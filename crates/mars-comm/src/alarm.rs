@@ -209,7 +209,7 @@ impl Alarm {
         }
     }
 
-    /// What [`Alarm::OnAlarm`] does before it runs the target.
+    /// What `Alarm::OnAlarm` does before it runs the target.
     ///
     /// The handler installed by [`Alarm::new`] already does this when the queue
     /// dispatches the alarm; a caller that drives the alarm itself has to say
@@ -294,7 +294,10 @@ mod tests {
         assert!(RunLoop::dispatch_timeout(queue, Duration::from_millis(300)));
         assert_eq!(soon.load(Ordering::SeqCst), 1);
         assert_eq!(later.load(Ordering::SeqCst), 0, "the wrong alarm fired");
-        assert!(second.is_waiting(), "the second alarm must still be waiting");
+        assert!(
+            second.is_waiting(),
+            "the second alarm must still be waiting"
+        );
         assert_eq!(second.status(), Status::Start);
 
         assert!(first.cancel());
