@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mars-xlog-core",
+    "crates/mars-xlog-crypt",
+    "crates/mars-xlog-buffer",
+    "crates/mars-xlog-appender",
+    "crates/mars-xlog-ffi",
+    "crates/mars-xlog-compat",
+    "crates/mars-xlog-jni",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/Tencent/mars"
+authors = ["Mars Rust Working Group"]
+
+[workspace.dependencies]
+mars-xlog-core = { path = "crates/mars-xlog-core" }
+mars-xlog-crypt = { path = "crates/mars-xlog-crypt" }
+mars-xlog-buffer = { path = "crates/mars-xlog-buffer" }
+mars-xlog-appender = { path = "crates/mars-xlog-appender" }
+
+memmap2 = "0.9"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+zstd = "0.13"
+k256 = "0.13"
+libc = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+thiserror = "2"
+tempfile = "3"
+serde_json = "1"
+jni = "0.21"

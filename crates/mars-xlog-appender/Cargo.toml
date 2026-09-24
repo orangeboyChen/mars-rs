@@ -1,0 +1,20 @@
+[package]
+name = "mars-xlog-appender"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Rust port of mars/xlog/src/appender.cc, formater.cc and xlogger_interface.cc"
+
+[dependencies]
+mars-xlog-core = { workspace = true }
+mars-xlog-crypt = { workspace = true }
+mars-xlog-buffer = { workspace = true }
+memmap2 = { workspace = true }
+chrono = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+flate2 = { workspace = true }

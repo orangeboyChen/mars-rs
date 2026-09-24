@@ -1,0 +1,169 @@
+{
+  "_comment": "Golden files produced by the C++ xlog implementation (LogZlibBuffer/LogZstdBuffer via compat/cpp/compat_tool.cc). inputs.bin holds one log record per line; expected.bin is the text every decoder has to recover from <case>.xlog. Regenerate with compat/generate_fixtures.py.",
+  "records": "inputs.bin",
+  "expected": "expected.bin",
+  "privkey": "ef7e9da1abac66449ba6f8697d4d0ac63fecd5679da53b9aab1f72aba73d8e2b",
+  "pubkey": "196d0b02543df00c8c1cf8ac58540286d3e568d7316a5de8a2f5a46f44a712518c726bb538f6abbc970391160c35f2df4c30bdb1a04cdba75c6098dcf2b4734b",
+  "cases": [
+    {
+      "name": "zlib-async-crypt1-flush0",
+      "file": "zlib-async-crypt1-flush0.xlog",
+      "mode": "zlib",
+      "compress": 1,
+      "sync": 0,
+      "crypt": 1,
+      "flush_every": 0,
+      "byte_exact": false
+    },
+    {
+      "name": "zlib-async-crypt1-flush1",
+      "file": "zlib-async-crypt1-flush1.xlog",
+      "mode": "zlib",
+      "compress": 1,
+      "sync": 0,
+      "crypt": 1,
+      "flush_every": 1,
+      "byte_exact": false
+    },
+    {
+      "name": "zlib-async-crypt0-flush0",
+      "file": "zlib-async-crypt0-flush0.xlog",
+      "mode": "zlib",
+      "compress": 1,
+      "sync": 0,
+      "crypt": 0,
+      "flush_every": 0,
+      "byte_exact": true
+    },
+    {
+      "name": "zlib-async-crypt0-flush1",
+      "file": "zlib-async-crypt0-flush1.xlog",
+      "mode": "zlib",
+      "compress": 1,
+      "sync": 0,
+      "crypt": 0,
+      "flush_every": 1,
+      "byte_exact": true
+    },
+    {
+      "name": "zlib-sync-crypt1-flush0",
+      "file": "zlib-sync-crypt1-flush0.xlog",
+      "mode": "zlib",
+      "compress": 1,
+      "sync": 1,
+      "crypt": 1,
+      "flush_every": 0,
+      "byte_exact": false
+    },
+    {
+      "name": "zlib-sync-crypt1-flush1",
+      "file": "zlib-sync-crypt1-flush1.xlog",
+      "mode": "zlib",
+      "compress": 1,
+      "sync": 1,
+      "crypt": 1,
+      "flush_every": 1,
+      "byte_exact": false
+    },
+    {
+      "name": "zlib-sync-crypt0-flush0",
+      "file": "zlib-sync-crypt0-flush0.xlog",
+      "mode": "zlib",
+      "compress": 1,
+      "sync": 1,
+      "crypt": 0,
+      "flush_every": 0,
+      "byte_exact": true
+    },
+    {
+      "name": "zlib-sync-crypt0-flush1",
+      "file": "zlib-sync-crypt0-flush1.xlog",
+      "mode": "zlib",
+      "compress": 1,
+      "sync": 1,
+      "crypt": 0,
+      "flush_every": 1,
+      "byte_exact": true
+    },
+    {
+      "name": "zstd-async-crypt1-flush0",
+      "file": "zstd-async-crypt1-flush0.xlog",
+      "mode": "zstd",
+      "compress": 1,
+      "sync": 0,
+      "crypt": 1,
+      "flush_every": 0,
+      "byte_exact": false
+    },
+    {
+      "name": "zstd-async-crypt1-flush1",
+      "file": "zstd-async-crypt1-flush1.xlog",
+      "mode": "zstd",
+      "compress": 1,
+      "sync": 0,
+      "crypt": 1,
+      "flush_every": 1,
+      "byte_exact": false
+    },
+    {
+      "name": "zstd-async-crypt0-flush0",
+      "file": "zstd-async-crypt0-flush0.xlog",
+      "mode": "zstd",
+      "compress": 1,
+      "sync": 0,
+      "crypt": 0,
+      "flush_every": 0,
+      "byte_exact": false
+    },
+    {
+      "name": "zstd-async-crypt0-flush1",
+      "file": "zstd-async-crypt0-flush1.xlog",
+      "mode": "zstd",
+      "compress": 1,
+      "sync": 0,
+      "crypt": 0,
+      "flush_every": 1,
+      "byte_exact": false
+    },
+    {
+      "name": "zstd-sync-crypt1-flush0",
+      "file": "zstd-sync-crypt1-flush0.xlog",
+      "mode": "zstd",
+      "compress": 1,
+      "sync": 1,
+      "crypt": 1,
+      "flush_every": 0,
+      "byte_exact": false
+    },
+    {
+      "name": "zstd-sync-crypt1-flush1",
+      "file": "zstd-sync-crypt1-flush1.xlog",
+      "mode": "zstd",
+      "compress": 1,
+      "sync": 1,
+      "crypt": 1,
+      "flush_every": 1,
+      "byte_exact": false
+    },
+    {
+      "name": "zstd-sync-crypt0-flush0",
+      "file": "zstd-sync-crypt0-flush0.xlog",
+      "mode": "zstd",
+      "compress": 1,
+      "sync": 1,
+      "crypt": 0,
+      "flush_every": 0,
+      "byte_exact": true
+    },
+    {
+      "name": "zstd-sync-crypt0-flush1",
+      "file": "zstd-sync-crypt0-flush1.xlog",
+      "mode": "zstd",
+      "compress": 1,
+      "sync": 1,
+      "crypt": 0,
+      "flush_every": 1,
+      "byte_exact": true
+    }
+  ]
+}
