@@ -110,6 +110,15 @@
 //! config is made into is a hook the app can replace with its own — which is
 //! what the C++'s weak `Create` symbols are for.
 //!
+//! The twenty-second slice is the queue the short-link tasks wait in
+//! ([`shortlink_task_manager`]): the order they go out in, the five timeouts a
+//! task that answered nothing runs into, when a task is over and when it is
+//! tried again, which try goes through a proxy, and the socket one task is done
+//! with — kept for the next one that wants the same pair, and closed when the
+//! server or the task did not ask for it. The C++'s own thread and its
+//! `ShortLinkInterface` are the host's here, so what a run *is* is an opaque
+//! [`RunId`] the host hands out with the task and hands back with the answer.
+//!
 //! What still needs the app callbacks (`net_core`, `longlink_task_manager`, the
 //! task managers that own the tasks, `stn_logic`) comes later.
 
@@ -174,6 +183,7 @@ pub mod netsource_timercheck;
 pub mod proxy_test;
 pub mod short_link;
 pub mod shortlink;
+pub mod shortlink_task_manager;
 pub mod signalling_keeper;
 pub mod simple_ipport_sort;
 pub mod smart_heartbeat;
@@ -234,6 +244,10 @@ pub use shortlink::{
     default_packer, is_keep_alive, keep_alive, pack, request_headers, request_url, Headers,
     KeepAlive, Packer,
 };
+pub use shortlink_task_manager::{
+    Callback, RespHandle, RunRequest, ShortLinkTaskManager, Timeout, RETRY_INTERNAL,
+    RUN_LOOP_TIMING,
+};
 pub use signalling_keeper::{SignallingKeeper, DEFAULT_KEEP_TIME, DEFAULT_PERIOD};
 pub use simple_ipport_sort::{
     BanItem, IpPortItem, IpSourceType, Record, RecordItem, SimpleIpPortSort, BAN_FAIL_COUNT,
@@ -250,7 +264,9 @@ pub use socket_pool::{CachedSocket, SocketPool, BAN_INTERVAL, DEFAULT_MAX_KEEPAL
 pub use task::{HostRedirectType, Task};
 pub use task_intercept::{TaskIntercept, TaskInterceptInfo, INTERCEPT_TIMEOUT};
 pub use task_profile::{
-    ConnectProfile, ErrCmdType, NoopProfile, TaskFailHandleType, TaskFailStep, TaskOutcome,
+    compare_task, compute_task_timeout, first_pkg_timeout, read_write_timeout, ConnectProfile,
+    ErrCmdType, NoopProfile, PrepareProfile, RunId, TaskFailHandleType, TaskFailStep, TaskOutcome,
+    TaskProfile, TransferProfile,
 };
 pub use timing_sync::{
     alarm_time, TimingSync, ACTIVE_SYNC_INTERVAL, INACTIVE_SYNC_INTERVAL, NONET_SALT_RATE,
