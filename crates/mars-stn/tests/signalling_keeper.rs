@@ -70,10 +70,12 @@ fn network_data_posts_the_next_buffer_a_period_later() {
     assert_eq!(keeper.due_time(), Some(2_500));
     assert!(keeper.is_keeping());
 
-    // what the post does: send again, and leave the post alone
+    // what the post does: send again, and consume itself — `AsyncInvokeAfter`
+    // posts one call, so a host that fires every due time it sees sends one
+    // buffer per post
     keeper.on_timeout();
     assert_eq!(keeper.sent(), 2);
-    assert_eq!(keeper.due_time(), Some(2_500));
+    assert_eq!(keeper.due_time(), None);
 
     keeper.on_network_data_changed_at(2_000);
     assert_eq!(keeper.due_time(), Some(3_000));
@@ -108,7 +110,7 @@ fn a_keep_time_that_ran_out_stops_the_signalling() {
 }
 
 #[test]
-fn stop_only_ends_a_keeper_that_has_a_post_outstanding() {
+fn stop_only_ends_a_keeper_that_has_been_posted() {
     let (mut keeper, _seen) = keeper_that_records();
     keeper.keep_at(1_000);
     keeper.stop();
@@ -123,6 +125,16 @@ fn stop_only_ends_a_keeper_that_has_a_post_outstanding() {
     keeper.on_network_data_changed_at(1_100);
     assert_eq!(keeper.due_time(), None);
     assert_eq!(keeper.sent(), 1);
+
+    // a post that already ran still counts as a post: the C++ asks
+    // `postid_ != KNullPost`, and running the message does not clear postid_
+    let (mut keeper, _seen) = keeper_that_records();
+    keeper.keep_at(1_000);
+    keeper.on_network_data_changed_at(1_000);
+    keeper.on_timeout();
+    assert_eq!(keeper.due_time(), None);
+    keeper.stop();
+    assert!(!keeper.is_keeping());
 }
 
 #[test]

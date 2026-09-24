@@ -71,6 +71,22 @@ pub fn keep_time() -> u64 {
 /// `LongLink::SendWhenNoData` returns, and `__SendSignallingBuffer` ignores it.
 pub type SendSignalling = dyn FnMut(u32) -> u32 + Send;
 
+/// `postid_` — a `MessageQueue::Post`, and the one thing the C++ keeps that a
+/// due time alone cannot say: `AsyncInvokeAfter` posts **one** call, so running
+/// it consumes the post while leaving `postid_` set, which is what
+/// [`SignallingKeeper::stop`] still looks for.
+#[derive(Debug, Clone, Copy, Default)]
+enum Post {
+    /// `KNullPost` — nothing was ever posted, or [`SignallingKeeper::stop`]
+    /// cancelled it.
+    #[default]
+    None,
+    /// A post that has not run yet: the reading it is due at.
+    Due(u64),
+    /// `__OnTimeOut` ran, and that consumed the post.
+    Fired,
+}
+
 /// `SignallingKeeper`.
 pub struct SignallingKeeper {
     send: Option<Box<SendSignalling>>,
@@ -78,11 +94,8 @@ pub struct SignallingKeeper {
     last_touch_time: Option<u64>,
     /// `keeping_`
     keeping: bool,
-    /// `postid_` — `MessageQueue::AsyncInvokeAfter(g_period, …)`: the reading
-    /// the posted call is due at. `__OnTimeOut` does not cancel it, so it stays
-    /// until [`SignallingKeeper::stop`] or the next
-    /// [`SignallingKeeper::on_network_data_changed_at`] does.
-    next_due: Option<u64>,
+    /// `postid_`
+    post: Post,
     /// How many signalling buffers went out. The C++ counts nothing, but the
     /// UDP path sends without [`SendSignalling`] being called at all, so the
     /// count is the port's.
@@ -95,7 +108,7 @@ impl SignallingKeeper {
             send: None,
             last_touch_time: None,
             keeping: false,
-            next_due: None,
+            post: Post::None,
             sent: 0,
         }
     }
@@ -121,9 +134,15 @@ impl SignallingKeeper {
         self.last_touch_time
     }
 
-    /// The reading the posted call is due at, `None` when there is none.
+    /// The reading the posted call is due at — [`None`] before the first post,
+    /// and again once the post has run or [`SignallingKeeper::stop`] cancelled
+    /// it. A host that fires every due time it sees therefore sends one buffer
+    /// per post, not one per turn of its loop.
     pub fn due_time(&self) -> Option<u64> {
-        self.next_due
+        match self.post {
+            Post::Due(due) => Some(due),
+            Post::None | Post::Fired => None,
+        }
     }
 
     /// How many signalling buffers went out.
@@ -150,14 +169,14 @@ impl SignallingKeeper {
 
     /// `Stop()`.
     ///
-    /// Only a keeper that is keeping *and* has a post outstanding stops — that
-    /// is what the C++'s `if (keeping_ && postid_ != KNullPost)` does, and it
-    /// means a [`SignallingKeeper::keep`] that never saw network data is still
-    /// keeping afterwards.
+    /// Only a keeper that is keeping *and* has been posted stops — that is what
+    /// the C++'s `if (keeping_ && postid_ != KNullPost)` does, and it means both
+    /// that a [`SignallingKeeper::keep`] that never saw network data is still
+    /// keeping afterwards and that a post which already ran is still stopped.
     pub fn stop(&mut self) {
-        if self.keeping && self.next_due.is_some() {
+        if self.keeping && !matches!(self.post, Post::None) {
             self.keeping = false;
-            self.next_due = None;
+            self.post = Post::None;
         }
     }
 
@@ -186,12 +205,20 @@ impl SignallingKeeper {
             self.keeping = false;
             return;
         }
-        // `CancelMessage(postid_)` + `AsyncInvokeAfter(g_period, …)`
-        self.next_due = Some(now.saturating_add(period()));
+        // `CancelMessage(postid_)` + `AsyncInvokeAfter(g_period, …)`, which
+        // posts one call: it runs once, `g_period` after this data
+        self.post = Post::Due(now.saturating_add(period()));
     }
 
     /// `__OnTimeOut` — what the posted call does: send another buffer.
+    ///
+    /// Firing it consumes the post: the C++'s `AsyncInvokeAfter` posts **one**
+    /// call, and the repository's dispatcher takes a due message out of its
+    /// queue before it runs it. Leaving the due time in place would have a host
+    /// that watches [`SignallingKeeper::due_time`] fire the same deadline on
+    /// every turn, and send a buffer every time.
     pub fn on_timeout(&mut self) {
+        self.post = Post::Fired;
         self.send_signalling_buffer();
     }
 
@@ -216,7 +243,7 @@ impl std::fmt::Debug for SignallingKeeper {
         f.debug_struct("SignallingKeeper")
             .field("last_touch_time", &self.last_touch_time)
             .field("keeping", &self.keeping)
-            .field("next_due", &self.next_due)
+            .field("post", &self.post)
             .field("sent", &self.sent)
             .finish()
     }
@@ -281,12 +308,13 @@ mod tests {
         assert_eq!(keeper.due_time(), Some(2_500));
         assert!(keeper.is_keeping());
 
-        // the timeout sends, and does not cancel the post
+        // the timeout sends, and consumes the post: `AsyncInvokeAfter` posts
+        // one call, so a host watching due_time() sends one buffer per post
         keeper.on_timeout();
         assert_eq!(keeper.sent(), 2);
-        assert_eq!(keeper.due_time(), Some(2_500));
+        assert_eq!(keeper.due_time(), None);
 
-        // and the next data moves it
+        // and the next data posts another
         keeper.on_network_data_changed_at(2_000);
         assert_eq!(keeper.due_time(), Some(3_000));
 
@@ -325,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_only_ends_a_keeper_that_has_a_post_outstanding() {
+    fn stop_only_ends_a_keeper_that_has_been_posted() {
         let mut keeper = SignallingKeeper::new();
         keeper.keep_at(1_000);
         keeper.stop();
@@ -335,6 +363,17 @@ mod tests {
         keeper.stop();
         assert!(!keeper.is_keeping());
         assert_eq!(keeper.due_time(), None);
+
+        // a post that already ran is still a post as far as Stop() is
+        // concerned: the C++ asks `postid_ != KNullPost`, and running the
+        // message does not clear postid_
+        let mut keeper = SignallingKeeper::new();
+        keeper.keep_at(1_000);
+        keeper.on_network_data_changed_at(1_000);
+        keeper.on_timeout();
+        assert_eq!(keeper.due_time(), None);
+        keeper.stop();
+        assert!(!keeper.is_keeping());
     }
 
     #[test]
