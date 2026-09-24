@@ -351,7 +351,10 @@ pub const KEEP_ALIVE: &str = "Keep-Alive";
 pub const USER_AGENT_MICRO_MESSAGE: &str = "MicroMessenger Client";
 const CHUNKED: &str = "chunked";
 const CLOSE: &str = "close";
-const KEEPALIVE: &str = "Keep-Alive";
+/// `KStringKeepalive` — the value [`HeaderFields::is_connection_keep_alive`]
+/// looks for, and the one `CheckKeepAlive` compares a task's header against
+/// exactly.
+pub const KEEPALIVE: &str = "Keep-Alive";
 const ACCEPT_ALL: &str = "*/*";
 const NO_CACHE: &str = "no-cache";
 const OCTET_STREAM: &str = "application/octet-stream";
