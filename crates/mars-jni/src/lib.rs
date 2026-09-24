@@ -604,6 +604,10 @@ mod tests {
 
     #[test]
     fn the_setters_accept_the_java_values() {
+        // every setter here moves the state of the default handle, which the
+        // other tests read: without the singleton lock this test used to race
+        // against them and leave the level/mode it happened to set last.
+        let _guard = singleton();
         set_level_impl(DEFAULT_HANDLE, 3);
         assert_eq!(
             get_level_impl(DEFAULT_HANDLE),

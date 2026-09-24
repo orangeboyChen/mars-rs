@@ -37,9 +37,11 @@ fn decodes_an_encrypted_file_the_cpp_wrote() {
 
     let expected = std::fs::read(fixtures().join("expected.bin")).unwrap();
     let got = std::fs::read(&out).unwrap();
+    // compared as bytes: `from_utf8_lossy` replaces every invalid sequence
+    // with U+FFFD, so a decoder that mangled the multi-byte records below
+    // still compared equal.
     assert_eq!(
-        String::from_utf8_lossy(&got),
-        String::from_utf8_lossy(&expected),
+        got, expected,
         "{file} did not decode back to the text that went in"
     );
     // the encrypted fixture must really be encrypted: the plaintext is not
@@ -78,11 +80,7 @@ fn decodes_every_golden_fixture() {
             .unwrap();
         assert!(status.success(), "{file} failed");
         let got = std::fs::read(&out).unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&got),
-            String::from_utf8_lossy(&expected),
-            "{file} differs"
-        );
+        assert_eq!(got, expected, "{file} differs");
         std::fs::remove_file(&out).ok();
     }
 }
@@ -120,6 +118,14 @@ fn encodes_and_round_trips_through_the_cli() {
         output.status.success(),
         "the encoded file did not decode: {}",
         String::from_utf8_lossy(&output.stderr)
+    );
+    // the whole point of the round trip: what comes back is what went in
+    // (the records are read back joined, so `expected.bin` is `inputs.bin`
+    // without its newlines).
+    assert_eq!(
+        std::fs::read(&back).unwrap(),
+        std::fs::read(fixtures().join("expected.bin")).unwrap(),
+        "the round trip did not return the records that went in"
     );
     std::fs::remove_file(&back).ok();
     std::fs::remove_file(&out).ok();
