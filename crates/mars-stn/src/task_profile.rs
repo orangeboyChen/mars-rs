@@ -12,6 +12,15 @@
 //! there either: `err_code` is an `int` that carries either a server code or
 //! one of the `kEctLocal*` values, so those are constants here.
 //!
+//! The task that is *running* is here too, now that the code that runs the
+//! tasks is: [`TaskProfile`] is the record of one, [`TransferProfile`] is what
+//! its run filled in, and [`PrepareProfile`] is what the caller did before it
+//! handed the task over. A running task is not the link it runs on — that is
+//! the host's — but a [`RunId`] it answers for, which is what the C++'s
+//! `intptr_t running_id` is for. The three free functions of `task_profile.cc`
+//! are here as well: [`read_write_timeout`], [`first_pkg_timeout`] and
+//! [`compare_task`].
+//!
 //! The other struct of that header is [`ConnectProfile`], which is the record
 //! of one connect — a long link's or a short link's — and it comes with the
 //! code that makes the connect: [`ConnectProfile::reset`] is what the C++
@@ -20,8 +29,18 @@
 //! QUIC ones, mmtls) are not here yet; they come with the code that reads
 //! them.
 
+use std::cmp::Ordering;
+
+use mars_comm::tickcount::gettickcount;
 use mars_comm::{LocalIpStack, ProxyInfo};
 
+use crate::config::{
+    BASE_FIRST_PACKAGE_GPRS_TIMEOUT, BASE_FIRST_PACKAGE_WIFI_TIMEOUT,
+    DYN_TIME_FIRST_PACKAGE_GPRS_TIMEOUT, DYN_TIME_FIRST_PACKAGE_WIFI_TIMEOUT,
+    MAX_FIRST_PACKAGE_GPRS_TIMEOUT, MAX_FIRST_PACKAGE_WIFI_TIMEOUT, MAX_RECV_LEN, MOBILE_MIN_RATE,
+    MOBILE_TASK_DELAY, WIFI_MIN_RATE, WIFI_TASK_DELAY,
+};
+use crate::dynamic_timeout::DynamicTimeoutStatus;
 use crate::net_source::{TimeoutSource, DEFAULT_QUIC_RW_TIMEOUT_MS};
 use crate::simple_ipport_sort::{IpPortItem, IpSourceType};
 use crate::socket_operator::SocketFd;
@@ -88,6 +107,30 @@ pub const LOCAL_LONG_LINK_UNAVAILABLE: i32 = -16;
 pub const LONG_FIRST_PKG_TIMEOUT: i32 = -500;
 /// `kEctLongPkgPkgTimeout`.
 pub const LONG_PKG_PKG_TIMEOUT: i32 = -501;
+/// `kEctLongReadWriteTimeout`.
+pub const LONG_READ_WRITE_TIMEOUT: i32 = -502;
+/// `kEctLongTaskTimeout`.
+pub const LONG_TASK_TIMEOUT: i32 = -503;
+
+/// `kEctHttpFirstPkgTimeout` — a short-link task that did not get the first
+/// package of its answer in time. The same number as
+/// [`LONG_FIRST_PKG_TIMEOUT`]: the two enums of `stn.h` share it.
+pub const HTTP_FIRST_PKG_TIMEOUT: i32 = -500;
+/// `kEctHttpPkgPkgTimeout`.
+pub const HTTP_PKG_PKG_TIMEOUT: i32 = -501;
+/// `kEctHttpReadWriteTimeout`.
+pub const HTTP_READ_WRITE_TIMEOUT: i32 = -502;
+/// `kEctHttpLongPollingTimeout`.
+pub const HTTP_LONG_POLLING_TIMEOUT: i32 = -503;
+/// `kEctHandshakeMisunderstand` — a task whose run gets another try because the
+/// two ends did not agree on the handshake.
+pub const HANDSHAKE_MISUNDERSTAND: i32 = -10096;
+
+/// `TaskProfile::ComputeTaskTimeout` — how long a wait there is for an answer
+/// that nobody said how long takes (`15 * 1000`), and the margin the whole task
+/// gets on top of it (`5 * 1000`).
+pub const BASE_TASK_TIMEOUT: u64 = 15 * 1000;
+pub const TASK_TIMEOUT_MARGIN: u64 = 5 * 1000;
 
 /// `TaskFailHandleType` of `mars/stn/stn.h` — what the app is told to do about
 /// a task that failed.
@@ -458,6 +501,372 @@ impl TaskOutcome {
     pub fn cost(&self) -> u64 {
         self.end_task_time.saturating_sub(self.start_task_time)
     }
+}
+
+/// `running_id` — which run of a task is out, in the words of whoever is
+/// running it.
+///
+/// The C++ keeps an `intptr_t` to the worker and finds a task with it
+/// (`__LocateBySeq`), because the worker is what answers. A run is the host's
+/// here — the port has no sockets and no threads — so what the port keeps is
+/// this: a number the host handed out when it started a run and hands back
+/// with every answer, which is all a task manager needs of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RunId(pub u64);
+
+/// `PrepareProfile` — what the caller did before the task was handed over:
+/// when it asked, and how long working out the hosts took.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrepareProfile {
+    /// `start_task_call_time` — when the app asked for the task.
+    pub start_task_call_time: u64,
+    /// `begin_process_hosts_time`.
+    pub begin_process_hosts_time: u64,
+    /// `end_process_hosts_time`.
+    pub end_process_hosts_time: u64,
+}
+
+impl PrepareProfile {
+    /// `PrepareProfile()` — `Reset()`, which is a caller that has just asked.
+    pub fn new() -> Self {
+        Self::new_at(gettickcount())
+    }
+
+    /// The same, with the reading handed in.
+    pub fn new_at(now: u64) -> Self {
+        Self {
+            start_task_call_time: now,
+            begin_process_hosts_time: 0,
+            end_process_hosts_time: 0,
+        }
+    }
+
+    /// `Reset()` — what a retry does to it, which is to say the task was asked
+    /// for again.
+    pub fn reset_at(&mut self, now: u64) {
+        *self = Self::new_at(now);
+    }
+}
+
+impl Default for PrepareProfile {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// `TransferProfile` — what a run of a task filled in: the connect it was made
+/// on, the five readings of how far it got, and the two timeouts it was given.
+///
+/// [`TransferProfile::task`] is a copy, which is what the C++ made it too —
+/// a reference there outlived the task it pointed at.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransferProfile {
+    /// `task` — the task as it was when this run was started; a retry hands it
+    /// the fallback hosts, and that is this copy's to keep.
+    pub task: Task,
+    /// `connect_profile` — the connect this run was made on.
+    pub connect_profile: ConnectProfile,
+    /// `loop_start_task_time` — when the run was started.
+    pub loop_start_task_time: u64,
+    /// `first_start_send_time` — when the request first went out; a retry does
+    /// not move it.
+    pub first_start_send_time: u64,
+    /// `start_send_time` — when the request went out.
+    pub start_send_time: u64,
+    /// `last_receive_pkg_time` — when the last package of the answer came in.
+    pub last_receive_pkg_time: u64,
+    /// `read_write_timeout` — how long the whole read may take.
+    pub read_write_timeout: u64,
+    /// `first_pkg_timeout` — how long the first package may take.
+    pub first_pkg_timeout: u64,
+    /// `sent_size`.
+    pub sent_size: usize,
+    /// `send_data_size` — how long the request was.
+    pub send_data_size: usize,
+    /// `received_size`.
+    pub received_size: usize,
+    /// `receive_data_size` — how long the answer was.
+    pub receive_data_size: usize,
+    /// `external_ip` — the near end of the socket, as the world sees it.
+    pub external_ip: String,
+    /// `error_type`.
+    pub error_type: ErrCmdType,
+    /// `error_code`.
+    pub error_code: i32,
+}
+
+impl TransferProfile {
+    /// `TransferProfile(_task)` — `Reset()`, which is a run that has not begun.
+    pub fn new(task: Task) -> Self {
+        Self {
+            task,
+            connect_profile: ConnectProfile::new(),
+            loop_start_task_time: 0,
+            first_start_send_time: 0,
+            start_send_time: 0,
+            last_receive_pkg_time: 0,
+            read_write_timeout: 0,
+            first_pkg_timeout: 0,
+            sent_size: 0,
+            send_data_size: 0,
+            received_size: 0,
+            receive_data_size: 0,
+            external_ip: String::new(),
+            error_type: ErrCmdType::Ok,
+            error_code: 0,
+        }
+    }
+
+    /// `Reset()` — every reading back to nothing, and the task kept: a retry is
+    /// the same task, not a new one.
+    pub fn reset(&mut self) {
+        let task = std::mem::replace(&mut self.task, Task::new(0, 0));
+        *self = Self::new(task);
+    }
+}
+
+/// `TaskProfile` — one task, from the moment it was asked for to the moment it
+/// was answered, and everything its retries left behind.
+///
+/// The C++ has a few fields this does not: `is_weak_network` and
+/// `first_auth_flag`, which only the report reads, and `channel_name`, which
+/// only a minor long link has. They come with the code that writes the report.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskProfile {
+    /// `task`.
+    pub task: Task,
+    /// `prepare_profile`.
+    pub prepare_profile: PrepareProfile,
+    /// `transfer_profile`.
+    pub transfer_profile: TransferProfile,
+    /// `running_id` — [`None`] while the task is waiting for a run.
+    pub running: Option<RunId>,
+    /// `task_timeout` — how long the whole task may take, retries and all;
+    /// [`compute_task_timeout`] at the moment the task was asked for.
+    pub task_timeout: u64,
+    /// `start_task_time` — when the task was asked for.
+    pub start_task_time: u64,
+    /// `end_task_time` — `0` until the task is over.
+    pub end_task_time: u64,
+    /// `retry_start_time` — when the last retry was due; `0` for one that is
+    /// due at once.
+    pub retry_start_time: u64,
+    /// `remain_retry_count` — how many tries the task has left.
+    pub remain_retry_count: i32,
+    /// `force_no_retry` — a run that asked for the task not to be tried again.
+    pub force_no_retry: bool,
+    /// `last_failed_dyntime_status` — what the network was called when the try
+    /// before this one failed.
+    pub last_failed_dyntime_status: DynamicTimeoutStatus,
+    /// `current_dyntime_status` — what it is called now.
+    pub current_dyntime_status: DynamicTimeoutStatus,
+    /// `use_proxy` — whether this try goes through a proxy.
+    pub use_proxy: bool,
+    /// `retry_time_interval` — how long a retry waits.
+    pub retry_time_interval: u64,
+    /// `err_type`.
+    pub err_type: ErrCmdType,
+    /// `err_code`.
+    pub err_code: i32,
+    /// `link_type` — one of the `Task::CHANNEL_*` values.
+    pub link_type: i32,
+    /// `allow_sessiontimeout_retry` — whether a session timeout may still give
+    /// this task another try; one try each.
+    pub allow_sessiontimeout_retry: bool,
+    /// `history_transfer_profiles` — every try but the one that is out. Not
+    /// empty is what makes the next try a fallback one.
+    pub history: Vec<TransferProfile>,
+}
+
+impl TaskProfile {
+    /// `TaskProfile(_task, _prepare_profile)`.
+    pub fn new(task: Task, prepare_profile: PrepareProfile) -> Self {
+        Self::new_at(gettickcount(), task, prepare_profile)
+    }
+
+    /// The same, with the reading `start_task_time` is set to handed in.
+    pub fn new_at(now: u64, task: Task, prepare_profile: PrepareProfile) -> Self {
+        Self {
+            transfer_profile: TransferProfile::new(task.clone()),
+            remain_retry_count: task.retry_count,
+            task_timeout: compute_task_timeout(&task),
+            task,
+            prepare_profile,
+            running: None,
+            start_task_time: now,
+            end_task_time: 0,
+            retry_start_time: 0,
+            force_no_retry: false,
+            last_failed_dyntime_status: DynamicTimeoutStatus::default(),
+            current_dyntime_status: DynamicTimeoutStatus::default(),
+            use_proxy: false,
+            retry_time_interval: 0,
+            err_type: ErrCmdType::Ok,
+            err_code: 0,
+            link_type: 0,
+            allow_sessiontimeout_retry: true,
+            history: Vec::new(),
+        }
+    }
+
+    /// `running_id != 0` — whether a run of this task is out.
+    pub fn is_running(&self) -> bool {
+        self.running.is_some()
+    }
+
+    /// `PushHistory()` — the try that is over, kept.
+    pub fn push_history(&mut self) {
+        self.history.push(self.transfer_profile.clone());
+    }
+
+    /// `InitSendParam()` — what a retry starts from: the run is gone and the
+    /// readings of it are cleared, which is what makes the timeouts of the next
+    /// try start over.
+    pub fn init_send_param_at(&mut self, now: u64) {
+        self.prepare_profile.reset_at(now);
+        self.transfer_profile.reset();
+        self.running = None;
+    }
+
+    /// `__SetLastFailedStatus()` — remember what the network was called, but
+    /// only for a task that has another try coming: what a task that is over
+    /// failed on is not what the next one cares about.
+    pub fn set_last_failed_status(&mut self) {
+        if self.remain_retry_count > 0 {
+            self.last_failed_dyntime_status = self.current_dyntime_status;
+        }
+    }
+
+    /// What a finished task reports.
+    pub fn outcome(&self) -> TaskOutcome {
+        TaskOutcome {
+            err_type: self.err_type,
+            err_code: self.err_code,
+            ip_index: self.transfer_profile.connect_profile.ip_index,
+            last_receive_pkg_time: self.transfer_profile.last_receive_pkg_time,
+            start_task_time: self.start_task_time,
+            end_task_time: self.end_task_time,
+        }
+    }
+
+    /// `GetFailStep()` — how the task failed, by the rules of
+    /// [`TaskOutcome::fail_step`].
+    pub fn fail_step(&self) -> TaskFailStep {
+        self.outcome().fail_step()
+    }
+
+    /// `end_task_time - start_task_time` — how long the task took, in all.
+    ///
+    /// `0` until it is over: a task that has not finished has not taken
+    /// anything.
+    pub fn cost(&self) -> u64 {
+        self.end_task_time.saturating_sub(self.start_task_time)
+    }
+}
+
+/// `TaskProfile::ComputeTaskTimeout(_task)` — how long the whole task may take:
+/// [`BASE_TASK_TIMEOUT`] plus what the server said it needs, for every try the
+/// task has in it, and [`TASK_TIMEOUT_MARGIN`] on top. A long-polling task gets
+/// its own `long_polling_timeout` and no more, and `total_timeout` is a ceiling
+/// on all of it.
+pub fn compute_task_timeout(task: &Task) -> u64 {
+    let wait = if task.server_process_cost > 0 {
+        BASE_TASK_TIMEOUT + task.server_process_cost as u64
+    } else {
+        BASE_TASK_TIMEOUT
+    };
+    // `int trycount = 0; if (0 <= retry_count) trycount = retry_count; trycount++;`
+    let tries = if task.retry_count >= 0 {
+        task.retry_count + 1
+    } else {
+        1
+    };
+    let mut timeout = (wait + TASK_TIMEOUT_MARGIN) * tries as u64;
+    if task.long_polling {
+        timeout = task.long_polling_timeout.max(0) as u64 + TASK_TIMEOUT_MARGIN;
+    }
+    if task.total_timeout > 0 && (task.total_timeout as u64) < timeout {
+        timeout = task.total_timeout as u64;
+    }
+    timeout
+}
+
+/// `__ReadWriteTimeout(_first_pkg_timeout)` — how long the whole read may take:
+/// the first package's wait, plus the time [`MAX_RECV_LEN`] takes to come in at
+/// the slowest rate the network is assumed to manage.
+pub fn read_write_timeout(first_pkg_timeout: u64, mobile: bool) -> u64 {
+    let rate = if mobile {
+        MOBILE_MIN_RATE
+    } else {
+        WIFI_MIN_RATE
+    };
+    first_pkg_timeout + 1000 * MAX_RECV_LEN / rate
+}
+
+/// `__FirstPkgTimeout(_init_first_pkg_timeout, _sendlen, _send_count,
+/// _dynamictimeout_status)` — how long the first package is waited for.
+///
+/// `init_first_pkg_timeout` is the task's `server_process_cost`: what the server
+/// said it needs. `0` is "it said nothing", which is either the network's own
+/// short wait (a network that has been [`DynamicTimeoutStatus::Excellent`]) or
+/// the base wait grown by how long the request is and clipped to the maximum.
+/// Either way, every task that is already out makes it longer.
+pub fn first_pkg_timeout(
+    init_first_pkg_timeout: i64,
+    send_len: usize,
+    send_count: i32,
+    dyntime_status: DynamicTimeoutStatus,
+    mobile: bool,
+) -> u64 {
+    // `std::min(_send_count, 5)`, and no less than nothing: a count is never
+    // negative, which the C++'s `uint64_t` arithmetic would have wrapped.
+    let sent_count = send_count.clamp(0, 5) as u64;
+    let delay = sent_count
+        * if mobile {
+            MOBILE_TASK_DELAY
+        } else {
+            WIFI_TASK_DELAY
+        };
+
+    let wait = if dyntime_status == DynamicTimeoutStatus::Excellent && init_first_pkg_timeout == 0 {
+        if mobile {
+            DYN_TIME_FIRST_PACKAGE_GPRS_TIMEOUT
+        } else {
+            DYN_TIME_FIRST_PACKAGE_WIFI_TIMEOUT
+        }
+    } else {
+        let rate = if mobile {
+            MOBILE_MIN_RATE
+        } else {
+            WIFI_MIN_RATE
+        };
+        let base = if mobile {
+            BASE_FIRST_PACKAGE_GPRS_TIMEOUT
+        } else {
+            BASE_FIRST_PACKAGE_WIFI_TIMEOUT
+        };
+        let max = if mobile {
+            MAX_FIRST_PACKAGE_GPRS_TIMEOUT
+        } else {
+            MAX_FIRST_PACKAGE_WIFI_TIMEOUT
+        };
+        if init_first_pkg_timeout > 0 {
+            init_first_pkg_timeout as u64 + 1000 * send_len as u64 / rate
+        } else {
+            (base + 1000 * send_len as u64 / rate).min(max)
+        }
+    };
+    wait + delay
+}
+
+/// `__CompareTask` — the order a task manager keeps its tasks in: most urgent
+/// first.
+///
+/// [`Ordering`] rather than the C++'s `bool`, so a stable sort leaves two tasks
+/// of the same priority in the order they were asked for — which is what
+/// `std::list::sort` does too.
+pub fn compare_task(first: &TaskProfile, second: &TaskProfile) -> Ordering {
+    first.task.priority.cmp(&second.task.priority)
 }
 
 #[cfg(test)]
