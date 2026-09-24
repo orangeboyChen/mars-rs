@@ -270,7 +270,9 @@ mod tests {
         // target: it used to stay kStart, waiting, with no elapsed time.
         assert_eq!(alarm.status(), Status::OnAlarm);
         assert!(!alarm.is_waiting());
-        assert!(alarm.elapse_time() >= 200);
+        // the delay is 200 ms, but the two clocks (the message's due time and
+        // `gettickcount`) need not round the same way
+        assert!(alarm.elapse_time() >= 190);
         // A cancel after it fired leaves it fired, not cancelled.
         assert!(alarm.cancel());
         assert_eq!(alarm.status(), Status::OnAlarm);
