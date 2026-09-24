@@ -28,6 +28,9 @@ pub struct Task {
     pub taskid: u32,
     /// Required: the command id of the request.
     pub cmdid: u32,
+    /// The long link the task has to go out on: the connect's own `start_time`,
+    /// which a link that was made again no longer answers to. `0` is any link.
+    pub channel_id: u64,
     /// Which channels the task may use; see the `CHANNEL_*` constants.
     pub channel_select: i32,
     /// `kTransportProtocol*`.
@@ -152,6 +155,7 @@ impl Task {
         Self {
             taskid,
             cmdid,
+            channel_id: 0,
             channel_select: Self::CHANNEL_BOTH,
             transport_protocol: Self::TRANSPORT_PROTOCOL_DEFAULT,
             cgi: String::new(),

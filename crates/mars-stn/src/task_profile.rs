@@ -629,12 +629,18 @@ impl TransferProfile {
 /// was answered, and everything its retries left behind.
 ///
 /// The C++ has a few fields this does not: `is_weak_network` and
-/// `first_auth_flag`, which only the report reads, and `channel_name`, which
-/// only a minor long link has. They come with the code that writes the report.
+/// `first_auth_flag`, which only the report reads. They come with the code that
+/// writes the report.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskProfile {
     /// `task`.
     pub task: Task,
+    /// `channel_name` — the long link the task goes out on; empty for a task
+    /// that is not a long-link one.
+    pub channel_name: String,
+    /// `antiavalanche_checked` — whether the task was already weighed once,
+    /// which is what keeps a retry from being given another sequence id.
+    pub antiavalanche_checked: bool,
     /// `prepare_profile`.
     pub prepare_profile: PrepareProfile,
     /// `transfer_profile`.
@@ -691,6 +697,8 @@ impl TaskProfile {
             remain_retry_count: task.retry_count,
             task_timeout: compute_task_timeout(&task),
             task,
+            channel_name: String::new(),
+            antiavalanche_checked: false,
             prepare_profile,
             running: None,
             start_task_time: now,
@@ -712,6 +720,13 @@ impl TaskProfile {
     /// `running_id != 0` — whether a run of this task is out.
     pub fn is_running(&self) -> bool {
         self.running.is_some()
+    }
+
+    /// Whether the task has been tried at least once, which is the C++'s
+    /// `retry_count > remain_retry_count`: the first try of a task is not one
+    /// the queue makes it wait for.
+    pub fn retried(&self) -> bool {
+        self.task.retry_count > self.remain_retry_count
     }
 
     /// `PushHistory()` — the try that is over, kept.
