@@ -545,6 +545,7 @@ name = "mars-stn"
 version = "0.1.0"
 dependencies = [
  "mars-comm",
+ "mars-sdt",
 ]
 
 [[package]]
