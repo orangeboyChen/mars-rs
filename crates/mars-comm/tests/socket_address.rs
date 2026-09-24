@@ -11,6 +11,10 @@ use mars_comm::ipv6_address::{in6_set_addr_nat64, in6_set_addr_v4mapped, set_nat
 use mars_comm::{LocalIpStack, SocketAddress};
 
 /// The NAT64 prefix is process-wide, so the tests that set it take it in turn.
+///
+/// `cargo test` runs this binary apart from the crate's unit tests, so the
+/// prefix it sets cannot reach them — but every test in here shares the one
+/// process, and therefore this one lock.
 fn prefixes() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))

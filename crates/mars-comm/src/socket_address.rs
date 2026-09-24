@@ -346,15 +346,12 @@ impl Address {
 mod tests {
     use super::*;
     use crate::ipv6_address::{in6_set_addr_nat64, set_nat64_prefix, NAT64_PREFIX};
-    use std::sync::{Mutex, OnceLock};
 
-    /// The NAT64 prefix is process-wide, so the tests that set it take it in
-    /// turn.
+    /// The NAT64 prefix is process-wide, so the tests that set it take the
+    /// crate's turn: [`crate::test_lock`], which is the one `ipv6_address`'s
+    /// tests take too.
     fn prefixes() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        crate::test_lock()
     }
 
     #[test]

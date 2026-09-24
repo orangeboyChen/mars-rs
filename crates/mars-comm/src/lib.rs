@@ -17,6 +17,19 @@
 //! The `wstring` overloads of the C++ are not ported: every caller in this
 //! repository works on UTF-8 `String`/`&str`.
 
+/// The NAT64 prefix of [`ipv6_address`] is one value for the whole process, so
+/// the unit tests that move it need **one** lock for the crate, not one per
+/// module: `ipv6_address`'s tests and `socket_address`'s tests run in the same
+/// binary, and a prefix one of them learned would otherwise be the prefix the
+/// other one reads.
+#[cfg(test)]
+pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 pub mod alarm;
 pub mod frequency_limit;
 pub mod ipv6_address;

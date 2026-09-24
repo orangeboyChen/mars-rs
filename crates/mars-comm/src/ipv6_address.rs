@@ -109,12 +109,10 @@ pub fn convert_v4_to_nat64_v6(v4: [u8; 4], stack: LocalIpStack) -> Option<[u8; 1
 mod tests {
     use super::*;
 
-    /// The prefix is process-wide, so the tests that set it take it in turn.
+    /// The prefix is process-wide, so the tests that set it take the crate's
+    /// turn: [`crate::test_lock`].
     fn prefixes() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        crate::test_lock()
     }
 
     #[test]
