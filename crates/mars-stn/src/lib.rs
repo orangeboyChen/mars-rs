@@ -103,6 +103,13 @@
 //! `GET` and judges the status that comes back — which is what the C++ asks of
 //! a proxy before it routes anything through it.
 //!
+//! The twenty-first slice is the one value a long link and the three things that
+//! keep it up are kept in ([`longlink_metadata`]), and the channels those links
+//! come from ([`net_channel_factory`]): the three helpers ask the link things,
+//! so the link is one `Arc<Mutex<..>>` all four of them share, and which link a
+//! config is made into is a hook the app can replace with its own — which is
+//! what the C++'s weak `Create` symbols are for.
+//!
 //! What still needs the app callbacks (`net_core`, `longlink_task_manager`, the
 //! task managers that own the tasks, `stn_logic`) comes later.
 
@@ -158,7 +165,9 @@ pub mod long_link;
 pub mod longlink;
 pub mod longlink_connect_monitor;
 pub mod longlink_identify_checker;
+pub mod longlink_metadata;
 pub mod longlink_speed_test;
+pub mod net_channel_factory;
 pub mod net_check_logic;
 pub mod net_source;
 pub mod netsource_timercheck;
@@ -196,10 +205,12 @@ pub use longlink_connect_monitor::{
     START_CHECK_PERIOD, TIME_CHECK_PERIOD, UP_OR_DOWN_THRESHOLD, WAKE_ALARM_INTERVAL,
 };
 pub use longlink_identify_checker::{IdentifyBuffer, IdentifyMode, LongLinkIdentifyChecker};
+pub use longlink_metadata::LongLinkMetaData;
 pub use longlink_speed_test::{
     Fastest, LongLinkSpeedTest, Need, Socket, SocketEvent, SpeedTestItem, SpeedTestState, Stop,
     Watch, MAX_RETRIES, OUT_OF_BAND_CMDID,
 };
+pub use net_channel_factory::{ChannelFactory, CreateLongLink, CreateShortLink};
 pub use net_check_logic::{
     NetCheckLogic, CHECK_IF_ABOVE_COUNT, CHECK_IF_BELOW_COUNT, CHECK_TIME_SPAN_INCREMENT_STEP,
     LIMIT_COUNT, LIMIT_TIME_SPAN, MIN_CHECK_TIME_SPAN, MOST_RECENT_TASK_START_N, NET_CHECK_MODE,
