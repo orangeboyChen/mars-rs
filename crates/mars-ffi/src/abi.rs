@@ -17,7 +17,7 @@ use mars_appender::{
 use mars_buffer::CompressMode;
 
 use crate::cstr;
-use crate::error::*;
+pub use crate::error::*;
 use crate::guard;
 use crate::state;
 
