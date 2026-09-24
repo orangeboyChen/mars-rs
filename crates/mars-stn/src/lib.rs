@@ -6,7 +6,13 @@
 //! pure logic over [`mars_comm::tickcount::gettickcount`], which is what makes
 //! them testable here.
 //!
-//! Everything that needs a network or the app callbacks (`net_core`, `longlink`,
+//! The second slice is the long link: its wire format ([`longlink`]) and the
+//! heartbeat interval that keeps it alive ([`smart_heartbeat`]). Neither needs
+//! a socket either — the packer is bytes in, bytes out, and the heartbeat
+//! takes the answers as arguments — but the long link that *uses* them does,
+//! so what is here is the format and the computation, not the connection.
+//!
+//! Everything that needs the app callbacks (`net_core`, `longlink_task_manager`,
 //! `shortlink`, `stn_logic`) comes later.
 
 pub mod anti_avalanche;
@@ -14,10 +20,16 @@ pub mod config;
 pub mod dynamic_timeout;
 pub mod flow_limit;
 pub mod frequency_limit;
+pub mod longlink;
+pub mod smart_heartbeat;
 pub mod task;
 
 pub use anti_avalanche::{AntiAvalanche, LimitKind};
 pub use dynamic_timeout::{DynamicTimeout, DynamicTimeoutStatus};
 pub use flow_limit::FlowLimit;
 pub use frequency_limit::FrequencyLimit;
+pub use longlink::{LongLinkEncoder, Unpacked};
+pub use smart_heartbeat::{
+    NetHeartbeatInfo, SmartHeartBeatAction, SmartHeartBeatType, SmartHeartbeat,
+};
 pub use task::{HostRedirectType, Task};
