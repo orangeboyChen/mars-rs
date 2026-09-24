@@ -248,23 +248,29 @@ mod tests {
             counter.fetch_add(1, Ordering::SeqCst);
         });
 
-        assert!(alarm.start(20));
+        // 200 ms, not 20: the short dispatch below asks for 5 ms but a
+        // loaded machine hands it more than that, and what it spends there
+        // is part of the delay this alarm is waiting out.
+        assert!(alarm.start(200));
         assert!(alarm.is_waiting());
         assert_eq!(alarm.status(), Status::Start);
-        assert!(!alarm.start(20), "a waiting alarm must not start again");
+        assert!(!alarm.start(200), "a waiting alarm must not start again");
 
         assert!(
             !RunLoop::dispatch_timeout(queue, Duration::from_millis(5)),
             "not due yet"
         );
         assert_eq!(fired.load(Ordering::SeqCst), 0);
-        assert!(RunLoop::dispatch_timeout(queue, Duration::from_millis(300)));
+        assert!(RunLoop::dispatch_timeout(
+            queue,
+            Duration::from_millis(2_000)
+        ));
         assert_eq!(fired.load(Ordering::SeqCst), 1);
         // Dispatching the alarm has to move its state on, not just run the
         // target: it used to stay kStart, waiting, with no elapsed time.
         assert_eq!(alarm.status(), Status::OnAlarm);
         assert!(!alarm.is_waiting());
-        assert!(alarm.elapse_time() >= 20);
+        assert!(alarm.elapse_time() >= 200);
         // A cancel after it fired leaves it fired, not cancelled.
         assert!(alarm.cancel());
         assert_eq!(alarm.status(), Status::OnAlarm);
