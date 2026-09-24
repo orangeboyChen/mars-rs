@@ -200,7 +200,7 @@ fn json_string(value: &str) -> String {
 
 /// `SdtManagerJniCallback::ReportNetCheckResult()` — the JSON the app gets
 /// through `SdtLogic.reportSignalDetectResults`, field for field the C++'s,
-/// with the string fields escaped ([`json_string`]).
+/// with the string fields escaped (`json_string`).
 pub fn report_json_impl(check_results: &[CheckResultProfile]) -> String {
     let mut json = String::from("{\"details\":[");
     for (index, result) in check_results.iter().enumerate() {

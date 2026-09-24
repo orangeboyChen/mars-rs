@@ -57,7 +57,7 @@ struct AlarmState {
     after: u32,
     start_time: u64,
     end_time: u64,
-    /// `seq_` of the pending message; [`INVAILD_SEQ`] when nothing is waiting.
+    /// `seq_` of the pending message; `INVAILD_SEQ` when nothing is waiting.
     seq: u64,
     post: Option<MessagePost>,
 }
@@ -221,7 +221,7 @@ impl Alarm {
         self.state.lock().unwrap().after
     }
 
-    /// The id of the pending message — `seq_`, [`INVAILD_SEQ`] when the alarm
+    /// The id of the pending message — `seq_`, `INVAILD_SEQ` when the alarm
     /// is not waiting.
     ///
     /// On Android this is also the id the platform alarm is started with:
