@@ -76,20 +76,15 @@ pub const KNullPost: MessagePost = MessagePost {
 pub struct MessageTitle(pub u64);
 
 /// `MessageQueue::MessageTiming`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MessageTiming {
     /// Run as soon as the loop reaches it.
+    #[default]
     Immediate,
     /// Run once, `after` ms from now.
     After(u64),
     /// Run every `period` ms, starting `after` ms from now.
     Period { after: u64, period: u64 },
-}
-
-impl Default for MessageTiming {
-    fn default() -> Self {
-        Self::Immediate
-    }
 }
 
 /// `MessageQueue::Message`.
@@ -164,6 +159,10 @@ impl std::fmt::Debug for Message {
 /// What the loop actually holds.
 struct PostedMessage {
     post: MessagePost,
+    /// `Message::title`, copied here so that a cancel can match on it without
+    /// locking the payload — a handler cancelling its own periodic message
+    /// runs while the dispatcher holds that very lock.
+    title: MessageTitle,
     /// When an `After`/`Period` message becomes due.
     due: Option<Instant>,
     /// Set for `Period`: the delay between two runs.
@@ -178,6 +177,7 @@ impl PostedMessage {
     fn clone_for_next_run(&self) -> Self {
         Self {
             post: self.post,
+            title: self.title,
             due: self.due,
             period: self.period,
             message: Arc::clone(&self.message),
@@ -248,14 +248,25 @@ fn queues() -> &'static Mutex<Option<HashMap<MessageQueueId, Arc<Queue>>>> {
     &QUEUES
 }
 
-fn queue(id: MessageQueueId) -> Option<Arc<Queue>> {
-    let mut guard = queues().lock().unwrap();
-    let map = guard.get_or_insert_with(|| {
+/// The registry, created on first use with the default queue already in it.
+///
+/// Every entry point has to go through here: `create_message_queue` used to
+/// build the map itself, so when it happened to be the first queue call in
+/// the process the default queue was missing for good and every later
+/// `get_def_message_queue` post silently failed.
+fn registry(
+    guard: &mut Option<HashMap<MessageQueueId, Arc<Queue>>>,
+) -> &mut HashMap<MessageQueueId, Arc<Queue>> {
+    guard.get_or_insert_with(|| {
         let mut map = HashMap::new();
         map.insert(KDefQueueID, Arc::new(Queue::new()));
         map
-    });
-    map.get(&id).cloned()
+    })
+}
+
+fn queue(id: MessageQueueId) -> Option<Arc<Queue>> {
+    let mut guard = queues().lock().unwrap();
+    registry(&mut guard).get(&id).cloned()
 }
 
 /// `MessageQueue::CurrentThreadMessageQueue()`.
@@ -281,8 +292,7 @@ pub fn create_message_queue() -> MessageQueueId {
         *next
     };
     let mut guard = queues().lock().unwrap();
-    let map = guard.get_or_insert_with(HashMap::new);
-    map.insert(id, Arc::new(Queue::new()));
+    registry(&mut guard).insert(id, Arc::new(Queue::new()));
     id
 }
 
@@ -362,6 +372,7 @@ pub fn post_message(
     state.next_post_seq += 1;
     state.messages.push_back(PostedMessage {
         post: MessagePost { reg: *handler, seq },
+        title: message.title,
         due,
         period,
         message: Arc::new(Mutex::new(message)),
@@ -440,26 +451,49 @@ pub fn cancel_message(post: &MessagePost) -> bool {
     let mut state = queue.lock();
     let before = state.messages.len();
     state.messages.retain(|m| m.post != *post);
-    state.messages.len() != before
+    let cancelled = state.messages.len() != before;
+    drop(state);
+    if cancelled {
+        // A `wait_message` on this post is waiting for exactly this: its
+        // completion condition just became true.
+        queue.cond.notify_all();
+    }
+    cancelled
 }
 
 /// `MessageQueue::CancelMessage(handler)`.
 pub fn cancel_message_by_handler(handler: &MessageHandler) {
     if let Some(queue) = queue(handler.queue) {
-        queue
-            .lock()
-            .messages
-            .retain(|m| m.post.reg.seq != handler.seq);
+        let before = {
+            let mut state = queue.lock();
+            let before = state.messages.len();
+            state.messages.retain(|m| m.post.reg.seq != handler.seq);
+            before
+        };
+        if queue.lock().messages.len() != before {
+            queue.cond.notify_all();
+        }
     }
 }
 
 /// `MessageQueue::CancelMessage(handler, title)`.
 pub fn cancel_message_by_handler_title(handler: &MessageHandler, title: MessageTitle) {
-    if let Some(queue) = queue(handler.queue) {
+    let Some(queue) = queue(handler.queue) else {
+        return;
+    };
+    // The title is matched on the queue entry, never through
+    // `m.message.lock()`: a handler cancelling its own periodic message runs
+    // while the dispatcher holds that lock, and a `Mutex` is not reentrant.
+    let before = {
         let mut state = queue.lock();
-        state.messages.retain(|m| {
-            !(m.post.reg.seq == handler.seq && m.message.lock().unwrap().title == title)
-        });
+        let before = state.messages.len();
+        state
+            .messages
+            .retain(|m| !(m.post.reg.seq == handler.seq && m.title == title));
+        before
+    };
+    if queue.lock().messages.len() != before {
+        queue.cond.notify_all();
     }
 }
 
@@ -530,6 +564,11 @@ impl RunLoop {
     }
 
     fn dispatch(queue: &Arc<Queue>, timeout: Option<Duration>) -> bool {
+        // Wait until a message is due, up to `timeout`. A wake-up is not the
+        // end of the wait: only the deadline or a due message is, otherwise a
+        // spurious wake-up reports "nothing to do" before an `After` message
+        // is due.
+        let deadline = timeout.map(|timeout| Instant::now() + timeout);
         let next = {
             let mut state = queue.lock();
             loop {
@@ -541,19 +580,21 @@ impl RunLoop {
                 {
                     break Some(index);
                 }
-                state = match timeout {
-                    Some(timeout) => {
-                        let (guard, _) = queue.cond.wait_timeout(state, timeout).unwrap();
-                        guard
-                    }
-                    None => queue.cond.wait(state).unwrap(),
+                // The wait is capped by the earliest message that is still to
+                // come, not only by the caller's timeout: an `After(40)` with
+                // a 300 ms timeout has to run after 40 ms, and with no timeout
+                // at all there is nothing else that would ever wake this up.
+                let wait = match (state.messages.iter().filter_map(|m| m.due).min(), deadline) {
+                    (Some(due), Some(deadline)) => due.min(deadline).saturating_duration_since(now),
+                    (Some(due), None) => due.saturating_duration_since(now),
+                    (None, Some(deadline)) => deadline.saturating_duration_since(now),
+                    (None, None) => Duration::MAX,
                 };
-                if timeout.is_some() {
-                    break state
-                        .messages
-                        .iter()
-                        .position(|m| m.due.is_none_or(|due| due <= Instant::now()));
+                if wait.is_zero() {
+                    break None;
                 }
+                let (guard, _) = queue.cond.wait_timeout(state, wait).unwrap();
+                state = guard;
             }
         };
         let Some(index) = next else { return false };
