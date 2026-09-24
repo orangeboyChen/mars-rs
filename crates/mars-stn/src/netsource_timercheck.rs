@@ -22,6 +22,13 @@
 //! The C++ starts the check from its constructor when the app is active; the
 //! port cannot, because the host hands the callbacks in afterwards, so
 //! [`NetSourceTimerCheck::on_active_changed_at`] is what starts it.
+//!
+//! Leaving the foreground stops a check that is in flight and leaves one that is
+//! not alone: `__StopCheck()` asks `thread_.isruning()` before it cancels
+//! `asyncpost_`, so the post keeps arriving — and keeps testing — after the app
+//! went to the background without a test running. The port keeps that, which is
+//! what [`NetSourceTimerCheck::stop_check`] and
+//! [`NetSourceTimerCheck::on_active_changed_at`] say of themselves too.
 
 use crate::simple_ipport_sort::IpSourceType;
 use crate::Random;
@@ -288,7 +295,9 @@ impl NetSourceTimerCheck {
     }
 
     /// `__OnActiveChanged(_is_active)` — the app coming to the foreground
-    /// starts the check and leaving it stops one.
+    /// starts the check and leaving it stops one, which is
+    /// [`NetSourceTimerCheck::stop_check`]: a check that is not in flight is
+    /// left alone, so the post keeps coming while the app is in the background.
     pub fn on_active_changed(&mut self, is_active: bool) {
         self.on_active_changed_at(gettickcount(), is_active)
     }
