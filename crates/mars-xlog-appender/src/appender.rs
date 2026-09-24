@@ -1365,11 +1365,21 @@ mod tests {
         let info = info(LogLevel::Debug);
         appender.write(Some(&info), "async payload");
         // No flush yet: nothing has reached the log file.
-        appender.flush();
-        appender.flush_sync();
-
         let path = today_name(tmp.path());
-        let bytes = fs::read(&path).unwrap_or_default();
+        let mut bytes = Vec::new();
+        // `flush` wakes the writer thread and `flush_sync` drains whatever is
+        // still in the buffer — and the C++ lets the two race for it. When
+        // the writer thread got there first the bytes are on their way to the
+        // file rather than in it, so the file is given a moment to catch up.
+        for _ in 0..100 {
+            appender.flush();
+            appender.flush_sync();
+            bytes = fs::read(&path).unwrap_or_default();
+            if !bytes.is_empty() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
         assert!(!bytes.is_empty(), "flush_sync must drain the cache");
 
         appender.close();
