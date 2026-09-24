@@ -141,8 +141,8 @@ jobs:
           export "CARGO_TARGET_${upper}_LINKER=$clang"
           # So that plain `llvm-ar` and friends are reachable too.
           export PATH="$ndk_bin:$PATH"
-          cargo build --release -p mars-xlog-ffi --target "$target"
-          cargo build --release -p mars-xlog-jni --target "$target"
+          cargo build --release -p mars-ffi --target "$target"
+          cargo build --release -p mars-jni --target "$target"
           ls -l "target/$target/release/libmarsxlog.so"
 
   apple:
@@ -160,7 +160,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release -p mars-xlog-ffi --target ${{ matrix.target }}
+      - run: cargo build --release -p mars-ffi --target ${{ matrix.target }}
 
   docs:
     name: docs
