@@ -13,7 +13,9 @@
 //! which is asked for the whole url — and what comes back is judged on its
 //! status alone, with no body to answer a task with. The connect is the long
 //! link's: `ComplexConnect` with the long link's timeout and interval, which the
-//! port hands the operator as [`SocketOperator::set_ip_connection_timeout`].
+//! port hands the operator as [`SocketOperator::set_ip_connection_timeout`] —
+//! both address families get the long link's budget, which is what the C++
+//! gives the connect; its address interval has no slot here.
 //!
 //! The reads of the answer are an argument, as they are everywhere else in this
 //! crate: [`ProxyTest::test`] is the C++'s `while (true)` loop, and what it is
@@ -30,7 +32,7 @@ use mars_comm::http::{
 };
 use mars_comm::{LocalIpStack, ProxyInfo, ProxyType, SocketAddress};
 
-use crate::config::{LONGLINK_CONN_INTERVAL_MS, LONGLINK_CONN_TIMEOUT_MS};
+use crate::config::LONGLINK_CONN_TIMEOUT_MS;
 use crate::short_link::ETIMEDOUT;
 use crate::shortlink::authorization;
 use crate::socket_operator::{SocketFd, SocketOperator};
@@ -250,8 +252,13 @@ impl ProxyTest {
         };
 
         if let Some(operator) = self.operator.as_mut() {
-            // `ComplexConnect(kLonglinkConnTimeout, kLonglinkConnInteral, …)`
-            operator.set_ip_connection_timeout(LONGLINK_CONN_TIMEOUT_MS, LONGLINK_CONN_INTERVAL_MS);
+            // `ComplexConnect(kLonglinkConnTimeout, kLonglinkConnInteral,
+            // kLonglinkConnInteral, kLonglinkConnMax)`: the C++ gives the two
+            // per-family slots the address interval and `kLonglinkConnMax`,
+            // neither of which is a connect budget. The port's operator has no
+            // slot for an interval, so both families get the budget the test
+            // itself was given.
+            operator.set_ip_connection_timeout(LONGLINK_CONN_TIMEOUT_MS, LONGLINK_CONN_TIMEOUT_MS);
         }
         let socket = self.open(&addresses, &connect_proxy);
         socket.is_valid().then_some(socket)
@@ -988,7 +995,7 @@ mod tests {
         );
         assert_eq!(
             seen.timeouts.lock().unwrap().clone(),
-            vec![(LONGLINK_CONN_TIMEOUT_MS, LONGLINK_CONN_INTERVAL_MS)]
+            vec![(LONGLINK_CONN_TIMEOUT_MS, LONGLINK_CONN_TIMEOUT_MS)]
         );
     }
 
