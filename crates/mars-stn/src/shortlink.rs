@@ -101,7 +101,8 @@ pub fn request_url(profile: &ConnectProfile, cgi: &str) -> String {
 
 /// What `__RunReadWrite` puts in the head: the `Host` of the connect, the
 /// `Proxy-Authorization` of an http proxy that has an account, and then the
-/// task's own headers — which is why one of theirs wins over either.
+/// task's own headers — which is why one of theirs wins over either, in
+/// whatever case it wrote the name.
 pub fn request_headers(profile: &ConnectProfile, task: &Task) -> Headers {
     let mut headers = Headers::new();
     headers.insert(HOST.to_string(), profile.host.clone());
@@ -110,7 +111,18 @@ pub fn request_headers(profile: &ConnectProfile, task: &Task) -> Headers {
         headers.insert(PROXY_AUTHORIZATION.to_string(), authorization);
     }
 
+    // a task's own header wins over either, whatever case it wrote the name
+    // in: the C++'s field map compares case-insensitively, so theirs is the
+    // same field as the one above and replaces it. This map does not, so the
+    // one above is taken out rather than left to be written after theirs
     for (name, value) in &task.headers {
+        let same_field = headers
+            .keys()
+            .find(|written| written.eq_ignore_ascii_case(name))
+            .cloned();
+        if let Some(written) = same_field {
+            headers.remove(&written);
+        }
         headers.insert(name.clone(), value.clone());
     }
     headers
@@ -320,6 +332,19 @@ mod tests {
             request_headers(&profile(), &task).get("Host"),
             Some(&"other.example".to_string())
         );
+
+        // and so is one it wrote in another case, which a `BTreeMap` would
+        // otherwise sort *before* `Host` and write first
+        task.headers.remove("Host");
+        task.headers
+            .insert("HOST".to_string(), "upper.example".to_string());
+        let headers = request_headers(&profile(), &task);
+        assert_eq!(
+            headers.get("HOST"),
+            Some(&"upper.example".to_string()),
+            "theirs, and only theirs"
+        );
+        assert_eq!(headers.len(), 2);
     }
 
     #[test]
