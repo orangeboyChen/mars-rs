@@ -198,37 +198,25 @@ pub fn new_xlogger_instance(config: &XLogConfig, level: LogLevel) -> XloggerHand
         return DEFAULT_HANDLE;
     }
 
-    // Fast path: already registered.
-    if let Some(handle) = registry()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .by_prefix
-        .get(&config.nameprefix)
-        .copied()
-    {
+    // The C++ creates the whole instance under
+    // `ScopedLock lock(GetGlobalMutex())` (`xlogger_interface.cc`), and this is
+    // why: two threads asking for the same prefix would otherwise both miss the
+    // table and open two appenders over one `<prefix>.mmap3`, and closing the
+    // redundant one clears the cache file the other is still writing through.
+    // Opening costs a `create_dir_all`, an mmap and a few writes, so every
+    // other logger in the process waits for it — which is what the C++ does
+    // too, and instance creation is not on the write path.
+    let mut registry = registry().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(handle) = registry.by_prefix.get(&config.nameprefix).copied() {
         return handle;
     }
 
     // Each instance opens its own appender, like the C++ `NewXloggerInstance`.
-    // That does `create_dir_all`, an mmap and several writes, so it happens
-    // outside the registry lock — otherwise every other logger in the process
-    // stalls for the whole of it.
     let appender = match appender_open_instance(config.clone()) {
         Ok(id) => Some(id),
         Err(_) => return DEFAULT_HANDLE,
     };
 
-    let mut registry = registry().lock().unwrap_or_else(|e| e.into_inner());
-    // Another thread may have registered the prefix while the lock was free.
-    if let Some(handle) = registry.by_prefix.get(&config.nameprefix).copied() {
-        // Ours is now redundant: close it rather than leak an appender nobody
-        // can reach.
-        if let Some(id) = appender {
-            drop(registry);
-            appender_close_instance(id);
-        }
-        return handle;
-    }
     let handle = registry.next;
     registry.next += 1;
     let mut category = XloggerCategory::default();
@@ -476,6 +464,40 @@ mod tests {
             new_xlogger_instance(&config("prefix", std::path::Path::new("")), LogLevel::Info),
             DEFAULT_HANDLE
         );
+    }
+
+    /// Two threads asking for the same prefix at once must open **one**
+    /// appender between them: a second one over the same `<prefix>.mmap3` would
+    /// be closed again, and `close` clears the cache file the first one is
+    /// still writing through — which is why the C++ holds its mutex across
+    /// `XloggerAppender::NewInstance`.
+    #[test]
+    fn threads_asking_for_the_same_prefix_at_once_open_one_appender() {
+        let _guard = serial();
+        let dir = tempfile::tempdir().unwrap();
+        let config = config("race", dir.path());
+
+        let handles: Vec<XloggerHandle> = std::thread::scope(|scope| {
+            let threads: Vec<_> = (0..8)
+                .map(|_| scope.spawn(|| new_xlogger_instance(&config, LogLevel::Verbose)))
+                .collect();
+            threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect()
+        });
+        assert!(handles.iter().all(|handle| *handle == handles[0]));
+        assert_ne!(handles[0], DEFAULT_HANDLE);
+
+        // one category, and the cache it writes through is the one it opened
+        set_appender_mode(handles[0], AppenderMode::Sync);
+        assert!(xlogger_write(handles[0], None, Some("REC-AFTER-THE-RACE")));
+        flush(handles[0], true);
+        let text = log_text(dir.path());
+        assert!(text.contains("REC-AFTER-THE-RACE"), "{text}");
+
+        release_xlogger_instance("race");
+        crate::appender_close();
     }
 
     #[test]
