@@ -865,7 +865,19 @@ impl ShortLink {
 
         self.profile.start_send_packet_time = now;
         match self.socket_send(socket, &request) {
-            Ok(len) => Ok(len),
+            // `send_ret < 0` is the C++'s only failure; a write that brought
+            // part of the request out is one too, since what would come back
+            // is the answer to a request that was never finished
+            Ok(len) if len >= request.len() => Ok(len),
+            Ok(_) | Err(0) => {
+                self.keep_alive = false;
+                Err(self.fail(
+                    RunFail::Socket {
+                        err_code: ECT_SOCKET_WRITEN_WITH_NON_BLOCK,
+                    },
+                    true,
+                ))
+            }
             Err(err_code) => {
                 // a request that did not go out is a socket that is not kept
                 self.keep_alive = false;
@@ -1026,6 +1038,9 @@ impl ShortLink {
         };
         self.on_send(socket);
         if let Err(fail) = self.write_at(now, socket, body) {
+            // the C++ leaves `__RunReadWrite` here too, and closes in `__Run`;
+            // the socket is one this run is not keeping either way
+            self.end_run(socket);
             return Some(Err(fail));
         }
         // `socketOperator_->Breaker().IsBreak()` — the C++ asks once more, just
@@ -1033,6 +1048,9 @@ impl ShortLink {
         // same thing it says for a break during the reads
         if self.is_broken() {
             self.profile.disconn_errtype = ErrCmdType::Canceld;
+            // no answer was read, so the socket is not one the pool can hand
+            // out again — the C++ keeps `is_keep_alive_` here, and loses it
+            self.keep_alive = false;
             self.end_run(socket);
             return Some(Err(RunFail::Canceld));
         }
@@ -1413,6 +1431,8 @@ mod tests {
         closed: Arc<Mutex<Vec<SocketFd>>>,
         /// A write that does not happen: `None` is one that does.
         fail_send: Arc<Mutex<Option<i32>>>,
+        /// A write that brings only part of the request out.
+        short_send: Arc<Mutex<bool>>,
     }
 
     impl Seen {
@@ -1502,6 +1522,9 @@ mod tests {
             // the C++ hands `-1`, which is the socket's own timeout
             assert_eq!(timeout_ms, -1);
             self.seen.sent.lock().unwrap().push(buffer.to_vec());
+            if *self.seen.short_send.lock().unwrap() {
+                return Ok(buffer.len().saturating_sub(1));
+            }
             match *self.seen.fail_send.lock().unwrap() {
                 None => Ok(buffer.len()),
                 Some(error) => Err(error),
@@ -2474,9 +2497,47 @@ mod tests {
     }
 
     #[test]
+    fn a_write_that_brought_only_part_of_the_request_out_is_one_that_failed() {
+        let seen = Seen::default();
+        let mut link = link_for(&seen, kept_task(), false);
+        let socket = link.connect_at(1000).unwrap();
+        *seen.short_send.lock().unwrap() = true;
+
+        assert_eq!(
+            link.write_at(1100, socket, b"hello"),
+            Err(RunFail::Socket {
+                err_code: ECT_SOCKET_WRITEN_WITH_NON_BLOCK
+            })
+        );
+        assert!(
+            !link.is_keep_alive(),
+            "the answer to a request that was never finished is not one to wait for"
+        );
+    }
+
+    #[test]
+    fn a_run_whose_write_did_not_happen_closes_the_socket_it_made() {
+        let seen = Seen::default();
+        let mut link = link_for(&seen, kept_task(), false);
+        *seen.fail_send.lock().unwrap() = Some(0);
+
+        assert_eq!(
+            link.run_at(1000, b"hello", std::iter::empty()),
+            Some(Err(RunFail::Socket {
+                err_code: ECT_SOCKET_WRITEN_WITH_NON_BLOCK
+            }))
+        );
+        assert_eq!(
+            seen.closed(),
+            vec![SocketFd(3)],
+            "the connect did happen, so the socket is the run's to close"
+        );
+    }
+
+    #[test]
     fn a_run_the_app_broke_off_is_cancelled_and_not_reported() {
         let seen = Seen::default();
-        let mut link = link(&seen);
+        let mut link = link_for(&seen, kept_task(), false);
         let mut host = Host::new(seen.clone());
         host.breaker.broken = true;
         link.set_socket_operator(host);
@@ -2489,6 +2550,11 @@ mod tests {
         assert_eq!(link.profile().disconn_errtype, ErrCmdType::Canceld);
         assert!(seen.reports.lock().unwrap().is_empty());
         assert_eq!(seen.sent().len(), 1, "the request did go out");
+        assert_eq!(
+            seen.closed(),
+            vec![SocketFd(3)],
+            "no answer was read, so the socket is not one to keep for the next task"
+        );
     }
 
     #[test]
