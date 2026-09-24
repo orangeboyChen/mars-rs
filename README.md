@@ -8,7 +8,7 @@ zlib- or zstd-compressed, sync or async — and is the whole logging stack:
 | crate                 | what it is                                                        |
 |-----------------------|-------------------------------------------------------------------|
 | `mars-core`      | block buffer, log file framing, zlib/zstd helpers                 |
-| `mars-comm`      | common utilities: `strutil`, `tickcount`, thread, frequency limit  |
+| `mars-comm`      | common utilities: `strutil`, `tickcount`, thread, message queue     |
 | `mars-crypt`     | ECDH + AES-GCM record encryption                                  |
 | `mars-buffer`    | the mmap append buffer (`LogZlibBuffer` / `LogZstdBuffer`)        |
 | `mars-appender`  | the process-wide appender and per-instance loggers                |
