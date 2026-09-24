@@ -67,6 +67,15 @@ fn level_to_java(level: LogLevel) -> jint {
     level as jint
 }
 
+/// `Xlog.AppednerModeAsync/Sync` — anything else is ignored, like the C++.
+fn appender_mode_from_java(mode: jint) -> Option<AppenderMode> {
+    match mode {
+        0 => Some(AppenderMode::Async),
+        1 => Some(AppenderMode::Sync),
+        _ => None,
+    }
+}
+
 /// Runs `f`, catching any panic: unwinding into the JVM is UB.
 fn guard<R: Default>(f: impl FnOnce() -> R) -> R {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
@@ -183,6 +192,71 @@ fn open_appender(config: XLogConfig, level: LogLevel) {
     set_level(DEFAULT_HANDLE, level);
 }
 
+/// `Xlog.appenderFlush` body.
+pub(crate) fn flush_impl(instance: u64, is_sync: bool) {
+    flush(instance, is_sync)
+}
+
+/// `Xlog.newXlogInstance` body — `0` is the "bad config" answer.
+pub(crate) fn new_instance_impl(config: XLogConfig, level: LogLevel) -> jlong {
+    new_xlogger_instance(&config, level) as jlong
+}
+
+/// `Xlog.getXlogInstance` body.
+pub(crate) fn get_instance_impl(prefix: &str) -> jlong {
+    get_xlogger_instance(prefix) as jlong
+}
+
+/// `Xlog.releaseXlogInstance` body.
+pub(crate) fn release_instance_impl(prefix: &str) {
+    release_xlogger_instance(prefix)
+}
+
+/// `Xlog.logWrite` body — `None` writes with the category defaults.
+pub(crate) fn log_write_impl(info: Option<XLoggerInfo>, log: &str) -> bool {
+    xlogger_write(DEFAULT_HANDLE, info.as_ref(), Some(log))
+}
+
+/// `Xlog.logWrite2` body.
+pub(crate) fn log_write2_impl(instance: u64, info: XLoggerInfo, log: &str) -> bool {
+    xlogger_write(instance, Some(&info), Some(log))
+}
+
+/// `Xlog.getLogLevel` body — `-1` for an unknown handle.
+pub(crate) fn get_level_impl(instance: u64) -> jint {
+    match get_level(instance) {
+        Some(level) => level_to_java(level),
+        None => -1,
+    }
+}
+
+/// `Xlog.setLogLevel` body.
+pub(crate) fn set_level_impl(instance: u64, level: jint) {
+    set_level(instance, level_from_java(level))
+}
+
+/// `Xlog.setAppenderMode` body — an unknown mode is ignored.
+pub(crate) fn set_appender_mode_impl(instance: u64, mode: jint) {
+    if let Some(mode) = appender_mode_from_java(mode) {
+        set_appender_mode(instance, mode);
+    }
+}
+
+/// `Xlog.setConsoleLogOpen` body.
+pub(crate) fn set_console_log_open_impl(instance: u64, is_open: bool) {
+    set_console_log_open(instance, is_open)
+}
+
+/// `Xlog.setMaxFileSize` body — a negative size means "never split".
+pub(crate) fn set_max_file_size_impl(instance: u64, size: jlong) {
+    set_max_file_size(instance, size.max(0) as u64)
+}
+
+/// `Xlog.setMaxAliveTime` body.
+pub(crate) fn set_max_alive_time_impl(instance: u64, seconds: jlong) {
+    set_max_alive_duration(instance, seconds.max(0) as u64)
+}
+
 /// `Xlog.appenderOpen`.
 #[no_mangle]
 pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_appenderOpen<'local>(
@@ -198,13 +272,19 @@ pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_appenderOpen<'local>(
     })
 }
 
+/// `Xlog.appenderClose` body: everything but the JNI plumbing, so it can be
+/// unit tested without a JVM.
+pub(crate) fn close_impl() {
+    mars_appender::appender_close()
+}
+
 /// `Xlog.appenderClose`.
 #[no_mangle]
 pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_appenderClose<'local>(
     _env: JNIEnv<'local>,
     _this: JObject<'local>,
 ) {
-    guard(mars_appender::appender_close)
+    guard(close_impl)
 }
 
 /// `Xlog.appenderFlush`.
@@ -215,7 +295,7 @@ pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_appenderFlush<'local>(
     instance: jlong,
     is_sync: jboolean,
 ) {
-    guard(|| flush(instance as u64, is_sync != 0))
+    guard(|| flush_impl(instance as u64, is_sync != 0))
 }
 
 /// `Xlog.newXlogInstance` — returns the handle, or `0` on a bad config.
@@ -226,7 +306,7 @@ pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_newXlogInstance<'local>(
     config: JObject<'local>,
 ) -> jlong {
     guard(|| match config_from_java(&mut env, &config) {
-        Some((config, level)) => new_xlogger_instance(&config, level) as jlong,
+        Some((config, level)) => new_instance_impl(config, level),
         None => 0,
     })
 }
@@ -243,7 +323,7 @@ pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_getXlogInstance<'local>(
             .get_string(&nameprefix)
             .map(|value| value.to_string_lossy().into_owned())
             .unwrap_or_default();
-        get_xlogger_instance(&prefix) as jlong
+        get_instance_impl(&prefix)
     })
 }
 
@@ -259,7 +339,7 @@ pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_releaseXlogInstance<'loca
             .get_string(&nameprefix)
             .map(|value| value.to_string_lossy().into_owned())
             .unwrap_or_default();
-        release_xlogger_instance(&prefix);
+        release_instance_impl(&prefix);
     })
 }
 
@@ -277,7 +357,7 @@ pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_logWrite<'local>(
             .map(|value| value.to_string_lossy().into_owned())
             .unwrap_or_default();
         if info.is_null() {
-            xlogger_write(DEFAULT_HANDLE, None, Some(&log));
+            log_write_impl(None, &log);
             return;
         }
         let info = XLoggerInfo {
@@ -293,7 +373,7 @@ pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_logWrite<'local>(
             maintid: long_field(&mut env, &info, "maintid"),
             timeval: now_timeval(),
         };
-        xlogger_write(DEFAULT_HANDLE, Some(&info), Some(&log));
+        log_write_impl(Some(info), &log);
     })
 }
 
@@ -330,7 +410,7 @@ pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_logWrite2<'local>(
             maintid,
             timeval: now_timeval(),
         };
-        xlogger_write(instance as u64, Some(&info), Some(&log));
+        log_write2_impl(instance as u64, info, &log);
     })
 }
 
@@ -341,10 +421,7 @@ pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_getLogLevel(
     _this: JObject<'_>,
     instance: jlong,
 ) -> jint {
-    guard(|| match get_level(instance as u64) {
-        Some(level) => level_to_java(level),
-        None => -1,
-    })
+    guard(|| get_level_impl(instance as u64))
 }
 
 /// `Xlog.setLogLevel`.
@@ -355,7 +432,7 @@ pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_setLogLevel(
     instance: jlong,
     level: jint,
 ) {
-    guard(|| set_level(instance as u64, level_from_java(level)))
+    guard(|| set_level_impl(instance as u64, level))
 }
 
 /// `Xlog.setAppenderMode`.
@@ -366,14 +443,7 @@ pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_setAppenderMode(
     instance: jlong,
     mode: jint,
 ) {
-    guard(|| {
-        let mode = match mode {
-            0 => AppenderMode::Async,
-            1 => AppenderMode::Sync,
-            _ => return,
-        };
-        set_appender_mode(instance as u64, mode);
-    })
+    guard(|| set_appender_mode_impl(instance as u64, mode))
 }
 
 /// `Xlog.setConsoleLogOpen`.
@@ -384,7 +454,7 @@ pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_setConsoleLogOpen(
     instance: jlong,
     is_open: jboolean,
 ) {
-    guard(|| set_console_log_open(instance as u64, is_open != 0))
+    guard(|| set_console_log_open_impl(instance as u64, is_open != 0))
 }
 
 /// `Xlog.setMaxFileSize`.
@@ -395,7 +465,7 @@ pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_setMaxFileSize(
     instance: jlong,
     size: jlong,
 ) {
-    guard(|| set_max_file_size(instance as u64, size.max(0) as u64))
+    guard(|| set_max_file_size_impl(instance as u64, size))
 }
 
 /// `Xlog.setMaxAliveTime`.
@@ -406,7 +476,7 @@ pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_setMaxAliveTime(
     instance: jlong,
     seconds: jlong,
 ) {
-    guard(|| set_max_alive_duration(instance as u64, seconds.max(0) as u64))
+    guard(|| set_max_alive_time_impl(instance as u64, seconds))
 }
 
 #[cfg(test)]
@@ -477,6 +547,94 @@ mod tests {
     /// The C++ called `xlogger_SetLevel` whatever `appender_open` returned, so
     /// a second `appenderOpen` still moves the level even though the singleton
     /// refuses to open twice.
+    #[test]
+    fn every_jni_body_is_reachable_without_a_jvm() {
+        let _guard = singleton();
+        let dir = logdir("bodies");
+        set_level(DEFAULT_HANDLE, LogLevel::Verbose);
+
+        // open + write + flush + close, the whole lifecycle
+        open_appender(config(&dir), LogLevel::Debug);
+        assert_eq!(
+            get_level_impl(DEFAULT_HANDLE),
+            level_to_java(LogLevel::Debug)
+        );
+        assert!(log_write_impl(None, "no info"));
+        let info = XLoggerInfo {
+            level: LogLevel::Info,
+            tag: Some("Net".to_owned()),
+            filename: Some("main.rs".to_owned()),
+            func_name: Some("run".to_owned()),
+            line: 42,
+            pid: -1,
+            tid: -1,
+            maintid: -1,
+            timeval: now_timeval(),
+        };
+        assert!(log_write_impl(Some(info.clone()), "with info"));
+        assert!(log_write2_impl(DEFAULT_HANDLE, info, "through an instance"));
+        flush_impl(DEFAULT_HANDLE, false);
+        flush_impl(DEFAULT_HANDLE, true);
+        close_impl();
+        // closing twice is harmless, like the C++ appender_close()
+        close_impl();
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn instances_are_created_looked_up_and_released() {
+        let dir = logdir("instances");
+        let config = config(&dir);
+        let handle = new_instance_impl(config.clone(), LogLevel::Info);
+        assert_ne!(handle, 0);
+        assert_eq!(get_instance_impl("Mars"), handle);
+        // an unknown prefix has no handle
+        assert_eq!(get_instance_impl("nope"), 0);
+        // a config without a log dir is refused
+        let broken = XLogConfig {
+            logdir: std::path::PathBuf::new(),
+            ..config.clone()
+        };
+        assert_eq!(new_instance_impl(broken, LogLevel::Info), 0);
+        release_instance_impl("Mars");
+        assert_eq!(get_instance_impl("Mars"), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_setters_accept_the_java_values() {
+        set_level_impl(DEFAULT_HANDLE, 3);
+        assert_eq!(
+            get_level_impl(DEFAULT_HANDLE),
+            level_to_java(LogLevel::Warn)
+        );
+        // an unknown handle has no level
+        assert_eq!(get_level_impl(0xdead_beef), -1);
+
+        set_appender_mode_impl(DEFAULT_HANDLE, 1);
+        set_appender_mode_impl(DEFAULT_HANDLE, 0);
+        // an out-of-range mode is ignored instead of panicking
+        set_appender_mode_impl(DEFAULT_HANDLE, 9);
+
+        set_console_log_open_impl(DEFAULT_HANDLE, true);
+        set_console_log_open_impl(DEFAULT_HANDLE, false);
+
+        // negatives clamp to "unlimited", like the C++
+        set_max_file_size_impl(DEFAULT_HANDLE, -1);
+        set_max_file_size_impl(DEFAULT_HANDLE, 1024);
+        set_max_alive_time_impl(DEFAULT_HANDLE, -1);
+        set_max_alive_time_impl(DEFAULT_HANDLE, 3600);
+    }
+
+    #[test]
+    fn appender_mode_from_java_only_accepts_the_two_modes() {
+        assert_eq!(appender_mode_from_java(0), Some(AppenderMode::Async));
+        assert_eq!(appender_mode_from_java(1), Some(AppenderMode::Sync));
+        assert_eq!(appender_mode_from_java(2), None);
+        assert_eq!(appender_mode_from_java(-1), None);
+    }
+
     #[test]
     fn the_level_is_applied_when_the_appender_is_already_open() {
         let _guard = singleton();
