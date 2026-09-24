@@ -314,6 +314,35 @@ pub struct SendData {
     pub pos: usize,
 }
 
+/// One pair the link may be made on: the [`IpPortItem`] it came from and the
+/// [`SocketAddress`] it is reached at.
+///
+/// The C++ keeps two vectors — `ip_items` and `vecaddr` — and an index into
+/// them, and the two come apart: a v4 proxy takes the v6 addresses out of
+/// `vecaddr` only, so the index the connect comes back with lands on a
+/// different item than the one it won on. Here the item and its address are one
+/// entry, so anything that filters the addresses filters the items with them.
+#[derive(Debug, Clone, PartialEq)]
+struct Candidate {
+    item: IpPortItem,
+    address: SocketAddress,
+}
+
+impl Candidate {
+    fn new(item: &IpPortItem, stack: LocalIpStack, use_proxy: bool) -> Self {
+        let mut address = SocketAddress::new(&item.ip, item.port);
+        // a proxy is reached at the address it is; anything else is mapped onto
+        // the stack the local network carries
+        if !use_proxy {
+            address.v4_to_v6_address(stack);
+        }
+        Self {
+            item: item.clone(),
+            address,
+        }
+    }
+}
+
 /// `LongLink`.
 pub struct LongLink {
     config: LonglinkConfig,
@@ -698,20 +727,12 @@ impl LongLink {
         let stack = self.local_ip_stack();
         self.profile.nat64 = stack == LocalIpStack::IPv6;
 
-        let mut addresses: Vec<SocketAddress> = items
+        let mut candidates: Vec<Candidate> = items
             .iter()
-            .map(|item| {
-                let mut address = SocketAddress::new(&item.ip, item.port);
-                // a proxy is reached at the address it is; anything else is
-                // mapped onto the stack the local network carries
-                if !use_proxy {
-                    address.v4_to_v6_address(stack);
-                }
-                address
-            })
+            .map(|item| Candidate::new(item, stack, use_proxy))
             .collect();
 
-        if addresses.is_empty() {
+        if candidates.is_empty() {
             self.set_status(LongLinkStatus::ConnectFailed);
             self.run_response_error(ErrCmdType::Dns, ECT_DNS_MAKE_SOCKET_PREPARED, true);
             return Err(ConnectFail::NoAddress);
@@ -719,19 +740,19 @@ impl LongLink {
 
         // what the profile says until the connect comes back with the pair that
         // actually won
-        if let Some(first) = items.first() {
+        if let Some(first) = candidates.first() {
             self.profile.proxy_info = proxy.clone();
             self.profile.ip_items = items.clone();
-            self.profile.host = first.host.clone();
-            self.profile.ip_type = first.source_type;
-            self.profile.ip = first.ip.clone();
-            self.profile.port = first.port;
+            self.profile.host = first.item.host.clone();
+            self.profile.ip_type = first.item.source_type;
+            self.profile.ip = first.item.ip.clone();
+            self.profile.port = first.item.port;
             self.profile.dns_endtime = now;
         }
 
         // `ComplexConnect` goes through the proxy only when it was given an
         // address for it, which is what no proxy at all is here
-        let proxy_address = match self.proxy_address(&mut addresses, &proxy, use_proxy, stack) {
+        let proxy_address = match self.proxy_address(&mut candidates, &proxy, use_proxy, stack) {
             Ok(address) => address,
             Err(fail) => {
                 self.set_status(LongLinkStatus::ConnectFailed);
@@ -751,6 +772,10 @@ impl LongLink {
             None => ProxyInfo::none(),
         };
 
+        let addresses: Vec<SocketAddress> = candidates
+            .iter()
+            .map(|candidate| candidate.address.clone())
+            .collect();
         let socket = self.open(&addresses, &connect_proxy);
         let connected = self.operator_profile();
         self.profile.conn_time = now;
@@ -771,21 +796,23 @@ impl LongLink {
         }
 
         self.profile.ip_index = connected.index;
-        if let Some(item) = items.get(usize::try_from(connected.index).unwrap_or(usize::MAX)) {
-            self.profile.host = item.host.clone();
-            self.profile.ip_type = item.source_type;
-            self.profile.ip = item.ip.clone();
-            self.profile.port = item.port;
+        if let Some(candidate) =
+            candidates.get(usize::try_from(connected.index).unwrap_or(usize::MAX))
+        {
+            self.profile.host = candidate.item.host.clone();
+            self.profile.ip_type = candidate.item.source_type;
+            self.profile.ip = candidate.item.ip.clone();
+            self.profile.port = candidate.item.port;
         }
 
         // the ports of the candidates that lost: 80 and 443 are the two the
         // C++ cares about, because a firewall that lets one through may not
         // let the other
-        for address in addresses
+        for candidate in candidates
             .iter()
             .take(usize::try_from(connected.index).unwrap_or(0))
         {
-            match address.port() {
+            match candidate.address.port() {
                 443 => self.profile.tried_443port = 1,
                 80 => self.profile.tried_80port = 1,
                 _ => {}
@@ -856,7 +883,13 @@ impl LongLink {
         }
     }
 
-    /// `~LongLink()` — `Disconnect(kObjectDestruct)`.
+    /// `~LongLink()` — `Disconnect(kObjectDestruct)`, which is the one scene
+    /// [`LongLink::make_sure_connected`] answers [`MakeSure::Released`] for.
+    ///
+    /// It is the C++'s `Disconnect` with that scene and nothing else, so a link
+    /// with no run in flight is left alone — and the C++ never sets
+    /// `kObjectDestruct` itself: it is a scene the app hands to `Disconnect`,
+    /// and `MakeSureConnected` is the only thing that reads it.
     pub fn release(&mut self) {
         self.disconnect(DisconnectInternalCode::ObjectDestruct);
     }
@@ -1261,7 +1294,7 @@ impl LongLink {
     /// a v4 proxy cannot carry v6 traffic, so those go.
     fn proxy_address(
         &mut self,
-        addresses: &mut Vec<SocketAddress>,
+        candidates: &mut Vec<Candidate>,
         proxy: &ProxyInfo,
         use_proxy: bool,
         stack: LocalIpStack,
@@ -1284,8 +1317,10 @@ impl LongLink {
         address.v4_to_v6_address(stack);
         self.profile.ip_type = IpSourceType::Proxy;
 
-        if address.is_v4() && addresses.len() > 1 {
-            addresses.retain(|address| !address.is_v6());
+        if address.is_v4() && candidates.len() > 1 {
+            // the item goes out with the address, so the pair the connect comes
+            // back with is still the one it won on
+            candidates.retain(|candidate| !candidate.address.is_v6());
         }
         Ok(Some(address))
     }
@@ -1735,6 +1770,37 @@ mod tests {
         assert_eq!(profile.dns_endtime, 1_000);
         assert!(!profile.nat64, "the local stack is v4");
         assert_eq!(profile.ip_items.len(), 2);
+    }
+
+    #[test]
+    fn a_v4_proxy_drops_the_v6_pairs_and_the_one_that_won_is_still_the_one_it_won_on() {
+        let (mut link, seen) = link();
+        link.set_longlink_items(|_| {
+            vec![
+                item("2001:db8::1", 80, "long.example"),
+                item("1.1.1.1", 80, "long.example"),
+                item("2.2.2.2", 80, "long.example"),
+            ]
+        });
+        link.set_proxy(|| ProxyInfo::new(ProxyType::Socks5, "", "10.0.0.2", 1080, "", ""));
+        // the second pair the host was given: `2.2.2.2`, not `1.1.1.1`
+        link.operator = Some(Box::new(Host {
+            profile: SocketProfile {
+                index: 1,
+                ..SocketProfile::default()
+            },
+            ..Host::new(seen.clone())
+        }));
+        link.make_sure_connected();
+        assert!(link.connect_at(1_000).is_ok());
+
+        let addresses = seen.addresses.lock().unwrap();
+        assert_eq!(addresses[0].len(), 2, "the v6 pair is not offered");
+        assert!(addresses[0].iter().all(|address| !address.is_v6()));
+        drop(addresses);
+        // and the index is read off what is left, which is the pair itself
+        assert_eq!(link.profile().ip, "2.2.2.2");
+        assert_eq!(link.profile().ip_index, 1);
     }
 
     #[test]
