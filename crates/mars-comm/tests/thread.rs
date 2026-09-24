@@ -50,6 +50,35 @@ fn starting_a_running_thread_is_a_no_op() {
 }
 
 #[test]
+fn a_thread_is_running_as_soon_as_start_returns() {
+    let barrier = Arc::new(Barrier::new(2));
+    let worker = Arc::clone(&barrier);
+    let mut thread = Thread::new(None);
+    assert!(thread.start(move || {
+        worker.wait();
+    }));
+    // `running` used to become true only once the child was scheduled, so a
+    // second `start` arriving here saw `false`, detached the first handle and
+    // launched a second callback.
+    assert!(thread.is_running());
+    assert!(!thread.start(|| unreachable!("must not start twice")));
+    barrier.wait();
+    thread.join();
+}
+
+#[test]
+fn a_panicking_body_leaves_the_thread_startable() {
+    let mut thread = Thread::new(None);
+    assert!(thread.start(|| panic!("the callback panics")));
+    thread.join();
+    // Unwinding used to skip the `running.store(false)`, so every later start
+    // was refused while `is_running()` stayed true.
+    assert!(!thread.is_running());
+    assert!(thread.start(|| {}));
+    thread.join();
+}
+
+#[test]
 fn a_delayed_start_can_be_cancelled() {
     let ran = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&ran);

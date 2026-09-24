@@ -277,6 +277,19 @@ impl Drop for MutexVectorGuard<'_> {
 /// replaced between runs; the port takes the closure at start time, which is
 /// what every caller in mars actually does (`Thread(boost::bind(...), "name")`
 /// or `thread.start(op)`).
+/// Clears the `running` flag when the thread body ends, however it ends.
+///
+/// A panicking callback unwinds past everything after it in the body, so the
+/// flag used to stay `true` forever: `is_running()` then refused every later
+/// `start` until somebody called `join()`.
+struct RunningGuard(Arc<AtomicBool>);
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 #[derive(Debug)]
 pub struct Thread {
     name: Option<String>,
@@ -310,8 +323,8 @@ impl Thread {
         self.spawn(|cancel, _running| {
             let _ = cancel;
             op();
-        });
-        true
+        })
+        .is_ok()
     }
 
     /// `Thread::start_after(after)` — run once, `after` milliseconds from now.
@@ -331,8 +344,8 @@ impl Thread {
                 return;
             }
             op();
-        });
-        true
+        })
+        .is_ok()
     }
 
     /// `Thread::start_periodic(after, periodic)` — wait `after` ms, then run
@@ -361,8 +374,8 @@ impl Thread {
                     break;
                 }
             }
-        });
-        true
+        })
+        .is_ok()
     }
 
     /// `Thread::cancel_after()` — abort a pending delayed start.
@@ -400,7 +413,7 @@ impl Thread {
         self.running.store(false, Ordering::SeqCst);
     }
 
-    fn spawn<F>(&mut self, body: F)
+    fn spawn<F>(&mut self, body: F) -> std::io::Result<()>
     where
         F: FnOnce(Arc<AtomicBool>, Arc<AtomicBool>) + Send + 'static,
     {
@@ -411,15 +424,25 @@ impl Thread {
         if let Some(name) = &self.name {
             builder = builder.name(name.clone());
         }
-        self.handle = Some(
-            builder
-                .spawn(move || {
-                    thread_running.store(true, Ordering::SeqCst);
-                    body(cancel, running);
-                    thread_running.store(false, Ordering::SeqCst);
-                })
-                .expect("failed to spawn a mars thread"),
-        );
+
+        // `running` has to be true before `start` answers: a second `start`
+        // that arrives before the child is scheduled would otherwise still
+        // read `false`, detach this handle and launch a second callback.
+        self.running.store(true, Ordering::SeqCst);
+        match builder.spawn(move || {
+            let _running = RunningGuard(thread_running);
+            body(cancel, running);
+        }) {
+            Ok(handle) => {
+                self.handle = Some(handle);
+                Ok(())
+            }
+            Err(e) => {
+                // Nothing was started, so nothing is running.
+                self.running.store(false, Ordering::SeqCst);
+                Err(e)
+            }
+        }
     }
 }
 
