@@ -26,8 +26,12 @@ pub struct TaskInterceptInfo {
     pub name: String,
     /// `intercept_time`
     pub intercept_time: u64,
-    /// `data` — the answer the app gave.
-    pub data: String,
+    /// `data` — the answer the app gave, as the bytes it gave them: the
+    /// C++'s `std::string` holds a response buffer, which is protobuf or
+    /// compressed often enough that a `String` would refuse it, and the
+    /// crate's other wire paths (`longlink::Unpacked::body`) are `Vec<u8>`
+    /// for the same reason.
+    pub data: Vec<u8>,
 }
 
 /// `TaskIntercept`.
@@ -44,7 +48,7 @@ impl TaskIntercept {
     }
 
     /// `AddInterceptTask(_name, _data)` — the tick count comes from the clock.
-    pub fn add_intercept_task(&mut self, name: impl Into<String>, data: impl Into<String>) {
+    pub fn add_intercept_task(&mut self, name: impl Into<String>, data: impl Into<Vec<u8>>) {
         self.add_intercept_task_at(gettickcount(), name, data)
     }
 
@@ -54,7 +58,7 @@ impl TaskIntercept {
         &mut self,
         now: u64,
         name: impl Into<String>,
-        data: impl Into<String>,
+        data: impl Into<Vec<u8>>,
     ) {
         let name = name.into();
         if name.is_empty() {
@@ -73,12 +77,12 @@ impl TaskIntercept {
     /// `GetInterceptTaskInfo(_name, _last_data)` — the answer the app gave, or
     /// [`None`] when there is none, or when it is older than
     /// [`INTERCEPT_TIMEOUT`] and is forgotten on the way out.
-    pub fn intercept_task_info(&mut self, name: &str) -> Option<String> {
+    pub fn intercept_task_info(&mut self, name: &str) -> Option<Vec<u8>> {
         self.intercept_task_info_at(gettickcount(), name)
     }
 
     /// The same, with the reading handed in.
-    pub fn intercept_task_info_at(&mut self, now: u64, name: &str) -> Option<String> {
+    pub fn intercept_task_info_at(&mut self, now: u64, name: &str) -> Option<Vec<u8>> {
         let info = self.intercept_tasks.get(name)?;
         if now.saturating_sub(info.intercept_time) > INTERCEPT_TIMEOUT {
             self.intercept_tasks.remove(name);
@@ -110,24 +114,36 @@ mod tests {
     #[test]
     fn an_answer_comes_back_while_it_is_fresh() {
         let mut intercept = TaskIntercept::new();
-        intercept.add_intercept_task_at(1_000, "task", "the answer");
+        intercept.add_intercept_task_at(1_000, "task", b"the answer".to_vec());
         assert_eq!(intercept.len(), 1);
 
         assert_eq!(
             intercept.intercept_task_info_at(1_000, "task"),
-            Some("the answer".to_string())
+            Some(b"the answer".to_vec())
         );
         // ... and right up to the minute
         assert_eq!(
             intercept.intercept_task_info_at(1_000 + INTERCEPT_TIMEOUT, "task"),
-            Some("the answer".to_string())
+            Some(b"the answer".to_vec())
+        );
+    }
+
+    #[test]
+    fn an_answer_that_is_not_text_comes_back_byte_for_byte() {
+        let mut intercept = TaskIntercept::new();
+        // a response buffer, not text: protobuf with a length it in
+        let answer = vec![0x00_u8, 0xff, 0xfe, 0x80, 0x0a];
+        intercept.add_intercept_task_at(1_000, "task", answer.clone());
+        assert_eq!(
+            intercept.intercept_task_info_at(1_000, "task"),
+            Some(answer)
         );
     }
 
     #[test]
     fn an_answer_that_is_too_old_is_forgotten() {
         let mut intercept = TaskIntercept::new();
-        intercept.add_intercept_task_at(1_000, "task", "the answer");
+        intercept.add_intercept_task_at(1_000, "task", b"the answer".to_vec());
 
         assert_eq!(
             intercept.intercept_task_info_at(1_000 + INTERCEPT_TIMEOUT + 1, "task"),
@@ -139,7 +155,7 @@ mod tests {
     #[test]
     fn a_task_without_a_name_is_not_written_down() {
         let mut intercept = TaskIntercept::new();
-        intercept.add_intercept_task_at(0, "", "the answer");
+        intercept.add_intercept_task_at(0, "", b"the answer".to_vec());
         assert!(intercept.is_empty());
         assert_eq!(intercept.intercept_task_info_at(0, ""), None);
     }
@@ -147,12 +163,12 @@ mod tests {
     #[test]
     fn a_second_answer_for_the_same_task_replaces_the_first() {
         let mut intercept = TaskIntercept::new();
-        intercept.add_intercept_task_at(0, "task", "the first");
-        intercept.add_intercept_task_at(1_000, "task", "the second");
+        intercept.add_intercept_task_at(0, "task", b"the first".to_vec());
+        intercept.add_intercept_task_at(1_000, "task", b"the second".to_vec());
         assert_eq!(intercept.len(), 1);
         assert_eq!(
             intercept.intercept_task_info_at(1_000, "task"),
-            Some("the second".to_string())
+            Some(b"the second".to_vec())
         );
 
         intercept.clear();
@@ -162,10 +178,10 @@ mod tests {
     #[test]
     fn the_methods_that_take_no_reading_ask_the_clock_themselves() {
         let mut intercept = TaskIntercept::default();
-        intercept.add_intercept_task("task", "the answer");
+        intercept.add_intercept_task("task", b"the answer".to_vec());
         assert_eq!(
             intercept.intercept_task_info("task"),
-            Some("the answer".to_string())
+            Some(b"the answer".to_vec())
         );
         assert_eq!(intercept.intercept_task_info("other"), None);
         assert!(format!("{intercept:?}").contains("TaskIntercept"));
