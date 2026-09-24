@@ -1,7 +1,7 @@
 //! JNI bindings for the Rust port of Mars xlog.
 //!
 //! Every symbol here is the counterpart of one `native` method in
-//! `com.tencent.mars.xlog.Xlog` (and of one function in
+//! `io.github.marsrs.xlog.Xlog` (and of one function in
 //! `mars/xlog/jni/Java2C_Xlog.cc`), so the Java side does not have to change:
 //!
 //! | Java                      | this crate                                    |
@@ -24,16 +24,13 @@
 //! A panic unwinding into the JVM is undefined behaviour, so every entry point
 //! runs inside a `catch_unwind` guard, which catches it and drops the call.
 
-use jni::objects::{JClass, JObject, JString};
-use jni::sys::{jboolean, jint, jlong};
-use jni::JNIEnv;
+use jni::sys::{jint, jlong};
 
 use mars_appender::{
     category_set_max_alive_duration as set_max_alive_duration,
     category_set_max_file_size as set_max_file_size, flush, get_level, get_xlogger_instance,
     new_xlogger_instance, release_xlogger_instance, set_appender_mode, set_console_log_open,
-    set_level, xlogger_write, AppenderMode, CompressMode, LogLevel, XLogConfig, XLoggerInfo,
-    DEFAULT_HANDLE,
+    set_level, xlogger_write, AppenderMode, LogLevel, XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
 };
 
 /// `gettimeofday(&info.timeval, NULL)` — seconds + microseconds since the
@@ -89,96 +86,6 @@ fn guard<R: Default>(f: impl FnOnce() -> R) -> R {
 
 use std::io::Write;
 
-fn int_field(env: &mut JNIEnv<'_>, obj: &JObject<'_>, name: &str) -> i32 {
-    guard(|| {
-        env.get_field(obj, name, "I")
-            .and_then(|value| value.i())
-            .unwrap_or(0)
-    })
-}
-
-fn long_field(env: &mut JNIEnv<'_>, obj: &JObject<'_>, name: &str) -> i64 {
-    guard(|| {
-        env.get_field(obj, name, "J")
-            .and_then(|value| value.j())
-            .unwrap_or(0)
-    })
-}
-
-fn string_field(env: &mut JNIEnv<'_>, obj: &JObject<'_>, name: &str) -> String {
-    guard(|| {
-        let Ok(field) = env.get_field(obj, name, "Ljava/lang/String;") else {
-            return String::new();
-        };
-        let Ok(object) = field.l() else {
-            return String::new();
-        };
-        if object.is_null() {
-            return String::new();
-        }
-        let jstring = JString::from(object);
-        let Ok(java_str) = env.get_string(&jstring) else {
-            return String::new();
-        };
-        java_str.to_string_lossy().into_owned()
-    })
-}
-
-/// Reads `com.tencent.mars.xlog.Xlog$XLogConfig`.
-fn config_from_java(env: &mut JNIEnv<'_>, config: &JObject<'_>) -> Option<(XLogConfig, LogLevel)> {
-    if config.is_null() {
-        return None;
-    }
-
-    let mode = match int_field(env, config, "mode") {
-        0 => AppenderMode::Async,
-        1 => AppenderMode::Sync,
-        _ => return None,
-    };
-    let compress_mode = match int_field(env, config, "compressmode") {
-        0 => CompressMode::Zlib,
-        _ => CompressMode::Zstd,
-    };
-
-    let logdir = string_field(env, config, "logdir");
-    if logdir.is_empty() {
-        return None;
-    }
-    let cachedir = string_field(env, config, "cachedir");
-
-    Some((
-        XLogConfig {
-            mode,
-            logdir: std::path::PathBuf::from(logdir),
-            nameprefix: string_field(env, config, "nameprefix"),
-            pub_key: string_field(env, config, "pubkey"),
-            compress_mode,
-            compress_level: int_field(env, config, "compresslevel"),
-            cachedir: if cachedir.is_empty() {
-                None
-            } else {
-                Some(std::path::PathBuf::from(cachedir))
-            },
-            cache_days: int_field(env, config, "cachedays").max(0) as u32,
-        },
-        level_from_java(int_field(env, config, "level")),
-    ))
-}
-
-fn java_string(env: &mut JNIEnv<'_>, value: &JObject<'_>) -> String {
-    guard(|| {
-        if value.is_null() {
-            return String::new();
-        }
-        // `JObject` is a borrowed handle: re-wrap the same raw reference
-        // without taking ownership of the local ref.
-        let jstring = unsafe { JString::from_raw(value.as_raw()) };
-        env.get_string(&jstring)
-            .map(|java_str| java_str.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    })
-}
-
 /// `appender_open` plus the level of the Java config, i.e. what
 /// `Java2C_Xlog.cc` did with `appender_open(config); xlogger_SetLevel(level);`.
 ///
@@ -190,6 +97,12 @@ fn java_string(env: &mut JNIEnv<'_>, value: &JObject<'_>) -> String {
 fn open_appender(config: XLogConfig, level: LogLevel) {
     let _ = mars_appender::appender_open(config);
     set_level(DEFAULT_HANDLE, level);
+}
+
+/// `Xlog.appenderClose` body: everything but the JNI plumbing, so it can be
+/// unit tested without a JVM.
+pub(crate) fn close_impl() {
+    mars_appender::appender_close()
 }
 
 /// `Xlog.appenderFlush` body.
@@ -258,226 +171,7 @@ pub(crate) fn set_max_alive_time_impl(instance: u64, seconds: jlong) {
 }
 
 /// `Xlog.appenderOpen`.
-#[no_mangle]
-pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_appenderOpen<'local>(
-    mut env: JNIEnv<'local>,
-    _class: JClass<'local>,
-    config: JObject<'local>,
-) {
-    guard(|| {
-        let Some((config, level)) = config_from_java(&mut env, &config) else {
-            return;
-        };
-        open_appender(config, level);
-    })
-}
-
-/// `Xlog.appenderClose` body: everything but the JNI plumbing, so it can be
-/// unit tested without a JVM.
-pub(crate) fn close_impl() {
-    mars_appender::appender_close()
-}
-
-/// `Xlog.appenderClose`.
-#[no_mangle]
-pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_appenderClose<'local>(
-    _env: JNIEnv<'local>,
-    _this: JObject<'local>,
-) {
-    guard(close_impl)
-}
-
-/// `Xlog.appenderFlush`.
-#[no_mangle]
-pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_appenderFlush<'local>(
-    _env: JNIEnv<'local>,
-    _this: JObject<'local>,
-    instance: jlong,
-    is_sync: jboolean,
-) {
-    guard(|| flush_impl(instance as u64, is_sync != 0))
-}
-
-/// `Xlog.newXlogInstance` — returns the handle, or `0` on a bad config.
-#[no_mangle]
-pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_newXlogInstance<'local>(
-    mut env: JNIEnv<'local>,
-    _this: JObject<'local>,
-    config: JObject<'local>,
-) -> jlong {
-    guard(|| match config_from_java(&mut env, &config) {
-        Some((config, level)) => new_instance_impl(config, level),
-        None => 0,
-    })
-}
-
-/// `Xlog.getXlogInstance` — the handle for `nameprefix`, or `0`.
-#[no_mangle]
-pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_getXlogInstance<'local>(
-    mut env: JNIEnv<'local>,
-    _this: JObject<'local>,
-    nameprefix: JString<'local>,
-) -> jlong {
-    guard(|| {
-        let prefix = env
-            .get_string(&nameprefix)
-            .map(|value| value.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        get_instance_impl(&prefix)
-    })
-}
-
-/// `Xlog.releaseXlogInstance`.
-#[no_mangle]
-pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_releaseXlogInstance<'local>(
-    mut env: JNIEnv<'local>,
-    _this: JObject<'local>,
-    nameprefix: JString<'local>,
-) {
-    guard(|| {
-        let prefix = env
-            .get_string(&nameprefix)
-            .map(|value| value.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        release_instance_impl(&prefix);
-    })
-}
-
-/// `Xlog.logWrite` — writes through the process-wide appender.
-#[no_mangle]
-pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_logWrite<'local>(
-    mut env: JNIEnv<'local>,
-    _class: JClass<'local>,
-    info: JObject<'local>,
-    log: JString<'local>,
-) {
-    guard(|| {
-        let log = env
-            .get_string(&log)
-            .map(|value| value.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if info.is_null() {
-            log_write_impl(None, &log);
-            return;
-        }
-        let info = XLoggerInfo {
-            level: level_from_java(int_field(&mut env, &info, "level")),
-            tag: Some(string_field(&mut env, &info, "tag")),
-            filename: Some(string_field(&mut env, &info, "filename")),
-            func_name: Some(string_field(&mut env, &info, "funcname")),
-            line: int_field(&mut env, &info, "line"),
-            // -1 makes the category fill these in from the OS; Java passes real
-            // values, which the port keeps.
-            pid: long_field(&mut env, &info, "pid"),
-            tid: long_field(&mut env, &info, "tid"),
-            maintid: long_field(&mut env, &info, "maintid"),
-            timeval: now_timeval(),
-        };
-        log_write_impl(Some(info), &log);
-    })
-}
-
-/// `Xlog.logWrite2` — writes through a specific instance.
-#[allow(clippy::too_many_arguments)]
-#[no_mangle]
-pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_logWrite2<'local>(
-    mut env: JNIEnv<'local>,
-    _class: JClass<'local>,
-    instance: jlong,
-    level: jint,
-    tag: JObject<'local>,
-    filename: JObject<'local>,
-    funcname: JObject<'local>,
-    line: jint,
-    pid: jint,
-    tid: jlong,
-    maintid: jlong,
-    log: JString<'local>,
-) {
-    guard(|| {
-        let log = env
-            .get_string(&log)
-            .map(|value| value.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let info = XLoggerInfo {
-            level: level_from_java(level),
-            tag: Some(java_string(&mut env, &tag)),
-            filename: Some(java_string(&mut env, &filename)),
-            func_name: Some(java_string(&mut env, &funcname)),
-            line,
-            pid: pid as i64,
-            tid,
-            maintid,
-            timeval: now_timeval(),
-        };
-        log_write2_impl(instance as u64, info, &log);
-    })
-}
-
-/// `Xlog.getLogLevel` — `-1` for an unknown handle.
-#[no_mangle]
-pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_getLogLevel(
-    _env: JNIEnv<'_>,
-    _this: JObject<'_>,
-    instance: jlong,
-) -> jint {
-    guard(|| get_level_impl(instance as u64))
-}
-
-/// `Xlog.setLogLevel`.
-#[no_mangle]
-pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_setLogLevel(
-    _env: JNIEnv<'_>,
-    _this: JObject<'_>,
-    instance: jlong,
-    level: jint,
-) {
-    guard(|| set_level_impl(instance as u64, level))
-}
-
-/// `Xlog.setAppenderMode`.
-#[no_mangle]
-pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_setAppenderMode(
-    _env: JNIEnv<'_>,
-    _this: JObject<'_>,
-    instance: jlong,
-    mode: jint,
-) {
-    guard(|| set_appender_mode_impl(instance as u64, mode))
-}
-
-/// `Xlog.setConsoleLogOpen`.
-#[no_mangle]
-pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_setConsoleLogOpen(
-    _env: JNIEnv<'_>,
-    _this: JObject<'_>,
-    instance: jlong,
-    is_open: jboolean,
-) {
-    guard(|| set_console_log_open_impl(instance as u64, is_open != 0))
-}
-
-/// `Xlog.setMaxFileSize`.
-#[no_mangle]
-pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_setMaxFileSize(
-    _env: JNIEnv<'_>,
-    _this: JObject<'_>,
-    instance: jlong,
-    size: jlong,
-) {
-    guard(|| set_max_file_size_impl(instance as u64, size))
-}
-
-/// `Xlog.setMaxAliveTime`.
-#[no_mangle]
-pub extern "system" fn Java_com_tencent_mars_xlog_Xlog_setMaxAliveTime(
-    _env: JNIEnv<'_>,
-    _this: JObject<'_>,
-    instance: jlong,
-    seconds: jlong,
-) {
-    guard(|| set_max_alive_time_impl(instance as u64, seconds))
-}
+pub mod jni_bridge;
 
 #[cfg(test)]
 mod tests {
