@@ -422,14 +422,14 @@ pub fn singleton_message(replace: bool, handler: &MessageHandler, message: Messa
     post_message(handler, message, MessageTiming::Immediate)
 }
 
-/// `MessageQueue::BroadcastMessage(queue, message)` — every handler of the
-/// queue that accepts broadcasts (and `seq == 0` marks the post as one).
-pub fn broadcast_message(id: MessageQueueId, message: Message) -> MessagePost {
-    post_message(
-        &MessageHandler { queue: id, seq: 0 },
-        message,
-        MessageTiming::Immediate,
-    )
+/// `MessageQueue::BroadcastMessage(queue, message, timing)` — every handler of
+/// the queue that accepts broadcasts (and `seq == 0` marks the post as one).
+pub fn broadcast_message(
+    id: MessageQueueId,
+    message: Message,
+    timing: MessageTiming,
+) -> MessagePost {
+    post_message(&MessageHandler { queue: id, seq: 0 }, message, timing)
 }
 
 /// `MessageQueue::FasterMessage` — a broadcast message that jumps the queue.
