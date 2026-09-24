@@ -7,11 +7,13 @@
 //! and `singleton` is the `OnceLock` equivalent of `comm/singleton.h`.
 //!
 //! `thread` mirrors `comm/thread/` on top of `std::thread`/`std::sync`, and
-//! `message_queue` mirrors `comm/messagequeue/`.
+//! `message_queue` mirrors `comm/messagequeue/` and `alarm` the timer built on
+//! top of it.
 //!
 //! The `wstring` overloads of the C++ are not ported: every caller in this
 //! repository works on UTF-8 `String`/`&str`.
 
+pub mod alarm;
 pub mod frequency_limit;
 pub mod message_queue;
 pub mod singleton;

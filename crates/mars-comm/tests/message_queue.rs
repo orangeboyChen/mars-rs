@@ -83,7 +83,11 @@ fn a_broadcast_only_runs_the_handlers_that_asked_for_it() {
         queue,
     );
 
-    broadcast_message(queue, Message::new(MessageTitle(1), "broadcast"));
+    broadcast_message(
+        queue,
+        Message::new(MessageTitle(1), "broadcast"),
+        MessageTiming::Immediate,
+    );
     assert!(RunLoop::dispatch_timeout(queue, Duration::from_millis(200)));
     assert_eq!(broadcast_hits.load(Ordering::SeqCst), 1);
     assert_eq!(
