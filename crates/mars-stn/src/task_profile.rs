@@ -221,7 +221,10 @@ pub struct ConnectProfile {
     /// `connect_successful_time` — when it came back, socket or no socket.
     pub connect_successful_time: u64,
     /// `socket_fd` — the socket the connect came back with; a reused one is
-    /// this too, with [`ConnectProfile::is_reused_fd`] saying so.
+    /// this too, with [`ConnectProfile::is_reused_fd`] saying so. A connect that
+    /// opened its own writes it here only once the server has said to keep it,
+    /// which is what the C++ does too: the run closes and hands back nothing but
+    /// a socket that is named here.
     pub socket_fd: SocketFd,
     /// `is_reused_fd` — whether the socket came out of the pool rather than
     /// from a connect.
