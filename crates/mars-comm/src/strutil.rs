@@ -134,14 +134,20 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn next_token(&mut self) -> Option<&'a str> {
-        let bytes = self.rest.as_bytes();
-        let start = bytes
-            .iter()
-            .position(|b| !self.delimiters.as_bytes().contains(b))?;
-        let end = bytes[start..]
-            .iter()
-            .position(|b| self.delimiters.as_bytes().contains(b))
-            .map_or(bytes.len(), |i| start + i);
+        // Delimiters are matched per character, not per byte: the offsets end
+        // up slicing `&str`, and a byte of a multi-byte character is not a
+        // boundary — `Tokenizer::new("Ãx", "é")` would otherwise cut `Ã` in
+        // half and panic.
+        let is_delimiter = |c: char| self.delimiters.contains(c);
+        let start = self
+            .rest
+            .char_indices()
+            .find(|&(_, c)| !is_delimiter(c))
+            .map(|(index, _)| index)?;
+        let end = self.rest[start..]
+            .char_indices()
+            .find(|&(_, c)| is_delimiter(c))
+            .map_or(self.rest.len(), |(index, _)| start + index);
         let token = &self.rest[start..end];
         self.rest = &self.rest[end..];
         Some(token)
@@ -218,7 +224,12 @@ pub fn ci_find_substr(haystack: &str, needle: &str, pos: usize) -> Option<usize>
     if needle.is_empty() {
         return Some(pos.min(bytes.len()));
     }
-    (pos..=bytes.len().saturating_sub(needle.len())).find(|&start| {
+    // A needle that cannot fit is `npos` — and `saturating_sub` would leave a
+    // one-element range whose slice runs past the end of the haystack.
+    if needle.len() > bytes.len() || pos > bytes.len() - needle.len() {
+        return None;
+    }
+    (pos..=bytes.len() - needle.len()).find(|&start| {
         bytes[start..start + needle.len()]
             .iter()
             .zip(needle)
@@ -276,13 +287,29 @@ pub unsafe fn cstr_cmp_safe(a: *const c_char, b: *const c_char) -> bool {
 
 /// `strutil::CStr2Int32Safe` — `atoi` with a fallback for a null pointer.
 ///
+/// Like `atoi`, only the numeric prefix is read: `"12ms"` is `12` and
+/// `"abc"` is `0`, not [`default_num`] — the fallback is reserved for a null
+/// pointer, which is what the "safe" in the C++ name buys.
+///
 /// # Safety
 ///
 /// See [`cstr_to_string_safe`].
 pub unsafe fn cstr_to_i32_safe(ptr: *const c_char, default_num: i32) -> i32 {
-    cstr_to_string_safe(ptr)
-        .and_then(|s| s.trim().parse::<i32>().ok())
-        .unwrap_or(default_num)
+    let Some(s) = cstr_to_string_safe(ptr) else {
+        return default_num;
+    };
+    let s = s.trim();
+    let (sign, digits) = match s.strip_prefix('-') {
+        Some(rest) => (-1i64, rest),
+        None => (1i64, s.strip_prefix('+').unwrap_or(s)),
+    };
+    let digits: String = digits.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return 0;
+    }
+    // `atoi` has no range: it saturates the way a cast does.
+    (sign * digits.parse::<i64>().unwrap_or(i64::MAX)).clamp(i32::MIN as i64, i32::MAX as i64)
+        as i32
 }
 
 /// `strutil::to_hex_string`.

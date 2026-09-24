@@ -33,6 +33,17 @@ fn spans_and_differences_behave_like_the_cpp() {
 }
 
 #[test]
+fn the_first_reading_is_valid() {
+    // `0` means "invalid", so a freshly sampled tick count must never be one
+    // — which is what it was for the whole first millisecond of the process.
+    assert!(TickCount::now().is_valid());
+    assert!(mars_comm::tickcount::gettickcount() > 0);
+    let mut tick = TickCount::invalid();
+    tick.refresh();
+    assert!(tick.is_valid(), "refreshing makes it valid again");
+}
+
+#[test]
 fn a_zero_tick_count_is_invalid() {
     assert!(!TickCount::invalid().is_valid());
     assert!(TickCount::invalid().get() == 0);

@@ -17,8 +17,12 @@ use std::time::Instant;
 static START: OnceLock<Instant> = OnceLock::new();
 
 /// `::gettickcount()` — milliseconds since the process started.
+///
+/// The count starts at `1`: [`TickCount`] reserves `0` for "invalid", so the
+/// very first reading — the one a freshly constructed `TickCount::now()`
+/// takes — must not look like one.
 pub fn gettickcount() -> u64 {
-    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
 }
 
 /// `tickcountdiff_t` — a signed difference between two [`TickCount`]s.

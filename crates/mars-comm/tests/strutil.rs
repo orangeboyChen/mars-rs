@@ -120,6 +120,33 @@ fn finds_a_substring_ignoring_case() {
 }
 
 #[test]
+fn a_needle_longer_than_the_haystack_is_not_found() {
+    // `pos == 0` used to leave a one-element range whose slice ran past the
+    // end of the haystack, so this panicked instead of answering `None`.
+    assert_eq!(strutil::ci_find_substr("a", "long", 0), None);
+    assert_eq!(strutil::ci_find_substr("", "long", 0), None);
+    assert_eq!(strutil::ci_find_substr("abc", "abcd", 1), None);
+}
+
+#[test]
+fn tokens_are_split_on_character_boundaries() {
+    // The delimiter is a multi-byte character: matching it byte by byte would
+    // cut "Ã" in half and panic on the slice.
+    assert_eq!(
+        Tokenizer::new("\u{00c3}x", "\u{00e9}").collect::<Vec<_>>(),
+        vec!["\u{00c3}x"]
+    );
+    assert_eq!(
+        Tokenizer::new("a\u{00e9}b", "\u{00e9}").collect::<Vec<_>>(),
+        vec!["a", "b"]
+    );
+    assert_eq!(
+        Tokenizer::new("\u{4e2d}\u{6587} a", " ").collect::<Vec<_>>(),
+        vec!["\u{4e2d}\u{6587}", "a"]
+    );
+}
+
+#[test]
 fn md5_matches_the_reference_vectors() {
     assert_eq!(strutil::buffer_md5(b""), "d41d8cd98f00b204e9800998ecf8427e");
     assert_eq!(
@@ -159,6 +186,19 @@ fn c_strings_are_read_safely() {
         assert_eq!(strutil::cstr_to_i32_safe(a.as_ptr(), -1), 12);
         assert_eq!(strutil::cstr_to_i32_safe(null, -1), -1);
         assert_eq!(strutil::cstr_to_i32_safe(c.as_ptr(), 0), 13);
+        // `atoi` reads the numeric prefix and nothing else
+        let prefixed = CString::new("12ms").unwrap();
+        let negative = CString::new("  -3abc").unwrap();
+        let not_a_number = CString::new("abc").unwrap();
+        let huge = CString::new("99999999999999").unwrap();
+        assert_eq!(strutil::cstr_to_i32_safe(prefixed.as_ptr(), -1), 12);
+        assert_eq!(strutil::cstr_to_i32_safe(negative.as_ptr(), -1), -3);
+        assert_eq!(strutil::cstr_to_i32_safe(not_a_number.as_ptr(), -1), 0);
+        assert_eq!(
+            strutil::cstr_to_i32_safe(huge.as_ptr(), -1),
+            i32::MAX,
+            "atoi saturates"
+        );
     }
 }
 
