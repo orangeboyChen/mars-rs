@@ -109,8 +109,10 @@ impl IpPortItem {
     }
 }
 
-/// `<item>` — the history the C++ keeps in `historyresult`: one bit per
-/// attempt, **newest in the low bit**.
+/// `<item>` — the history the C++ keeps in `historyresult`: one **bit** per
+/// attempt, newest in the low bit, which is what `Update` writes. What
+/// `InitHistory2BannedList` reads out of it is one bit per *byte*, so the two
+/// do not agree — see [`SimpleIpPortSort::load_records`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordItem {
     /// `ip`
@@ -135,9 +137,6 @@ pub struct Record {
 
 /// `struct BanItem` — the port of the C++: the history of one pair and the
 /// readings the last attempt on it was written down at.
-///
-/// The two times are `tickcount_t`s, whose "never" is `0`, so a span measured
-/// from one of them is a span measured from the start of the process.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BanItem {
     /// `ip`
@@ -146,11 +145,28 @@ pub struct BanItem {
     pub port: u16,
     /// `records` — the last eight attempts, `1` for a failure.
     pub records: u8,
-    /// `last_fail_time`, `0` for "never".
-    pub last_fail_time: u64,
-    /// `last_suc_time`, `0` for "never".
-    pub last_suc_time: u64,
+    /// `last_fail_time` — [`None`] for "never", which is a pair the ban list
+    /// knows only from the history the host handed in.
+    pub last_fail_time: Option<u64>,
+    /// `last_suc_time`, the same.
+    pub last_suc_time: Option<u64>,
 }
+
+/// `tickcount_t::gettickspan()` — how long ago, in milliseconds.
+///
+/// A `tickcount_t` the C++ has not written into is `0`, and one it has is
+/// `sg_tick_init` — two billion, about twenty-three days — on top of the tick
+/// count, so "never" answers a span longer than any ban and longer than
+/// either update interval. That is [`None`] here, and it is what keeps a pair
+/// restored from the host's history from looking like one that failed a
+/// moment ago.
+fn tickspan(now: u64, at: Option<u64>) -> u64 {
+    at.map_or(NEVER_SPAN, |at| now.saturating_sub(at))
+}
+
+/// `sg_tick_init` — what the C++'s `tickcount_t` starts a real reading at, and
+/// so what a span from a "never" one is.
+const NEVER_SPAN: u64 = 2_000_000_000;
 
 /// `getCurrNetLabel` — the label of the network the app is on, or [`None`] for
 /// `kNoNet`.
@@ -195,6 +211,13 @@ fn last_continuous_bit_count(mut records: u8) -> u32 {
 
 /// The 64 `historyresult` bits of an xml item, "8 in 1": the C++ pushes one
 /// byte at a time, low byte first, so the high byte is the newest attempt.
+///
+/// The two ends of the xml disagree in the C++ and disagree here: `Update`
+/// writes one *bit* per attempt into the 64-bit attribute, and this reads one
+/// *bit* per *byte* out of it, so eight attempts that failed come back as one
+/// byte that is not `0` — a single failure. The port keeps the disagreement
+/// because what the C++ does with a restored pair is sort it last, and one
+/// failure is enough for that.
 fn history_to_records(mut history: u64) -> u8 {
     let mut records = 0u8;
     for _ in 0..8 {
@@ -314,8 +337,8 @@ impl SimpleIpPortSort {
                 ip: item.ip.clone(),
                 port: item.port,
                 records: history_to_records(item.history_result),
-                last_fail_time: 0,
-                last_suc_time: 0,
+                last_fail_time: None,
+                last_suc_time: None,
             })
             .collect();
     }
@@ -441,8 +464,14 @@ impl SimpleIpPortSort {
     }
 
     /// Whether the pair is out right now: `__IsBanned`, plus what
-    /// `AddServerBan` may have said about its ip.
+    /// [`SimpleIpPortSort::add_server_ban`] may have said about its ip — which
+    /// is what `__FilterbyBanned` asks, so a caller that decides on its own
+    /// whether to connect cannot pick an ip the server took out.
     pub fn is_banned_at(&self, now: u64, ip: &str, port: u16) -> bool {
+        if self.is_server_banned_at(now, ip) {
+            return true;
+        }
+
         let Some(item) = self.find_banned(ip, port) else {
             return false;
         };
@@ -458,7 +487,16 @@ impl SimpleIpPortSort {
             ban_time = ban_time.min(MAX_BAN_TIME);
         }
 
-        now.saturating_sub(item.last_fail_time) < ban_time
+        tickspan(now, item.last_fail_time) < ban_time
+    }
+
+    /// `__IsServerBan` without the `erase` — whether the ip is still inside
+    /// `kServerBanTime`. [`SimpleIpPortSort::sort_and_filter`] is what forgets
+    /// one whose ban has run out, the way the C++ does.
+    pub fn is_server_banned_at(&self, now: u64, ip: &str) -> bool {
+        self.server_bans
+            .get(ip)
+            .is_some_and(|&banned_at| now.saturating_sub(banned_at) < SERVER_BAN_TIME)
     }
 
     /// `__RemoveTimeoutXml`.
@@ -504,9 +542,9 @@ impl SimpleIpPortSort {
             return true;
         };
         if is_success {
-            SUCCESS_UPDATE_INTERVAL < now.saturating_sub(item.last_suc_time)
+            SUCCESS_UPDATE_INTERVAL < tickspan(now, item.last_suc_time)
         } else {
-            FAIL_UPDATE_INTERVAL < now.saturating_sub(item.last_fail_time)
+            FAIL_UPDATE_INTERVAL < tickspan(now, item.last_fail_time)
         }
     }
 
@@ -515,9 +553,9 @@ impl SimpleIpPortSort {
         if let Some(item) = self.find_banned_mut(ip, port) {
             item.records = set_bit(!is_success, u64::from(item.records)) as u8;
             if is_success {
-                item.last_suc_time = now;
+                item.last_suc_time = Some(now);
             } else {
-                item.last_fail_time = now;
+                item.last_fail_time = Some(now);
             }
             return;
         }
@@ -526,8 +564,8 @@ impl SimpleIpPortSort {
             ip: ip.to_string(),
             port,
             records: u8::from(!is_success),
-            last_fail_time: if is_success { 0 } else { now },
-            last_suc_time: if is_success { now } else { 0 },
+            last_fail_time: if is_success { None } else { Some(now) },
+            last_suc_time: if is_success { Some(now) } else { None },
         });
     }
 
@@ -600,6 +638,7 @@ impl SimpleIpPortSort {
             if bit_count(left.records) != bit_count(right.records) {
                 return bit_count(left.records).cmp(&bit_count(right.records));
             }
+            // `None` is the C++'s `0`, which is smaller than any reading
             if left.last_fail_time != right.last_fail_time {
                 return left.last_fail_time.cmp(&right.last_fail_time);
             }
@@ -793,27 +832,71 @@ mod tests {
         assert_eq!(sort.ban_list()[0].records, 0b1);
         assert_eq!(sort.records()[0].items[0].history_result, 0b1);
 
-        // ... and so is a success inside `kSuccessUpdateInterval`
+        // a success is a different kind of attempt, and this pair has never
+        // had one, so nothing holds it back
         sort.update_at(2, 0, "1.2.3.4", 80, true);
-        assert_eq!(sort.ban_list()[0].records, 0b1);
-        sort.update_at(2 + SUCCESS_UPDATE_INTERVAL, 0, "1.2.3.4", 80, true);
         assert_eq!(sort.ban_list()[0].records, 0b10);
+        assert_eq!(sort.ban_list()[0].last_suc_time, Some(2));
+
+        // ... and a second one inside `kSuccessUpdateInterval` is dropped
+        sort.update_at(3, 0, "1.2.3.4", 80, true);
+        assert_eq!(sort.ban_list()[0].records, 0b10);
+        sort.update_at(2 + SUCCESS_UPDATE_INTERVAL + 1, 0, "1.2.3.4", 80, true);
+        assert_eq!(sort.ban_list()[0].records, 0b100);
         assert_eq!(
             sort.ban_list()[0].last_suc_time,
-            2 + SUCCESS_UPDATE_INTERVAL
+            Some(2 + SUCCESS_UPDATE_INTERVAL + 1)
         );
+    }
+
+    #[test]
+    fn a_pair_restored_from_history_is_neither_banned_nor_held_back() {
+        let mut sort = a_sort("wifi");
+        sort.load_records(
+            vec![Record {
+                net_info: "wifi".to_string(),
+                time: Some(1),
+                items: vec![RecordItem {
+                    ip: "1.2.3.4".to_string(),
+                    port: 80,
+                    // three bytes that are not `0`: three failures, which is
+                    // `kBanFailCount`
+                    history_result: 0x00_00_00_00_00_01_01_01,
+                }],
+            }],
+            1,
+        );
+        sort.init_history_to_banned_list();
+
+        // the pair has no `last_fail_time` — the C++'s `tickcount_t` is `0`
+        // until something is written into it, and a span from a `0` is about
+        // twenty-three days — so a history of failures alone never bans it
+        assert_eq!(sort.ban_list()[0].last_fail_time, None);
+        assert!(!sort.is_banned_at(0, "1.2.3.4", 80));
+        assert!(!sort.is_banned_at(BAN_TIME - 1, "1.2.3.4", 80));
+
+        // ... and it is not "inside an update interval" either, so the first
+        // attempt on it goes through right away
+        fail(&mut sort, 1, "1.2.3.4", 80);
+        // the new failure goes in the low bit and the oldest of the eight
+        // falls off the end, so two of the three restored ones are left
+        assert_eq!(sort.ban_list()[0].records, 0b1100_0001);
+        assert_eq!(sort.ban_list()[0].last_fail_time, Some(1));
+        // from then on the interval does hold it back
+        fail(&mut sort, 2, "1.2.3.4", 80);
+        assert_eq!(sort.ban_list()[0].records, 0b1100_0001);
     }
 
     #[test]
     fn a_success_stamps_its_own_time_and_a_failure_the_other_one() {
         let mut sort = a_sort("wifi");
         sort.update_at(1_000, 1, "1.2.3.4", 80, true);
-        assert_eq!(sort.ban_list()[0].last_suc_time, 1_000);
-        assert_eq!(sort.ban_list()[0].last_fail_time, 0, "never failed");
+        assert_eq!(sort.ban_list()[0].last_suc_time, Some(1_000));
+        assert_eq!(sort.ban_list()[0].last_fail_time, None, "never failed");
 
         sort.update_at(1_000, 1, "1.2.3.4", 443, false);
-        assert_eq!(sort.ban_list()[1].last_fail_time, 1_000);
-        assert_eq!(sort.ban_list()[1].last_suc_time, 0);
+        assert_eq!(sort.ban_list()[1].last_fail_time, Some(1_000));
+        assert_eq!(sort.ban_list()[1].last_suc_time, None, "never succeeded");
     }
 
     #[test]
@@ -912,7 +995,7 @@ mod tests {
         assert_eq!(sort.ban_list()[0].records, 0b1000_0000);
         assert_eq!(sort.ban_list()[1].records, 0b1100_0000);
         // the times stay at "never", so history alone never bans a pair
-        assert_eq!(sort.ban_list()[0].last_fail_time, 0);
+        assert_eq!(sort.ban_list()[0].last_fail_time, None);
         assert!(!sort.is_banned_at(0, "1.2.3.4", 80));
 
         // ... and a second call starts from nothing again

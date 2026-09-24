@@ -110,9 +110,9 @@ fn what_the_host_saved_is_what_the_next_run_reads() {
     next.init_history_to_banned_list();
     assert_eq!(next.ban_list().len(), 1);
     assert_eq!(next.ban_list()[0].ip, "1.2.3.4");
-    // the xml keeps one *byte* per attempt and the ban list one *bit*, so the
-    // two failures that went in as `0b11` come back as one byte that is not
-    // `0` — one failure, and the oldest of the eight
+    // the xml keeps one *bit* per attempt and `InitHistory2BannedList` reads
+    // one *bit* per *byte* out of it, so the two failures that went in as
+    // `0b11` come back as a single one, and the oldest of the eight
     assert_eq!(next.ban_list()[0].records, 0b1000_0000);
 
     // ... and the pair with a history goes in front of the one without one:
@@ -211,4 +211,60 @@ fn the_two_families_come_in_turn_and_the_defaults_hold() {
         mars_stn::Task::TRANSPORT_PROTOCOL_TCP
     );
     assert_eq!(item.from_source, 0);
+}
+
+#[test]
+fn a_server_ban_is_what_the_ban_query_answers_too() {
+    let mut sort = a_sort();
+    sort.add_server_ban_at(0, "1.2.3.4");
+
+    // no failure history at all, and still out
+    assert!(sort.is_banned_at(0, "1.2.3.4", 80));
+    assert!(sort.is_server_banned_at(0, "1.2.3.4"));
+    assert!(!sort.is_banned_at(0, "5.6.7.8", 80));
+
+    // `kServerBanTime` later it is a candidate again
+    assert!(!sort.is_banned_at(SERVER_BAN_TIME, "1.2.3.4", 80));
+    assert!(!sort.is_server_banned_at(SERVER_BAN_TIME, "1.2.3.4"));
+}
+
+#[test]
+fn a_pair_known_only_from_history_is_neither_banned_nor_held_back() {
+    let mut sort = a_sort();
+    sort.load_records(
+        vec![Record {
+            net_info: "wifi".to_string(),
+            time: Some(1_700_000_000),
+            items: vec![RecordItem {
+                ip: "1.2.3.4".to_string(),
+                port: 80,
+                // three bytes that are not `0`: `kBanFailCount` failures
+                history_result: 0x00_00_00_00_00_01_01_01,
+            }],
+        }],
+        1_700_000_000,
+    );
+    sort.init_history_to_banned_list();
+    assert_eq!(sort.ban_list()[0].records, 0b1110_0000);
+
+    // it never failed in this process, so there is no reading to measure
+    // `kBanTime` from and no interval to wait out
+    assert_eq!(sort.ban_list()[0].last_fail_time, None);
+    assert!(!sort.is_banned_at(BAN_TIME - 1, "1.2.3.4", 80));
+    assert!(sort
+        .ban_list()
+        .iter()
+        .all(|item| item.last_suc_time.is_none()));
+
+    // ... and the first failure on it is taken down, which is what stamps the
+    // time the next one is held back by
+    fail(&mut sort, 1, "1.2.3.4", 80);
+    assert_eq!(sort.ban_list()[0].last_fail_time, Some(1));
+    assert_eq!(sort.ban_list()[0].records, 0b1100_0001);
+    fail(&mut sort, 2, "1.2.3.4", 80);
+    assert_eq!(
+        sort.ban_list()[0].records,
+        0b1100_0001,
+        "inside `kFailUpdateInterval`"
+    );
 }
