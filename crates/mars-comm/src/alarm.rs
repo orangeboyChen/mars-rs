@@ -75,6 +75,28 @@ impl Default for AlarmState {
     }
 }
 
+/// `Alarm::onAlarmImpl(id)` — the platform's own alarm went off.
+///
+/// On Android the `AlarmManager` broadcast is picked up by Java's
+/// `BroadcastReceiver`, which calls back with the id the alarm was started
+/// with; the C++ (`comm/alarm.cc`, `#ifdef ANDROID`) puts that id on the
+/// default queue as a `KALARM_SYSTEMTITLE` message, with the queue in
+/// `body2`. Nothing else has to be told: the [`Alarm`] whose [`Alarm::seq`]
+/// the id is matches it, stops waiting and runs its target.
+///
+/// `false` when the message could not be posted.
+pub fn on_system_alarm(id: i64) -> bool {
+    let queue = crate::message_queue::KDefQueueID;
+    let post = broadcast_message(
+        queue,
+        Message::new(ALARM_SYSTEM_TITLE, "Alarm.onAlarm")
+            .with_body1(id as u64)
+            .with_body2(queue),
+        MessageTiming::Immediate,
+    );
+    post != crate::message_queue::KNullPost
+}
+
 /// A one-shot timer.
 pub struct Alarm {
     handler: Option<crate::message_queue::MessageHandler>,
@@ -199,6 +221,16 @@ impl Alarm {
         self.state.lock().unwrap().after
     }
 
+    /// The id of the pending message — `seq_`, [`INVAILD_SEQ`] when the alarm
+    /// is not waiting.
+    ///
+    /// On Android this is also the id the platform alarm is started with:
+    /// `Alarm::Start` hands it to Java's `Alarm` and [`on_system_alarm`] brings
+    /// it back.
+    pub fn seq(&self) -> u64 {
+        self.state.lock().unwrap().seq
+    }
+
     /// `Alarm::ElapseTime()` — 0 while the alarm has not finished.
     pub fn elapse_time(&self) -> u64 {
         let alarm = self.state.lock().unwrap();
@@ -235,7 +267,9 @@ impl Drop for Alarm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message_queue::{create_message_queue, destroy_message_queue, RunLoop};
+    use crate::message_queue::{
+        create_message_queue, destroy_message_queue, get_def_message_queue, RunLoop,
+    };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -345,6 +379,41 @@ mod tests {
         assert_eq!(fired.load(Ordering::SeqCst), 0);
         alarm.cancel();
         destroy_message_queue(queue);
+    }
+
+    #[test]
+    fn a_system_alarm_wakes_the_alarm_that_started_it() {
+        // the system-title message goes to the default queue, so this one has
+        // to live there too
+        let queue = get_def_message_queue();
+        let first_ran = Arc::new(AtomicUsize::new(0));
+        let later_ran = Arc::new(AtomicUsize::new(0));
+        let first_counter = Arc::clone(&first_ran);
+        let later_counter = Arc::clone(&later_ran);
+
+        let mut first = Alarm::new(queue, move || {
+            first_counter.fetch_add(1, Ordering::SeqCst);
+        });
+        let mut later = Alarm::new(queue, move || {
+            later_counter.fetch_add(1, Ordering::SeqCst);
+        });
+        assert!(first.start(60_000));
+        assert!(later.start(60_000));
+
+        // Java heard the `AlarmManager` broadcast for the second one
+        assert!(on_system_alarm(later.seq() as i64));
+        assert!(RunLoop::dispatch_timeout(
+            get_def_message_queue(),
+            Duration::from_millis(2_000)
+        ));
+
+        assert_eq!(later_ran.load(Ordering::SeqCst), 1);
+        assert_eq!(first_ran.load(Ordering::SeqCst), 0, "the wrong alarm fired");
+        assert_eq!(later.status(), Status::OnAlarm);
+        assert!(first.is_waiting(), "the other one is still waiting");
+
+        assert!(first.cancel());
+        assert!(later.cancel());
     }
 
     #[test]

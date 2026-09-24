@@ -23,6 +23,16 @@
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 
+use mars_comm::alarm::on_system_alarm;
+use mars_comm::tickcount::gettickcount;
+
+use crate::wakerlock::{wakerlock_is_locking_impl, wakerlock_lock_for_impl, wakerlock_new_impl};
+
+/// `Alarm::kAlarmStartWakeupLook` — for how long the CPU is kept awake when a
+/// platform alarm comes in. The C++ takes the wakelock *here*, on the thread
+/// that heard the alarm, because acquiring it anywhere else fails.
+const START_ALARM_WAKELOCK_MS: u64 = 1_000;
+
 /// One waiting alarm, the Rust counterpart of the `Object[]` `Alarm.java` keeps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Waiting {
@@ -89,19 +99,43 @@ pub fn alarm_is_waiting_impl(id: i64) -> bool {
 /// `Alarm.onAlarm(id)` — the `native` method, called from `onReceive` once the
 /// broadcast found the id. It answers whether the alarm was still waiting, so
 /// the caller can tell a real alarm from a stale broadcast.
+///
+/// A real one is not just struck off the list: the id is handed to the alarm
+/// subsystem (`Alarm::onAlarmImpl`), which is what wakes whatever the alarm
+/// was started for — a retry, or the timer STN is waiting on. Striking it off
+/// the list here and stopping there would accept an Android alarm without ever
+/// running the work it was meant to wake.
 pub fn on_alarm_impl(id: i64) -> bool {
     // `onReceive` returns early for id 0 and for a pid that is not ours
     if id == 0 {
         return false;
     }
-    with_state(|state| {
+    let fired = with_state(|state| {
         if state.waiting.remove(&id).is_some() {
             state.fired.push(id);
             true
         } else {
             false
         }
-    })
+    });
+    if !fired {
+        return false;
+    }
+    on_system_alarm(id);
+    // `Alarm::__StartWakeLock()`, on the alarm thread
+    wakerlock_lock_for_impl(alarm_wakelock(), START_ALARM_WAKELOCK_MS, gettickcount());
+    true
+}
+
+/// The wakelock `onAlarm` holds — a static one, like the C++ `WakeUpLock`.
+fn alarm_wakelock() -> crate::wakerlock::WakerLockHandle {
+    static LOCK: OnceLock<crate::wakerlock::WakerLockHandle> = OnceLock::new();
+    *LOCK.get_or_init(wakerlock_new_impl)
+}
+
+/// Whether the wakelock `onAlarm` took is still held.
+pub fn alarm_wakelock_is_locking_impl() -> bool {
+    wakerlock_is_locking_impl(alarm_wakelock())
 }
 
 /// The ids `onAlarm` dispatched since the last call.
@@ -133,8 +167,11 @@ mod tests {
 
             assert!(on_alarm_impl(1));
             assert_eq!(take_fired_impl(), vec![1]);
+            // and the CPU is kept awake while the alarm is dispatched
+            assert!(alarm_wakelock_is_locking_impl());
 
-            // a second broadcast for the same id is stale
+            // a second broadcast for the same id is stale, and it takes no
+            // wakelock either
             assert!(!on_alarm_impl(1));
             assert!(take_fired_impl().is_empty());
         })

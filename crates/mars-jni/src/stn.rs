@@ -107,9 +107,16 @@ pub fn reset_impl() {
 
 /// `StnLogic.resetAndInitEncoderVersion` — `Reset()` plus the encoder the C++
 /// hands to the new `NetCore`.
+///
+/// The signalling session goes with the rest: this is documented as reset plus
+/// the encoder, and the C++ rebuilds `NetCore` here, so a host that kept
+/// signalling must not find the old session still running afterwards.
 pub fn reset_and_init_encoder_version_impl(version: i32, name: &str) {
     with_state(|state| {
         state.tasks.clear();
+        state.signalling = false;
+        state.signalling_period = 0;
+        state.signalling_keep_time = 0;
         state.encoder_version = version;
         state.encoder_name = name.to_owned();
     })
@@ -359,6 +366,24 @@ mod tests {
 
             assert!(!has_task_impl(1));
             with_state(|state| {
+                assert_eq!(state.encoder_version, 3);
+                assert_eq!(state.encoder_name, "wechat");
+            });
+        })
+    }
+
+    #[test]
+    fn reset_and_init_encoder_version_drops_the_signalling_too() {
+        isolated(|| {
+            set_signalling_strategy_impl(1000, 2000);
+            keep_signalling_impl();
+            reset_and_init_encoder_version_impl(3, "wechat");
+
+            with_state(|state| {
+                assert!(!state.signalling, "the old session is still running");
+                assert_eq!(state.signalling_period, 0);
+                assert_eq!(state.signalling_keep_time, 0);
+                // and it is still reset plus the encoder
                 assert_eq!(state.encoder_version, 3);
                 assert_eq!(state.encoder_name, "wechat");
             });

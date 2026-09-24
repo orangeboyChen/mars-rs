@@ -7,13 +7,14 @@
 //! coverage measurement.
 
 use jni::objects::{JClass, JIntArray, JObject, JObjectArray, JString, JValue};
-use jni::sys::{jboolean, jint, jlong, jobject};
-use jni::JNIEnv;
+use jni::sys::{jboolean, jint, jlong, jobject, JNI_VERSION_1_6};
+use jni::{JNIEnv, JavaVM};
 
 use mars_appender::{AppenderMode, CompressMode, LogLevel, XLogConfig, XLoggerInfo};
 use mars_stn::Task;
 
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
 use crate::alarm::on_alarm_impl;
 use crate::sdt::{get_load_libraries_impl as sdt_libraries, set_http_netcheck_cgi_impl};
@@ -32,6 +33,54 @@ use crate::{
     release_instance_impl, set_appender_mode_impl, set_console_log_open_impl, set_level_impl,
     set_max_alive_time_impl, set_max_file_size_impl,
 };
+
+/// The VM the library was loaded into.
+///
+/// Every other call in this file goes Java -> Rust, but two of them go the
+/// other way: `SdtLogic.reportSignalDetectResults` is a static *Java* method
+/// the native side calls when a diagnosis finishes, and calling it needs a VM
+/// to attach a thread to. `System.loadLibrary` calls `JNI_OnLoad`, which is
+/// where this is set.
+static VM: OnceLock<JavaVM> = OnceLock::new();
+
+/// `JNI_OnLoad` — `System.loadLibrary` calls it, and it is the only place the
+/// library can get hold of the VM.
+#[no_mangle]
+pub extern "system" fn JNI_OnLoad(vm: JavaVM, _reserved: *mut std::ffi::c_void) -> jint {
+    let _ = VM.set(vm);
+    JNI_VERSION_1_6 as jint
+}
+
+/// `SdtLogic.reportSignalDetectResults(String)` — the C2Java call at the end of
+/// a diagnosis, the port of `mars::sdt::ReportNetCheckResult`.
+///
+/// Without a VM (a unit test, or a host that linked the library instead of
+/// loading it from Java) there is nobody to tell, and the report stays where
+/// [`crate::sdt`] recorded it; nothing here panics into Rust either way.
+pub fn report_signal_detect_results(json: String) {
+    guard(|| {
+        let Some(vm) = VM.get() else {
+            return;
+        };
+        let Ok(mut env) = vm.attach_current_thread() else {
+            return;
+        };
+        let Ok(class) = env.find_class("io/github/marsrs/sdt/SdtLogic") else {
+            return;
+        };
+        let Ok(message) = env.new_string(&json) else {
+            return;
+        };
+        let argument = JObject::from(message);
+        let argument = JValue::Object(&argument);
+        let _ = env.call_static_method(
+            class,
+            "reportSignalDetectResults",
+            "(Ljava/lang/String;)V",
+            &[argument],
+        );
+    })
+}
 
 fn int_field(env: &mut JNIEnv<'_>, obj: &JObject<'_>, name: &str) -> i32 {
     guard(|| {

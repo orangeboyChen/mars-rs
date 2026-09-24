@@ -8,8 +8,17 @@
 //! and turning what it found into the JSON
 //! `SdtLogic.reportSignalDetectResults(String)` hands to the app.
 //!
-//! Everything the JVM touches lives in [`crate::jni_bridge`]; what is here is
-//! plain Rust and is covered by `cargo test`.
+//! That hand-over goes the other way round from every other call in this
+//! crate: `reportSignalDetectResults` is a static **Java** method the native
+//! side calls when a diagnosis ends
+//! (`com_tencent_mars_sdt_SdtLogic_C2Java.cc`), not a `native` method Java
+//! calls. It needs a live `JNIEnv`, so it lives in
+//! [`crate::jni_bridge::report_signal_detect_results`] and is left out of the
+//! tests; everything up to it — the JSON, and the record of what was handed
+//! over — is here and is covered by `cargo test`.
+//!
+//! Everything else the JVM touches lives in [`crate::jni_bridge`]; what is here
+//! is plain Rust and is covered by `cargo test`.
 
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -20,7 +29,8 @@ use mars_sdt::{Callback, CheckIPPorts, NetCheckType, SdtLogic};
 /// loaded, which in this port is this one library.
 pub const LOAD_LIBRARIES: &[&str] = &["marsxlog"];
 
-/// Keeps the results `SdtLogic` reported, so the host can pick them up.
+/// Keeps the results `SdtLogic` reported, so the host can pick them up — and
+/// hands them to Java as well, which is what a report is for.
 struct Sink(Arc<Mutex<Vec<CheckResultProfile>>>);
 
 impl Callback for Sink {
@@ -28,7 +38,18 @@ impl Callback for Sink {
         if let Ok(mut reported) = self.0.lock() {
             reported.extend_from_slice(check_results);
         }
+        deliver_report_impl(check_results);
     }
+}
+
+/// The JSON reports handed to Java since the last call.
+///
+/// This lives outside [`SdtState`] on purpose: the callback runs *inside*
+/// [`run_checks_impl`], which holds the state lock for the whole run, so
+/// taking that lock again to record a report would deadlock.
+fn delivered() -> &'static Mutex<Vec<String>> {
+    static DELIVERED: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+    DELIVERED.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 struct SdtState {
@@ -53,11 +74,8 @@ fn with_state<R>(f: impl FnOnce(&mut SdtState) -> R) -> R {
     f(&mut state)
 }
 
-/// Drops the diagnosis state and starts over.
-///
-/// A cancelled `SdtCore` is cancelled for good — the C++ never clears
-/// `cancel_`, so mars-sdt says it "has to be replaced" — and this is the only
-/// way back from [`cancel_active_check_impl`].
+/// Drops the diagnosis state and starts over: the waiting checks, the
+/// callback and everything that was reported go away together.
 pub fn reset_impl() {
     let reported = Arc::new(Mutex::new(Vec::new()));
     let mut logic = SdtLogic::new();
@@ -65,6 +83,9 @@ pub fn reset_impl() {
     *state()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = SdtState { logic, reported };
+    if let Ok(mut delivered) = delivered().lock() {
+        delivered.clear();
+    }
 }
 
 /// `SdtLogic.setHttpNetcheckCGI`.
@@ -129,8 +150,57 @@ pub fn take_reported_impl() -> Vec<CheckResultProfile> {
     })
 }
 
+/// `SdtManagerJniCallback::ReportNetCheckResult()` — hands a finished diagnosis
+/// over: the JSON [`report_json_impl`] builds goes to Java, and a copy stays
+/// here for the host ([`take_delivered_impl`]) and for the tests, which have no
+/// JVM to hand it to.
+///
+/// This is the call the C++ makes from inside `ReportNetCheckResult`, so a
+/// diagnosis that ends is never just buffered: it reaches the app's
+/// `SdtLogic.ICallBack` (or is recorded, when there is no JVM yet).
+pub fn deliver_report_impl(check_results: &[CheckResultProfile]) -> String {
+    let json = report_json_impl(check_results);
+    if let Ok(mut delivered) = delivered().lock() {
+        delivered.push(json.clone());
+    }
+    crate::jni_bridge::report_signal_detect_results(json.clone());
+    json
+}
+
+/// The JSON reports handed to Java since the last call.
+pub fn take_delivered_impl() -> Vec<String> {
+    delivered()
+        .lock()
+        .map(|mut delivered| std::mem::take(&mut *delivered))
+        .unwrap_or_default()
+}
+
+/// A JSON string field: the C++ writes `iter->ip` straight into the document,
+/// so a quote or a newline in a domain name — and the domain names come from
+/// the caller — used to break the whole report.
+fn json_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for char in value.chars() {
+        match char {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            control if control < ' ' => out.push_str(&format!("\\u{:04x}", control as u32)),
+            _ => out.push(char),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// `SdtManagerJniCallback::ReportNetCheckResult()` — the JSON the app gets
-/// through `SdtLogic.reportSignalDetectResults`, field for field the C++'s.
+/// through `SdtLogic.reportSignalDetectResults`, field for field the C++'s,
+/// with the string fields escaped ([`json_string`]).
 pub fn report_json_impl(check_results: &[CheckResultProfile]) -> String {
     let mut json = String::from("{\"details\":[");
     for (index, result) in check_results.iter().enumerate() {
@@ -138,22 +208,22 @@ pub fn report_json_impl(check_results: &[CheckResultProfile]) -> String {
             json.push(',');
         }
         json.push_str(&format!(
-            "{{\"detectType\":{},\"errorCode\":{},\"networkType\":{},\"detectIP\":\"{}\",\"port\":{},\"conntime\":{},\"rtt\":{},\"rttStr\":\"{}\",\"httpStatusCode\":{},\"pingCheckCount\":{},\"pingLossRate\":\"{}\",\"dnsDomain\":\"{}\",\"localDns\":\"{}\",\"dnsIP1\":\"{}\",\"dnsIP2\":\"{}\"}}",
+            "{{\"detectType\":{},\"errorCode\":{},\"networkType\":{},\"detectIP\":{},\"port\":{},\"conntime\":{},\"rtt\":{},\"rttStr\":{},\"httpStatusCode\":{},\"pingCheckCount\":{},\"pingLossRate\":{},\"dnsDomain\":{},\"localDns\":{},\"dnsIP1\":{},\"dnsIP2\":{}}}",
             result.netcheck_type,
             result.error_code,
             result.network_type,
-            result.ip,
+            json_string(&result.ip),
             result.port,
             result.conntime,
             result.rtt,
-            result.rtt_str,
+            json_string(&result.rtt_str),
             result.status_code,
             result.checkcount,
-            result.loss_rate,
-            result.domain_name,
-            result.local_dns,
-            result.ip1,
-            result.ip2,
+            json_string(&result.loss_rate),
+            json_string(&result.domain_name),
+            json_string(&result.local_dns),
+            json_string(&result.ip1),
+            json_string(&result.ip2),
         ));
     }
     json.push_str("]}");
@@ -265,6 +335,80 @@ mod tests {
         assert!(json.contains("\"pingLossRate\":\"0%\""), "{json}");
         assert!(json.contains("\"rttStr\":\"12ms\""), "{json}");
         assert!(json.contains("\"httpStatusCode\":0"), "{json}");
+    }
+
+    #[test]
+    fn a_finished_check_reaches_java() {
+        isolated(|| {
+            assert!(start_active_check_impl(
+                &hosts("long.weixin.qq.com"),
+                &hosts("short.weixin.qq.com"),
+                NET_CHECK_BASIC,
+                UNUSE_TIMEOUT
+            ));
+            let results = run_checks_impl(record);
+            assert_eq!(results.len(), 2);
+
+            // the report is not just buffered: it is handed over (here there
+            // is no JVM, so what is recorded is what the host would get)
+            let delivered = take_delivered_impl();
+            assert_eq!(delivered.len(), 1, "the diagnosis was never delivered");
+            assert_eq!(delivered[0], report_json_impl(&results));
+            assert!(
+                delivered[0].contains("\"detectType\":0"),
+                "{}",
+                delivered[0]
+            );
+            assert!(take_delivered_impl().is_empty(), "delivered only once");
+
+            // a cancelled check runs nothing, and still says so: `SdtCore::
+            // __RunOn` hands the (empty) profiles to `ReportNetCheckResult`
+            // whatever the reason the run ended, so the app hears that the
+            // diagnosis finished even when there is nothing in it
+            assert!(start_active_check_impl(
+                &hosts("long"),
+                &hosts("short"),
+                NET_CHECK_BASIC,
+                UNUSE_TIMEOUT
+            ));
+            cancel_active_check_impl();
+            assert!(run_checks_impl(record).is_empty());
+            assert_eq!(take_delivered_impl(), vec!["{\"details\":[]}".to_owned()]);
+        })
+    }
+
+    #[test]
+    fn the_string_fields_are_json_escaped() {
+        // a domain name comes from the caller, and the C++ writes it into the
+        // document verbatim, so one quote used to break the whole report
+        let mut dns = CheckResultProfile::of(Kind::DnsCheck);
+        dns.domain_name = "a\"b\\c\nd\re\tf".to_owned();
+        dns.local_dns = String::from("x\u{1}y");
+        dns.ip1 = "1.2.3.4".to_owned();
+
+        let json = report_json_impl(&[dns]);
+        assert!(json.contains("\\\""), "the quote is escaped: {json}");
+        assert!(json.contains("\\\\"), "the backslash is escaped: {json}");
+        assert!(json.contains("\\n"), "the newline is escaped: {json}");
+        assert!(
+            json.contains("\\r"),
+            "the carriage return is escaped: {json}"
+        );
+        assert!(json.contains("\\t"), "the tab is escaped: {json}");
+        assert!(
+            json.contains("\\u0001"),
+            "a control char is escaped: {json}"
+        );
+        assert!(
+            !json.contains('\n'),
+            "the document has no raw newline: {json}"
+        );
+
+        // and the document is one object with one detail, not the two or three
+        // a raw newline or quote would have turned it into
+        assert!(json.starts_with("{\"details\":[{"), "{json}");
+        assert!(json.ends_with("}]}"), "{json}");
+        assert_eq!(json.matches("\\\\").count(), 1, "one backslash: {json}");
     }
 
     #[test]
