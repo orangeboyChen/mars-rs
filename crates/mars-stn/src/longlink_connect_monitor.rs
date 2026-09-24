@@ -311,8 +311,14 @@ impl LongLinkConnectMonitor {
         self.connect_status() == LongLinkStatus::Connected
     }
 
-    /// `NetworkChange()` — `true` when the link is up when it is done: the C++
-    /// drops the link first and then asks for a new one.
+    /// `NetworkChange()` — the C++ drops the link first and then asks for a new
+    /// one, and answers `0 == __IntervalConnect(kNetworkChangeConnect)`: what it
+    /// answers is **that the connect was asked for now**, not that the link is
+    /// up. The same `0` comes back when the server turned the trigger off and
+    /// nothing was asked for at all, and when the link is merely connecting —
+    /// the C++ ignores the `bool` its `MakeSureConnected` hands back. The
+    /// question "is the link up" is [`Self::make_sure_connected_at`]'s, which
+    /// is the one the C++ asks `longlink_.ConnectStatus()` to answer.
     pub fn network_change(&mut self) -> bool {
         self.network_change_at(mars_comm::tickcount::gettickcount())
     }
@@ -822,6 +828,27 @@ mod tests {
         assert_eq!(
             *calls.lock().unwrap_or_else(|e| e.into_inner()),
             vec!["disconnect", "connect"]
+        );
+    }
+
+    #[test]
+    fn network_change_answers_that_a_connect_was_asked_for_and_not_that_the_link_is_up() {
+        let (mut monitor, _calls) = a_monitor();
+        monitor.set_dns_time(|| 0);
+        // the host says the link is down, and saying so is all the connect the
+        // monitor asks for does here
+        assert!(monitor.network_change_at(0), "the connect was asked for");
+        assert!(!monitor.make_sure_connected_at(0), "and the link is not up");
+
+        // a server that turned the trigger off asks for nothing at all, and the
+        // answer is the same `true`
+        let (mut monitor, calls) = a_monitor();
+        monitor.set_is_svr_trig_off(|| true);
+        assert!(monitor.network_change_at(0));
+        assert_eq!(
+            *calls.lock().unwrap_or_else(|e| e.into_inner()),
+            vec!["disconnect"],
+            "the link was dropped and nothing was asked for"
         );
     }
 
