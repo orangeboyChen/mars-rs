@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "JNI bindings for the Rust port of Mars xlog (com.tencent.mars.xlog.Xlog)"
+description = "JNI bindings for the Rust port of Mars xlog (io.github.marsrs.xlog.Xlog)"
 
 [lib]
 # `libmarsxlog.so`, the name Xlog.java passes to System.loadLibrary.

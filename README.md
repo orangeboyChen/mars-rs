@@ -13,7 +13,7 @@ zlib- or zstd-compressed, sync or async — and is the whole logging stack:
 | `mars-buffer`    | the mmap append buffer (`LogZlibBuffer` / `LogZstdBuffer`)        |
 | `mars-appender`  | the process-wide appender and per-instance loggers                |
 | `mars-ffi`       | C ABI (`cdylib` + `staticlib`) and its hand-written header        |
-| `mars-jni`       | JNI bindings of `com.tencent.mars.xlog.Xlog`                      |
+| `mars-jni`       | JNI bindings of `io.github.marsrs.xlog.Xlog`                      |
 | `mars-compat`    | CLI plus the golden `.xlog` files that pin the wire format        |
 
 ## Build and test
