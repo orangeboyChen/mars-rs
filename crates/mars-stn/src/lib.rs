@@ -98,6 +98,11 @@
 //! handed back to the pool when both the task and the server asked for it, and
 //! closed when one of them did not.
 //!
+//! The twentieth slice is whether a proxy is one a task can go through
+//! ([`proxy_test`]): the test connects the way the long link does, writes one
+//! `GET` and judges the status that comes back — which is what the C++ asks of
+//! a proxy before it routes anything through it.
+//!
 //! What still needs the app callbacks (`net_core`, `longlink_task_manager`, the
 //! task managers that own the tasks, `stn_logic`) comes later.
 
@@ -157,6 +162,7 @@ pub mod longlink_speed_test;
 pub mod net_check_logic;
 pub mod net_source;
 pub mod netsource_timercheck;
+pub mod proxy_test;
 pub mod short_link;
 pub mod shortlink;
 pub mod signalling_keeper;
@@ -205,6 +211,7 @@ pub use net_source::{
     DISABLE_QUIC_SECONDS, ITEM_DELIMITER, NUM_MAKE_COUNT,
 };
 pub use netsource_timercheck::{NetSourceTimerCheck, INTERVAL_TIME, MAX_SPEED_TEST_COUNT, TIMEOUT};
+pub use proxy_test::{ProxyTest, Verdict, BUFFER_SIZE, READ_TIMEOUT_MS, TEST_PORT};
 // `ConnectFail` is not here: [`long_link`] already has one of that name, so the
 // short link's is [`short_link::ConnectFail`].
 pub use short_link::{

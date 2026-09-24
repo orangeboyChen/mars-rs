@@ -60,6 +60,19 @@ pub const BASE_SUCC_COUNT: u32 = 5;
 /// is considered stable enough to start computing.
 pub const NET_STABLE_TEST_COUNT: u32 = 3;
 
+/// `kLonglinkConnTimeout` — how long a connect of the long link is given, in
+/// milliseconds. The proxy test races its addresses with it too, which is the
+/// one other place the C++ uses it.
+pub const LONGLINK_CONN_TIMEOUT_MS: u32 = 10 * 1000;
+/// `kLonglinkConnInteral` — how long after the first address the next one is
+/// started, in milliseconds. The C++ spells it `2.5 * 1000`, which is `2500`
+/// of a `unsigned int` and not `2` of them.
+pub const LONGLINK_CONN_INTERVAL_MS: u32 = 2500;
+/// `kLonglinkConnMax` — how many addresses a connect tries at once. Which ones,
+/// and how many, is the host's connect's own bookkeeping, so the port hands it
+/// the two timeouts above and nothing else: `ComplexConnect` is not ported.
+pub const LONGLINK_CONN_MAX: u32 = 3;
+
 /// One week, in seconds: how old a settled interval has to be before the smart
 /// heartbeat probes a bigger one.
 pub const ONE_DAY_SECONDS: i64 = 24 * 60 * 60;

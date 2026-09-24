@@ -134,8 +134,9 @@ pub fn request_headers(profile: &ConnectProfile, task: &Task) -> Headers {
 /// account.
 ///
 /// The C++ writes it through a `snprintf` into 1024 bytes, so a long enough
-/// account is cut off there; the port is not cut off.
-fn authorization(proxy: &ProxyInfo) -> Option<String> {
+/// account is cut off there; the port is not cut off. [`crate::proxy_test`]
+/// asks the same thing of the same proxy, which is why it is one function.
+pub(crate) fn authorization(proxy: &ProxyInfo) -> Option<String> {
     let account = match proxy.kind {
         ProxyType::Http if !proxy.username.is_empty() && !proxy.password.is_empty() => {
             format!("{}:{}", proxy.username, proxy.password)
