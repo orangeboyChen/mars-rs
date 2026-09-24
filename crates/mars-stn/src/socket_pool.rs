@@ -97,7 +97,6 @@ impl CachedSocket {
 }
 
 /// `SocketPool`.
-#[derive(Default)]
 pub struct SocketPool {
     /// `use_cache_`
     use_cache: bool,
@@ -119,7 +118,12 @@ impl SocketPool {
     pub fn new() -> Self {
         Self {
             use_cache: true,
-            ..Self::default()
+            ban_start: None,
+            pool: VecDeque::new(),
+            close: None,
+            create_stream: None,
+            is_sub_stream: None,
+            is_closed: None,
         }
     }
 
@@ -312,6 +316,24 @@ impl SocketPool {
             Some(is_closed) => is_closed(socket),
             None => false,
         }
+    }
+}
+
+impl Default for SocketPool {
+    /// `SocketPool()` — which is [`SocketPool::new`]: a pool that caches, not
+    /// one that only holds.
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for SocketPool {
+    /// `~SocketPool()` — the C++'s destructor is `Clear()`, and so is this
+    /// one's: a socket the pool was given is the pool's to close, and a pool
+    /// that goes away with sockets still in it closes them rather than leaving
+    /// them for whoever comes next.
+    fn drop(&mut self) {
+        self.clear();
     }
 }
 
@@ -557,6 +579,39 @@ mod tests {
         pool.clear();
         assert!(pool.is_empty());
         assert_eq!(closed.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_default_pool_is_one_that_caches() {
+        let mut pool = SocketPool::default();
+        assert!(pool.use_cache());
+
+        let address = item("1.1.1.1", 80, "h");
+        pool.add_cache(CachedSocket::new_at(0, address.clone(), SocketFd(3), 5));
+        assert_eq!(pool.get_socket_at(1_000, &address), Some(SocketFd(3)));
+    }
+
+    #[test]
+    fn a_pool_that_goes_away_closes_what_it_still_holds() {
+        let closed = {
+            let (mut pool, closed) = pool();
+            pool.add_cache(CachedSocket::new_at(
+                0,
+                item("1.1.1.1", 80, "h"),
+                SocketFd(3),
+                5,
+            ));
+            pool.add_cache(CachedSocket::new_at(
+                0,
+                item("2.2.2.2", 80, "h"),
+                SocketFd(4),
+                5,
+            ));
+            assert_eq!(closed.lock().unwrap().len(), 0);
+            closed
+        };
+        // `~SocketPool()` is `Clear()`, so nothing is left for the next pool
+        assert_eq!(*closed.lock().unwrap(), vec![SocketFd(4), SocketFd(3)]);
     }
 
     #[test]

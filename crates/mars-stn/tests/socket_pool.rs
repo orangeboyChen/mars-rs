@@ -193,6 +193,28 @@ fn a_pool_that_is_not_caching_holds_the_sockets_but_hands_none_out() {
 }
 
 #[test]
+fn a_pool_that_goes_away_closes_the_sockets_it_was_holding() {
+    // `~SocketPool()` is `Clear()`, so a host that drops a pool is not left
+    // with sockets nobody can reach
+    let closed = {
+        let (mut pool, closed) = pool();
+        pool.add_cache(CachedSocket::new(
+            item("1.1.1.1", 80, "short.example"),
+            SocketFd(3),
+            400,
+        ));
+        pool.add_cache(CachedSocket::new(
+            item("2.2.2.2", 80, "h"),
+            SocketFd(4),
+            400,
+        ));
+        assert!(closed.lock().unwrap().is_empty());
+        closed
+    };
+    assert_eq!(*closed.lock().unwrap(), vec![SocketFd(4), SocketFd(3)]);
+}
+
+#[test]
 fn the_clock_the_pool_asks_for_is_the_hosts() {
     // `get_socket`, `clean_timeout` and `report` are the same calls without a
     // reading: what they do is what the `_at` ones do with a clock of their own
