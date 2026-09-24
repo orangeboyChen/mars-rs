@@ -63,6 +63,12 @@ fn only_a_task_that_can_be_kept_is_saved() {
     spent.total_timeout = 500;
     assert!(!manager.save_task_at(0, &spent, 500));
 
+    // a cost that does not fit in the C++'s `int` is a deadline that ran out
+    let mut stalled = kept(9, Task::TASK_PRIORITY_NORMAL);
+    stalled.total_timeout = 1_000;
+    assert!(!manager.save_task_at(0, &stalled, u32::MAX));
+    assert!(!manager.has_task(9));
+
     // a kept one is there, and the check is due a period later
     assert!(manager.save_task_at(1_000, &kept(3, Task::TASK_PRIORITY_NORMAL), 0));
     assert!(manager.has_task(3));

@@ -38,6 +38,17 @@ pub type StartTask = dyn FnMut(&Task) + Send;
 /// `fun_callback_`.
 pub type ZombieCallback = dyn FnMut(ErrCmdType, i32, TaskFailHandleType, &Task, u32) + Send;
 
+/// `int total_timeout -= cost`, followed by the C++'s comparison against `0` —
+/// but in a type wide enough that a cost above `i32::MAX` (a task that stalled
+/// for more than about 24.9 days) is a deadline that ran out instead of a
+/// negative one that `saturating_sub` would turn into more time.
+///
+/// [`None`] when the deadline the task had is used up.
+fn remaining_timeout(total_timeout: i32, spent: u64) -> Option<i32> {
+    let remaining = i64::from(total_timeout).saturating_sub(spent.min(i64::MAX as u64) as i64);
+    (remaining > 0).then_some(remaining as i32)
+}
+
 /// A saved task and the reading it was saved at.
 struct ZombieTask {
     task: Task,
@@ -138,13 +149,13 @@ impl ZombieTaskManager {
 
         let mut task = task.clone();
         task.retry_count = 0;
-        // `total_timeout -= _taskcosttime`, and the C++ compares the `int`
-        // against `0` afterwards: a task whose deadline the time it spent has
-        // used up is not kept.
-        task.total_timeout = task.total_timeout.saturating_sub(task_cost_time as i32);
-        if task.total_timeout <= 0 {
+        // `total_timeout -= _taskcosttime`, and then `if (0 >= total_timeout)`:
+        // a task whose deadline the time it spent has used up is not kept.
+        let Some(total_timeout) = remaining_timeout(task.total_timeout, task_cost_time.into())
+        else {
             return false;
-        }
+        };
+        task.total_timeout = total_timeout;
 
         self.tasks.push(ZombieTask {
             task,
@@ -207,12 +218,15 @@ impl ZombieTaskManager {
 
         for zombie in batch.iter_mut() {
             let spent = now.saturating_sub(zombie.save_time);
-            if spent >= zombie.task.total_timeout.max(0) as u64 {
-                self.fail(zombie, spent);
-            } else {
-                zombie.task.total_timeout = zombie.task.total_timeout.saturating_sub(spent as i32);
-                if let Some(start) = self.start.as_mut() {
-                    start(&zombie.task);
+            // `cur_time - save_time >= total_timeout`, and the subtraction that
+            // follows
+            match remaining_timeout(zombie.task.total_timeout, spent) {
+                None => self.fail(zombie, spent),
+                Some(total_timeout) => {
+                    zombie.task.total_timeout = total_timeout;
+                    if let Some(start) = self.start.as_mut() {
+                        start(&zombie.task);
+                    }
                 }
             }
         }
@@ -244,17 +258,18 @@ impl ZombieTaskManager {
 
         for mut zombie in std::mem::take(&mut self.tasks) {
             let spent = now.saturating_sub(zombie.save_time);
-            if spent >= zombie.task.total_timeout.max(0) as u64 {
-                self.fail(&zombie, spent);
-            } else if spent >= RETRY_INTERVAL
-                && now.saturating_sub(net_core_last_start_task_time) >= RETRY_INTERVAL
-            {
-                zombie.task.total_timeout = zombie.task.total_timeout.saturating_sub(spent as i32);
-                if let Some(start) = self.start.as_mut() {
-                    start(&zombie.task);
+            match remaining_timeout(zombie.task.total_timeout, spent) {
+                None => self.fail(&zombie, spent),
+                Some(total_timeout)
+                    if spent >= RETRY_INTERVAL
+                        && now.saturating_sub(net_core_last_start_task_time) >= RETRY_INTERVAL =>
+                {
+                    zombie.task.total_timeout = total_timeout;
+                    if let Some(start) = self.start.as_mut() {
+                        start(&zombie.task);
+                    }
                 }
-            } else {
-                kept.push(zombie);
+                Some(_) => kept.push(zombie),
             }
         }
         self.tasks = kept;
@@ -358,6 +373,35 @@ mod tests {
         spent.total_timeout = 500;
         assert!(!manager.save_task_at(0, &spent, 500));
         assert!(!manager.save_task_at(0, &spent, 501));
+        assert!(manager.is_empty());
+
+        // a cost that does not fit in the C++'s `int` is a deadline that ran
+        // out, not one that grew
+        let mut stalled = a_task(3);
+        stalled.total_timeout = 1_000;
+        assert!(!manager.save_task_at(0, &stalled, u32::MAX));
+        assert!(!manager.save_task_at(0, &stalled, i32::MAX as u32 + 1));
+        assert!(!manager.save_task_at(0, &stalled, u64::MAX as u32));
+        assert!(manager.is_empty());
+        assert!(!manager.has_task(3));
+    }
+
+    #[test]
+    fn a_zombie_that_stalled_for_longer_than_an_int_is_failed() {
+        let (mut manager, (started, failed)) = manager();
+        let mut task = a_task(9);
+        task.total_timeout = 1_000;
+        assert!(manager.save_task_at(0, &task, 0));
+
+        // `i32::MAX` milliseconds and a bit more: the deadline is long gone,
+        // and the subtraction must not wrap it back into a live task
+        let stalled = i32::MAX as u64 + 10_000;
+        manager.on_timer_check_at(stalled);
+        assert!(started.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
+        assert_eq!(
+            *failed.lock().unwrap_or_else(|e| e.into_inner()),
+            vec![(9, LOCAL_TASK_TIMEOUT, TaskFailHandleType::TaskEnd as i32)]
+        );
         assert!(manager.is_empty());
     }
 
