@@ -1,0 +1,24 @@
+[package]
+name = "mars-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "C ABI (cdylib + staticlib) over the Rust port of the Mars xlog appender"
+
+[lib]
+# `cdylib`/`staticlib` for the C/C++/JNI/ObjC callers, `rlib` so the Rust
+# integration tests in `tests/` can call the very same symbols.
+crate-type = ["cdylib", "staticlib", "rlib"]
+name = "mars_ffi"
+
+[dependencies]
+mars-appender = { workspace = true }
+# Only needed for `CompressMode`, which `XLogConfig` stores by value.
+mars-buffer = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+# Used by `tests/ffi_smoke.rs` to inflate the (always compressed) .xlog records.
+flate2 = { workspace = true }
