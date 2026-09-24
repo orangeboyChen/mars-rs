@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/mars-core",
     "crates/mars-comm",
+    "crates/mars-stn",
     "crates/mars-crypt",
     "crates/mars-buffer",
     "crates/mars-appender",
@@ -21,6 +22,7 @@ authors = ["Mars Rust Working Group"]
 [workspace.dependencies]
 mars-core = { path = "crates/mars-core" }
 mars-comm = { path = "crates/mars-comm" }
+mars-stn = { path = "crates/mars-stn" }
 mars-crypt = { path = "crates/mars-crypt" }
 mars-buffer = { path = "crates/mars-buffer" }
 mars-appender = { path = "crates/mars-appender" }
