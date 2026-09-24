@@ -1,0 +1,23 @@
+[package]
+name = "mars-xlog-compat"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "CLI that encodes/decodes xlog files so the Rust port can be diffed against the C++ implementation"
+
+[dependencies]
+mars-xlog-core = { workspace = true }
+mars-xlog-crypt = { workspace = true }
+mars-xlog-buffer = { workspace = true }
+flate2 = { workspace = true }
+zstd = { workspace = true }
+k256 = { workspace = true }
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+
+[[bin]]
+name = "xlog-compat"
+path = "src/main.rs"

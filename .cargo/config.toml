@@ -1,0 +1,27 @@
+# Android 15 introduced devices with 16 KiB pages: the dynamic loader refuses
+# to load a shared object whose ELF segments are only 4 KiB aligned, and lld
+# still defaults to 4 KiB on the NDK releases CI installs. The C++ build forces
+# the same values in mars/CMakeLists.txt.
+#
+# It applies only when `RUSTFLAGS` is *not* exported: cargo ranks the variable
+# above `target.<triple>.rustflags`, so mars/gradle/mars-cargo.gradle.kts and
+# the Android job of .github/workflows/rust.yml pass the same flags
+# themselves.
+#
+[target.armv7-linux-androideabi]
+rustflags = [
+    "-C", "link-arg=-Wl,-z,max-page-size=16384",
+    "-C", "link-arg=-Wl,-z,common-page-size=16384",
+]
+
+[target.aarch64-linux-android]
+rustflags = [
+    "-C", "link-arg=-Wl,-z,max-page-size=16384",
+    "-C", "link-arg=-Wl,-z,common-page-size=16384",
+]
+
+[target.x86_64-linux-android]
+rustflags = [
+    "-C", "link-arg=-Wl,-z,max-page-size=16384",
+    "-C", "link-arg=-Wl,-z,common-page-size=16384",
+]

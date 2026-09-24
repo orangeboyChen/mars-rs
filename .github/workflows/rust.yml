@@ -1,0 +1,173 @@
+name: Rust
+
+# Build / lint / test gate of the xlog workspace: rustfmt, clippy, the test
+# suite on Linux/macOS/Windows (debug and release), a release build, cargo doc,
+# and the Android and Apple cross builds of the FFI and JNI crates.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: '-D warnings'
+
+jobs:
+  format:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test
+        run: cargo test --workspace --all-targets
+      - name: cargo test (release)
+        run: cargo test --workspace --release
+
+  build:
+    name: build (release)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --release --all-targets
+
+  android:
+    name: build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: 27.1.12297006
+      # An exported `RUSTFLAGS` replaces `target.<triple>.rustflags` of
+      # .cargo/config.toml instead of extending it, so the 16 KiB page size has
+      # to ride along with `-D warnings`. Without it Android 15 devices with
+      # 16 KiB pages refuse to load the library.
+      RUSTFLAGS: >-
+        -D warnings
+        -C link-arg=-Wl,-z,max-page-size=16384
+        -C link-arg=-Wl,-z,common-page-size=16384
+      # The runner image already ships the Android SDK; it is pinned here
+      # because the `cargo build` step derives the NDK path from it.
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-linux-android
+            clang: aarch64-linux-android24-clang
+          - target: armv7-linux-androideabi
+            clang: armv7a-linux-androideabi24-clang
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # `android-actions/setup-android` is intentionally not used: it installs
+      # the long-removed `tools` SDK package, so its `sdkmanager` call exits
+      # non-zero and the job fails before any Rust code is compiled. The SDK
+      # (and its `sdkmanager`) that the runner image already provides is enough
+      # to install the NDK.
+      - name: Install the Android NDK
+        run: |
+          set -euo pipefail
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          # `yes` is killed by SIGPIPE as soon as sdkmanager stops reading, and
+          # under `pipefail` that 141 would fail the job even though sdkmanager
+          # itself succeeded. Grouping it keeps the pipeline status to
+          # sdkmanager's own exit code.
+          { yes || true; } | "$sdkmanager" --licenses > /dev/null
+          "$sdkmanager" --install "ndk;${NDK_VERSION}"
+          test -d "$ANDROID_HOME/ndk/${NDK_VERSION}"
+      - uses: Swatinem/rust-cache@v2
+      # `zstd-sys` compiles C, so both cc-rs and rustc need the NDK clang. The
+      # two of them spell the env var prefixes differently, so the names are
+      # built in the shell rather than from `env:`; see the comment below.
+      - name: cargo build
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          # `aarch64-linux-android` -> `aarch64_linux_android`
+          flat="$(printf '%s' "$target" | tr '-' '_')"
+          upper="$(printf '%s' "$flat" | tr '[:lower:]' '[:upper:]')"
+          ndk_bin="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          clang="$ndk_bin/${{ matrix.clang }}"
+          test -x "$clang"
+          # Casing matters here and the two prefixes are spelled differently:
+          # cargo reads the upper-cased `CARGO_TARGET_<TRIPLE>_LINKER`, while
+          # cc-rs reads `CC_<triple>` verbatim (it also tries the underscore
+          # form, then `TARGET_CC`, then `CC`). The upper-cased `CC_<TRIPLE>`
+          # is silently ignored on Linux, which makes cc-rs fall back to a bare
+          # `<triple>-clang` on `$PATH` and fail.
+          export "CC_${flat}=$clang"
+          export "AR_${flat}=$ndk_bin/llvm-ar"
+          export "CARGO_TARGET_${upper}_LINKER=$clang"
+          # So that plain `llvm-ar` and friends are reachable too.
+          export PATH="$ndk_bin:$PATH"
+          cargo build --release -p mars-xlog-ffi --target "$target"
+          cargo build --release -p mars-xlog-jni --target "$target"
+          ls -l "target/$target/release/libmarsxlog.so"
+
+  apple:
+    name: build (${{ matrix.target }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-apple-ios
+          - aarch64-apple-ios-sim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p mars-xlog-ffi --target ${{ matrix.target }}
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: '-D warnings'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo doc --workspace --no-deps
