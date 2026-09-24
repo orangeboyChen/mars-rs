@@ -67,6 +67,12 @@
 //! is done with for the next task that wants the same ip, port and host — for
 //! a while, and never again once one taken from it turned out to be no good.
 //!
+//! The fourteenth slice is the long link itself ([`long_link`]): the status a
+//! task asks about, the connect that fills the profile the slices before this
+//! one were written to fill in, and the proxy and the debug ip that say which
+//! of its pairs it is made on. What the C++ does on a thread — the loop that
+//! reads and writes, the heartbeat, the tasks going out — comes after it.
+//!
 //! Everything that needs the app callbacks (`net_core`, `longlink_task_manager`,
 //! `shortlink`, `stn_logic`) comes later.
 
@@ -118,6 +124,7 @@ pub mod config;
 pub mod dynamic_timeout;
 pub mod flow_limit;
 pub mod frequency_limit;
+pub mod long_link;
 pub mod longlink;
 pub mod longlink_connect_monitor;
 pub mod longlink_identify_checker;
@@ -141,6 +148,10 @@ pub use anti_avalanche::{AntiAvalanche, LimitKind};
 pub use dynamic_timeout::{DynamicTimeout, DynamicTimeoutStatus};
 pub use flow_limit::FlowLimit;
 pub use frequency_limit::FrequencyLimit;
+pub use long_link::{
+    ConnectFail, DisconnectInternalCode, LongLink, MakeSure, EBADMSG, ECT_DNS_MAKE_SOCKET_PREPARED,
+    ECT_SOCKET_MAKE_SOCKET_PREPARED, RECV_BUFFER_LEN,
+};
 pub use longlink::{LongLinkEncoder, Unpacked};
 pub use longlink_connect_monitor::{
     ActiveState, ConnectType, LongLinkConnectMonitor, LongLinkStatus, INACTIVE_BUFFER,
@@ -179,7 +190,9 @@ pub use socket_operator::{
 pub use socket_pool::{CachedSocket, SocketPool, BAN_INTERVAL, DEFAULT_MAX_KEEPALIVE_TIME};
 pub use task::{HostRedirectType, Task};
 pub use task_intercept::{TaskIntercept, TaskInterceptInfo, INTERCEPT_TIMEOUT};
-pub use task_profile::{ErrCmdType, TaskFailHandleType, TaskFailStep, TaskOutcome};
+pub use task_profile::{
+    ConnectProfile, ErrCmdType, NoopProfile, TaskFailHandleType, TaskFailStep, TaskOutcome,
+};
 pub use timing_sync::{
     alarm_time, TimingSync, ACTIVE_SYNC_INTERVAL, INACTIVE_SYNC_INTERVAL, NONET_SALT_RATE,
     UNLOGIN_SYNC_INTERVAL,
