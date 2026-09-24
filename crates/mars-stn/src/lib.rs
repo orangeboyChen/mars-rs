@@ -61,6 +61,12 @@
 //! ([`longlink_speed_test`]): the same noop goes out on all of them at once,
 //! and the first one whose answer comes back is the one the link is made on.
 //!
+//! The thirteenth slice is the socket layer under the links
+//! ([`socket_operator`] and [`socket_pool`]): what a link asks of a socket,
+//! which is the host's to answer, and the pool that keeps the socket one task
+//! is done with for the next task that wants the same ip, port and host — for
+//! a while, and never again once one taken from it turned out to be no good.
+//!
 //! Everything that needs the app callbacks (`net_core`, `longlink_task_manager`,
 //! `shortlink`, `stn_logic`) comes later.
 
@@ -122,6 +128,8 @@ pub mod netsource_timercheck;
 pub mod signalling_keeper;
 pub mod simple_ipport_sort;
 pub mod smart_heartbeat;
+pub mod socket_operator;
+pub mod socket_pool;
 pub mod task;
 pub mod task_intercept;
 pub mod task_profile;
@@ -165,6 +173,10 @@ pub use simple_ipport_sort::{
 pub use smart_heartbeat::{
     NetHeartbeatInfo, SmartHeartBeatAction, SmartHeartBeatType, SmartHeartbeat,
 };
+pub use socket_operator::{
+    contain_ipv6, is_impatient, tcp_identify, OpBreaker, SocketFd, SocketOperator, SocketProfile,
+};
+pub use socket_pool::{CachedSocket, SocketPool, BAN_INTERVAL, DEFAULT_MAX_KEEPALIVE_TIME};
 pub use task::{HostRedirectType, Task};
 pub use task_intercept::{TaskIntercept, TaskInterceptInfo, INTERCEPT_TIMEOUT};
 pub use task_profile::{ErrCmdType, TaskFailHandleType, TaskFailStep, TaskOutcome};

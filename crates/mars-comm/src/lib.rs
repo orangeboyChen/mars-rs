@@ -14,6 +14,10 @@
 //! headers it needs: `ipv6_address` is `ipv6_address_utils.h` +
 //! `nat64_prefix_util.h` and `local_ipstack` is `local_ipstack.h`.
 //!
+//! `proxy` mirrors the proxy half of `comm/comm_data.h`: `ProxyInfo` is the
+//! value the C++ hands a connect, and `ProxyType` is how the proxy is talked
+//! to.
+//!
 //! The `wstring` overloads of the C++ are not ported: every caller in this
 //! repository works on UTF-8 `String`/`&str`.
 
@@ -35,6 +39,7 @@ pub mod frequency_limit;
 pub mod ipv6_address;
 pub mod local_ipstack;
 pub mod message_queue;
+pub mod proxy;
 pub mod singleton;
 pub mod socket_address;
 pub mod strutil;
@@ -43,5 +48,6 @@ pub mod tickcount;
 
 pub use frequency_limit::FrequencyLimit;
 pub use local_ipstack::LocalIpStack;
+pub use proxy::{ProxyInfo, ProxyType};
 pub use socket_address::SocketAddress;
 pub use tickcount::{TickCount, TickCountDiff};
