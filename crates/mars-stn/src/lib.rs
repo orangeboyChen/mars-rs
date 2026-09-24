@@ -18,13 +18,19 @@
 //! report the C++ hands to the app is a `(key, value)` pair the port hands to a
 //! callback instead.
 //!
+//! The fourth slice is what keeps the long link trusted and the mapping alive:
+//! the identify check the app answers before the connection is used
+//! ([`longlink_identify_checker`]) and the signalling that keeps a mapping up
+//! while the app waits ([`signalling_keeper`]).
+//!
 //! Everything that needs the app callbacks (`net_core`, `longlink_task_manager`,
 //! `shortlink`, `stn_logic`) comes later.
 
 /// The `static`s of this crate are one value for the whole process —
-/// `sg_client_version` in [`longlink`] and `outer_setted_heart_` in
-/// [`smart_heartbeat`] — so the unit tests that move them need **one** lock for
-/// the crate, not one per module.
+/// `sg_client_version` in [`longlink`], `outer_setted_heart_` in
+/// [`smart_heartbeat`], and `g_period` / `g_keepTime` in
+/// [`signalling_keeper`] — so the unit tests that move them need **one** lock
+/// for the crate, not one per module.
 #[cfg(test)]
 pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
@@ -39,6 +45,8 @@ pub mod dynamic_timeout;
 pub mod flow_limit;
 pub mod frequency_limit;
 pub mod longlink;
+pub mod longlink_identify_checker;
+pub mod signalling_keeper;
 pub mod smart_heartbeat;
 pub mod task;
 pub mod task_profile;
@@ -49,6 +57,8 @@ pub use dynamic_timeout::{DynamicTimeout, DynamicTimeoutStatus};
 pub use flow_limit::FlowLimit;
 pub use frequency_limit::FrequencyLimit;
 pub use longlink::{LongLinkEncoder, Unpacked};
+pub use longlink_identify_checker::{IdentifyMode, LongLinkIdentifyChecker};
+pub use signalling_keeper::{SignallingKeeper, DEFAULT_KEEP_TIME, DEFAULT_PERIOD};
 pub use smart_heartbeat::{
     NetHeartbeatInfo, SmartHeartBeatAction, SmartHeartBeatType, SmartHeartbeat,
 };
