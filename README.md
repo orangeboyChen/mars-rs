@@ -10,6 +10,7 @@ zlib- or zstd-compressed, sync or async — and is the whole logging stack:
 | `mars-core`      | block buffer, log file framing, zlib/zstd helpers                 |
 | `mars-comm`      | common utilities: `strutil`, `tickcount`, thread, message queue, alarm |
 | `mars-stn`       | the task model and the anti-avalanche / dynamic-timeout policies   |
+| `mars-sdt`       | the network diagnosis: check profiles, the plan a mode turns into  |
 | `mars-crypt`     | ECDH + AES-GCM record encryption                                  |
 | `mars-buffer`    | the mmap append buffer (`LogZlibBuffer` / `LogZstdBuffer`)        |
 | `mars-appender`  | the process-wide appender and per-instance loggers                |

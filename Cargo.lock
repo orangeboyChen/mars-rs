@@ -534,6 +534,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mars-sdt"
+version = "0.1.0"
+
+[[package]]
 name = "mars-stn"
 version = "0.1.0"
 dependencies = [
