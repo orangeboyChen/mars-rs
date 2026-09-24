@@ -288,7 +288,7 @@ pub unsafe fn cstr_cmp_safe(a: *const c_char, b: *const c_char) -> bool {
 /// `strutil::CStr2Int32Safe` — `atoi` with a fallback for a null pointer.
 ///
 /// Like `atoi`, only the numeric prefix is read: `"12ms"` is `12` and
-/// `"abc"` is `0`, not [`default_num`] — the fallback is reserved for a null
+/// `"abc"` is `0`, not `default_num` — the fallback is reserved for a null
 /// pointer, which is what the "safe" in the C++ name buys.
 ///
 /// # Safety
