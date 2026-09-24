@@ -260,7 +260,7 @@ mod tests {
             !RunLoop::dispatch_timeout(queue, Duration::from_millis(5)),
             "not due yet"
         );
-        assert_eq!(fired.load(Ordering::SeqCst), 0);
+        assert_eq!(fired.load(Ordering::SeqCst), 0, "nothing ran yet");
         assert!(RunLoop::dispatch_timeout(
             queue,
             Duration::from_millis(2_000)
@@ -270,7 +270,9 @@ mod tests {
         // target: it used to stay kStart, waiting, with no elapsed time.
         assert_eq!(alarm.status(), Status::OnAlarm);
         assert!(!alarm.is_waiting());
-        assert!(alarm.elapse_time() >= 200);
+        // the delay is 200 ms, but the two clocks (the message's due time and
+        // `gettickcount`) need not round the same way
+        assert!(alarm.elapse_time() >= 190);
         // A cancel after it fired leaves it fired, not cancelled.
         assert!(alarm.cancel());
         assert_eq!(alarm.status(), Status::OnAlarm);
@@ -321,6 +323,27 @@ mod tests {
         assert!(!alarm.is_waiting());
         // It is startable again: `seq_` went back to INVAILD_SEQ.
         assert!(alarm.start(10));
+        alarm.cancel();
+        destroy_message_queue(queue);
+    }
+
+    #[test]
+    fn a_far_away_alarm_is_not_dispatched_by_a_short_wait() {
+        let queue = create_message_queue();
+        let fired = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&fired);
+        let mut alarm = Alarm::new(queue, move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        // 2 s versus a 5 ms window: a loaded runner cannot make this flaky
+        assert!(alarm.start(2_000));
+        assert!(
+            !RunLoop::dispatch_timeout(queue, Duration::from_millis(5)),
+            "not due yet"
+        );
+        assert_eq!(fired.load(Ordering::SeqCst), 0);
+        alarm.cancel();
         destroy_message_queue(queue);
     }
 

@@ -162,6 +162,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p mars-ffi --target ${{ matrix.target }}
 
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+      # The floor is what the suite covers today; it is raised as the remaining
+      # crates (mars-ffi, mars-compat, the JNI wrappers) get their tests, with
+      # 90 % lines as the target.
+      - name: Measure line coverage
+        run: cargo llvm-cov --workspace --summary-only --fail-under-lines 84
   docs:
     name: docs
     runs-on: ubuntu-latest
