@@ -186,7 +186,8 @@ impl Unpacked {
 /// [`Unpacked::Package`] whose `package_len` is `0`. That is what the C++
 /// answers too, and `LongLink::__ReadWrite` is the only consumer it has, so the
 /// port leaves it to the caller: whoever advances a stream by `package_len`
-/// has to stop on a `0`, or it will never move.
+/// has to stop on a `0`, or it will never move — which is what the long link
+/// does, ending its run on one.
 pub fn longlink_unpack(packed: &[u8]) -> Unpacked {
     // `__unpack_test`
     if packed.len() < HEADER_LEN {

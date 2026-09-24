@@ -1258,9 +1258,12 @@ impl LongLink {
                     body,
                 } => {
                     if package_len == 0 {
-                        // a header that claims no bytes at all, which the
-                        // unpacker answers for a package it cannot advance past
-                        break;
+                        // a header that claims no bytes at all: the C++
+                        // advances its buffer by `packlen` and so walks in
+                        // place for ever, which is no answer at all. The port
+                        // ends the run on it, the way it ends one on a package
+                        // that is not a package
+                        return Err(RunEnd::unpack());
                     }
                     let answer = if self.noop_resp_at(now, cmdid, seq, &body) {
                         Answer::Heartbeat { cmdid, taskid: seq }
@@ -2837,6 +2840,18 @@ mod tests {
             }]
         );
         assert_eq!(link.recv_len(), 0);
+    }
+
+    #[test]
+    fn a_package_that_claims_no_bytes_ends_the_read() {
+        // `head_length` of `0` and `body_length` of `0`: a package the stream
+        // cannot be advanced past, which is what `longlink_unpack` answers for
+        // it. The C++ moves its buffer by `packlen` and walks in place for ever
+        let (mut link, seen) = link();
+        link.make_sure_connected();
+        let socket = link.connect_at(1_000).unwrap();
+        *seen.answer.lock().unwrap() = vec![0; crate::longlink::HEADER_LEN];
+        assert_eq!(link.read_at(2_000, socket), Err(RunEnd::unpack()));
     }
 
     #[test]
