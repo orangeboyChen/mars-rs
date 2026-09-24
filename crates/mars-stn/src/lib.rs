@@ -41,6 +41,11 @@
 //! diagnosing ([`net_check_logic`]): a window of the last thirty-two tasks of
 //! each link, and two limits on how often the diagnosis may start.
 //!
+//! The ninth slice is the periodic sync the app is asked for
+//! ([`timing_sync`]) and the answer of a task the app answered itself
+//! ([`task_intercept`]): one alarm restarted by every change, and one table
+//! of answers that are good for a minute.
+//!
 //! Everything that needs the app callbacks (`net_core`, `longlink_task_manager`,
 //! `shortlink`, `stn_logic`) comes later.
 
@@ -100,7 +105,9 @@ pub mod signalling_keeper;
 pub mod simple_ipport_sort;
 pub mod smart_heartbeat;
 pub mod task;
+pub mod task_intercept;
 pub mod task_profile;
+pub mod timing_sync;
 pub mod weak_network;
 pub mod zombie_task_manager;
 
@@ -131,6 +138,11 @@ pub use smart_heartbeat::{
     NetHeartbeatInfo, SmartHeartBeatAction, SmartHeartBeatType, SmartHeartbeat,
 };
 pub use task::{HostRedirectType, Task};
+pub use task_intercept::{TaskIntercept, TaskInterceptInfo, INTERCEPT_TIMEOUT};
 pub use task_profile::{ErrCmdType, TaskFailHandleType, TaskFailStep, TaskOutcome};
+pub use timing_sync::{
+    alarm_time, TimingSync, ACTIVE_SYNC_INTERVAL, INACTIVE_SYNC_INTERVAL, NONET_SALT_RATE,
+    UNLOGIN_SYNC_INTERVAL,
+};
 pub use weak_network::{ReportWeak, WeakKey, WeakNetworkLogic};
 pub use zombie_task_manager::ZombieTaskManager;
