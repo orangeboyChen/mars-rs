@@ -353,8 +353,12 @@ pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
     // This is the "another process died with a full cache" recovery path. Run
     // it while an appender is open for the same directory and it reads that
     // cache file mid-write and then unlinks it, so every record the live
-    // appender buffers afterwards lands in an unnamed inode and is lost.
-    if appender_get_current_log_path().is_some() {
+    // appender buffers afterwards lands in an unnamed inode and is lost. The
+    // instances matter as much as the process-wide appender: each of them owns
+    // a `<prefix>.mmap3` of its own.
+    if appender_get_current_log_path().is_some()
+        || crate::category::instance_owns_mmap_path(&crate::appender::mmap_file_path(config))
+    {
         return FileIoAction::Unnecessary;
     }
 

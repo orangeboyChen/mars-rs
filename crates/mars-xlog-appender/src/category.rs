@@ -25,6 +25,7 @@
 //! the process-wide appender opened by `appender_open`.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 use crate::{
@@ -120,6 +121,9 @@ struct Registry {
     next: XloggerHandle,
     categories: HashMap<XloggerHandle, XloggerCategory>,
     by_prefix: HashMap<String, XloggerHandle>,
+    /// `<prefix>.mmap3` of every live instance: one-shot recovery reads and
+    /// unlinks that file, so it has to stay away from an instance that owns it.
+    mmap_paths: HashMap<XloggerHandle, PathBuf>,
     /// The logger handle `0` selects: `SetLevel(0, ..)` in the C++ configures
     /// the process-wide level, so it has to be reachable.
     default: XloggerCategory,
@@ -132,9 +136,46 @@ fn registry() -> &'static Mutex<Registry> {
             next: DEFAULT_HANDLE + 1,
             categories: HashMap::new(),
             by_prefix: HashMap::new(),
+            mmap_paths: HashMap::new(),
             default: XloggerCategory::default(),
         })
     })
+}
+
+/// Which appender a handle names.
+enum Target {
+    /// The instance's own appender.
+    Instance(AppenderId),
+    /// The process-wide default — what handle `0` means in the C++.
+    Default,
+    /// Nothing at all: a handle whose instance was released, or one that was
+    /// never handed out. Calls through it are a no-op; they must not reach the
+    /// process-wide appender, which belongs to handle `0`.
+    Gone,
+}
+
+fn target(handle: XloggerHandle) -> Target {
+    if handle == DEFAULT_HANDLE {
+        return Target::Default;
+    }
+    match lookup(handle).and_then(|category| category.appender) {
+        Some(id) => Target::Instance(id),
+        None => Target::Gone,
+    }
+}
+
+/// Whether a live instance owns the cache file at `path`.
+///
+/// `appender_oneshot_flush` asks this before it reads and unlinks
+/// `<prefix>.mmap3`: doing that to an instance that is mid-write loses
+/// everything the instance buffers afterwards.
+pub fn instance_owns_mmap_path(path: &std::path::Path) -> bool {
+    registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .mmap_paths
+        .values()
+        .any(|owned| owned == path)
 }
 
 /// Writes through the instance's own appender, or the process-wide default
@@ -195,6 +236,9 @@ pub fn new_xlogger_instance(config: &XLogConfig, level: LogLevel) -> XloggerHand
     category.appender = appender;
     registry.categories.insert(handle, category);
     registry.by_prefix.insert(config.nameprefix.clone(), handle);
+    registry
+        .mmap_paths
+        .insert(handle, crate::appender::mmap_file_path(config));
     handle
 }
 
@@ -216,6 +260,7 @@ pub fn release_xlogger_instance(nameprefix: &str) {
         return;
     };
     let category = registry.categories.remove(&handle);
+    registry.mmap_paths.remove(&handle);
     drop(registry);
 
     // The C++ releases the instance's own appender here
@@ -309,54 +354,77 @@ pub fn set_level(handle: XloggerHandle, level: LogLevel) {
 }
 
 /// `mars::xlog::SetAppenderMode` — applies to the instance's own appender.
+///
+/// A handle whose instance is gone changes nothing: only [`DEFAULT_HANDLE`]
+/// reaches the process-wide appender.
 pub fn set_appender_mode(handle: XloggerHandle, mode: AppenderMode) {
-    match lookup(handle).and_then(|category| category.appender) {
-        Some(id) => appender_set_mode_instance(id, mode),
-        None => appender_set_mode(mode),
+    match target(handle) {
+        Target::Instance(id) => appender_set_mode_instance(id, mode),
+        Target::Default => appender_set_mode(mode),
+        Target::Gone => {}
     }
 }
 
 /// `mars::xlog::SetMaxFileSize` — per instance, like
 /// `xlogger_interface.cc`'s `SetMaxFileSize`.
 pub fn set_max_file_size(handle: XloggerHandle, bytes: u64) {
-    match lookup(handle).and_then(|category| category.appender) {
-        Some(id) => appender_set_max_file_size_instance(id, bytes),
-        None => appender_set_max_file_size(bytes),
+    match target(handle) {
+        Target::Instance(id) => appender_set_max_file_size_instance(id, bytes),
+        Target::Default => appender_set_max_file_size(bytes),
+        Target::Gone => {}
     }
 }
 
 /// `mars::xlog::SetMaxAliveTime` — per instance.
 pub fn set_max_alive_duration(handle: XloggerHandle, secs: u64) {
-    match lookup(handle).and_then(|category| category.appender) {
-        Some(id) => appender_set_max_alive_duration_instance(id, secs),
-        None => appender_set_max_alive_duration(secs),
+    match target(handle) {
+        Target::Instance(id) => appender_set_max_alive_duration_instance(id, secs),
+        Target::Default => appender_set_max_alive_duration(secs),
+        Target::Gone => {}
     }
 }
 
 /// `mars::xlog::Flush` — drains the instance's own appender.
 pub fn flush(handle: XloggerHandle, sync: bool) {
-    match lookup(handle).and_then(|category| category.appender) {
-        Some(id) => appender_flush_instance(id, sync),
-        None => {
+    match target(handle) {
+        Target::Instance(id) => appender_flush_instance(id, sync),
+        Target::Default => {
             if sync {
                 appender_flush_sync();
             } else {
                 appender_flush();
             }
         }
+        Target::Gone => {}
     }
 }
 
 /// `mars::xlog::FlushAll`.
+///
+/// Every registered instance has an appender of its own, so the C++'s
+/// "flush everything" has to drain those too — a caller that flushes before
+/// collecting logs or suspending would otherwise miss their records.
 pub fn flush_all(sync: bool) {
     flush(DEFAULT_HANDLE, sync);
+
+    let instances: Vec<AppenderId> = registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .categories
+        .values()
+        .filter_map(|category| category.appender)
+        .collect();
+    for id in instances {
+        appender_flush_instance(id, sync);
+    }
 }
 
 /// `mars::xlog::SetConsoleLogOpen` — per instance.
 pub fn set_console_log_open(handle: XloggerHandle, open: bool) {
-    match lookup(handle).and_then(|category| category.appender) {
-        Some(id) => appender_set_console_log_instance(id, open),
-        None => appender_set_console_log(open),
+    match target(handle) {
+        Target::Instance(id) => appender_set_console_log_instance(id, open),
+        Target::Default => appender_set_console_log(open),
+        Target::Gone => {}
     }
 }
 
@@ -516,6 +584,88 @@ mod tests {
         assert!(!xlogger_write(STALE, None, Some("dropped")));
         assert!(!is_enabled_for(STALE, LogLevel::Fatal));
         assert_eq!(get_level(STALE), None);
+    }
+
+    #[test]
+    fn flush_all_drains_the_instances_as_well() {
+        let _guard = serial();
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let one = new_xlogger_instance(&config("all-one", first.path()), LogLevel::Verbose);
+        let two = new_xlogger_instance(&config("all-two", second.path()), LogLevel::Verbose);
+        set_appender_mode(one, AppenderMode::Sync);
+        set_appender_mode(two, AppenderMode::Sync);
+        assert!(xlogger_write(one, None, Some("ALL-ONE")));
+        assert!(xlogger_write(two, None, Some("ALL-TWO")));
+
+        // Not one per-instance `flush`: `flush_all` has to reach both.
+        flush_all(true);
+
+        assert!(log_text(first.path()).contains("ALL-ONE"));
+        assert!(log_text(second.path()).contains("ALL-TWO"));
+
+        release_xlogger_instance("all-one");
+        release_xlogger_instance("all-two");
+    }
+
+    #[test]
+    fn a_stale_handle_leaves_the_default_appender_alone() {
+        let _guard = serial();
+        const STALE: XloggerHandle = 999;
+
+        // Only handle `0` names the process-wide appender, so none of these
+        // may reach it: a one byte file size would rotate on every record.
+        crate::appender_close();
+        set_appender_mode(STALE, AppenderMode::Async);
+        set_max_file_size(STALE, 1);
+        set_max_alive_duration(STALE, 1);
+        set_console_log_open(STALE, true);
+        flush(STALE, true);
+
+        let dir = tempfile::tempdir().unwrap();
+        crate::appender_open(config("default", dir.path())).unwrap();
+        crate::appender_write(None, "first record");
+        crate::appender_write(None, "second record");
+        crate::appender_close();
+
+        let files: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".xlog"))
+            .collect();
+        assert_eq!(
+            files.len(),
+            1,
+            "the default appender was resized: {files:?}"
+        );
+
+        // Put the process-wide settings back.
+        set_max_file_size(DEFAULT_HANDLE, 0);
+        set_console_log_open(DEFAULT_HANDLE, false);
+    }
+
+    #[test]
+    fn one_shot_recovery_stays_away_from_an_instance_cache() {
+        let _guard = serial();
+        crate::appender_close();
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config("owned", dir.path());
+        let handle = new_xlogger_instance(&cfg, LogLevel::Verbose);
+        assert_ne!(handle, DEFAULT_HANDLE);
+
+        // The instance owns `<prefix>.mmap3`: recovery must not read and
+        // unlink it underneath a live appender.
+        let mmap_path = crate::appender::mmap_file_path(&cfg);
+        assert!(instance_owns_mmap_path(&mmap_path));
+        assert_eq!(
+            crate::appender_oneshot_flush(&cfg),
+            crate::config::FileIoAction::Unnecessary
+        );
+
+        release_xlogger_instance("owned");
+        assert!(!instance_owns_mmap_path(&mmap_path));
+        crate::appender_close();
     }
 
     #[test]

@@ -409,9 +409,13 @@ impl AppenderInner {
     }
 
     /// `XloggerAppender::__Log2File`.
-    fn log2file(&mut self, data: &[u8], move_file: bool) {
+    ///
+    /// Answers whether the records reached a file: one-shot recovery has to
+    /// know, because it may only drop the mmap cache once every record in it
+    /// has been persisted elsewhere.
+    fn log2file(&mut self, data: &[u8], move_file: bool) -> bool {
         if data.is_empty() || self.config.logdir.as_os_str().is_empty() {
-            return;
+            return false;
         }
 
         let logdir = self.config.logdir.clone();
@@ -420,12 +424,13 @@ impl AppenderInner {
 
         let Some(cachedir) = self.config.cachedir.clone() else {
             if self.open_log_file(&logdir) {
-                self.write_file_record(data);
+                let written = self.write_file_record(data);
                 if !self.is_sync() {
                     self.close_log_file();
                 }
+                return written;
             }
-            return;
+            return false;
         };
 
         let tv = now_secs();
@@ -441,13 +446,13 @@ impl AppenderInner {
         let cache_logs = self.cache_logs();
 
         if (cache_logs || cache_path.exists()) && self.open_log_file(&cachedir) {
-            self.write_file_record(data);
+            let written = self.write_file_record(data);
             if !self.is_sync() {
                 self.close_log_file();
             }
 
             if cache_logs || !move_file {
-                return;
+                return written;
             }
 
             let log_path = make_log_file_name(
@@ -465,7 +470,7 @@ impl AppenderInner {
                 }
                 let _ = fs::remove_file(&cache_path);
             }
-            return;
+            return written;
         }
 
         let mut write_success = false;
@@ -482,12 +487,13 @@ impl AppenderInner {
                 self.close_log_file();
             }
             if self.open_log_file(&cachedir) {
-                self.write_file_record(data);
+                write_success = self.write_file_record(data);
                 if !self.is_sync() {
                     self.close_log_file();
                 }
             }
         }
+        write_success
     }
 
     /// `XloggerAppender::__CacheLogs`.
@@ -944,10 +950,16 @@ impl Appender {
 
         let mark = mark_info();
         self.write_tips2file("~~~~~ begin of mmap from other process ~~~~~\n");
-        self.lock().log2file(buffer.as_slice(), false);
+        let written = self.lock().log2file(buffer.as_slice(), false);
         self.write_tips2file(&format!(
             "~~~~~ end of mmap from other process ~~~~~{mark}\n"
         ));
+
+        // The cache is the only copy of these records: keep it when the write
+        // failed, so the next recovery can try again instead of losing them.
+        if !written {
+            return FileIoAction::WriteFailed;
+        }
 
         match fs::remove_file(&mmap_path) {
             Ok(()) => FileIoAction::Success,
@@ -1234,7 +1246,7 @@ fn async_log_thread(inner: Arc<Mutex<AppenderInner>>, rx: Receiver<Msg>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AppenderMode, XLogConfig};
+    use crate::config::{AppenderMode, FileIoAction, XLogConfig};
     use mars_xlog_buffer::CompressMode;
     use mars_xlog_crypt::{magic, LogCrypt, HEADER_LEN, TAILER_LEN};
 
@@ -1467,27 +1479,41 @@ mod tests {
         assert!(names.len() > 1, "{names:?}");
     }
 
+    /// Leaves a cache file with one record in it behind, the way a process that
+    /// died does: opens an async appender, writes, then drops it without
+    /// `close()`. Answers the `<prefix>.mmap3` path.
+    fn leave_cache_behind(dir: &Path) -> PathBuf {
+        let mut appender = Appender::open(config(dir, AppenderMode::Async), 0, 0).unwrap();
+        appender.write(Some(&info(LogLevel::Error)), "cached in mmap");
+        // The async thread exits when the sender drops.
+        appender.lock().log_close = true;
+        let close_tx = appender.lock().close_sender();
+        if let Some(tx) = close_tx {
+            let _ = tx.send(Msg::Close);
+        }
+        if let Some(handle) = appender.thread.take() {
+            let _ = handle.join();
+        }
+        appender.lock().tx = None;
+        dir.join("Mars.mmap3")
+    }
+
+    /// Writes `<prefix>.mmap3` with one record in it, the way a process that
+    /// died does — straight into the file, without an appender around it.
+    fn records_in_cache(dir: &Path) -> PathBuf {
+        let mut region = vec![0u8; BUFFER_BLOCK_LENGTH];
+        let mut buff = LogBuffer::new(true, Some(""), CompressMode::Zlib, 6);
+        buff.attach(&mut region);
+        assert!(buff.write(&mut region, b"cached in mmap"));
+        let path = dir.join("Mars.mmap3");
+        fs::write(&path, &region).unwrap();
+        path
+    }
+
     #[test]
     fn mmap_cache_file_is_created_and_drained_on_reopen() {
         let tmp = tempfile::tempdir().unwrap();
-        let mmap_path = tmp.path().join("Mars.mmap3");
-
-        {
-            let mut appender =
-                Appender::open(config(tmp.path(), AppenderMode::Async), 0, 0).unwrap();
-            appender.write(Some(&info(LogLevel::Error)), "cached in mmap");
-            // Drop without `close()` to leave the data in the cache file, like a
-            // process that died. The async thread exits when the sender drops.
-            appender.lock().log_close = true;
-            let close_tx = appender.lock().close_sender();
-            if let Some(tx) = close_tx {
-                let _ = tx.send(Msg::Close);
-            }
-            if let Some(handle) = appender.thread.take() {
-                let _ = handle.join();
-            }
-            appender.lock().tx = None;
-        }
+        let mmap_path = leave_cache_behind(tmp.path());
 
         assert!(mmap_path.exists(), "the cache file must survive");
         assert!(fs::metadata(&mmap_path).unwrap().len() >= BUFFER_BLOCK_LENGTH as u64);
@@ -1499,6 +1525,26 @@ mod tests {
         let bytes = fs::read(today_name(tmp.path())).unwrap();
         let text = decoded_text(&bytes);
         assert!(text.contains("cached in mmap"), "{text}");
+    }
+
+    #[test]
+    fn one_shot_recovery_keeps_the_cache_when_the_write_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mmap_path = records_in_cache(tmp.path());
+
+        // Today's log file is a directory, so every write into it fails — what
+        // a full or read-only file system looks like from here.
+        let log_file = today_name(tmp.path());
+        let _ = fs::remove_file(&log_file);
+        fs::create_dir(&log_file).unwrap();
+
+        let mut appender =
+            Appender::oneshot(&config(tmp.path(), AppenderMode::Sync), 0, 0).unwrap();
+        let action = appender.treat_mapping_as_file_and_flush();
+        appender.close();
+
+        assert_eq!(action, FileIoAction::WriteFailed);
+        assert!(mmap_path.exists(), "the cache is the only copy left");
     }
 
     #[test]
