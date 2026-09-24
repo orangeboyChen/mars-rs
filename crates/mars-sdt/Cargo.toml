@@ -1,0 +1,10 @@
+[package]
+name = "mars-sdt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Rust port of the Mars SDT network-diagnosis component (profiles, check plan, run loop)"
+
+[dependencies]
