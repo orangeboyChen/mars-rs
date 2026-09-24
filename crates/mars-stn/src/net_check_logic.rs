@@ -9,8 +9,12 @@
 //! was fine in the eight before that, with two limits on top: the checks it
 //! starts are at least [`MIN_CHECK_TIME_SPAN`] apart and that span grows by
 //! [`CHECK_TIME_SPAN_INCREMENT_STEP`] every time, and
-//! [`CommFrequencyLimit`](mars_comm::frequency_limit::FrequencyLimit) lets at
-//! most [`LIMIT_COUNT`] of them through per [`LIMIT_TIME_SPAN`].
+//! [`CommFrequencyLimit`](mars_comm::frequency_limit::FrequencyLimit) caps how
+//! many of them get through per [`LIMIT_TIME_SPAN`]. That cap is the C++'s
+//! `touch_times_.size() <= count_`, which is [`LIMIT_COUNT`] **plus one** — two
+//! checks in the first hour, then one every [`LIMIT_TIME_SPAN`] — and the port
+//! keeps it rather than "fixing" it; the growing span is what keeps wait apart,
+//! not the limit.
 //!
 //! Everything the C++ reads from `NetSource`, `DnsUtil`, `StnManager` and
 //! `sdt::SdtManager` is a callback here:
@@ -42,7 +46,10 @@ use mars_sdt::NET_CHECK_SHORT;
 pub const NET_CHECK_MODE: i32 = NET_CHECK_BASIC | NET_CHECK_LONG | NET_CHECK_SHORT;
 /// `kLimitTimeSpan` — the window of the frequency limit, in milliseconds.
 pub const LIMIT_TIME_SPAN: u64 = 60 * 60 * 1000;
-/// `kLimitCount` — how many checks that window lets through.
+/// `kLimitCount` — the count the frequency limit is built with. Its `Check()`
+/// passes while `touch_times.size() <= count`, so the limit it gives is
+/// `LIMIT_COUNT + 1` checks per [`LIMIT_TIME_SPAN`], which is the C++'s own
+/// arithmetic and is what [`NetCheckLogic`] keeps.
 pub const LIMIT_COUNT: usize = 1;
 /// `kMinCheckTimeSpan` — how long apart two checks are, to start with.
 pub const MIN_CHECK_TIME_SPAN: u64 = 5 * 60 * 1000;
@@ -644,6 +651,47 @@ mod tests {
             false,
         );
         assert_eq!(logic.increment_steps(), 3, "twenty-five minutes");
+    }
+
+    #[test]
+    fn the_frequency_limit_lets_one_more_through_than_its_count() {
+        let mut logic = a_logic();
+        let started: Started = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&started);
+        logic.set_start_active_check(move |_, _, _| {
+            record
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((Vec::new(), Vec::new(), 0));
+        });
+
+        // the first check, five minutes in
+        broken_longlink(&mut logic, MIN_CHECK_TIME_SPAN, 7);
+        assert_eq!(started.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
+
+        // fifteen minutes: `LIMIT_COUNT` is one, but the C++'s `Check()` passes
+        // while `touch_times_.size() <= count_`, so a second one goes through
+        // in the same hour
+        logic.update_long_link_info_at(
+            MIN_CHECK_TIME_SPAN + CHECK_TIME_SPAN_INCREMENT_STEP,
+            0,
+            false,
+        );
+        assert_eq!(started.lock().unwrap_or_else(|e| e.into_inner()).len(), 2);
+
+        // twenty-five minutes is refused, and the hour is what it takes
+        logic.update_long_link_info_at(
+            MIN_CHECK_TIME_SPAN + 2 * CHECK_TIME_SPAN_INCREMENT_STEP,
+            0,
+            false,
+        );
+        assert_eq!(
+            started.lock().unwrap_or_else(|e| e.into_inner()).len(),
+            2,
+            "the third is refused"
+        );
+        logic.update_long_link_info_at(MIN_CHECK_TIME_SPAN + LIMIT_TIME_SPAN + 1, 0, false);
+        assert_eq!(started.lock().unwrap_or_else(|e| e.into_inner()).len(), 3);
     }
 
     #[test]
