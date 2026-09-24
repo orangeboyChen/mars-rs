@@ -1,6 +1,6 @@
-//! Compile-time check that `mars-xlog-appender` exposes exactly the API of
-//! `rust/PORT-CONTRACT.md` (AGENT 3). Every public function is coerced to a
-//! function pointer of the contracted signature, so a signature drift fails
+//! Compile-time check that `mars-xlog-appender` keeps exposing the API the
+//! FFI and JNI crates are written against. Every public function is coerced to
+//! a function pointer of its expected signature, so a signature drift fails
 //! the build instead of the FFI crate downstream.
 
 use std::path::{Path, PathBuf};

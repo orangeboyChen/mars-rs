@@ -15,9 +15,6 @@ zlib- or zstd-compressed, sync or async — and is the whole logging stack:
 | `mars-xlog-jni`       | JNI bindings of `com.tencent.mars.xlog.Xlog`                      |
 | `mars-xlog-compat`    | CLI plus the golden `.xlog` files that pin the wire format        |
 
-`PORT-CONTRACT.md` is the authoritative API contract between the crates — read
-it before changing a public signature.
-
 ## Build and test
 
 ```bash
