@@ -22,6 +22,7 @@
 
 use mars_comm::{LocalIpStack, ProxyInfo};
 
+use crate::net_source::{TimeoutSource, DEFAULT_QUIC_RW_TIMEOUT_MS};
 use crate::simple_ipport_sort::{IpPortItem, IpSourceType};
 use crate::socket_operator::SocketFd;
 use crate::task::Task;
@@ -237,6 +238,32 @@ pub struct ConnectProfile {
     pub tls_handshake_mismatch: bool,
     /// `tls_handshake_success`.
     pub tls_handshake_success: bool,
+    /// `tid` — `xlogger_tid`, which thread the run was on.
+    pub tid: i64,
+    /// `channel_type` — one of the `Task::CHANNEL_*` values, which is what a
+    /// short link writes here once it has answered.
+    pub channel_type: i32,
+    /// `start_send_packet_time` — when the request went out.
+    pub start_send_packet_time: u64,
+    /// `send_request_cost` — how long the write took, which the C++ works out
+    /// between the write and the first read.
+    pub send_request_cost: u64,
+    /// `start_read_packet_time` — when the read of the answer began.
+    pub start_read_packet_time: u64,
+    /// `read_packet_finished_time` — when the last read came back.
+    pub read_packet_finished_time: u64,
+    /// `recv_reponse_cost` — how long the whole read took, from its first byte.
+    pub recv_reponse_cost: u64,
+    /// `quic_rw_timeout_ms` — how long a read waits on a quic link; `5000` until
+    /// something sets it.
+    pub quic_rw_timeout_ms: u32,
+    /// `quic_rw_timeout_source` — where the timeout above came from.
+    pub quic_rw_timeout_source: TimeoutSource,
+    /// `keepalive_timeout` — how long the server said the socket is good for.
+    pub keepalive_timeout: u32,
+    /// `is_fast_fallback_tcp` — a quic link that read `ENOTCONN` and so fell
+    /// back to tcp.
+    pub is_fast_fallback_tcp: i32,
 }
 
 impl ConnectProfile {
@@ -311,6 +338,17 @@ impl Default for ConnectProfile {
             noop_profiles: Vec::new(),
             tls_handshake_mismatch: false,
             tls_handshake_success: false,
+            tid: 0,
+            channel_type: 0,
+            start_send_packet_time: 0,
+            send_request_cost: 0,
+            start_read_packet_time: 0,
+            read_packet_finished_time: 0,
+            recv_reponse_cost: 0,
+            quic_rw_timeout_ms: DEFAULT_QUIC_RW_TIMEOUT_MS,
+            quic_rw_timeout_source: TimeoutSource::default(),
+            keepalive_timeout: 0,
+            is_fast_fallback_tcp: 0,
         }
     }
 }

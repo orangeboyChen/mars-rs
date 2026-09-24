@@ -5,13 +5,15 @@
 //!
 //! The samples are the ones the C++ would write: one task on its own host, one
 //! through an http proxy it has to log in to, one on pairs newdns handed the
-//! link, and one that takes the socket the pool kept from the task before it.
+//! link, one that takes the socket the pool kept from the task before it, and
+//! the runs on those sockets — one request out, one answer back, and the socket
+//! handed to the pool or closed when it is over.
 
 use std::sync::{Arc, Mutex};
 
 use mars_comm::tickcount::gettickcount;
 use mars_comm::{LocalIpStack, ProxyInfo, ProxyType, SocketAddress};
-use mars_stn::short_link::{ConnectFail, ShortLink};
+use mars_stn::short_link::{ConnectFail, RunFail, ShortLink};
 use mars_stn::{
     default_packer, pack, request_headers, request_url, CachedSocket, ConnectProfile, ErrCmdType,
     ExtraInfo, IpPortItem, IpSourceType, NetSource, OpBreaker, SocketFd, SocketOperator,
@@ -36,6 +38,18 @@ struct Seen {
     proxies: Arc<Mutex<Vec<ProxyInfo>>>,
     timeouts: Arc<Mutex<Vec<(u32, u32)>>>,
     reports: Arc<Mutex<Vec<Reported>>>,
+    sent: Arc<Mutex<Vec<Vec<u8>>>>,
+    closed: Arc<Mutex<Vec<SocketFd>>>,
+}
+
+impl Seen {
+    fn sent(&self) -> Vec<Vec<u8>> {
+        self.sent.lock().unwrap().clone()
+    }
+
+    fn closed(&self) -> Vec<SocketFd> {
+        self.closed.lock().unwrap().clone()
+    }
 }
 
 /// One thing a link reported: the error, and the pair it was about.
@@ -97,6 +111,7 @@ impl SocketOperator for Host {
     }
 
     fn send(&mut self, _socket: SocketFd, buffer: &[u8], _timeout_ms: i32) -> Result<usize, i32> {
+        self.seen.sent.lock().unwrap().push(buffer.to_vec());
         Ok(buffer.len())
     }
 
@@ -110,7 +125,9 @@ impl SocketOperator for Host {
         Ok(Vec::new())
     }
 
-    fn close(&mut self, _socket: SocketFd) {}
+    fn close(&mut self, socket: SocketFd) {
+        self.seen.closed.lock().unwrap().push(socket);
+    }
 
     fn identify(&self, socket: SocketFd) -> String {
         format!("{}@TCP", socket.0)
@@ -185,7 +202,12 @@ fn proxy_link(source: Arc<Mutex<NetSource>>, seen: &Seen) -> ShortLink {
 }
 
 fn link_of(source: Arc<Mutex<NetSource>>, seen: &Seen, use_proxy: bool) -> ShortLink {
-    let mut link = ShortLink::new(task(), use_proxy);
+    link_for(source, seen, task(), use_proxy)
+}
+
+/// The same, for a task of the test's own.
+fn link_for(source: Arc<Mutex<NetSource>>, seen: &Seen, task: Task, use_proxy: bool) -> ShortLink {
+    let mut link = ShortLink::new(task, use_proxy);
     link.set_socket_operator(Host::new(seen.clone()));
     link.set_shortlink_items(move |hosts, cgi| {
         let mut source = source.lock().unwrap();
@@ -460,5 +482,169 @@ fn the_packer_the_app_replaced_is_the_one_the_run_writes_with() {
     assert_eq!(
         default_packer()("/cgi", &headers, b"hello"),
         pack("/cgi", &headers, b"hello")
+    );
+}
+
+/// An answer of 200, with a body of `hello`.
+fn answer_200() -> Vec<u8> {
+    b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".to_vec()
+}
+
+/// The same, one the C++ forks on: any status but 200 is `kEctHttp` with it.
+fn answer_500() -> Vec<u8> {
+    b"HTTP/1.1 500 Server Error\r\nContent-Length: 0\r\n\r\n".to_vec()
+}
+
+#[test]
+fn a_task_comes_back_as_the_body_of_the_answer() {
+    let seen = Seen::default();
+    let mut link = link(Arc::new(Mutex::new(net_source())), &seen);
+    let statuses = Arc::new(Mutex::new(Vec::new()));
+    link.set_response_status({
+        let statuses = statuses.clone();
+        move |status| statuses.lock().unwrap().push(status)
+    });
+    link.set_tid(|| 42);
+    link.set_net_type_for_report(|| 1);
+    link.set_signal(|_| -55);
+
+    let reads = vec![(Ok(answer_200()), NOW + 200)];
+    assert_eq!(
+        link.run_at(NOW, b"hello", reads.into_iter()),
+        Some(Ok(b"hello".to_vec()))
+    );
+
+    let profile = link.profile();
+    assert_eq!(profile.disconn_errtype, ErrCmdType::Ok);
+    assert_eq!(profile.disconn_errcode, 200);
+    assert_eq!(profile.channel_type, Task::CHANNEL_SHORT);
+    assert_eq!(profile.tid, 42);
+    assert_eq!(profile.nettype_for_report, 1);
+    assert_eq!(profile.start_time, NOW);
+    assert_eq!(profile.start_send_packet_time, NOW);
+    assert_eq!(profile.send_request_cost, 200);
+    assert_eq!(profile.start_read_packet_time, NOW + 200);
+    assert_eq!(profile.read_packet_finished_time, NOW + 200);
+    assert_eq!(profile.recv_reponse_cost, 0);
+    assert_eq!(profile.disconn_signal, -55);
+    assert_eq!(*statuses.lock().unwrap(), vec![200]);
+
+    // one request out, and a socket that was not kept
+    assert_eq!(seen.sent(), vec![request_of(profile, link.task())]);
+    assert_eq!(seen.closed(), vec![SocketFd(3)]);
+    assert!(seen.reports.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_task_on_a_server_that_said_five_hundred_fails_with_the_status() {
+    let seen = Seen::default();
+    let mut link = link(Arc::new(Mutex::new(net_source())), &seen);
+
+    let reads = vec![(Ok(answer_500()), NOW + 200)];
+    assert_eq!(
+        link.run_at(NOW, b"hello", reads.into_iter()),
+        Some(Err(RunFail::Http { err_code: 500 }))
+    );
+
+    let profile = link.profile();
+    assert_eq!(profile.disconn_errtype, ErrCmdType::Http);
+    assert_eq!(profile.disconn_errcode, 500);
+    assert_eq!(
+        seen.reports.lock().unwrap().as_slice(),
+        &[Reported {
+            err_type: ErrCmdType::Http,
+            err_code: 500,
+            ip: "183.3.226.35".to_string(),
+            host: "short.weixin.qq.com".to_string(),
+            port: 80,
+        }]
+    );
+    assert_eq!(seen.closed(), vec![SocketFd(3)]);
+}
+
+#[test]
+fn an_answer_that_came_in_two_reads_is_whole_on_the_second() {
+    let seen = Seen::default();
+    let mut link = link(Arc::new(Mutex::new(net_source())), &seen);
+    let recvs = Arc::new(Mutex::new(Vec::new()));
+    link.set_on_recv({
+        let recvs = recvs.clone();
+        move |cached, total| recvs.lock().unwrap().push((cached, total))
+    });
+
+    let answer = answer_200();
+    let half = answer.len() - 5;
+    let reads = vec![
+        (Ok(answer[..half].to_vec()), NOW + 200),
+        (Ok(answer[half..].to_vec()), NOW + 300),
+    ];
+    assert_eq!(
+        link.run_at(NOW, b"hello", reads.into_iter()),
+        Some(Ok(b"hello".to_vec()))
+    );
+
+    assert_eq!(
+        *recvs.lock().unwrap(),
+        vec![(half, half), (5, answer.len())],
+        "what each read brought, and how much of the answer that is"
+    );
+    assert_eq!(link.profile().recv_reponse_cost, 100);
+    assert_eq!(link.profile().read_packet_finished_time, NOW + 300);
+}
+
+#[test]
+fn a_socket_the_server_kept_is_the_one_the_next_task_takes() {
+    let seen = Seen::default();
+    let source = Arc::new(Mutex::new(net_source()));
+    let pool = Arc::new(Mutex::new({
+        let mut pool = SocketPool::new();
+        pool.set_is_closed(|_| false);
+        pool
+    }));
+
+    // one task that asked for the socket to be kept, and the server said yes
+    let kept = {
+        let mut task = task();
+        task.headers
+            .insert("Connection".to_string(), "Keep-Alive".to_string());
+        task
+    };
+    let mut link = link_for(Arc::clone(&source), &seen, kept.clone(), false);
+    link.set_pool_cache({
+        let pool = Arc::clone(&pool);
+        move |item, profile| {
+            pool.lock().unwrap().add_cache(CachedSocket::new_at(
+                NOW,
+                item.clone(),
+                profile.socket_fd,
+                profile.keepalive_timeout,
+            ));
+        }
+    });
+
+    let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: Keep-Alive\r\n\
+                       Keep-Alive: timeout=15\r\n\r\nhello";
+    let reads = vec![(Ok(answer.to_vec()), NOW + 200)];
+    assert_eq!(
+        link.run_at(NOW, b"hello", reads.into_iter()),
+        Some(Ok(b"hello".to_vec()))
+    );
+    assert_eq!(link.profile().keepalive_timeout, 15);
+    assert_eq!(link.profile().socket_fd, SocketFd(3));
+    assert!(
+        seen.closed().is_empty(),
+        "a socket that is kept is not closed"
+    );
+
+    // and the task after it takes it out of the pool rather than connecting
+    let mut next = link_for(Arc::clone(&source), &seen, kept, false);
+    next.set_cache_socket(move |item| pool.lock().unwrap().get_socket_at(NOW + 1000, item));
+    assert_eq!(next.connect_at(NOW + 1000), Ok(SocketFd(3)));
+    assert!(next.profile().is_reused_fd);
+    assert_eq!(next.profile().connection_identify, "3@TCP@REUSE");
+    assert_eq!(
+        seen.addresses.lock().unwrap().len(),
+        1,
+        "the first task connected, and the second did not have to"
     );
 }
