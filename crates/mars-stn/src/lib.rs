@@ -51,6 +51,12 @@
 //! is on and asks, at most so many times an hour, whether one of the other
 //! pairs is reachable now.
 //!
+//! The eleventh slice is where an ip/port pair comes from ([`net_source`]): the
+//! hosts, ports, debug ips and backup ips the app set, and the history that
+//! says which pairs failed — at most five pairs per host list, sorted by their
+//! history when they came from dns and shuffled when they came from the backup
+//! list.
+//!
 //! The twelfth slice is the race a link runs between its pairs
 //! ([`longlink_speed_test`]): the same noop goes out on all of them at once,
 //! and the first one whose answer comes back is the one the link is made on.
@@ -111,6 +117,7 @@ pub mod longlink_connect_monitor;
 pub mod longlink_identify_checker;
 pub mod longlink_speed_test;
 pub mod net_check_logic;
+pub mod net_source;
 pub mod netsource_timercheck;
 pub mod signalling_keeper;
 pub mod simple_ipport_sort;
@@ -142,6 +149,11 @@ pub use net_check_logic::{
     NetCheckLogic, CHECK_IF_ABOVE_COUNT, CHECK_IF_BELOW_COUNT, CHECK_TIME_SPAN_INCREMENT_STEP,
     LIMIT_COUNT, LIMIT_TIME_SPAN, MIN_CHECK_TIME_SPAN, MOST_RECENT_TASK_START_N, NET_CHECK_MODE,
     SECOND_RECENT_TASK_START_N, VALID_BITS_FILTER,
+};
+pub use net_source::{
+    ExtraInfo, LonglinkConfig, NetSource, TimeoutSource, CGI_DEBUG_DEFAULT_PORT,
+    DEFAULT_LONGLINK_GROUP, DEFAULT_QUIC_CONNECT_TIMEOUT_MS, DEFAULT_QUIC_RW_TIMEOUT_MS,
+    DISABLE_QUIC_SECONDS, ITEM_DELIMITER, NUM_MAKE_COUNT,
 };
 pub use netsource_timercheck::{NetSourceTimerCheck, INTERVAL_TIME, MAX_SPEED_TEST_COUNT, TIMEOUT};
 pub use signalling_keeper::{SignallingKeeper, DEFAULT_KEEP_TIME, DEFAULT_PERIOD};
