@@ -70,8 +70,14 @@
 //! The fourteenth slice is the long link itself ([`long_link`]): the status a
 //! task asks about, the connect that fills the profile the slices before this
 //! one were written to fill in, and the proxy and the debug ip that say which
-//! of its pairs it is made on. What the C++ does on a thread — the loop that
-//! reads and writes, the heartbeat, the tasks going out — comes after it.
+//! of its pairs it is made on.
+//!
+//! The fifteenth slice is the heartbeat that keeps it up ([`long_link`]): the
+//! two alarms a host's run reads instead of waiting on, the noop that goes out
+//! when the interval is up, the identify check that rides on the first one, and
+//! what a heartbeat that answered — or did not — leaves on the profile. What
+//! the C++ does on a thread, the loop that reads and writes the socket, comes
+//! after it.
 //!
 //! Everything that needs the app callbacks (`net_core`, `longlink_task_manager`,
 //! `shortlink`, `stn_logic`) comes later.
@@ -149,8 +155,9 @@ pub use dynamic_timeout::{DynamicTimeout, DynamicTimeoutStatus};
 pub use flow_limit::FlowLimit;
 pub use frequency_limit::FrequencyLimit;
 pub use long_link::{
-    ConnectFail, DisconnectInternalCode, LongLink, MakeSure, EBADMSG, ECT_DNS_MAKE_SOCKET_PREPARED,
-    ECT_SOCKET_MAKE_SOCKET_PREPARED, RECV_BUFFER_LEN,
+    AlarmStatus, ConnectFail, DisconnectInternalCode, LongLink, MakeSure, NoopAlarm, SendData,
+    EBADMSG, ECT_DNS_MAKE_SOCKET_PREPARED, ECT_SOCKET_MAKE_SOCKET_PREPARED, NOOP_ACTIVE_TIMEOUT,
+    NOOP_LATE_TOO_MUCH, NOOP_TIMEOUT, RECV_BUFFER_LEN,
 };
 pub use longlink::{LongLinkEncoder, Unpacked};
 pub use longlink_connect_monitor::{
