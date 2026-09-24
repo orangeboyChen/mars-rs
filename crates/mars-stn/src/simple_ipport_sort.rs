@@ -33,6 +33,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::task::Task;
+use crate::Random;
 
 /// `kRecordTimeout` — a record older than this, in seconds, is gone the next
 /// time the file is read or written.
@@ -172,9 +173,6 @@ const NEVER_SPAN: u64 = 2_000_000_000;
 /// `kNoNet`.
 pub type NetLabel = dyn FnMut() -> Option<String> + Send;
 
-/// `mars::comm::random_shuffle` and `rand()`: a number in `0..bound`.
-pub type Random = dyn FnMut(usize) -> usize + Send;
-
 /// `SimpleIPPortSort`.
 pub struct SimpleIpPortSort {
     /// `recordsxml_` — the `<record>`s, in the order they were written in.
@@ -227,26 +225,6 @@ fn history_to_records(mut history: u64) -> u8 {
     records
 }
 
-/// `rand()` — the port's own, so a test does not have to care which numbers
-/// the platform would have handed out.
-fn xorshift(seed: u64) -> impl FnMut(usize) -> usize + Send + 'static {
-    let mut state = if seed == 0 {
-        0x9E37_79B9_7F4A_7C15
-    } else {
-        seed
-    };
-    move |bound: usize| {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        if bound == 0 {
-            0
-        } else {
-            (state % bound as u64) as usize
-        }
-    }
-}
-
 impl SimpleIpPortSort {
     /// `SimpleIPPortSort(context)` — the C++ reads `ipportrecords2.xml` here,
     /// which in the port is [`SimpleIpPortSort::load_records`], and seeds its
@@ -263,7 +241,7 @@ impl SimpleIpPortSort {
             ban_fail_list: Vec::new(),
             server_bans: HashMap::new(),
             net_label: None,
-            random: Box::new(xorshift(seed)),
+            random: Box::new(crate::xorshift(seed)),
         }
     }
 
