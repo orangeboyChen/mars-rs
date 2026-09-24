@@ -21,21 +21,42 @@
 //! one won (only the host's connect knows), and the falling back to the next
 //! candidate when the verification of one fails.
 //!
+//! The heartbeat is two alarms the host's run reads instead of waiting on:
+//! [`LongLink::noop_due`] is the reading the next noop is due at, and
+//! [`LongLink::noop_timeout_due`] the one the noop in flight has to answer by.
+//! The C++'s alarms run on a message queue of their own and call back into the
+//! link; here the host calls [`LongLink::on_noop_alarm_at`] when a reading has
+//! come, and [`LongLink::send_heartbeat_at`] is the step the C++'s
+//! `__RunReadWrite` runs whenever the interval alarm is not waiting.
+//!
+//! Two of the C++'s pieces have no place here: it has *two* noop-timeout alarms
+//! — a member `TrigNoop` binds and a local one in `__RunReadWrite` — and an
+//! `OnNoopAlarmSet` that `longlink_task_manager` wires up on Android but
+//! nothing ever calls. The port has one alarm, and no `OnNoopAlarmSet`.
+//!
+//! Whether the app is in the foreground and whether the network is a mobile one
+//! are `ActiveLogic` and `getNetInfo` in the C++, which are singletons; here
+//! they are arguments, like the ones [`crate::AntiAvalanche`] takes.
+//!
 //! `fun_network_report_` carries a `__LINE__` in the C++, which is a line
 //! number in a file the port does not have; what is reported here is the error
 //! and the pair it happened on.
 
+use std::collections::VecDeque;
+
 use mars_comm::local_ipstack::LocalIpStack;
 use mars_comm::{ProxyInfo, ProxyType, SocketAddress};
 
+use crate::config::MIN_HEART_INTERVAL;
 use crate::longlink::{longlink_pack, longlink_unpack, LongLinkEncoder, Unpacked};
 use crate::longlink_connect_monitor::LongLinkStatus;
+use crate::longlink_identify_checker::{IdentifyBuffer, LongLinkIdentifyChecker};
 use crate::net_source::LonglinkConfig;
 use crate::simple_ipport_sort::{IpPortItem, IpSourceType};
 use crate::smart_heartbeat::SmartHeartbeat;
 use crate::socket_operator::{SocketFd, SocketOperator, SocketProfile};
 use crate::task::Task;
-use crate::task_profile::{ConnectProfile, ErrCmdType};
+use crate::task_profile::{ConnectProfile, ErrCmdType, NoopProfile};
 
 /// `kEctDnsMakeSocketPrepared` — no address to connect to at all.
 pub const ECT_DNS_MAKE_SOCKET_PREPARED: i32 = -10606;
@@ -46,6 +67,15 @@ pub const EBADMSG: i32 = 74;
 /// The buffer the connect's verification reads into: `64 * 1024`, which is what
 /// the C++'s `__RunReadWrite` uses too.
 pub const RECV_BUFFER_LEN: usize = 64 * 1024;
+/// How long a noop has to answer: the `8 * 1000` of the C++'s `__NoopReq`.
+pub const NOOP_TIMEOUT: u64 = 8 * 1000;
+/// The same, for a noop that is going out late: the `5 * 1000` the C++ asks
+/// for when the last heartbeat came back a quarter of an hour late, which is
+/// what a dozing network looks like.
+pub const NOOP_ACTIVE_TIMEOUT: u64 = 5 * 1000;
+/// `has_late_toomuch` — how late a heartbeat has to be before the noop that
+/// follows it is given the short timeout: `15 * 60 * 1000`.
+pub const NOOP_LATE_TOO_MUCH: u64 = 15 * 60 * 1000;
 
 /// `LongLinkErrCode::TDisconnectInternalCode` — why a link is being taken
 /// down. "Note: Never Delete Item!!!Just Add!!!" is the C++'s, and so are the
@@ -168,6 +198,121 @@ pub type ResponseError = dyn FnMut(&str, ErrCmdType, i32, &ConnectProfile) + Sen
 pub type Connection = dyn FnMut(LongLinkStatus, &str) + Send;
 /// `broadcast_linkstatus_signal_` — a profile of a link that has finished.
 pub type LinkStatus = dyn FnMut(&ConnectProfile) + Send;
+/// `OnNoopAlarmReceived(_noop_timeout)` — one of the two noop alarms went off,
+/// which on Android is what the connect monitor counts.
+pub type NoopAlarmReceived = dyn FnMut(bool) + Send;
+
+/// `comm::Alarm::TAlarmStatus` — where a one-shot timer is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AlarmStatus {
+    /// `kInit` — never started.
+    #[default]
+    Init,
+    /// `kStart` — waiting for its reading.
+    Start,
+    /// `kCancel` — cancelled.
+    Cancel,
+    /// `kOnAlarm` — it went off, and nothing has been started on it since.
+    OnAlarm,
+}
+
+/// `comm::Alarm` as the port models one: a reading it is due at.
+///
+/// The C++'s alarm runs on a message queue of its own and calls the link back
+/// when it goes off; the port has no thread, so what is here is the reading a
+/// host waits for ([`NoopAlarm::due`]) and the two numbers the heartbeat is
+/// judged by: `After()` is the interval it was started with
+/// ([`NoopAlarm::after`]) and `ElapseTime()` the one it really was
+/// ([`NoopAlarm::elapse_at`]), which is what a network that dozes shows itself
+/// in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NoopAlarm {
+    /// The reading it goes off at; [`None`] when it is not waiting.
+    due: Option<u64>,
+    /// `after_` — the interval it was started with.
+    after: u64,
+    /// `start_tick_` — the reading it was started at.
+    started: u64,
+    status: AlarmStatus,
+}
+
+impl NoopAlarm {
+    /// `Alarm()` — `kInit`, which is an alarm that was never started.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `Status()`.
+    pub fn status(&self) -> AlarmStatus {
+        self.status
+    }
+
+    /// The reading it goes off at; [`None`] while it is not waiting.
+    pub fn due(&self) -> Option<u64> {
+        self.due
+    }
+
+    /// `After()` — the interval it was started with.
+    pub fn after(&self) -> u64 {
+        self.after
+    }
+
+    /// `ElapseTime()` — how long ago it was started.
+    pub fn elapse_at(&self, now: u64) -> u64 {
+        now.saturating_sub(self.started)
+    }
+
+    /// `IsWaiting()` — started, and its reading has not come yet.
+    pub fn is_waiting(&self) -> bool {
+        self.status == AlarmStatus::Start
+    }
+
+    /// Whether its reading has come: what the host's run asks before it calls
+    /// [`LongLink::on_noop_alarm_at`].
+    pub fn is_due_at(&self, now: u64) -> bool {
+        self.due.is_some_and(|due| now >= due)
+    }
+
+    /// `Start(_wait)` — from `now`, in `wait_ms`.
+    pub fn start_at(&mut self, now: u64, wait_ms: u64) {
+        self.due = Some(now + wait_ms);
+        self.after = wait_ms;
+        self.started = now;
+        self.status = AlarmStatus::Start;
+    }
+
+    /// `Cancel()` — what the C++ does before it starts one again, and when the
+    /// noop it was waiting for never went out.
+    pub fn cancel(&mut self) {
+        self.due = None;
+        self.status = AlarmStatus::Cancel;
+    }
+
+    /// `OnAlarm` — whether it went off at `now`, which is what turns
+    /// [`AlarmStatus::Start`] into [`AlarmStatus::OnAlarm`]. An alarm that is
+    /// not waiting, or whose reading has not come, is left alone.
+    pub fn on_alarm_at(&mut self, now: u64) -> bool {
+        if self.status != AlarmStatus::Start || !self.is_due_at(now) {
+            return false;
+        }
+        self.due = None;
+        self.status = AlarmStatus::OnAlarm;
+        true
+    }
+}
+
+/// One thing queued to go out on the link: the task it is, and what the encoder
+/// made of it. `pos` is how much of `buffer` has been written, which is what
+/// the C++'s `AutoBuffer::Pos()` is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendData {
+    /// The task the buffer came from; a noop is one too.
+    pub task: Task,
+    /// What the encoder made of the body: header first, then the body.
+    pub buffer: Vec<u8>,
+    /// How much of [`SendData::buffer`] has gone out.
+    pub pos: usize,
+}
 
 /// `LongLink`.
 pub struct LongLink {
@@ -181,6 +326,23 @@ pub struct LongLink {
     /// `svr_trig_off_` — the server hung up on the link.
     server_triggered_off: bool,
     heartbeat: Option<SmartHeartbeat>,
+    /// `identifychecker_` — the check the app answers before the link is used.
+    identify: LongLinkIdentifyChecker,
+    /// `lstsenddata_` — what is queued to go out, in order.
+    queue: VecDeque<SendData>,
+    /// `isnooping_` — a heartbeat is out and has not answered.
+    nooping: bool,
+    /// `lastheartbeat_` — the interval the heartbeat in force is on.
+    last_heartbeat: u64,
+    /// `alarmnoopinterval` — when the next heartbeat is due. The C++'s is a
+    /// local of `__RunReadWrite`, so a new run starts with a new one.
+    noop_interval: NoopAlarm,
+    /// `alarmnooptimeout_` — when the heartbeat in flight has to answer by.
+    noop_timeout: NoopAlarm,
+    /// `first_noop_sent` — the C++'s, which is what keeps the doze judgement
+    /// off the first heartbeat of a run: there is no interval to compare it to
+    /// yet.
+    first_noop_sent: bool,
 
     operator: Option<Box<dyn SocketOperator>>,
     items: Option<Box<LongLinkItems>>,
@@ -196,6 +358,7 @@ pub struct LongLink {
     on_response: Option<Box<ResponseError>>,
     on_connection: Option<Box<Connection>>,
     on_link_status: Option<Box<LinkStatus>>,
+    on_noop_alarm_received: Option<Box<NoopAlarmReceived>>,
 }
 
 impl LongLink {
@@ -207,6 +370,13 @@ impl LongLink {
 
     /// The same, with the encoder the app asked for.
     pub fn with_encoder(config: LonglinkConfig, encoder: LongLinkEncoder) -> Self {
+        // `identifychecker_(_context, _encoder, _config.name, kChannelMinorLong
+        // == _config.link_type)`
+        let mut identify = LongLinkIdentifyChecker::new(
+            &config.name,
+            config.link_type == Task::CHANNEL_MINOR_LONG,
+        );
+        identify.set_encoder(encoder);
         Self {
             profile: ConnectProfile {
                 link_type: config.link_type,
@@ -219,6 +389,13 @@ impl LongLink {
             running: false,
             server_triggered_off: false,
             heartbeat: None,
+            identify,
+            queue: VecDeque::new(),
+            nooping: false,
+            last_heartbeat: 0,
+            noop_interval: NoopAlarm::new(),
+            noop_timeout: NoopAlarm::new(),
+            first_noop_sent: false,
             operator: None,
             items: None,
             proxy: None,
@@ -233,6 +410,7 @@ impl LongLink {
             on_response: None,
             on_connection: None,
             on_link_status: None,
+            on_noop_alarm_received: None,
         }
     }
 
@@ -281,6 +459,62 @@ impl LongLink {
     /// for an interval.
     pub fn heartbeat(&self) -> Option<&SmartHeartbeat> {
         self.heartbeat.as_ref()
+    }
+
+    /// `isnooping_` — a heartbeat is out and has not answered yet.
+    pub fn is_nooping(&self) -> bool {
+        self.nooping
+    }
+
+    /// `lastheartbeat_` — the interval the heartbeat in force is on, which is
+    /// `0` until the first one goes out.
+    pub fn last_heartbeat(&self) -> u64 {
+        self.last_heartbeat
+    }
+
+    /// `identifychecker_` — what the link asks the app before it uses the
+    /// connection.
+    pub fn identify(&self) -> &LongLinkIdentifyChecker {
+        &self.identify
+    }
+
+    /// `lstsenddata_` — what is queued to go out, in the order it was queued.
+    pub fn queued(&self) -> &VecDeque<SendData> {
+        &self.queue
+    }
+
+    /// `has_data_to_send` — whether anything is waiting to go out, which is
+    /// what the C++'s `__RunReadWrite` puts the socket in the select's write
+    /// set for.
+    pub fn has_data_to_send(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
+    /// `GetLonglinkIdentifyCheckBuffer` — the buffer the app answers the
+    /// identify check with.
+    pub fn set_identify_check_buffer(
+        &mut self,
+        check_buffer: impl FnMut(&str, u32) -> IdentifyBuffer + Send + 'static,
+    ) {
+        self.identify.set_check_buffer(check_buffer);
+    }
+
+    /// `OnLonglinkIdentifyResponse` — whether the answer the server sent back
+    /// is the one the app handed out.
+    pub fn set_identify_on_response(
+        &mut self,
+        on_response: impl FnMut(&str, &[u8], &[u8]) -> bool + Send + 'static,
+    ) {
+        self.identify.set_on_response(on_response);
+    }
+
+    /// `OnNoopAlarmReceived(_noop_timeout)` — one of the two noop alarms went
+    /// off. The C++ wires this to the connect monitor on Android only.
+    pub fn set_on_noop_alarm_received(
+        &mut self,
+        on_noop_alarm_received: impl FnMut(bool) + Send + 'static,
+    ) {
+        self.on_noop_alarm_received = Some(Box::new(on_noop_alarm_received));
     }
 
     /// `SocketOperator` — the sockets the link is made on. Unset, a connect
@@ -414,6 +648,14 @@ impl LongLink {
             self.status = LongLinkStatus::ConnectIdle;
             self.disconnect_code = DisconnectInternalCode::None;
             self.server_triggered_off = false;
+            // what the C++'s `__RunReadWrite` starts with, and what its local
+            // `alarmnoopinterval` is: a run asks the identify check again and
+            // sends its first heartbeat at once
+            self.identify.reset();
+            self.queue.clear();
+            self.noop_interval = NoopAlarm::new();
+            self.noop_timeout = NoopAlarm::new();
+            self.first_noop_sent = false;
         }
 
         MakeSure::Run { new_one }
@@ -577,11 +819,11 @@ impl LongLink {
     /// host's connect has already picked one, so here it fails the connect.
     pub fn verify(&mut self, socket: SocketFd) -> bool {
         let request = longlink_pack(self.encoder.noop_cmdid(), Task::NOOP_TASK_ID, &[]);
-        if let Err(error_code) = self.send(socket, &request, -1) {
+        if let Err(error_code) = self.write(socket, &request, -1) {
             self.network_report(ErrCmdType::Socket, error_code);
             return false;
         }
-        match self.recv(socket) {
+        match self.read(socket) {
             Err(error_code) => {
                 self.network_report(ErrCmdType::Socket, error_code);
                 false
@@ -628,6 +870,337 @@ impl LongLink {
             if let Some(on_link_status) = self.on_link_status.as_mut() {
                 on_link_status(&profile);
             }
+        }
+    }
+
+    /// `Send(_body, _extension, _task)` — a task going out on the link.
+    ///
+    /// What goes out is what the encoder made of the body, and it waits in the
+    /// queue until the host writes it; [`LongLink::queued`] is what it is
+    /// waiting in. The C++ also clears `start_read_packet_time` and
+    /// `start_connect_time` here, which are two profile fields that come with
+    /// the code that reads them.
+    ///
+    /// The C++'s `_extension` has no home in the port's packer, which writes a
+    /// header and a body, so it is not an argument.
+    pub fn send(&mut self, task: Task, body: &[u8]) -> bool {
+        if self.status != LongLinkStatus::Connected {
+            return false;
+        }
+        self.push(task, body);
+        true
+    }
+
+    /// `SendWhenNoData(_body, _extension, _cmdid, _taskid)` — the same, but
+    /// only when nothing else is waiting: a heartbeat queued behind a task
+    /// would not be answered any sooner than the task is.
+    pub fn send_when_no_data(&mut self, cmdid: u32, taskid: u32, body: &[u8]) -> bool {
+        if self.status != LongLinkStatus::Connected {
+            return false;
+        }
+        if !self.queue.is_empty() {
+            return false;
+        }
+        // `Task task(_taskid); task.send_only = true;`
+        let mut task = Task::new(taskid, cmdid);
+        task.send_only = true;
+        self.push(task, body);
+        true
+    }
+
+    /// `Stop(_taskid)` — a task that has not started going out is taken out of
+    /// the queue. One that has (`pos != 0`) is not, which is the C++'s
+    /// `0 == it->second->Pos()`.
+    pub fn stop(&mut self, taskid: u32) -> bool {
+        let Some(index) = self
+            .queue
+            .iter()
+            .position(|data| data.task.taskid == taskid && data.pos == 0)
+        else {
+            return false;
+        };
+        self.queue.remove(index);
+        true
+    }
+
+    /// What the host's run says when it has written: `len` bytes of what is at
+    /// the head of the queue went out, and a thing that is fully written is
+    /// done with.
+    ///
+    /// The C++ writes off `lstsenddata_.front()` the same way, and takes it out
+    /// when `Pos()` is at the end of it.
+    pub fn wrote(&mut self, len: usize) {
+        let Some(data) = self.queue.front_mut() else {
+            return;
+        };
+        data.pos += len;
+        if data.pos >= data.buffer.len() {
+            self.queue.pop_front();
+        }
+    }
+
+    /// `__GetNextHeartbeatInterval()` — how long until the next heartbeat: the
+    /// encoder's interval when it has one of its own, the minimum when there is
+    /// no smart heartbeat, and the heartbeat's own answer otherwise.
+    ///
+    /// `is_active` is the app being in the foreground, which pins the interval
+    /// to the minimum.
+    pub fn next_heartbeat_interval(&mut self, is_active: bool) -> u64 {
+        if self.encoder.noop_interval() > 0 {
+            return u64::from(self.encoder.noop_interval());
+        }
+        match self.heartbeat.as_mut() {
+            Some(heartbeat) => u64::from(heartbeat.get_next_heartbeat_interval(is_active)),
+            None => u64::from(MIN_HEART_INTERVAL),
+        }
+    }
+
+    /// `alarmnoopinterval` — the reading the next heartbeat is due at; [`None`]
+    /// when none is waiting, which is also what a link with no interval at all
+    /// answers.
+    pub fn noop_due(&self) -> Option<u64> {
+        self.noop_interval.due()
+    }
+
+    /// `alarmnooptimeout_` — the reading the heartbeat in flight has to answer
+    /// by; [`None`] when none is in flight.
+    pub fn noop_timeout_due(&self) -> Option<u64> {
+        self.noop_timeout.due()
+    }
+
+    /// Where the interval alarm is, which is what the C++'s
+    /// `while (!alarmnoopinterval.IsWaiting())` asks.
+    pub fn noop_interval_status(&self) -> AlarmStatus {
+        self.noop_interval.status()
+    }
+
+    /// Where the noop-timeout alarm is: [`AlarmStatus::OnAlarm`] is a heartbeat
+    /// that did not answer in time.
+    pub fn noop_timeout_status(&self) -> AlarmStatus {
+        self.noop_timeout.status()
+    }
+
+    /// Whether the heartbeat that is due has not been sent yet — the C++'s
+    /// `while (!alarmnoopinterval.IsWaiting())`, which is what the host's run
+    /// asks before [`LongLink::send_heartbeat_at`].
+    ///
+    /// An alarm that was never started is one, which is the first heartbeat of
+    /// a run: it goes out at once. A cancelled one is not, which is what stops
+    /// a link whose interval came out as `0`.
+    pub fn is_heartbeat_due_at(&self, now: u64) -> bool {
+        match self.noop_interval.status() {
+            AlarmStatus::Init | AlarmStatus::OnAlarm => true,
+            AlarmStatus::Start => self.noop_interval.is_due_at(now),
+            AlarmStatus::Cancel => false,
+        }
+    }
+
+    /// The step the C++'s `__RunReadWrite` runs whenever the interval alarm is
+    /// not waiting: the noop goes out, the heartbeat is told, and the alarm is
+    /// started again on the interval that is in force now.
+    ///
+    /// `is_mobile` and `is_active` are `kMobile == getNetInfo()` and
+    /// `ActiveLogic::Instance()->IsActive()`.
+    pub fn send_heartbeat_at(&mut self, now: u64, is_mobile: bool, is_active: bool) -> bool {
+        // what the alarm was set to, and what it really was — which is the
+        // difference a dozing network shows itself in
+        self.noop_interval.on_alarm_at(now);
+        let on_alarm = self.noop_interval.status() == AlarmStatus::OnAlarm;
+        let last_interval = self.noop_interval.after();
+        let last_actual_interval = if on_alarm {
+            self.noop_interval.elapse_at(now)
+        } else {
+            0
+        };
+
+        // the first heartbeat of a run has no interval to judge the network by
+        if self.first_noop_sent && on_alarm {
+            self.judge_doze_style_at(now, is_mobile, is_active);
+        }
+
+        let sent = self.noop_req_at(now, last_actual_interval >= NOOP_LATE_TOO_MUCH);
+        if sent {
+            self.nooping = true;
+            self.notify_heartbeat_heart_req_at(now, last_interval, last_actual_interval);
+        }
+
+        self.first_noop_sent = true;
+        self.last_heartbeat = self.next_heartbeat_interval(is_active);
+        self.noop_interval.cancel();
+        if self.last_heartbeat != 0 {
+            self.noop_interval.start_at(now, self.last_heartbeat);
+        }
+        sent
+    }
+
+    /// `TrigNoop()` — the heartbeat the app asks for, which is a noop that is
+    /// not the one the interval asked for.
+    ///
+    /// `isnooping_` is set *before* the noop goes out, which is the C++'s
+    /// "in case the network is faster than the call" — an answer that arrives
+    /// while the request is still being made is an answer all the same.
+    pub fn trig_noop_at(&mut self, now: u64) {
+        self.nooping = true;
+        let sent = self.noop_req_at(now, false);
+        if !sent && self.nooping {
+            self.nooping = false;
+        }
+    }
+
+    /// The same, with the reading of the clock the host's `gettickcount()`.
+    pub fn trig_noop(&mut self) {
+        self.trig_noop_at(mars_comm::tickcount::gettickcount())
+    }
+
+    /// `__NoopReq(_log, _alarm, need_active_timeout)` — the noop itself, or the
+    /// identify check the app answered with when there is one to send.
+    ///
+    /// Either way the timeout alarm is started, and cancelled again when
+    /// nothing went out: the C++ starts it, sends, and starts it once more,
+    /// which is the same reading twice.
+    pub fn noop_req_at(&mut self, now: u64, need_active_timeout: bool) -> bool {
+        let wait = if need_active_timeout {
+            NOOP_ACTIVE_TIMEOUT
+        } else {
+            NOOP_TIMEOUT
+        };
+        self.noop_timeout.cancel();
+        self.noop_timeout.start_at(now, wait);
+
+        let sent = match self.identify.get_identify_buffer() {
+            Some((buffer, cmdid)) => {
+                // `Task task(kLongLinkIdentifyCheckerTaskID); task.cmdid = …`
+                let task = Task::new(Task::LONG_LINK_IDENTIFY_CHECKER_TASK_ID, cmdid);
+                let sent = self.send(task, &buffer);
+                self.identify
+                    .set_id(Task::LONG_LINK_IDENTIFY_CHECKER_TASK_ID);
+                sent
+            }
+            None => self.send_noop_when_no_data(),
+        };
+
+        if !sent {
+            self.noop_timeout.cancel();
+        }
+        sent
+    }
+
+    /// `__NoopResp(...)` — whether what came back is the answer to the
+    /// heartbeat that is out: the identify check's, or the noop's.
+    ///
+    /// An answer to a heartbeat that is out ends it: the timeout alarm is
+    /// cancelled and the smart heartbeat is told it succeeded. The C++ pulls
+    /// the noop's body out of the package here
+    /// (`longlink_noop_resp_body`); the port's unpacker has already handed the
+    /// caller the body, so there is nothing left to take out.
+    pub fn noop_resp_at(&mut self, now: u64, cmdid: u32, taskid: u32, body: &[u8]) -> bool {
+        let mut is_noop = false;
+
+        if self.identify.is_identify_resp(taskid) {
+            is_noop = true;
+            if self.identify.on_identify_resp(body) {
+                self.network_report(ErrCmdType::Ok, 0);
+            }
+        }
+
+        if self.encoder.noop_isresp(Task::NOOP_TASK_ID, cmdid) {
+            is_noop = true;
+        }
+
+        if is_noop && self.nooping {
+            self.nooping = false;
+            self.noop_timeout.cancel();
+            self.notify_heartbeat_heart_result_at(now, true, false);
+        }
+
+        is_noop
+    }
+
+    /// `__OnAlarm(_noop_timeout)` — one of the two noop alarms went off, which
+    /// in the C++ is the alarm's own thread calling back into the link; the
+    /// host's run calls it when the reading [`LongLink::noop_due`] or
+    /// [`LongLink::noop_timeout_due`] handed it has come.
+    ///
+    /// Whether it really went off is what comes back, and only then is
+    /// `OnNoopAlarmReceived` told.
+    pub fn on_noop_alarm_at(&mut self, now: u64, noop_timeout: bool) -> bool {
+        let went_off = if noop_timeout {
+            self.noop_timeout.on_alarm_at(now)
+        } else {
+            self.noop_interval.on_alarm_at(now)
+        };
+        if went_off {
+            if let Some(received) = self.on_noop_alarm_received.as_mut() {
+                received(noop_timeout);
+            }
+        }
+        went_off
+    }
+
+    /// `__NotifySmartHeartbeatJudgeDozeStyle()` — whether the network delivered
+    /// the last heartbeat when it was due.
+    ///
+    /// `is_mobile` is `kMobile == getNetInfo()` and `is_active` is
+    /// `ActiveLogic::Instance()->IsActive()`; a network that is not a mobile
+    /// one, or an app in the foreground, is not judged.
+    pub fn judge_doze_style_at(&mut self, now: u64, is_mobile: bool, is_active: bool) {
+        // an encoder with an interval of its own is not the smart heartbeat's
+        // business
+        if self.encoder.noop_interval() > 0 {
+            return;
+        }
+        if let Some(heartbeat) = self.heartbeat.as_mut() {
+            heartbeat.judge_doze_style(now, is_mobile, is_active);
+        }
+    }
+
+    fn send_noop_when_no_data(&mut self) -> bool {
+        // `__SendNoopWhenNoData()`: the C++ asks the encoder for the noop's
+        // body and extension; the default encoder's are empty, and the port's
+        // packer carries a body only
+        let cmdid = self.encoder.noop_cmdid();
+        self.send_when_no_data(cmdid, Task::NOOP_TASK_ID, &[])
+    }
+
+    fn push(&mut self, task: Task, body: &[u8]) {
+        let buffer = longlink_pack(task.cmdid, task.taskid, body);
+        self.queue.push_back(SendData {
+            task,
+            buffer,
+            pos: 0,
+        });
+    }
+
+    /// `__NotifySmartHeartbeatHeartReq(_profile, _internal, _actual_internal)`
+    /// — the heartbeat that is going out is written on the profile before it
+    /// does, with the interval the alarm was set to and the one it really was.
+    fn notify_heartbeat_heart_req_at(&mut self, now: u64, internal: u64, actual_internal: u64) {
+        if self.encoder.noop_interval() > 0 || self.heartbeat.is_none() {
+            return;
+        }
+        self.profile.noop_profiles.push(NoopProfile {
+            noop_internal: internal,
+            noop_actual_internal: actual_internal,
+            noop_starttime: now,
+            ..NoopProfile::default()
+        });
+        if let Some(heartbeat) = self.heartbeat.as_mut() {
+            heartbeat.on_heartbeat_start(now);
+        }
+    }
+
+    /// `__NotifySmartHeartbeatHeartResult(_succes, _fail_of_timeout, _profile)`
+    /// — how long the heartbeat took to answer, and whether it did.
+    fn notify_heartbeat_heart_result_at(&mut self, now: u64, success: bool, fail_of_timeout: bool) {
+        if self.encoder.noop_interval() > 0 || self.heartbeat.is_none() {
+            return;
+        }
+        if let Some(noop) = self.profile.noop_profiles.last_mut() {
+            noop.noop_cost = now.saturating_sub(noop.noop_starttime);
+            noop.success = success;
+        }
+        if let Some(heartbeat) = self.heartbeat.as_mut() {
+            heartbeat.on_heart_result(success, fail_of_timeout, seconds(now));
         }
     }
 
@@ -731,14 +1304,15 @@ impl LongLink {
         }
     }
 
-    fn send(&mut self, socket: SocketFd, buffer: &[u8], timeout_ms: i32) -> Result<usize, i32> {
+    /// What the socket is asked for, which is the host's to answer.
+    fn write(&mut self, socket: SocketFd, buffer: &[u8], timeout_ms: i32) -> Result<usize, i32> {
         match self.operator.as_mut() {
             Some(operator) => operator.send(socket, buffer, timeout_ms),
             None => Err(0),
         }
     }
 
-    fn recv(&mut self, socket: SocketFd) -> Result<Vec<u8>, i32> {
+    fn read(&mut self, socket: SocketFd) -> Result<Vec<u8>, i32> {
         match self.operator.as_mut() {
             Some(operator) => operator.recv(socket, RECV_BUFFER_LEN, -1, false),
             None => Err(0),
@@ -805,6 +1379,11 @@ impl LongLink {
 /// C++'s `gettickcount() / 1000` is.
 fn now_seconds() -> i64 {
     (mars_comm::tickcount::gettickcount() / 1000) as i64
+}
+
+/// The same, for a reading the host handed in.
+fn seconds(now: u64) -> i64 {
+    (now / 1000) as i64
 }
 
 impl std::fmt::Debug for LongLink {
@@ -1335,6 +1914,10 @@ mod tests {
         assert!(link.connect().is_ok());
         assert_eq!(link.connect_status(), LongLinkStatus::Connected);
         assert_eq!(link.profile().conn_time, link.profile().start_time);
+
+        // ... and `trig_noop` is `trig_noop_at` with the same reading
+        link.trig_noop();
+        assert!(link.is_nooping());
     }
 
     #[test]
@@ -1350,5 +1933,341 @@ mod tests {
         // `OnLongLinkDisconnect` is `OnHeartResult(false, false)` and then a
         // success count of zero: whatever the network did is forgotten
         assert_eq!(link.heartbeat().unwrap().info().succ_heart_count, 0);
+    }
+
+    /// A link that is up: what every heartbeat test starts from.
+    fn connected() -> LongLink {
+        let (mut link, _) = link();
+        link.make_sure_connected();
+        assert!(link.connect_at(1_000).is_ok());
+        link
+    }
+
+    /// What the host's run does between two heartbeats: what was queued has
+    /// gone out, so the queue is empty again.
+    fn written(link: &mut LongLink) {
+        let len = link
+            .queued()
+            .front()
+            .map(|data| data.buffer.len())
+            .unwrap_or(0);
+        link.wrote(len);
+    }
+
+    #[test]
+    fn an_alarm_is_a_reading_it_is_due_at() {
+        let mut alarm = NoopAlarm::new();
+        assert_eq!(alarm.status(), AlarmStatus::Init);
+        assert_eq!(alarm.due(), None);
+        assert!(!alarm.is_waiting());
+
+        alarm.start_at(1_000, 8_000);
+        assert_eq!(alarm.status(), AlarmStatus::Start);
+        assert_eq!(alarm.after(), 8_000);
+        assert_eq!(alarm.due(), Some(9_000));
+        assert!(alarm.is_waiting());
+        assert!(!alarm.is_due_at(8_999));
+        assert!(!alarm.on_alarm_at(8_999));
+
+        // `ElapseTime` is where a network that dozes shows itself: the reading
+        // came a minute later than the interval it was started with
+        assert!(alarm.is_due_at(69_000));
+        assert!(alarm.on_alarm_at(69_000));
+        assert_eq!(alarm.status(), AlarmStatus::OnAlarm);
+        assert_eq!(alarm.elapse_at(69_000), 68_000);
+        assert_eq!(alarm.due(), None);
+        assert!(!alarm.is_waiting());
+        // ... and it goes off once
+        assert!(!alarm.on_alarm_at(70_000));
+
+        alarm.cancel();
+        assert_eq!(alarm.status(), AlarmStatus::Cancel);
+        assert_eq!(alarm.due(), None);
+        // `After` is what the heartbeat before this one was set to, which is
+        // what the next one is judged against
+        assert_eq!(alarm.after(), 8_000);
+    }
+
+    #[test]
+    fn a_task_that_went_out_is_queued_until_the_host_writes_it() {
+        let mut link = connected();
+        assert!(!link.has_data_to_send());
+
+        assert!(link.send(Task::new(7, 12), b"hello"));
+        assert!(link.has_data_to_send());
+        let queued = link.queued();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].task.taskid, 7);
+        assert_eq!(queued[0].pos, 0, "nothing of it has gone out");
+        assert_eq!(queued[0].buffer, longlink_pack(12, 7, b"hello"));
+
+        // `Stop` takes out a task that has not started going out
+        assert!(link.stop(7));
+        assert!(link.queued().is_empty());
+        assert!(!link.stop(7));
+
+        link.send(Task::new(8, 12), b"hello");
+        link.queue[0].pos = 4;
+        assert!(!link.stop(8), "one that is already going out");
+
+        // and what the host wrote is taken out when the whole of it is out
+        link.wrote(3);
+        assert_eq!(link.queued()[0].pos, 7);
+        let rest = link.queued()[0].buffer.len() - 7;
+        link.wrote(rest);
+        assert!(link.queued().is_empty());
+        link.wrote(1);
+        assert!(link.queued().is_empty(), "nothing is waiting");
+    }
+
+    #[test]
+    fn a_link_that_is_not_up_sends_nothing() {
+        let (mut link, _) = link();
+        assert!(!link.send(Task::new(7, 12), b"hello"));
+        assert!(!link.send_when_no_data(12, 7, b"hello"));
+        assert!(link.queued().is_empty());
+
+        // ... and a noop only goes out when nothing else is waiting
+        link.set_status(LongLinkStatus::Connected);
+        assert!(link.send(Task::new(7, 12), b"hello"));
+        assert!(!link.send_when_no_data(NOOP_CMDID, Task::NOOP_TASK_ID, &[]));
+    }
+
+    #[test]
+    fn the_heartbeat_goes_out_when_its_reading_comes() {
+        // the heartbeat interval is one value for the whole process
+        let _lock = crate::test_lock();
+        let mut link = connected();
+        // the first heartbeat of a run goes out at once: the C++'s interval
+        // alarm is a local of `__RunReadWrite`, so it is `kInit`, not waiting
+        assert_eq!(link.noop_interval_status(), AlarmStatus::Init);
+        assert!(link.is_heartbeat_due_at(2_000));
+
+        assert!(link.send_heartbeat_at(2_000, false, false));
+        assert!(link.is_nooping());
+        assert_eq!(link.last_heartbeat(), 210_000, "`MinHeartInterval`");
+        assert_eq!(link.noop_due(), Some(2_000 + 210_000));
+        assert_eq!(link.noop_timeout_due(), Some(2_000 + NOOP_TIMEOUT));
+
+        // what went out is the noop: `kNoopTaskID` with `kNoopCmdID`
+        let queued = link.queued();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].task.taskid, Task::NOOP_TASK_ID);
+        assert_eq!(queued[0].task.cmdid, NOOP_CMDID);
+        assert!(queued[0].task.send_only);
+
+        // and a heartbeat that is waiting does not go out again
+        assert!(!link.is_heartbeat_due_at(2_000 + 210_000 - 1));
+        assert!(link.is_heartbeat_due_at(2_000 + 210_000));
+
+        // the interval alarm going off is told the same way the timeout one
+        // is, and what it says is which of the two it was
+        let (received, record) = sink();
+        link.set_on_noop_alarm_received(record);
+        assert!(link.on_noop_alarm_at(2_000 + 210_000, false));
+        assert_eq!(*received.lock().unwrap(), vec![false]);
+    }
+
+    #[test]
+    fn the_answer_of_the_heartbeat_is_written_on_the_profile() {
+        // the heartbeat interval is one value for the whole process
+        let _lock = crate::test_lock();
+        let mut link = connected();
+        link.set_smart_heartbeat(SmartHeartbeat::new());
+        assert!(link.send_heartbeat_at(1_000, false, false));
+        assert_eq!(link.profile().noop_profiles.len(), 1);
+        // there was no alarm before this one, so there is no interval to say
+        assert_eq!(link.profile().noop_profiles[0].noop_internal, 0);
+        assert_eq!(link.profile().noop_profiles[0].noop_actual_internal, 0);
+        assert_eq!(link.profile().noop_profiles[0].noop_starttime, 1_000);
+        assert!(
+            !link.profile().noop_profiles[0].success,
+            "it has not answered"
+        );
+
+        // the noop's answer, 500 later
+        assert!(link.noop_resp_at(1_500, NOOP_CMDID, Task::NOOP_TASK_ID, &[]));
+        assert!(!link.is_nooping());
+        assert_eq!(link.noop_timeout_due(), None, "the alarm was cancelled");
+        let noop = link.profile().noop_profiles[0];
+        assert!(noop.success);
+        assert_eq!(noop.noop_cost, 500);
+
+        // ... and a package that is neither the noop nor the identify check is
+        // not the answer to a heartbeat
+        assert!(!link.noop_resp_at(1_600, 12, 7, &[]));
+    }
+
+    #[test]
+    fn a_heartbeat_that_is_late_is_given_the_short_timeout() {
+        // the heartbeat interval is one value for the whole process
+        let _lock = crate::test_lock();
+        let mut link = connected();
+        link.set_smart_heartbeat(SmartHeartbeat::new());
+        assert!(link.send_heartbeat_at(1_000, false, false));
+        assert_eq!(link.noop_timeout_due(), Some(1_000 + NOOP_TIMEOUT));
+
+        // the next one, twenty minutes after the interval it was set to, which
+        // is more than `has_late_toomuch` allows
+        written(&mut link);
+        let late = 1_000 + 210_000 + 20 * 60 * 1000;
+        assert!(link.is_heartbeat_due_at(late));
+        assert!(link.send_heartbeat_at(late, false, false));
+        assert_eq!(link.noop_timeout_due(), Some(late + NOOP_ACTIVE_TIMEOUT));
+
+        // and the profile says what the interval was, and what it really was
+        let noop = link.profile().noop_profiles[1];
+        assert_eq!(noop.noop_internal, 210_000);
+        assert_eq!(noop.noop_actual_internal, late - 1_000);
+    }
+
+    #[test]
+    fn a_network_that_dozed_is_judged_from_the_second_heartbeat_on() {
+        // the heartbeat interval is one value for the whole process
+        let _lock = crate::test_lock();
+        let mut link = connected();
+        link.set_smart_heartbeat(SmartHeartbeat::new());
+        // the first heartbeat of a run has no interval to be late for
+        assert!(link.send_heartbeat_at(1_000, true, false));
+        assert!(!link.heartbeat().unwrap().is_doze_style());
+
+        // the second one is thirty past its interval, which is outside the
+        // window `JudgeDozeStyle` allows
+        written(&mut link);
+        let late = 1_000 + 210_000 + 30_000;
+        assert!(link.send_heartbeat_at(late, true, false));
+        assert!(
+            !link.heartbeat().unwrap().is_doze_style(),
+            "one late heartbeat is not a pattern"
+        );
+
+        // ... and the third one makes two of them
+        written(&mut link);
+        assert!(link.send_heartbeat_at(late + 210_000 + 30_000, true, false));
+        assert!(link.heartbeat().unwrap().is_doze_style());
+
+        // a network that is not a mobile one is never judged
+        let mut link = connected();
+        link.set_smart_heartbeat(SmartHeartbeat::new());
+        assert!(link.send_heartbeat_at(1_000, false, false));
+        written(&mut link);
+        assert!(link.send_heartbeat_at(late, false, false));
+        assert!(!link.heartbeat().unwrap().is_doze_style());
+    }
+
+    #[test]
+    fn the_heartbeat_the_app_asks_for_starts_the_timeout_alarm() {
+        let mut link = connected();
+        let (received, record) = sink();
+        link.set_on_noop_alarm_received(record);
+
+        // `TrigNoop` is the noop the app asked for, not the one the interval
+        // did: the interval alarm is not what it is waiting on
+        link.trig_noop_at(3_000);
+        assert!(link.is_nooping());
+        assert_eq!(link.noop_timeout_due(), Some(3_000 + NOOP_TIMEOUT));
+        assert_eq!(link.noop_due(), None);
+
+        assert!(!link.on_noop_alarm_at(3_000 + NOOP_TIMEOUT - 1, true));
+        assert!(link.on_noop_alarm_at(3_000 + NOOP_TIMEOUT, true));
+        assert_eq!(link.noop_timeout_status(), AlarmStatus::OnAlarm);
+        assert_eq!(*received.lock().unwrap(), vec![true]);
+
+        // ... and a noop that never went out leaves no alarm waiting
+        let mut down = LongLink::new(LonglinkConfig::new("long.example"));
+        down.trig_noop_at(3_000);
+        assert!(!down.is_nooping(), "a link that is not up");
+        assert_eq!(down.noop_timeout_due(), None);
+    }
+
+    #[test]
+    fn the_identify_check_goes_out_before_the_first_noop() {
+        // the heartbeat interval is one value for the whole process
+        let _lock = crate::test_lock();
+        let mut link = connected();
+        link.set_identify_check_buffer(|_channel_id, _cmdid| {
+            IdentifyBuffer::now(b"check".to_vec(), b"hash".to_vec(), 99)
+        });
+        let (checked, mut record) = sink();
+        link.set_identify_on_response(move |_channel_id, response, _hash| {
+            let accepted = response == b"hash";
+            record((response.to_vec(), accepted));
+            accepted
+        });
+        let (reported, mut record_report) = sink();
+        link.set_network_report(move |err_type, err_code, _ip, _port| {
+            record_report((err_type, err_code))
+        });
+
+        assert!(link.send_heartbeat_at(1_000, false, false));
+        let queued = link.queued();
+        assert_eq!(
+            queued[0].task.taskid,
+            Task::LONG_LINK_IDENTIFY_CHECKER_TASK_ID
+        );
+        assert_eq!(queued[0].task.cmdid, 99);
+        assert_eq!(
+            queued[0].buffer,
+            longlink_pack(99, Task::LONG_LINK_IDENTIFY_CHECKER_TASK_ID, b"check")
+        );
+        assert_eq!(
+            link.identify().taskid(),
+            Task::LONG_LINK_IDENTIFY_CHECKER_TASK_ID
+        );
+
+        // the answer the server sent back is the hash the app handed out
+        assert!(link.noop_resp_at(1_100, 99, Task::LONG_LINK_IDENTIFY_CHECKER_TASK_ID, b"hash"));
+        assert!(link.identify().has_checked());
+        assert!(!link.is_nooping());
+        assert_eq!(*checked.lock().unwrap(), vec![(b"hash".to_vec(), true)]);
+        assert_eq!(*reported.lock().unwrap(), vec![(ErrCmdType::Ok, 0)]);
+
+        // ... and the next heartbeat is a plain noop, because the link is
+        // checked now
+        written(&mut link);
+        assert!(link.send_heartbeat_at(2_000, false, false));
+        assert_eq!(link.queued()[0].task.taskid, Task::NOOP_TASK_ID);
+    }
+
+    #[test]
+    fn a_new_run_starts_the_heartbeat_over() {
+        // the heartbeat interval is one value for the whole process
+        let _lock = crate::test_lock();
+        let mut link = connected();
+        link.set_smart_heartbeat(SmartHeartbeat::new());
+        assert!(link.send_heartbeat_at(1_000, false, false));
+        assert_eq!(link.queued().len(), 1);
+        assert_eq!(link.noop_due(), Some(1_000 + 210_000));
+        link.identify
+            .set_id(Task::LONG_LINK_IDENTIFY_CHECKER_TASK_ID);
+
+        link.set_status(LongLinkStatus::ConnectFailed);
+        link.end_run();
+        assert_eq!(link.make_sure_connected(), MakeSure::Run { new_one: true });
+        // `identifychecker_.Reset()` and `lstsenddata_.clear()`, and a new
+        // interval alarm, which is the one the first heartbeat of a run is
+        // sent on
+        assert!(link.queued().is_empty());
+        assert_eq!(link.identify().taskid(), 0);
+        assert_eq!(link.noop_interval_status(), AlarmStatus::Init);
+        assert_eq!(link.noop_due(), None);
+    }
+
+    #[test]
+    fn a_link_with_no_interval_sends_no_more_heartbeats() {
+        let _lock = crate::test_lock();
+        // `SetHeartBeat(0)`, which is what a noop triggered from Java leaves
+        // behind: an interval of `0` is no interval at all
+        crate::smart_heartbeat::set_heartbeat(0);
+        let mut link = connected();
+        link.set_smart_heartbeat(SmartHeartbeat::new());
+
+        assert!(link.send_heartbeat_at(1_000, false, false));
+        assert_eq!(link.last_heartbeat(), 0);
+        assert_eq!(link.noop_due(), None, "no alarm was started");
+        // the C++'s `if (lastheartbeat_ == 0) break;`
+        assert!(!link.is_heartbeat_due_at(1_000 + 600_000));
+
+        crate::smart_heartbeat::set_heartbeat(-1);
     }
 }
