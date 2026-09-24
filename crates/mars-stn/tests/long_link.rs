@@ -13,16 +13,21 @@
 //! is not the one the interval asked for, the identify check the first of them
 //! carries, and the two [`NoopProfile`]s a run that answered twice leaves on
 //! the profile.
+//!
+//! The run is the same: a task that goes out and whose answer comes back, a
+//! read of nothing, which is the peer hanging up, an answer that arrived in two
+//! pieces, and a connect that never happened, which is a run that is over
+//! before it began.
 
 use std::sync::{Arc, Mutex};
 
 use mars_comm::local_ipstack::LocalIpStack;
 use mars_comm::{ProxyInfo, ProxyType, SocketAddress};
 use mars_stn::{
-    AlarmStatus, ConnectFail, DisconnectInternalCode, ErrCmdType, IdentifyBuffer, IpPortItem,
-    IpSourceType, LongLink, LongLinkStatus, LonglinkConfig, MakeSure, NoopProfile, OpBreaker,
-    SmartHeartbeat, SocketFd, SocketOperator, SocketProfile, Task, ECT_DNS_MAKE_SOCKET_PREPARED,
-    ECT_SOCKET_MAKE_SOCKET_PREPARED,
+    AlarmStatus, Answer, ConnectFail, ConnectProfile, DisconnectInternalCode, ErrCmdType,
+    IdentifyBuffer, IpPortItem, IpSourceType, LongLink, LongLinkStatus, LonglinkConfig, MakeSure,
+    NoopProfile, OpBreaker, RunEnd, SmartHeartbeat, SocketFd, SocketOperator, SocketProfile, Task,
+    ECT_DNS_MAKE_SOCKET_PREPARED, ECT_SOCKET_MAKE_SOCKET_PREPARED, ECT_SOCKET_SHUTDOWN,
 };
 
 /// A host's `OPBreaker`: the port has nothing blocking to give up.
@@ -113,8 +118,13 @@ impl SocketOperator for Host {
         _timeout_ms: i32,
         _wait_full_size: bool,
     ) -> Result<Vec<u8>, i32> {
-        // what the C++ reads off a socket: the head of what is left
-        Ok(self.replies.first().cloned().unwrap_or_default())
+        // what the C++ reads off a socket: the head of what is left, which is
+        // then gone
+        Ok(if self.replies.is_empty() {
+            Vec::new()
+        } else {
+            self.replies.remove(0)
+        })
     }
 
     fn close(&mut self, _socket: SocketFd) {}
@@ -584,4 +594,122 @@ fn the_identify_check_is_what_the_first_heartbeat_carries() {
     wrote(&mut link);
     assert!(link.send_heartbeat_at(2_000, false, false));
     assert_eq!(link.queued()[0].task.taskid, Task::NOOP_TASK_ID);
+}
+
+#[test]
+fn a_run_writes_a_task_reads_its_answer_and_ends_with_the_profile() {
+    let (mut link, record) = a_longlink();
+    link.set_socket_operator(Host {
+        // what the server answers to the task: the same package back
+        replies: vec![mars_stn::longlink::longlink_pack(12, 7, b"hello")],
+        ..Host::new(Arc::clone(&record))
+    });
+    assert_eq!(link.make_sure_connected(), MakeSure::Run { new_one: true });
+    let socket = link.run_at(1_000).unwrap();
+    assert_eq!(link.connect_status(), LongLinkStatus::Connected);
+
+    assert!(link.send(Task::new(7, 12), b"hello"));
+    let written = link.write_at(2_000, socket, false).unwrap();
+    assert_eq!(written.started, vec![7], "the task started going out");
+    assert!(written.len > 0);
+    assert_eq!(
+        record.lock().unwrap_or_else(|e| e.into_inner()).sent[0],
+        mars_stn::longlink::longlink_pack(12, 7, b"hello")
+    );
+
+    assert_eq!(
+        link.read_at(2_100, socket).unwrap(),
+        vec![Answer::Task {
+            cmdid: 12,
+            taskid: 7,
+            body: b"hello".to_vec(),
+        }]
+    );
+
+    link.finish_run_at(2_200, socket, RunEnd::ok());
+    assert!(!link.is_running(), "the run is over");
+    assert_eq!(link.connect_status(), LongLinkStatus::DisConnected);
+    assert_eq!(link.profile().disconn_time, 2_200);
+    assert_eq!(link.profile().disconn_errtype, ErrCmdType::Ok);
+}
+
+#[test]
+fn a_run_the_peer_hung_up_on_is_over_and_says_so() {
+    let (mut link, _) = a_connected_longlink();
+    link.set_signal(|is_wifi| if is_wifi { 4 } else { 2 });
+    let said: Arc<Mutex<Vec<(ErrCmdType, i32)>>> = Arc::new(Mutex::new(Vec::new()));
+    let responses = Arc::clone(&said);
+    link.set_on_response(move |_name, err_type, err_code, _profile| {
+        responses
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((err_type, err_code))
+    });
+
+    // a read of nothing is the peer hanging up
+    assert_eq!(link.read_at(2_000, SocketFd(3)), Err(RunEnd::shutdown()));
+    assert!(link.is_server_triggered_off());
+    link.finish_run_at(2_000, SocketFd(3), RunEnd::shutdown());
+
+    assert_eq!(link.profile().disconn_errcode, ECT_SOCKET_SHUTDOWN);
+    assert_eq!(link.profile().disconn_signal, 2, "`getSignal(false)`");
+    assert_eq!(
+        *said.lock().unwrap_or_else(|e| e.into_inner()),
+        vec![(ErrCmdType::Socket, ECT_SOCKET_SHUTDOWN)]
+    );
+    // ... and a link whose run is over starts a new one from the beginning
+    assert_eq!(link.make_sure_connected(), MakeSure::Run { new_one: true });
+    assert_eq!(link.connect_status(), LongLinkStatus::ConnectIdle);
+}
+
+#[test]
+fn what_the_link_read_stays_until_it_is_a_whole_package() {
+    let packed = mars_stn::longlink::longlink_pack(12, 7, b"hello");
+    let (mut link, record) = a_longlink();
+    link.set_socket_operator(Host {
+        // the answer comes in two pieces
+        replies: vec![
+            packed[..packed.len() / 2].to_vec(),
+            packed[packed.len() / 2..].to_vec(),
+        ],
+        ..Host::new(Arc::clone(&record))
+    });
+    link.make_sure_connected();
+    let socket = link.run_at(1_000).unwrap();
+
+    assert_eq!(link.read_at(2_000, socket).unwrap(), vec![]);
+    assert_eq!(link.recv_len(), packed.len() / 2, "half of it is here");
+    assert_eq!(
+        link.read_at(2_100, socket).unwrap(),
+        vec![Answer::Task {
+            cmdid: 12,
+            taskid: 7,
+            body: b"hello".to_vec(),
+        }]
+    );
+    assert_eq!(link.recv_len(), 0);
+    assert_eq!(link.last_recv(), 2_100);
+}
+
+#[test]
+fn a_connect_that_did_not_happen_is_a_run_that_is_over() {
+    let mut link = LongLink::new(LonglinkConfig::new("long.example"));
+    let broadcast: Arc<Mutex<Vec<ConnectProfile>>> = Arc::new(Mutex::new(Vec::new()));
+    let said = Arc::clone(&broadcast);
+    link.set_on_link_status(move |profile| {
+        said.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(profile.clone())
+    });
+
+    assert_eq!(link.make_sure_connected(), MakeSure::Run { new_one: true });
+    assert_eq!(link.run_at(1_000), Err(ConnectFail::NoAddress));
+    assert!(!link.is_running());
+    assert_eq!(link.profile().disconn_time, 1_000);
+    // `kConnectFailed`, not `kDisConnected`: the link was never up
+    assert_eq!(link.connect_status(), LongLinkStatus::ConnectFailed);
+
+    let broadcast = broadcast.lock().unwrap_or_else(|e| e.into_inner());
+    assert_eq!(broadcast.len(), 1);
+    assert_eq!(broadcast[0].disconn_time, 1_000);
 }
