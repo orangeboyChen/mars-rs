@@ -1,0 +1,13 @@
+[package]
+name = "mars-comm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Common utilities ported from mars/comm (strutil, tickcount, frequency limit, singleton)."
+
+[dependencies]
+md5 = { workspace = true }
+
+[dev-dependencies]

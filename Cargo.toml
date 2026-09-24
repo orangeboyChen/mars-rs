@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/mars-core",
+    "crates/mars-comm",
     "crates/mars-crypt",
     "crates/mars-buffer",
     "crates/mars-appender",
@@ -19,6 +20,7 @@ authors = ["Mars Rust Working Group"]
 
 [workspace.dependencies]
 mars-core = { path = "crates/mars-core" }
+mars-comm = { path = "crates/mars-comm" }
 mars-crypt = { path = "crates/mars-crypt" }
 mars-buffer = { path = "crates/mars-buffer" }
 mars-appender = { path = "crates/mars-appender" }
@@ -33,3 +35,4 @@ thiserror = "2"
 tempfile = "3"
 serde_json = "1"
 jni = "0.21"
+md5 = "0.7"
