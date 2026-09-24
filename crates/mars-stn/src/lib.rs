@@ -28,6 +28,11 @@
 //! when the link comes back or when its periodic check decides it waited long
 //! enough.
 //!
+//! The sixth slice is which ip/port pair a task is tried on
+//! ([`simple_ipport_sort`]): one bit per attempt decides whether a pair is used
+//! at all and in which order, and the history behind it is what survives
+//! between runs — the port has no filesystem, so the host loads and saves it.
+//!
 //! Everything that needs the app callbacks (`net_core`, `longlink_task_manager`,
 //! `shortlink`, `stn_logic`) comes later.
 
@@ -52,6 +57,7 @@ pub mod frequency_limit;
 pub mod longlink;
 pub mod longlink_identify_checker;
 pub mod signalling_keeper;
+pub mod simple_ipport_sort;
 pub mod smart_heartbeat;
 pub mod task;
 pub mod task_profile;
@@ -65,6 +71,11 @@ pub use frequency_limit::FrequencyLimit;
 pub use longlink::{LongLinkEncoder, Unpacked};
 pub use longlink_identify_checker::{IdentifyMode, LongLinkIdentifyChecker};
 pub use signalling_keeper::{SignallingKeeper, DEFAULT_KEEP_TIME, DEFAULT_PERIOD};
+pub use simple_ipport_sort::{
+    BanItem, IpPortItem, IpSourceType, Record, RecordItem, SimpleIpPortSort, BAN_FAIL_COUNT,
+    BAN_TIME, FAIL_UPDATE_INTERVAL, MAX_BAN_TIME, RECORD_TIMEOUT, SERVER_BAN_TIME,
+    SUCCESS_UPDATE_INTERVAL,
+};
 pub use smart_heartbeat::{
     NetHeartbeatInfo, SmartHeartBeatAction, SmartHeartBeatType, SmartHeartbeat,
 };
