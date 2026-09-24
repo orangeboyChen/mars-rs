@@ -20,20 +20,22 @@ fn task() -> Task {
 #[test]
 fn adler32_matches_the_reference_implementation() {
     // `mars/comm/adler32.c` is the Mark Adler reference implementation, which
-    // is what zlib ships; these are zlib's values.
-    assert_eq!(adler32(b""), 0x0000_0001);
-    assert_eq!(adler32(b"a"), 0x0062_0062);
-    assert_eq!(adler32(b"abc"), 0x024d_0127);
-    assert_eq!(adler32(b"Wikipedia"), 0x11e6_0398);
+    // is what zlib ships; these are its sums started from the seed STN passes
+    // (0, not zlib's 1), so every value is one lower than the one everyone
+    // quotes.
+    assert_eq!(adler32(b""), 0x0000_0000);
+    assert_eq!(adler32(b"a"), 0x0061_0061);
+    assert_eq!(adler32(b"abc"), 0x024a_0126);
+    assert_eq!(adler32(b"Wikipedia"), 0x11dd_0397);
     assert_eq!(
         adler32(b"The quick brown fox jumps over the lazy dog"),
-        0x5bdc_0fda
+        0x5bb1_0fd9
     );
-    assert_eq!(adler32(&(0..=255u8).collect::<Vec<u8>>()), 0xadf6_7f81);
-    assert_eq!(adler32(&b"mars".repeat(100)), 0x17db_a9ed);
+    assert_eq!(adler32(&(0..=255u8).collect::<Vec<u8>>()), 0xacf6_7f80);
+    assert_eq!(adler32(&b"mars".repeat(100)), 0x164b_a9ec);
 
     // the hash the table keys on, and the two ends of the sum it is built from
-    let a = 1u32;
+    let a = 0u32;
     assert_eq!(adler32(b""), a);
     assert_ne!(adler32(b"a"), adler32(b"b"));
 }
