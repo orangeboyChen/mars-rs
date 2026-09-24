@@ -197,6 +197,7 @@ fn an_after_message_waits_for_its_due_time() {
         queue,
     );
 
+    let start = Instant::now();
     post_message(
         &handler,
         Message::new(MessageTitle(1), "later"),
@@ -208,9 +209,16 @@ fn an_after_message_waits_for_its_due_time() {
     );
     assert_eq!(hits.load(Ordering::SeqCst), 0);
 
-    let start = Instant::now();
+    // … and it runs once its 40 ms are up. The wait is measured from the
+    // post and not from this call: the short dispatch above asks for 5 ms
+    // but a coarse clock may well hand it more, and what it spends there
+    // is part of the 40 ms the message is waiting for.
     assert!(RunLoop::dispatch_timeout(queue, Duration::from_millis(300)));
-    assert!(start.elapsed() >= Duration::from_millis(30));
+    assert!(
+        start.elapsed() >= Duration::from_millis(40),
+        "ran {:?} after the post",
+        start.elapsed()
+    );
     assert_eq!(hits.load(Ordering::SeqCst), 1);
     destroy_message_queue(queue);
 }
