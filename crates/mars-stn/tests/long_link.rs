@@ -493,6 +493,34 @@ fn the_heartbeats_of_a_run_are_what_the_profile_reports() {
 }
 
 #[test]
+fn the_answer_of_a_noop_the_app_asked_for_is_what_the_heartbeat_before_it_reports() {
+    let (mut link, _) = a_connected_longlink();
+    link.set_smart_heartbeat(SmartHeartbeat::new());
+
+    assert!(link.send_heartbeat_at(1_000, false, false));
+    assert!(link.noop_resp_at(
+        1_500,
+        mars_stn::longlink::NOOP_CMDID,
+        Task::NOOP_TASK_ID,
+        &[]
+    ));
+    assert_eq!(link.profile().noop_profiles[0].noop_cost, 500);
+
+    // ... and one the app asked for: the C++ gives it no profile of its own, so
+    // its answer is written on the heartbeat before it
+    wrote(&mut link);
+    link.trig_noop_at(2_000);
+    assert!(link.noop_resp_at(
+        2_200,
+        mars_stn::longlink::NOOP_CMDID,
+        Task::NOOP_TASK_ID,
+        &[]
+    ));
+    assert_eq!(link.profile().noop_profiles.len(), 1);
+    assert_eq!(link.profile().noop_profiles[0].noop_cost, 1_200);
+}
+
+#[test]
 fn the_heartbeat_the_app_asks_for_is_not_the_one_the_interval_asked_for() {
     let (mut link, _) = a_connected_longlink();
     let said: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));

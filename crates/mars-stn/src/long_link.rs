@@ -677,11 +677,17 @@ impl LongLink {
             self.status = LongLinkStatus::ConnectIdle;
             self.disconnect_code = DisconnectInternalCode::None;
             self.server_triggered_off = false;
-            // what the C++'s `__RunReadWrite` starts with, and what its local
-            // `alarmnoopinterval` is: a run asks the identify check again and
-            // sends its first heartbeat at once
+            // what the C++'s `__RunReadWrite` starts with: a run asks the
+            // identify check again and sends its first heartbeat at once. Its
+            // `alarmnoopinterval`, `alarmnooptimeout` and `first_noop_sent` are
+            // locals of that function, and `isnooping_` and `lastheartbeat_`
+            // are members that outlive a run — which is the C++'s own wart, and
+            // what makes a link whose run ended with a noop in the air start
+            // the next one with a heartbeat it cannot have
             self.identify.reset();
             self.queue.clear();
+            self.nooping = false;
+            self.last_heartbeat = 0;
             self.noop_interval = NoopAlarm::new();
             self.noop_timeout = NoopAlarm::new();
             self.first_noop_sent = false;
@@ -1072,6 +1078,12 @@ impl LongLink {
     /// `isnooping_` is set *before* the noop goes out, which is the C++'s
     /// "in case the network is faster than the call" — an answer that arrives
     /// while the request is still being made is an answer all the same.
+    ///
+    /// The heartbeat it sends is not one the profile is about: the C++'s
+    /// `TrigNoop` does not push a [`NoopProfile`] of its own, and its
+    /// `__NoopResp` writes the answer on the *last* one whatever started it —
+    /// so the answer of a noop the app asked for is what the profile of the
+    /// heartbeat before it ends up saying.
     pub fn trig_noop_at(&mut self, now: u64) {
         self.nooping = true;
         let sent = self.noop_req_at(now, false);
@@ -1920,6 +1932,9 @@ mod tests {
 
     #[test]
     fn the_verification_is_a_noop_the_server_answers() {
+        // what a package carries is the client version, which is one value for
+        // the whole process
+        let _lock = crate::test_lock();
         let (mut link, seen) = link();
         let noop = longlink_pack(NOOP_CMDID, Task::NOOP_TASK_ID, &[]);
         *seen.answer.lock().unwrap() = noop.clone();
@@ -2051,6 +2066,9 @@ mod tests {
 
     #[test]
     fn a_task_that_went_out_is_queued_until_the_host_writes_it() {
+        // what a package carries is the client version, which is one value for
+        // the whole process
+        let _lock = crate::test_lock();
         let mut link = connected();
         assert!(!link.has_data_to_send());
 
@@ -2299,6 +2317,8 @@ mod tests {
         assert!(link.send_heartbeat_at(1_000, false, false));
         assert_eq!(link.queued().len(), 1);
         assert_eq!(link.noop_due(), Some(1_000 + 210_000));
+        assert!(link.is_nooping(), "the heartbeat is in the air");
+        assert_eq!(link.last_heartbeat(), 210_000);
         link.identify
             .set_id(Task::LONG_LINK_IDENTIFY_CHECKER_TASK_ID);
 
@@ -2312,6 +2332,10 @@ mod tests {
         assert_eq!(link.identify().taskid(), 0);
         assert_eq!(link.noop_interval_status(), AlarmStatus::Init);
         assert_eq!(link.noop_due(), None);
+        // ... and a run that ended with a heartbeat in the air does not start
+        // the next one claiming it is still out
+        assert!(!link.is_nooping());
+        assert_eq!(link.last_heartbeat(), 0);
     }
 
     #[test]
