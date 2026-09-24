@@ -41,6 +41,7 @@ fn session(hb: &mut SmartHeartbeat, beats: usize, answered: impl Fn(usize) -> bo
 
 #[test]
 fn the_interval_grows_while_the_network_answers() {
+    let _guard = hearts();
     let mut hb = SmartHeartbeat::new();
     hb.on_longlink_established("wifi-home", 1);
 
@@ -60,6 +61,7 @@ fn the_interval_grows_while_the_network_answers() {
 
 #[test]
 fn a_network_that_stops_answering_is_pulled_back_down() {
+    let _guard = hearts();
     let mut hb = SmartHeartbeat::new();
     hb.on_longlink_established("4g", 2);
 
@@ -75,6 +77,7 @@ fn a_network_that_stops_answering_is_pulled_back_down() {
 
 #[test]
 fn the_interval_a_host_kept_is_the_one_the_next_session_starts_on() {
+    let _guard = hearts();
     let mut first = SmartHeartbeat::new();
     first.on_longlink_established("wifi-home", 1);
     session(&mut first, 20, |_| true);
@@ -117,6 +120,7 @@ fn an_interval_the_app_sets_wins_over_the_computed_one() {
 
 #[test]
 fn what_a_session_reports() {
+    let _guard = hearts();
     let mut hb = SmartHeartbeat::new();
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = std::sync::Arc::clone(&seen);
@@ -148,6 +152,7 @@ fn what_a_session_reports() {
 
 #[test]
 fn a_network_that_cannot_hold_the_minimum_is_reported_as_bad() {
+    let _guard = hearts();
     let mut hb = SmartHeartbeat::new();
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = std::sync::Arc::clone(&seen);
@@ -189,6 +194,7 @@ fn the_record_of_a_network_is_replaced_with_the_defaults() {
 
 #[test]
 fn the_heartbeat_count_that_decides_a_network_is_stable() {
+    let _guard = hearts();
     let mut hb = SmartHeartbeat::new();
     hb.on_longlink_established("wifi-home", 1);
 
