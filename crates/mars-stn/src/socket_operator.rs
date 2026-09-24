@@ -75,7 +75,12 @@ pub trait OpBreaker {
 /// What the C++ answers through an `int& _errcode` is a `Result` here: `Err`
 /// carries the error code it would have written, and the platform's description
 /// of one is [`SocketOperator::error_desc`].
-pub trait SocketOperator {
+///
+/// It is `Send`, which is what lets a link be shared: the long link is one
+/// value the link's own run, its monitor, its timer check and its signalling
+/// keeper all hold (see [`crate::longlink_metadata`]), and they ask it for
+/// things through callbacks that have to be `Send` too.
+pub trait SocketOperator: Send {
     /// `Connect(_vecaddr, _proxy_type, _proxy_addr, _proxy_username,
     /// _proxy_pwd)` — a socket on one of the addresses, or
     /// [`SocketFd::INVALID`].
