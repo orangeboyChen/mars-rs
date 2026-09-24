@@ -49,7 +49,7 @@ pub fn xlogger_memory_dump(bytes: &[u8]) -> String {
             break;
         }
 
-        push_dump_line(&mut out, &bytes[offset..offset + line]);
+        out.push_str(&dump_line(&bytes[offset..offset + line]));
         offset += line;
         // next line
         out.push('\n');
@@ -64,21 +64,24 @@ fn dump_line_len(line: usize) -> usize {
     line * 6 + 1
 }
 
-/// `to_string()` — the hex column, a newline, then the text column.
-fn push_dump_line(out: &mut String, chunk: &[u8]) {
+/// `to_string()` — the hex column, a newline, then the text column: one line
+/// of the dump, which the caller pushes onto what it has.
+fn dump_line(chunk: &[u8]) -> String {
+    let mut line = String::with_capacity(dump_line_len(chunk.len()));
     for byte in chunk {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-        out.push(' ');
+        line.push(HEX[(byte >> 4) as usize] as char);
+        line.push(HEX[(byte & 0x0f) as usize] as char);
+        line.push(' ');
     }
-    out.push('\n');
+    line.push('\n');
     for byte in chunk {
         // `isgraph(c) ? c : ' '` in the C locale: ASCII 0x21..=0x7e.
         let printable = byte.is_ascii_graphic();
-        out.push(if printable { *byte as char } else { ' ' });
-        out.push(' ');
-        out.push(' ');
+        line.push(if printable { *byte as char } else { ' ' });
+        line.push(' ');
+        line.push(' ');
     }
+    line
 }
 
 #[cfg(test)]

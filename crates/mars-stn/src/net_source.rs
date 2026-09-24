@@ -976,14 +976,12 @@ impl NetSource {
             made.truncate(count.saturating_sub(so_far.len()));
         } else {
             // `(int)(_count - len)` in the C++, which is negative when the list
-            // is already longer than the count — and a negative `needcount`
-            // keeps every pair
-            let need = match count.checked_sub(so_far.len()) {
-                Some(more) => i32::try_from(more).unwrap_or(i32::MAX),
-                None => -1,
-            };
-            self.ipport_strategy
-                .sort_and_filter_at(now, &mut made, need, true);
+            // is already longer than the count — and a `needcount` that is not
+            // a length keeps every pair
+            let need = count.checked_sub(so_far.len()).unwrap_or(usize::MAX);
+            made = self
+                .ipport_strategy
+                .sort_and_filter_at(now, made, need, true);
         }
 
         Some(made)
