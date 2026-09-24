@@ -140,7 +140,7 @@ pub use longlink_connect_monitor::{
     NO_ACCOUNT_INFO_SALT_RISE, NO_NET_SALT_RATE, NO_NET_SALT_RISE, RECONNECT_INTERVAL,
     START_CHECK_PERIOD, TIME_CHECK_PERIOD, UP_OR_DOWN_THRESHOLD, WAKE_ALARM_INTERVAL,
 };
-pub use longlink_identify_checker::{IdentifyMode, LongLinkIdentifyChecker};
+pub use longlink_identify_checker::{IdentifyBuffer, IdentifyMode, LongLinkIdentifyChecker};
 pub use longlink_speed_test::{
     Fastest, LongLinkSpeedTest, Need, Socket, SocketEvent, SpeedTestItem, SpeedTestState, Stop,
     Watch, MAX_RETRIES, OUT_OF_BAND_CMDID,

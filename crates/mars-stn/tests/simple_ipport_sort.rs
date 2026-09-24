@@ -31,20 +31,20 @@ fn three_failures_take_a_pair_out_of_the_candidates() {
     }
     assert!(sort.is_banned_at(22_000, "1.2.3.4", 80));
 
-    let mut items = vec![
+    let items = vec![
         IpPortItem::new("1.2.3.4", 80),
         IpPortItem::new("1.2.3.4", 443),
         IpPortItem::new("5.6.7.8", 80),
     ];
-    sort.sort_and_filter_at(22_000, &mut items, 3, false);
+    let items = sort.sort_and_filter_at(22_000, items, 3, false);
     assert_eq!(items.len(), 2, "the pair that failed three times is out");
     assert!(items
         .iter()
         .all(|item| !(item.ip == "1.2.3.4" && item.port == 80)));
 
     // `kBanTime` later it is a candidate again
-    let mut items = vec![IpPortItem::new("1.2.3.4", 80)];
-    sort.sort_and_filter_at(22_000 + BAN_TIME, &mut items, 3, false);
+    let items = vec![IpPortItem::new("1.2.3.4", 80)];
+    let items = sort.sort_and_filter_at(22_000 + BAN_TIME, items, 3, false);
     assert_eq!(items.len(), 1);
 }
 
@@ -53,21 +53,21 @@ fn a_server_ban_takes_the_whole_ip_out() {
     let mut sort = a_sort();
     sort.add_server_ban_at(0, "1.2.3.4");
 
-    let mut items = vec![
+    let items = vec![
         IpPortItem::new("1.2.3.4", 80),
         IpPortItem::new("1.2.3.4", 443),
         IpPortItem::new("5.6.7.8", 80),
     ];
-    sort.sort_and_filter_at(0, &mut items, 3, false);
+    let items = sort.sort_and_filter_at(0, items, 3, false);
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].ip, "5.6.7.8");
 
     // `kServerBanTime` later the ip is back
-    let mut items = vec![
+    let items = vec![
         IpPortItem::new("1.2.3.4", 80),
         IpPortItem::new("5.6.7.8", 80),
     ];
-    sort.sort_and_filter_at(SERVER_BAN_TIME, &mut items, 3, false);
+    let items = sort.sort_and_filter_at(SERVER_BAN_TIME, items, 3, false);
     assert_eq!(items.len(), 2);
 }
 
@@ -79,20 +79,20 @@ fn the_least_failed_pair_is_tried_first_and_the_count_is_kept() {
     fail(&mut sort, 11_000, "1.2.3.4", 80);
     fail(&mut sort, 22_000, "5.6.7.8", 443);
 
-    let mut items = vec![
+    let items = vec![
         IpPortItem::new("1.2.3.4", 80),
         IpPortItem::new("5.6.7.8", 443),
     ];
-    sort.sort_and_filter_at(33_000, &mut items, 2, false);
+    let items = sort.sort_and_filter_at(33_000, items, 2, false);
     let ports: Vec<u16> = items.iter().map(|item| item.port).collect();
     assert_eq!(ports, vec![443, 80], "one failure before two");
 
     // ... and `_needcount` keeps the first one only
-    let mut items = vec![
+    let items = vec![
         IpPortItem::new("1.2.3.4", 80),
         IpPortItem::new("5.6.7.8", 443),
     ];
-    sort.sort_and_filter_at(33_000, &mut items, 1, false);
+    let items = sort.sort_and_filter_at(33_000, items, 1, false);
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].port, 443);
 }
@@ -118,11 +118,11 @@ fn what_the_host_saved_is_what_the_next_run_reads() {
     // ... and the pair with a history goes in front of the one without one:
     // `rand()` deciding for the queue the sort put first every time
     next.set_random(|_bound| 0);
-    let mut items = vec![
+    let items = vec![
         IpPortItem::new("1.2.3.4", 80),
         IpPortItem::new("5.6.7.8", 80),
     ];
-    next.sort_and_filter_at(0, &mut items, 2, false);
+    let items = next.sort_and_filter_at(0, items, 2, false);
     assert_eq!(items.first().map(|item| item.ip.as_str()), Some("1.2.3.4"));
 
     // a record a day old does not survive the save
@@ -178,10 +178,10 @@ fn with_no_network_nothing_is_learned_and_nothing_is_banned() {
     assert!(sort.ban_list().is_empty());
 
     // and the candidates come back in whatever order they went in
-    let mut items: Vec<IpPortItem> = (0..4)
+    let items: Vec<IpPortItem> = (0..4)
         .map(|port| IpPortItem::new("1.2.3.4", port))
         .collect();
-    sort.sort_and_filter_at(0, &mut items, 4, false);
+    let items = sort.sort_and_filter_at(0, items, 4, false);
     assert_eq!(items.len(), 4);
     assert!(format!("{sort:?}").contains("SimpleIpPortSort"));
 }
@@ -189,13 +189,13 @@ fn with_no_network_nothing_is_learned_and_nothing_is_banned() {
 #[test]
 fn the_two_families_come_in_turn_and_the_defaults_hold() {
     let mut sort = a_sort();
-    let mut items = vec![
+    let items = vec![
         IpPortItem::new("1.2.3.4", 80),
         IpPortItem::new("1.2.3.4", 443),
         IpPortItem::new("2001:db8::1", 80),
         IpPortItem::new("2001:db8::2", 80),
     ];
-    sort.sort_and_filter_at(0, &mut items, 4, true);
+    let items = sort.sort_and_filter_at(0, items, 4, true);
     let v6: Vec<bool> = items.iter().map(|item| !item.ip.contains('.')).collect();
     assert_eq!(v6, vec![true, false, true, false]);
 

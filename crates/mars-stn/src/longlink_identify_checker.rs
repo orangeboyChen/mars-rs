@@ -37,10 +37,80 @@ pub enum IdentifyMode {
     CheckNever = 2,
 }
 
-/// `GetLonglinkIdentifyCheckBuffer` — the app fills the identify buffer, the
-/// hash of it, and the cmdid to send it with, and answers when.
-pub type GetIdentifyCheckBuffer =
-    dyn FnMut(&str, &mut Vec<u8>, &mut Vec<u8>, &mut u32) -> IdentifyMode + Send;
+/// `GetLonglinkIdentifyCheckBuffer` — the app answers *when* the buffer goes
+/// out, and — when it goes out now — the buffer, the hash of it, and the cmdid
+/// to send it with.
+///
+/// The C++ hands the three of them out as references the app writes through,
+/// which is what [`IdentifyBuffer`] replaces: the answer is one value, and an
+/// app that has nothing to send says [`IdentifyBuffer::Next`] instead of filling
+/// a buffer that is then thrown away.
+pub type GetIdentifyCheckBuffer = dyn FnMut(&str, u32) -> IdentifyBuffer + Send;
+
+/// What [`GetIdentifyCheckBuffer`] answers.
+///
+/// The hash is in every variant because the C++ fills it whatever it answers
+/// and judges the response against it: a check that is put off still leaves the
+/// hash behind ([`LongLinkIdentifyChecker::hash_code`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdentifyBuffer {
+    /// `kCheckNow` — send `buffer` with `cmdid`.
+    Now {
+        /// `identify_buffer`
+        buffer: Vec<u8>,
+        /// `buffer_hash`
+        hash: Vec<u8>,
+        /// `cmdid`
+        cmdid: u32,
+    },
+    /// `kCheckNext` — ask again on the next connect.
+    Next {
+        /// `buffer_hash`
+        hash: Vec<u8>,
+    },
+    /// `kCheckNever` — stop asking.
+    Never {
+        /// `buffer_hash`
+        hash: Vec<u8>,
+    },
+}
+
+impl IdentifyBuffer {
+    /// `kCheckNow` — the buffer and the hash go out on `cmdid`.
+    pub fn now(buffer: Vec<u8>, hash: Vec<u8>, cmdid: u32) -> Self {
+        Self::Now {
+            buffer,
+            hash,
+            cmdid,
+        }
+    }
+
+    /// `kCheckNext`.
+    pub fn next(hash: Vec<u8>) -> Self {
+        Self::Next { hash }
+    }
+
+    /// `kCheckNever`.
+    pub fn never(hash: Vec<u8>) -> Self {
+        Self::Never { hash }
+    }
+
+    /// When it goes out — the [`IdentifyMode`] the C++ switches on.
+    pub fn mode(&self) -> IdentifyMode {
+        match self {
+            Self::Now { .. } => IdentifyMode::CheckNow,
+            Self::Next { .. } => IdentifyMode::CheckNext,
+            Self::Never { .. } => IdentifyMode::CheckNever,
+        }
+    }
+
+    /// The hash the response is judged against.
+    pub fn hash(&self) -> &[u8] {
+        match self {
+            Self::Now { hash, .. } | Self::Next { hash } | Self::Never { hash } => hash,
+        }
+    }
+}
 
 /// `OnLonglinkIdentifyResponse` — the app's verdict on the answer, given the
 /// response and the hash it handed out.
@@ -90,12 +160,11 @@ impl LongLinkIdentifyChecker {
         self.encoder = encoder;
     }
 
-    /// `GetLonglinkIdentifyCheckBuffer = …`.
+    /// `GetLonglinkIdentifyCheckBuffer = …` — the app is handed the cmdid the
+    /// buffer would go out with, and answers [`IdentifyBuffer`].
     pub fn set_check_buffer(
         &mut self,
-        check_buffer: impl FnMut(&str, &mut Vec<u8>, &mut Vec<u8>, &mut u32) -> IdentifyMode
-            + Send
-            + 'static,
+        check_buffer: impl FnMut(&str, u32) -> IdentifyBuffer + Send + 'static,
     ) {
         self.check_buffer = Some(Box::new(check_buffer));
     }
@@ -137,7 +206,7 @@ impl LongLinkIdentifyChecker {
     /// send it with, which are the C++'s two out-parameters.
     ///
     /// [`None`] unless the app answered `kCheckNow`, in which case the buffer
-    /// and the cmdid the app left are what went out. `kCheckNever` marks the
+    /// and the cmdid it answered with are what went out. `kCheckNever` marks the
     /// connection checked and `kCheckNext` leaves it to be asked again, and
     /// both answer [`None`]: the buffer is dropped, but the hash the app filled
     /// stays — the C++ resets `hash_code_buffer_` *before* the call, and the
@@ -145,40 +214,41 @@ impl LongLinkIdentifyChecker {
     ///
     /// The cmdid starts at `0` and, for a minor long link, gets
     /// [`Task::MINOR_LONGLINK_CMD_MASK`] OR'd into it **before** the app sees
-    /// it — the order the C++ has, and one that matters: an app that writes a
-    /// cmdid of its own overwrites the mask. `__NoopReq` is the only caller and
-    /// passes `0`.
+    /// it — the order the C++ has, and one that matters: an app that answers
+    /// with a cmdid of its own overwrites the mask. `__NoopReq` is the only
+    /// caller and passes `0`.
     pub fn get_identify_buffer(&mut self) -> Option<(Vec<u8>, u32)> {
         if self.has_checked {
             return None;
         }
 
-        self.hash_code.clear();
-        let mut buffer = Vec::new();
-        let mut cmdid = 0u32;
-        if self.is_minor_long {
-            cmdid |= Task::MINOR_LONGLINK_CMD_MASK;
-        }
-        let mode = match self.check_buffer.as_mut() {
-            Some(check_buffer) => check_buffer(
-                &self.channel_id,
-                &mut buffer,
-                &mut self.hash_code,
-                &mut cmdid,
-            ),
-            None => IdentifyMode::CheckNext,
+        let initial = if self.is_minor_long {
+            Task::MINOR_LONGLINK_CMD_MASK
+        } else {
+            0
+        };
+        let answer = match self.check_buffer.as_mut() {
+            Some(check_buffer) => check_buffer(&self.channel_id, initial),
+            None => IdentifyBuffer::Next { hash: Vec::new() },
         };
 
-        match mode {
-            IdentifyMode::CheckNever => {
+        match answer {
+            IdentifyBuffer::Never { hash } => {
+                self.hash_code = hash;
                 self.has_checked = true;
                 None
             }
-            IdentifyMode::CheckNext => {
+            IdentifyBuffer::Next { hash } => {
+                self.hash_code = hash;
                 self.has_checked = false;
                 None
             }
-            IdentifyMode::CheckNow => {
+            IdentifyBuffer::Now {
+                buffer,
+                hash,
+                cmdid,
+            } => {
+                self.hash_code = hash;
                 self.cmd_id = cmdid;
                 Some((buffer, cmdid))
             }
@@ -251,12 +321,7 @@ mod tests {
     #[test]
     fn a_check_that_is_never_made_ends_the_asking() {
         let mut checker = LongLinkIdentifyChecker::new("default", false);
-        checker.set_check_buffer(|_channel, buffer, hash, cmdid| {
-            buffer.extend_from_slice(b"identify");
-            hash.extend_from_slice(b"hash");
-            *cmdid = 17;
-            IdentifyMode::CheckNever
-        });
+        checker.set_check_buffer(|_channel, _cmdid| IdentifyBuffer::never(b"hash".to_vec()));
 
         assert!(checker.get_identify_buffer().is_none());
         assert!(checker.has_checked());
@@ -269,12 +334,7 @@ mod tests {
     #[test]
     fn a_check_that_waits_for_the_next_connect_is_asked_again() {
         let mut checker = LongLinkIdentifyChecker::new("default", false);
-        checker.set_check_buffer(|_channel, buffer, hash, cmdid| {
-            buffer.extend_from_slice(b"identify");
-            hash.extend_from_slice(b"hash");
-            *cmdid = 17;
-            IdentifyMode::CheckNext
-        });
+        checker.set_check_buffer(|_channel, _cmdid| IdentifyBuffer::next(b"hash".to_vec()));
 
         assert!(checker.get_identify_buffer().is_none());
         assert!(!checker.has_checked());
@@ -285,12 +345,21 @@ mod tests {
 
     #[test]
     fn a_check_that_is_made_now_goes_out_with_its_cmdid() {
+        let buffer = IdentifyBuffer::now(b"identify".to_vec(), b"hash".to_vec(), 17);
+        assert_eq!(buffer.mode(), IdentifyMode::CheckNow);
+        assert_eq!(buffer.hash(), b"hash");
+        assert_eq!(
+            IdentifyBuffer::next(Vec::new()).mode(),
+            IdentifyMode::CheckNext
+        );
+        assert_eq!(
+            IdentifyBuffer::never(Vec::new()).mode(),
+            IdentifyMode::CheckNever
+        );
+
         let mut checker = LongLinkIdentifyChecker::new("default", false);
-        checker.set_check_buffer(|_channel, buffer, hash, cmdid| {
-            buffer.extend_from_slice(b"identify");
-            hash.extend_from_slice(b"hash");
-            *cmdid = 17;
-            IdentifyMode::CheckNow
+        checker.set_check_buffer(|_channel, _cmdid| {
+            IdentifyBuffer::now(b"identify".to_vec(), b"hash".to_vec(), 17)
         });
 
         assert_eq!(
@@ -307,10 +376,10 @@ mod tests {
         let mut checker = LongLinkIdentifyChecker::new("minor", true);
         let seen = std::sync::Arc::new(std::sync::Mutex::new(0u32));
         let recording = std::sync::Arc::clone(&seen);
-        checker.set_check_buffer(move |channel, _buffer, _hash, cmdid| {
+        checker.set_check_buffer(move |channel, cmdid| {
             assert_eq!(channel, "minor");
-            *recording.lock().unwrap_or_else(|p| p.into_inner()) = *cmdid;
-            IdentifyMode::CheckNow
+            *recording.lock().unwrap_or_else(|p| p.into_inner()) = cmdid;
+            IdentifyBuffer::now(Vec::new(), Vec::new(), cmdid)
         });
 
         // the mask is already in the cmdid the app is handed
@@ -326,20 +395,16 @@ mod tests {
         // is what the C++ does too: `_cmdid |= kMinorLonglinkCmdMask` runs
         // before the callback does
         let mut checker = LongLinkIdentifyChecker::new("minor", true);
-        checker.set_check_buffer(|_channel, _buffer, _hash, cmdid| {
-            *cmdid = 17;
-            IdentifyMode::CheckNow
-        });
+        checker
+            .set_check_buffer(|_channel, _cmdid| IdentifyBuffer::now(Vec::new(), Vec::new(), 17));
         assert_eq!(checker.get_identify_buffer().unwrap().1, 17);
     }
 
     #[test]
     fn the_response_is_the_one_that_was_asked_for() {
         let mut checker = LongLinkIdentifyChecker::new("default", false);
-        checker.set_check_buffer(|_channel, _buffer, hash, cmdid| {
-            hash.extend_from_slice(b"hash");
-            *cmdid = 17;
-            IdentifyMode::CheckNow
+        checker.set_check_buffer(|_channel, _cmdid| {
+            IdentifyBuffer::now(Vec::new(), b"hash".to_vec(), 17)
         });
         let _ = checker.get_identify_buffer();
         checker.set_id(42);
@@ -382,7 +447,7 @@ mod tests {
     #[test]
     fn reset_asks_again() {
         let mut checker = LongLinkIdentifyChecker::new("default", false);
-        checker.set_check_buffer(|_channel, _buffer, _hash, _cmdid| IdentifyMode::CheckNever);
+        checker.set_check_buffer(|_channel, _cmdid| IdentifyBuffer::never(Vec::new()));
         let _ = checker.get_identify_buffer();
         assert!(checker.has_checked());
 

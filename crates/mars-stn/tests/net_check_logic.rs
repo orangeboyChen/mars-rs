@@ -34,7 +34,7 @@ fn a_logic() -> (NetCheckLogic, Started) {
     logic.set_long_link_hosts(|| vec!["long.example".to_string()]);
     logic.set_long_link_ports(|| vec![80, 443]);
     logic.set_short_link_port(|| 8080);
-    logic.set_request_short_link_hosts(|hosts| hosts.push("short.example".to_string()));
+    logic.set_request_short_link_hosts(|| vec!["short.example".to_string()]);
     logic.set_new_dns(|host| {
         if host.starts_with("long") {
             vec!["1.2.3.4".to_string()]
