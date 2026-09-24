@@ -51,6 +51,7 @@ struct App {
     destroyed: Arc<Mutex<Vec<RunId>>>,
     ended: Arc<Mutex<Ended>>,
     asked: Arc<Mutex<Asked>>,
+    bodies: Arc<Mutex<Vec<Vec<u8>>>>,
     closed: Arc<Mutex<Vec<mars_stn::SocketFd>>>,
     answer: Arc<Mutex<(i32, TaskFailHandleType)>>,
 }
@@ -64,12 +65,15 @@ impl App {
 
         let sent: Arc<Mutex<Vec<Sent>>> = Arc::new(Mutex::new(Vec::new()));
         let recorder = sent.clone();
+        let bodies: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+        let body_recorder = bodies.clone();
         manager.set_start_run(move |task: &Task, request: &RunRequest| {
             recorder.lock().unwrap().push(Sent {
                 taskid: task.taskid,
                 use_proxy: request.use_proxy,
                 sent_count: request.sent_count,
             });
+            body_recorder.lock().unwrap().push(request.body.clone());
             Some(RunId(u64::from(task.taskid)))
         });
 
@@ -117,6 +121,7 @@ impl App {
             destroyed,
             ended,
             asked,
+            bodies,
             closed,
             answer,
         }
@@ -170,6 +175,10 @@ impl App {
 
     fn closed(&self) -> Vec<mars_stn::SocketFd> {
         self.closed.lock().unwrap().clone()
+    }
+
+    fn bodies(&self) -> Vec<Vec<u8>> {
+        self.bodies.lock().unwrap().clone()
     }
 }
 
@@ -239,6 +248,11 @@ fn a_task_that_goes_out_and_answers_is_over() {
             use_proxy: true,
             sent_count: 0
         }]
+    );
+    assert_eq!(
+        app.bodies(),
+        vec![b"/cgi-bin/7".to_vec()],
+        "the run is started with what the encoder wrote"
     );
     assert!(app.manager.on_send_at(START, RunId(7)));
     assert_eq!(

@@ -36,6 +36,7 @@ use crate::config::{DYN_TIME_TASK_FAILED_PKG_LEN, MOBILE_PACKAGE_INTERVAL, WIFI_
 use crate::dynamic_timeout::{DynamicTimeout, DynamicTimeoutStatus, NetworkKind};
 use crate::long_link::{ECT_SOCKET_MAKE_SOCKET_PREPARED, ECT_SOCKET_SHUTDOWN};
 use crate::shortlink::is_keep_alive;
+use crate::simple_ipport_sort::IpPortItem;
 use crate::socket_operator::SocketFd;
 use crate::socket_pool::{CachedSocket, CloseSocket, SocketPool};
 use crate::task::Task;
@@ -132,6 +133,10 @@ impl RespHandle {
 /// the host is handed to start one task on.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunRequest {
+    /// `bufreq` — what `Req2Buf` wrote, which is the same bytes the anti-avalanche
+    /// check weighed and the two timeouts were worked out from: the C++ hands
+    /// them to `SendRequest`, so a host does not encode the task twice.
+    pub body: Vec<u8>,
     /// `use_proxy` — whether this try goes through a proxy.
     pub use_proxy: bool,
     /// `debug_host_` — empty when the app set none.
@@ -658,6 +663,19 @@ impl ShortLinkTaskManager {
         &mut self.socket_pool
     }
 
+    /// `__OnGetCacheSocket` — the socket the pool still has for a pair, which
+    /// is what a host wires [`crate::ShortLink`]'s `set_cache_socket` to: the
+    /// C++ gives the same getter to every worker it makes, and a run that finds
+    /// one connects with it instead of making a new one.
+    pub fn cache_socket(&mut self, item: &IpPortItem) -> Option<SocketFd> {
+        self.socket_pool.get_socket(item)
+    }
+
+    /// The same, with the reading handed in.
+    pub fn cache_socket_at(&mut self, now: u64, item: &IpPortItem) -> Option<SocketFd> {
+        self.socket_pool.get_socket_at(now, item)
+    }
+
     /// `task_intercept_`.
     pub fn intercept(&mut self) -> &mut TaskIntercept {
         &mut self.intercept
@@ -934,6 +952,7 @@ impl ShortLinkTaskManager {
             }
 
             let request = RunRequest {
+                body: body.clone(),
                 use_proxy,
                 debug_host: self.debug_host.clone(),
                 first_pkg_timeout: first_pkg,
@@ -1863,6 +1882,11 @@ mod tests {
         );
         assert_eq!(manager.socket_pool().len(), 1, "the socket is kept");
         assert!(closed.lock().unwrap().is_empty());
+        assert_eq!(
+            manager.cache_socket_at(100_500, &IpPortItem::new("1.1.1.1", 80)),
+            Some(SocketFd(3)),
+            "and the next run of the same pair is connected with it"
+        );
 
         // and one that answered badly is not
         manager.start_task_at(100_500, task, prepare());
