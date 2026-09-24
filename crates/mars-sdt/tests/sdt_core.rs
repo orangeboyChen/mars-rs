@@ -1,6 +1,7 @@
 //! `mars/sdt/src/sdt_core.cc` — what the mode turns into, and the run loop.
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 use mars_sdt::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
 use mars_sdt::sdt_core::SdtCore;
@@ -170,11 +171,66 @@ fn a_cancelled_check_runs_nothing() {
     core.cancel_check();
     assert!(core.is_cancelled());
     assert!(core.run_on(record).is_empty());
-
-    // the C++ never clears `cancel_`, so the core stays cancelled
-    core.start_check(&longlink, &shortlink, NET_CHECK_BASIC, UNUSE_TIMEOUT);
+    // the cancellation outlives the run, so the caller can still see it
     assert!(core.is_cancelled());
+
+    // and the next request is a new one: the core must not stay cancelled
+    // forever, or one `CancelCheck()` would retire it for good
+    core.start_check(&longlink, &shortlink, NET_CHECK_BASIC, UNUSE_TIMEOUT);
+    assert!(!core.is_cancelled());
+    assert_eq!(core.run_on(record).len(), 2);
+}
+
+#[test]
+fn a_running_check_can_be_cancelled_from_the_outside() {
+    let longlink = hosts(&["long.weixin.qq.com"]);
+    let shortlink = hosts(&["short.weixin.qq.com"]);
+
+    let mut core = SdtCore::new();
+    core.start_check(&longlink, &shortlink, NET_CHECK_BASIC, UNUSE_TIMEOUT);
+
+    // `run_on` borrows the core for as long as the checks take, so the only
+    // way to cancel one that is already running is a flag taken beforehand
+    // and passed to whoever is blocked — here the checker, after its first
+    // (pretend) socket read.
+    let cancel = core.cancel_handle();
+    let cancel_in_check = cancel.clone();
+    let ran = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&ran);
+    let results = core.run_on(move |kind, request| {
+        sink.lock().unwrap().push(kind);
+        cancel_in_check.cancel();
+        record(kind, request);
+    });
+
+    assert!(core.is_cancelled());
+    assert_eq!(*ran.lock().unwrap(), vec![NetCheckType::PingCheck]);
+    assert_eq!(results.len(), 1, "the checks after the cancel must not run");
+
+    // the handle and the core see the same flag, from either side
+    assert!(cancel.is_cancelled());
+    let cancel = core.cancel_handle();
+    cancel.cancel();
+    assert!(core.is_cancelled());
+}
+
+#[test]
+fn a_cancel_handle_stays_usable_after_a_run() {
+    let longlink = hosts(&["long.weixin.qq.com"]);
+    let shortlink = hosts(&["short.weixin.qq.com"]);
+
+    let mut core = SdtCore::new();
+    let cancel = core.cancel_handle();
+    core.start_check(&longlink, &shortlink, NET_CHECK_BASIC, UNUSE_TIMEOUT);
+    cancel.cancel();
     assert!(core.run_on(record).is_empty());
+
+    // a second request through the same handle
+    core.start_check(&longlink, &shortlink, NET_CHECK_BASIC, UNUSE_TIMEOUT);
+    assert!(!cancel.is_cancelled(), "the new request is not cancelled");
+    assert_eq!(core.run_on(record).len(), 2);
+    cancel.cancel();
+    assert!(core.is_cancelled());
 }
 
 #[test]

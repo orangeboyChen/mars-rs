@@ -7,9 +7,54 @@
 //! `PingChecker` / `DnsChecker` / `HttpChecker` / `TcpChecker` here; those need
 //! a network, so the caller passes the check to run as a closure.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use crate::constants::{mode_basic, mode_long, mode_short};
 use crate::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
 use crate::sdt::{CheckIPPorts, CheckStatus, NetCheckType};
+
+/// The `cancel_` of one [`SdtCore`], reachable from outside the core.
+///
+/// The C++ keeps `cancel_` inside `SdtCore` and guards it with the core's
+/// mutex, but `__RunOn` holds that mutex for as long as the checks take — so
+/// `CancelCheck()` can only ever cancel a request that has not started yet,
+/// never one that is blocked on a socket. The port has the same shape:
+/// [`SdtCore::run_on`] borrows the core for the whole run. So the flag lives
+/// in its own shared cell and a caller that wants to stop a running diagnosis
+/// takes a [`CancelHandle`] ([`SdtCore::cancel_handle`]) before the run and
+/// sets it from wherever it is — the app thread, or the checker itself, which
+/// is where the socket that has to be interrupted is.
+#[derive(Debug, Clone)]
+pub struct CancelHandle(Arc<AtomicBool>);
+
+impl CancelHandle {
+    /// A flag that is not set.
+    pub fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    /// `SdtCore::CancelCheck()` — stops the run at its next check.
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether somebody has cancelled.
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+
+    /// Takes the cancellation back, so the core can be used again.
+    fn clear(&self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+impl Default for CancelHandle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// `SdtCore`.
 #[derive(Debug, Clone)]
@@ -18,8 +63,8 @@ pub struct SdtCore {
     check_list: Vec<NetCheckType>,
     /// `check_request_`.
     check_request: CheckRequestProfile,
-    /// `cancel_`.
-    cancel: bool,
+    /// `cancel_` — shared, so it can be set while a run borrows the core.
+    cancel: CancelHandle,
     /// `checking_`.
     checking: bool,
     /// `netcheck_cgi_` — the URL the HTTP check goes to.
@@ -38,7 +83,7 @@ impl SdtCore {
         Self {
             check_list: Vec::new(),
             check_request: CheckRequestProfile::new(),
-            cancel: false,
+            cancel: CancelHandle::new(),
             checking: false,
             netcheck_cgi: String::new(),
         }
@@ -71,6 +116,10 @@ impl SdtCore {
         mode: i32,
         timeout: u32,
     ) {
+        // A core that was cancelled once has to be able to run again: the
+        // request that is accepted here is a new one, and it is not the one
+        // anybody cancelled.
+        self.cancel.clear();
         self.checking = true;
 
         self.check_request.reset();
@@ -95,15 +144,28 @@ impl SdtCore {
         }
     }
 
-    /// `SdtCore::CancelCheck()`.
-    pub fn cancel_check(&mut self) {
-        self.cancel = true;
+    /// `SdtCore::CancelCheck()` — the run stops at its next check.
+    ///
+    /// `&self`, and shared with every [`CancelHandle`] handed out for this
+    /// core: that is what lets a caller cancel a check that is already
+    /// running, which [`SdtCore::run_on`] borrowing the core for the whole
+    /// run would otherwise make impossible.
+    pub fn cancel_check(&self) {
+        self.cancel.cancel();
+    }
+
+    /// The cancellation flag of this core, for a caller that has to cancel
+    /// while the checks are running.
+    pub fn cancel_handle(&self) -> CancelHandle {
+        self.cancel.clone()
     }
 
     /// `SdtCore::__Reset()` — the checks are dropped and the request is over.
     ///
-    /// `cancel_` is *not* cleared, exactly as in the C++: a cancelled core stays
-    /// cancelled and has to be replaced.
+    /// `cancel_` survives the reset so that whoever asked for the run can
+    /// still see that it was cancelled; it is cleared when the core accepts
+    /// the next request instead ([`SdtCore::init_check_request`]), which is
+    /// what makes one core usable for more than one cancellation.
     pub fn reset(&mut self) {
         self.check_list.clear();
         self.checking = false;
@@ -120,7 +182,9 @@ impl SdtCore {
     ) -> Vec<CheckResultProfile> {
         let plan = self.check_list.clone();
         for kind in plan {
-            if self.cancel || self.check_request.check_status == CheckStatus::CheckFinish {
+            if self.cancel.is_cancelled()
+                || self.check_request.check_status == CheckStatus::CheckFinish
+            {
                 break;
             }
             do_check(kind, &mut self.check_request);
@@ -148,7 +212,7 @@ impl SdtCore {
 
     /// Whether the request was cancelled.
     pub fn is_cancelled(&self) -> bool {
-        self.cancel
+        self.cancel.is_cancelled()
     }
 
     /// The checks of the current request, in the order they run.

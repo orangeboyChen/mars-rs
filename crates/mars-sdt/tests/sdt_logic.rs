@@ -62,6 +62,42 @@ fn start_and_cancel_drive_the_core() {
 }
 
 #[test]
+fn a_check_that_is_already_running_can_be_cancelled() {
+    let longlink = hosts(&["long.weixin.qq.com"]);
+    let shortlink = hosts(&["short.weixin.qq.com"]);
+
+    let mut logic = SdtLogic::new();
+    logic.start_active_check(
+        &longlink,
+        &shortlink,
+        NET_CHECK_BASIC | NET_CHECK_SHORT,
+        3000,
+    );
+
+    // `run` holds the logic exclusively until the last check is done, so
+    // `cancel_active_check()` cannot be called from outside while it runs:
+    // the handle is taken first and cancelled by the checker, which is what
+    // would be blocked on a socket in the real thing.
+    let cancel = logic.cancel_handle();
+    let cancel_in_check = cancel.clone();
+    let ran = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&ran);
+    let results = logic.run(move |kind, request| {
+        sink.lock().unwrap().push(kind);
+        cancel_in_check.cancel();
+        record(kind, request);
+    });
+
+    assert_eq!(*ran.lock().unwrap(), vec![NetCheckType::PingCheck]);
+    assert_eq!(results.len(), 1, "the DNS and HTTP checks must not run");
+    assert!(cancel.is_cancelled());
+
+    // and the logic is usable again once it is given a new request
+    assert!(logic.start_active_check(&longlink, &shortlink, NET_CHECK_BASIC, 3000));
+    assert_eq!(logic.run(record).len(), 2);
+}
+
+#[test]
 fn what_the_checks_record_is_handed_to_the_callback() {
     let longlink = hosts(&["long.weixin.qq.com"]);
     let shortlink = hosts(&["short.weixin.qq.com"]);

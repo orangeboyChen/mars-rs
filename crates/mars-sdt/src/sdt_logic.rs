@@ -6,7 +6,7 @@
 
 use crate::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
 use crate::sdt::{Callback, CheckIPPorts, NetCheckType};
-use crate::sdt_core::SdtCore;
+use crate::sdt_core::{CancelHandle, SdtCore};
 
 /// The `sdt_logic` of the C++, as one value.
 pub struct SdtLogic {
@@ -80,8 +80,19 @@ impl SdtLogic {
     }
 
     /// `CancelActiveCheck()`.
-    pub fn cancel_active_check(&mut self) {
+    ///
+    /// `&self`, and it still stops a check that is already running: the flag
+    /// it sets is shared with the run, which borrows this logic exclusively
+    /// for as long as the checks take. A caller that does not own the logic
+    /// while the checks run takes a [`CancelHandle`] instead.
+    pub fn cancel_active_check(&self) {
         self.core.cancel_check();
+    }
+
+    /// The cancellation flag of the current request, so that a caller can
+    /// cancel while [`SdtLogic::run`] is still in flight.
+    pub fn cancel_handle(&self) -> CancelHandle {
+        self.core.cancel_handle()
     }
 
     /// The checks the running request is going to make, in order.
@@ -102,6 +113,12 @@ impl SdtLogic {
     /// Runs the checks of the request — one `do_check` per planned check, in
     /// order — and reports what they recorded. This is the `__RunOn` thread of
     /// the C++, called by the host instead of started by it.
+    ///
+    /// The run borrows the logic exclusively, so nobody can call
+    /// [`SdtLogic::cancel_active_check`] while it is in flight: take a
+    /// [`CancelHandle`] with [`SdtLogic::cancel_handle`] first and hand it to
+    /// whoever has to stop the run (the checker is the usual candidate, since
+    /// it owns the socket that has to give up).
     pub fn run(
         &mut self,
         do_check: impl FnMut(NetCheckType, &mut CheckRequestProfile),
