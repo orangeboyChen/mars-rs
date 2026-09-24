@@ -6,7 +6,7 @@
 //! [`LOCK`].
 
 use std::ffi::CString;
-use std::os::raw::{c_char, c_int, c_longlong, c_uchar, c_uint, c_ulonglong};
+use std::os::raw::{c_char, c_int, c_uint};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_ffi::abi::{
@@ -35,7 +35,11 @@ fn tempdir(tag: &str) -> std::path::PathBuf {
     dir
 }
 
-/// A config whose `CString`s live as long as the returned borrow.
+/// A config whose `CString`s live as long as the borrow the pointers came from.
+///
+/// The fields are only held so that the pointers in `raw` stay valid; nothing
+/// reads them.
+#[allow(dead_code)]
 struct ConfigBundle {
     log_dir: CString,
     prefix: CString,
@@ -96,8 +100,6 @@ fn the_whole_abi_runs_over_one_appender() {
     assert_eq!(mars_xlog_open(&config.raw), MARS_XLOG_ERR_APPENDER);
 
     let tag = CString::new("Net").unwrap();
-    let file = CString::new("net.cc").unwrap();
-    let func = CString::new("Send").unwrap();
     let message = CString::new("hello").unwrap();
     // null pieces are allowed
     mars_xlog_write(
@@ -215,7 +217,7 @@ fn instances_are_created_addressed_and_released() {
     broken.raw.log_dir = empty.as_ptr();
     assert_eq!(mars_xlog_new_instance(&broken.raw, 2), 0);
     // and so is a bad mode
-    let mut broken_mode = make_config(&dir, 9, 0);
+    let broken_mode = make_config(&dir, 9, 0);
     assert_eq!(mars_xlog_new_instance(&broken_mode.raw, 2), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
