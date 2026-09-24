@@ -393,15 +393,23 @@ impl LongLinkSpeedTest {
         self.sockets.len()
     }
 
-    /// `GetFastestSocket` — runs the race with the reading of the clock the
-    /// caller hands in.
+    /// `GetFastestSocket` — runs the race, reading the clock again after every
+    /// `Select`: the connect of a pair is over when the host's select says its
+    /// socket takes a write, which is a later reading than the one the race
+    /// started with.
     pub fn fastest(&mut self) -> Option<Fastest> {
-        self.fastest_at(gettickcount())
+        self.race(gettickcount)
     }
 
-    /// The same, with the reading handed in: one round per [`Select`], until a
-    /// pair was answered, every pair has failed, or the select gave up.
+    /// The same with one reading of the clock for every round: for a host that
+    /// steps the clock itself, or a test that wants to say when each round
+    /// happened. One round per `Select`, until a pair was answered, every pair
+    /// has failed, or the select gave up.
     pub fn fastest_at(&mut self, now: u64) -> Option<Fastest> {
+        self.race(|| now)
+    }
+
+    fn race(&mut self, mut clock: impl FnMut() -> u64) -> Option<Fastest> {
         while self.sockets.len() < self.items.len() {
             let Some(open) = self.open.as_mut() else {
                 break;
@@ -424,6 +432,9 @@ impl LongLinkSpeedTest {
                 Err(_) => break,
             };
 
+            // the C++'s item reads the clock when its socket takes the first
+            // write, which is here: after the select, before the round
+            let now = clock();
             self.round(&events, now);
 
             if self
