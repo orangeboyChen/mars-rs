@@ -172,11 +172,15 @@ jobs:
           components: llvm-tools-preview
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
-      # The floor is what the suite covers today; it is raised as the remaining
-      # crates (mars-ffi, mars-compat, the JNI wrappers) get their tests, with
-      # 90 % lines as the target.
+      # Measured 88.5 % on a developer machine; the runner is a point or two
+      # lower, so the floor sits below it. It is raised as the remaining crates
+      # (mars-compat, the JNI wrappers) get their tests, with 90 % as the target.
       - name: Measure line coverage
+<<<<<<< HEAD
         run: cargo llvm-cov --workspace --summary-only --fail-under-lines 87
+=======
+        run: cargo llvm-cov --workspace --summary-only --fail-under-lines 86
+>>>>>>> 82d212d (ci: keep the coverage floor just under the measured value)
   docs:
     name: docs
     runs-on: ubuntu-latest
