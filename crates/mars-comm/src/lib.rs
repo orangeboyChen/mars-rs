@@ -20,6 +20,10 @@
 //!
 //! The `wstring` overloads of the C++ are not ported: every caller in this
 //! repository works on UTF-8 `String`/`&str`.
+//!
+//! `http` mirrors `comm/http.h` — the little http the short link speaks: a
+//! request line or a status line, the header fields, and a body of a
+//! `Content-Length` of bytes or of chunks.
 
 /// The NAT64 prefix of [`ipv6_address`] is one value for the whole process, so
 /// the unit tests that move it need **one** lock for the crate, not one per
@@ -36,6 +40,7 @@ pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
 
 pub mod alarm;
 pub mod frequency_limit;
+pub mod http;
 pub mod ipv6_address;
 pub mod local_ipstack;
 pub mod message_queue;
