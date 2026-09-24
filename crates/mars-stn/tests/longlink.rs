@@ -4,9 +4,9 @@
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_stn::longlink::{
-    client_version, longlink_pack, longlink_unpack, set_client_version, LongLinkEncoder, Unpacked,
-    HEADER_LEN, LONGLINK_UNPACK_CONTINUE, LONGLINK_UNPACK_FALSE, LONGLINK_UNPACK_OK,
-    MAX_PACKAGE_LEN, NOOP_CMDID, PUSH_DATA_TASKID, SIGNALKEEP_CMDID,
+    client_version, longlink_pack, longlink_unpack, set_client_version, LongLinkEncoder,
+    StNetMsgXpHeader, Unpacked, HEADER_LEN, LONGLINK_UNPACK_CONTINUE, LONGLINK_UNPACK_FALSE,
+    LONGLINK_UNPACK_OK, MAX_PACKAGE_LEN, NOOP_CMDID, PUSH_DATA_TASKID, SIGNALKEEP_CMDID,
 };
 use mars_stn::Task;
 
@@ -21,6 +21,10 @@ fn versions() -> MutexGuard<'static, ()> {
 
 /// Reads the stream the way `LongLink::__ReadWrite` does: unpack, skip what
 /// was read, stop when the rest is not a whole package yet.
+///
+/// A package of `0` bytes — a header whose `head_length` claims nothing, which
+/// `__unpack_test` accepts — is where it stops: advancing by `0` would walk in
+/// place. The C++ leaves that guard to its caller too.
 fn drain(stream: &[u8]) -> Vec<(u32, u32, Vec<u8>)> {
     let mut packages = Vec::new();
     let mut rest = stream;
@@ -32,6 +36,9 @@ fn drain(stream: &[u8]) -> Vec<(u32, u32, Vec<u8>)> {
                 package_len,
                 body,
             } => {
+                if package_len == 0 {
+                    return packages;
+                }
                 packages.push((cmdid, seq, body));
                 rest = &rest[package_len..];
                 if rest.is_empty() {
@@ -60,6 +67,45 @@ fn a_stream_carries_the_packages_it_was_packed_from() {
             (SIGNALKEEP_CMDID, 102, b"keep".to_vec()),
         ]
     );
+
+    set_client_version(0);
+    drop(guard);
+}
+
+/// `__unpack_test` takes `head_length` from the stream and never checks it
+/// against `sizeof(__STNetMsgXpHeader)`: a header that claims nothing is a
+/// package of nothing, and the port answers the same. What must not happen is
+/// what [`drain`] does about it.
+#[test]
+fn a_header_that_claims_nothing_is_the_cpp_answer() {
+    let guard = versions();
+    set_client_version(0);
+    let header = StNetMsgXpHeader {
+        head_length: 0,
+        client_version: 0,
+        cmdid: 1,
+        seq: 2,
+        body_length: 0,
+    };
+
+    match longlink_unpack(&header.to_bytes()) {
+        Unpacked::Package {
+            cmdid,
+            seq,
+            package_len,
+            body,
+        } => {
+            assert_eq!((cmdid, seq), (1, 2));
+            assert_eq!(package_len, 0, "head_length is not checked");
+            assert!(body.is_empty());
+        }
+        other => panic!("the C++ answers a package: {other:?}"),
+    }
+
+    // a stream of them: the consumer stops instead of walking in place
+    let mut stream = header.to_bytes().to_vec();
+    stream.extend_from_slice(&header.to_bytes());
+    assert!(drain(&stream).is_empty(), "no package, and no spin");
 
     set_client_version(0);
     drop(guard);

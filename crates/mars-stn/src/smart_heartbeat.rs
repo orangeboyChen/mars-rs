@@ -127,6 +127,13 @@ static OUTER_SETTED_HEART: AtomicI32 = AtomicI32::new(-1);
 
 /// `SmartHeartbeat::SetHeartBeat(heart)` — an interval from outside, which
 /// wins over anything computed.
+///
+/// `0` is an interval like any other, not "no override": the C++ keeps
+/// `outer_setted_heart_` as an `int` that starts at `-1` and honours it while
+/// `outer_setted_heart_ != -1 && outer_setted_heart_ >= 0`, and
+/// `Java_com_tencent_mars_stn_StnLogic_trigNooping` is `SetHeartBeat(0)` — so
+/// a noop triggered from Java really does leave the interval at `0` until
+/// somebody sets it again. `-1` is what clears it.
 pub fn set_heartbeat(heart: i32) {
     OUTER_SETTED_HEART.store(heart, Ordering::SeqCst);
 }
@@ -553,17 +560,46 @@ mod tests {
         assert_eq!(hb.get_next_heartbeat_interval(false), MIN_HEART_INTERVAL);
     }
 
+    /// `outer_setted_heart_` is process-wide, so the test that moves it takes
+    /// the crate's turn: [`crate::test_lock`].
+    fn with_outer_heart<R>(heart: i32, f: impl FnOnce() -> R) -> R {
+        let guard = crate::test_lock();
+        let previous = outer_setted_heart();
+        set_heartbeat(heart);
+        let result = f();
+        set_heartbeat(previous);
+        drop(guard);
+        result
+    }
+
     #[test]
     fn an_interval_from_outside_wins() {
         let mut hb = SmartHeartbeat::new();
         established(&mut hb);
-        set_heartbeat(120_000);
-        assert_eq!(hb.get_next_heartbeat_interval(false), 120_000);
-        assert_eq!(hb.last_heart(), 120_000);
+        with_outer_heart(120_000, || {
+            assert_eq!(hb.get_next_heartbeat_interval(false), 120_000);
+            assert_eq!(hb.last_heart(), 120_000);
+        });
 
         // `SetHeartBeat` also resets the noop interval of the C++ (`0`)
-        set_heartbeat(-1);
-        assert_eq!(hb.get_next_heartbeat_interval(false), MIN_HEART_INTERVAL);
+        with_outer_heart(-1, || {
+            assert_eq!(hb.get_next_heartbeat_interval(false), MIN_HEART_INTERVAL);
+        });
+    }
+
+    /// `TrigNooping` is `SmartHeartbeat::SetHeartBeat(0)` in the C++, and the
+    /// C++ honours a `0`: `outer_setted_heart_ != -1 && >= 0`. It is `-1`, not
+    /// `0`, that means "no interval from outside".
+    #[test]
+    fn a_zero_from_outside_is_an_interval_like_any_other() {
+        let mut hb = SmartHeartbeat::new();
+        established(&mut hb);
+        stable(&mut hb);
+        with_outer_heart(0, || {
+            assert_eq!(outer_setted_heart(), 0);
+            assert_eq!(hb.get_next_heartbeat_interval(false), 0);
+            assert_eq!(hb.last_heart(), 0, "a computed interval loses to it");
+        });
     }
 
     #[test]

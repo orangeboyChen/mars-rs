@@ -15,6 +15,18 @@
 //! Everything that needs the app callbacks (`net_core`, `longlink_task_manager`,
 //! `shortlink`, `stn_logic`) comes later.
 
+/// The `static`s of this crate are one value for the whole process —
+/// `sg_client_version` in [`longlink`] and `outer_setted_heart_` in
+/// [`smart_heartbeat`] — so the unit tests that move them need **one** lock for
+/// the crate, not one per module.
+#[cfg(test)]
+pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 pub mod anti_avalanche;
 pub mod config;
 pub mod dynamic_timeout;

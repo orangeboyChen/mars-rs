@@ -179,6 +179,14 @@ impl Unpacked {
 /// `longlink_unpack` — the C++ answers an `int` and fills `_cmdid`, `_seq`,
 /// `_package_len`, `_body` and `_extension` through references; the port hands
 /// back the same four in one value.
+///
+/// `head_length` is taken from the stream and is **not** checked against
+/// [`HEADER_LEN`]: like the C++ `__unpack_test`, which takes it as it comes, a
+/// header that claims `0` is a package of `0` bytes — an answer of
+/// [`Unpacked::Package`] whose `package_len` is `0`. That is what the C++
+/// answers too, and `LongLink::__ReadWrite` is the only consumer it has, so the
+/// port leaves it to the caller: whoever advances a stream by `package_len`
+/// has to stop on a `0`, or it will never move.
 pub fn longlink_unpack(packed: &[u8]) -> Unpacked {
     // `__unpack_test`
     if packed.len() < HEADER_LEN {
@@ -279,17 +287,10 @@ impl LongLinkEncoder {
 mod tests {
     use super::*;
 
-    /// `sg_client_version` is process-wide, so the tests that set it take it in
-    /// turn.
-    fn version_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
+    /// `sg_client_version` is process-wide, so the tests that set it take the
+    /// crate's turn: [`crate::test_lock`].
     fn with_client_version<R>(version: u32, f: impl FnOnce() -> R) -> R {
-        let guard = version_lock();
+        let guard = crate::test_lock();
         let previous = client_version();
         set_client_version(version);
         let result = f();
