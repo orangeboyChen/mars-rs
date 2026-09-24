@@ -24,6 +24,9 @@
 //! `http` mirrors `comm/http.h` — the little http the short link speaks: a
 //! request line or a status line, the header fields, and a body of a
 //! `Content-Length` of bytes or of chunks.
+//!
+//! `base64` mirrors `comm/crypt/ibase64.h` — the `Basic` a proxy is logged in
+//! with, which is the one thing mars needs an encoding for.
 
 /// The NAT64 prefix of [`ipv6_address`] is one value for the whole process, so
 /// the unit tests that move it need **one** lock for the crate, not one per
@@ -39,6 +42,7 @@ pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 pub mod alarm;
+pub mod base64;
 pub mod frequency_limit;
 pub mod http;
 pub mod ipv6_address;
