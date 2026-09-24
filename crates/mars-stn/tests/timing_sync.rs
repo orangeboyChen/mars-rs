@@ -1,10 +1,9 @@
-//! `mars/stn/src/timing_sync.cc`, through the public api.
+//! The timing sync, through the public api.
 //!
-//! The samples are what the C++ answers for the same calls: ninety seconds
-//! between two syncs while the app is active and logged in, four minutes while
-//! nobody is logged in, ten while it is not active at all — and three times as
-//! long with no network to sync on. A link that came up cancels the alarm, and
-//! a change only restarts an alarm that is still waiting.
+//! Ninety seconds between two syncs while the app is active and logged in, four
+//! minutes while nobody is logged in, ten while it is not active at all — and
+//! three times as long with no network to sync on. A link that came up cancels
+//! the alarm, and a change only restarts an alarm that is still waiting.
 
 use std::sync::{Arc, Mutex};
 
@@ -50,17 +49,26 @@ fn the_wait_is_what_the_app_and_the_network_make_it() {
 }
 
 #[test]
-fn the_constructor_arms_the_alarm() {
-    let (mut sync, _syncs) = a_sync(0);
-    // ... before any of the host is set: not active, nobody logged in, and no
-    // network, which is the longest wait there is
+fn the_constructor_arms_the_alarm_and_every_callback_rearms_it() {
+    let mut sync = TimingSync::new_at(0);
+    // before any of the host: not active, nobody logged in, and no network,
+    // which is the longest wait there is
     assert_eq!(
         sync.due_time(),
         Some(INACTIVE_SYNC_INTERVAL * NONET_SALT_RATE)
     );
-    // and the first change the app reports is what arms it for the ninety
-    // seconds an active, logged-in app waits
-    sync.on_network_change_at(0);
+
+    // the C++ has all of this before its constructor runs, and the port gets
+    // it afterwards — so arming it again is what installing it does
+    sync.set_net_info(|| 1);
+    assert_eq!(sync.due_time(), Some(INACTIVE_SYNC_INTERVAL));
+    sync.set_is_active(|| true);
+    assert_eq!(sync.due_time(), Some(UNLOGIN_SYNC_INTERVAL));
+    sync.set_is_logoned(|| true);
+    assert_eq!(sync.due_time(), Some(ACTIVE_SYNC_INTERVAL));
+
+    // ... and a host that installs them all at once gets there in one step
+    let (sync, _syncs) = a_sync(0);
     assert_eq!(sync.due_time(), Some(ACTIVE_SYNC_INTERVAL));
 }
 
@@ -120,7 +128,7 @@ fn a_link_that_came_up_cancels_the_alarm_and_one_that_went_down_arms_it() {
     assert_eq!(
         sync.due_time(),
         Some(1_000 + ACTIVE_SYNC_INTERVAL),
-        "only the two states the C++ looks at move it"
+        "only the two states the sync looks at move it"
     );
 }
 

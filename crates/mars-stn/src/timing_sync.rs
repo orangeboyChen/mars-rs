@@ -12,6 +12,14 @@
 //! and `StnManager::RequestSync()`; all four are callbacks here, and
 //! `comm::Alarm` is a due time the host compares its own clock against
 //! ([`TimingSync::due_time`]), the way the rest of the crate models one.
+//!
+//! The C++ has the first three before its constructor runs, and its
+//! `alarm_.Start` in that constructor is what the port's [`TimingSync::new_at`]
+//! is; a host here can only hand them in afterwards, so every one of
+//! [`TimingSync::set_is_active`], [`TimingSync::set_is_logoned`] and
+//! [`TimingSync::set_net_info`] arms the alarm again from the reading it was
+//! armed at — the first sync is ninety seconds out for an active, logged-in
+//! app with a network, not the thirty minutes the unset answers give.
 
 use crate::longlink_connect_monitor::LongLinkStatus;
 use crate::smart_heartbeat::NO_NET;
@@ -57,6 +65,12 @@ pub struct TimingSync {
     /// `alarm_` — the reading it is due at, [`None`] for one that was
     /// cancelled.
     due: Option<u64>,
+    /// The reading the wait that is running now was armed at. The C++ has
+    /// `ActiveLogic`, `GetAccountInfo()` and `getNetInfo()` before its
+    /// constructor runs, so its first `Start` already knows them; the port
+    /// gets them afterwards, through the setters, and arms from here again
+    /// when one arrives.
+    armed_at: u64,
     is_active: Option<Box<IsActive>>,
     is_logoned: Option<Box<IsLogoned>>,
     net_info: Option<Box<NetInfo>>,
@@ -80,6 +94,7 @@ impl TimingSync {
     pub fn new_at(now: u64) -> Self {
         let mut sync = Self {
             due: None,
+            armed_at: now,
             is_active: None,
             is_logoned: None,
             net_info: None,
@@ -89,19 +104,24 @@ impl TimingSync {
         sync
     }
 
-    /// `ActiveLogic::IsActive()`.
+    /// `ActiveLogic::IsActive()` — a host hands the callbacks in after the
+    /// constructor, so the alarm is armed again from the moment it was armed
+    /// with whatever this one answers.
     pub fn set_is_active(&mut self, is_active: impl FnMut() -> bool + Send + 'static) {
         self.is_active = Some(Box::new(is_active));
+        self.rearm();
     }
 
     /// `GetAccountInfo().is_logoned`.
     pub fn set_is_logoned(&mut self, is_logoned: impl FnMut() -> bool + Send + 'static) {
         self.is_logoned = Some(Box::new(is_logoned));
+        self.rearm();
     }
 
     /// `getNetInfo()`.
     pub fn set_net_info(&mut self, net_info: impl FnMut() -> i32 + Send + 'static) {
         self.net_info = Some(Box::new(net_info));
+        self.rearm();
     }
 
     /// `StnManager::RequestSync()` — what the alarm asks for.
@@ -193,8 +213,21 @@ impl TimingSync {
     fn start_with(&mut self, now: u64, is_actived: bool, is_logoned: bool) -> u64 {
         let wait = alarm_time(is_actived, is_logoned, self.net_info());
         let due = now.saturating_add(wait);
+        self.armed_at = now;
         self.due = Some(due);
         due
+    }
+
+    /// Arm the alarm again from the reading the wait that is running now was
+    /// armed at: what the C++'s constructor gets by having its `ActiveLogic`,
+    /// its account info and `getNetInfo()` before it runs. A cancelled alarm
+    /// stays cancelled — the C++ only rearms one that is waiting, and so does
+    /// this.
+    fn rearm(&mut self) {
+        if self.due.is_some() {
+            let armed_at = self.armed_at;
+            self.start(armed_at);
+        }
     }
 
     fn is_active(&mut self) -> bool {
@@ -284,6 +317,32 @@ mod tests {
         sync.cancel();
         sync.on_active_changed_at(0, true);
         sync.on_network_change_at(0);
+        assert_eq!(sync.due_time(), None);
+    }
+
+    #[test]
+    fn a_callback_the_host_installs_arms_the_alarm_for_what_it_answers() {
+        let mut sync = a_sync(0);
+        // no host, so no network and nobody logged in: the longest wait
+        assert_eq!(
+            sync.due_time(),
+            Some(INACTIVE_SYNC_INTERVAL * NONET_SALT_RATE)
+        );
+
+        sync.set_net_info(|| 1);
+        assert_eq!(sync.due_time(), Some(INACTIVE_SYNC_INTERVAL), "a network");
+        sync.set_is_active(|| true);
+        assert_eq!(sync.due_time(), Some(UNLOGIN_SYNC_INTERVAL), "active");
+        sync.set_is_logoned(|| true);
+        assert_eq!(
+            sync.due_time(),
+            Some(ACTIVE_SYNC_INTERVAL),
+            "the ninety seconds the C++'s constructor would have armed"
+        );
+
+        // a cancelled alarm is not rearmed by one
+        sync.cancel();
+        sync.set_net_info(|| NO_NET);
         assert_eq!(sync.due_time(), None);
     }
 
