@@ -1,0 +1,12 @@
+[package]
+name = "mars-crypt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "On-disk xlog framing + TEA/ECDH crypto ported from mars/xlog/crypt."
+
+[dependencies]
+mars-core = { workspace = true }
+k256 = { workspace = true, features = ["ecdh"] }

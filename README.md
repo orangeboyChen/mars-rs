@@ -7,13 +7,13 @@ zlib- or zstd-compressed, sync or async — and is the whole logging stack:
 
 | crate                 | what it is                                                        |
 |-----------------------|-------------------------------------------------------------------|
-| `mars-xlog-core`      | block buffer, log file framing, zlib/zstd helpers                 |
-| `mars-xlog-crypt`     | ECDH + AES-GCM record encryption                                  |
-| `mars-xlog-buffer`    | the mmap append buffer (`LogZlibBuffer` / `LogZstdBuffer`)        |
-| `mars-xlog-appender`  | the process-wide appender and per-instance loggers                |
-| `mars-xlog-ffi`       | C ABI (`cdylib` + `staticlib`) and its hand-written header        |
-| `mars-xlog-jni`       | JNI bindings of `com.tencent.mars.xlog.Xlog`                      |
-| `mars-xlog-compat`    | CLI plus the golden `.xlog` files that pin the wire format        |
+| `mars-core`      | block buffer, log file framing, zlib/zstd helpers                 |
+| `mars-crypt`     | ECDH + AES-GCM record encryption                                  |
+| `mars-buffer`    | the mmap append buffer (`LogZlibBuffer` / `LogZstdBuffer`)        |
+| `mars-appender`  | the process-wide appender and per-instance loggers                |
+| `mars-ffi`       | C ABI (`cdylib` + `staticlib`) and its hand-written header        |
+| `mars-jni`       | JNI bindings of `com.tencent.mars.xlog.Xlog`                      |
+| `mars-compat`    | CLI plus the golden `.xlog` files that pin the wire format        |
 
 ## Build and test
 
@@ -31,18 +31,18 @@ the linker):
 ```bash
 rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 export ANDROID_HOME=...            # .cargo/config.toml forces 16 KiB pages
-cargo build --release -p mars-xlog-jni --target aarch64-linux-android
+cargo build --release -p mars-jni --target aarch64-linux-android
 ```
 
-`unsafe` appears in exactly two places: the C ABI shims of `mars-xlog-ffi` and
-the single `memmap2::MmapOptions::map_mut` call of `mars-xlog-appender` (there
+`unsafe` appears in exactly two places: the C ABI shims of `mars-ffi` and
+the single `memmap2::MmapOptions::map_mut` call of `mars-appender` (there
 is no safe API for creating a mapping). Both carry SAFETY notes.
 
 ## The format is pinned by golden files
 
-The 16 `.xlog` files in `crates/mars-xlog-compat/fixtures` were written by the
+The 16 `.xlog` files in `crates/mars-compat/fixtures` were written by the
 *original C++* encoders — one per combination of zlib/zstd, sync/async,
-encryption on/off and flush policy — and `cargo test -p mars-xlog-compat`
+encryption on/off and flush policy — and `cargo test -p mars-compat`
 decodes every one of them back to the exact text that went in. That is what
 keeps the port readable/writable against files produced by the C++ it replaced.
 
@@ -55,9 +55,9 @@ Two differences are known and accepted:
 
 ## Consumers
 
-* Android: `mars-xlog-jni` builds `libmarsxlog.so`, which the `mars-xlog` AAR
+* Android: `mars-jni` builds `libmarsxlog.so`, which the `mars-xlog` AAR
   of <https://github.com/orangeboyChen/mars> packages per ABI.
-* Apple: `mars-xlog-ffi` builds the static library inside
+* Apple: `mars-ffi` builds the static library inside
   `MarsXlog.xcframework`, wrapped by the Swift API of that repository.
 
 ## License

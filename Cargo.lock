@@ -455,75 +455,75 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
-name = "mars-xlog-appender"
+name = "mars-appender"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "flate2",
  "libc",
- "mars-xlog-buffer",
- "mars-xlog-core",
- "mars-xlog-crypt",
+ "mars-buffer",
+ "mars-core",
+ "mars-crypt",
  "memmap2",
  "tempfile",
 ]
 
 [[package]]
-name = "mars-xlog-buffer"
+name = "mars-buffer"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "mars-xlog-core",
- "mars-xlog-crypt",
+ "mars-core",
+ "mars-crypt",
  "tempfile",
  "zstd",
 ]
 
 [[package]]
-name = "mars-xlog-compat"
+name = "mars-compat"
 version = "0.1.0"
 dependencies = [
  "flate2",
  "k256",
- "mars-xlog-buffer",
- "mars-xlog-core",
- "mars-xlog-crypt",
+ "mars-buffer",
+ "mars-core",
+ "mars-crypt",
  "serde_json",
  "tempfile",
  "zstd",
 ]
 
 [[package]]
-name = "mars-xlog-core"
+name = "mars-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
 ]
 
 [[package]]
-name = "mars-xlog-crypt"
+name = "mars-crypt"
 version = "0.1.0"
 dependencies = [
  "k256",
- "mars-xlog-core",
+ "mars-core",
 ]
 
 [[package]]
-name = "mars-xlog-ffi"
+name = "mars-ffi"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "mars-xlog-appender",
- "mars-xlog-buffer",
+ "mars-appender",
+ "mars-buffer",
  "tempfile",
 ]
 
 [[package]]
-name = "mars-xlog-jni"
+name = "mars-jni"
 version = "0.1.0"
 dependencies = [
  "jni",
- "mars-xlog-appender",
+ "mars-appender",
 ]
 
 [[package]]
