@@ -74,6 +74,30 @@ pub const LONG_FIRST_PKG_TIMEOUT: i32 = -500;
 /// `kEctLongPkgPkgTimeout`.
 pub const LONG_PKG_PKG_TIMEOUT: i32 = -501;
 
+/// `TaskFailHandleType` of `mars/stn/stn.h` — what the app is told to do about
+/// a task that failed.
+///
+/// The C++ hands it to the callback as a plain `int`, and not every value it
+/// carries is one of these; the port uses the enum everywhere it is produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaskFailHandleType {
+    /// `kTaskFailHandleNormal` / `kTaskFailHandleNoError`
+    #[default]
+    Normal = 0,
+    /// `kTaskFailHandleDefault`
+    Default = -1,
+    /// `kTaskFailHandleRetryAllTasks`
+    RetryAllTasks = -12,
+    /// `kTaskFailHandleSessionTimeout`
+    SessionTimeout = -13,
+    /// `kTaskFailHandleTaskEnd` — the task is over, do not retry it.
+    TaskEnd = -14,
+    /// `kTaskFailHandleTaskTimeout`
+    TaskTimeout = -15,
+    /// `kTaskSlientHandleTaskEnd`
+    SlientTaskEnd = -16,
+}
+
 /// `TaskFailStep` — "do not insert or delete": the C++ turns the value into a
 /// report key by adding it to an offset, so the discriminants are part of the
 /// contract with the report.
