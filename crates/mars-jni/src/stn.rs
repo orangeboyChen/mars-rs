@@ -94,15 +94,30 @@ fn with_state<R>(f: impl FnOnce(&mut StnState) -> R) -> R {
     f(&mut state)
 }
 
+/// What the new `NetCore` starts with.
+///
+/// `StnManager::Reset()` releases the `NetCore` and builds another one, so
+/// everything that lived inside it is gone with it: the tasks, the signalling
+/// session, and the addresses `SetLonglinkSvrAddr`, `SetShortlinkSvrAddr`,
+/// `SetDebugIP` and `SetBackupIPs` had handed to its `NetSource`.
+fn clear(state: &mut StnState) {
+    state.tasks.clear();
+    state.signalling = false;
+    state.signalling_period = 0;
+    state.signalling_keep_time = 0;
+    state.longlink_host.clear();
+    state.longlink_ports.clear();
+    state.longlink_debug_ip.clear();
+    state.shortlink_port = 0;
+    state.shortlink_debug_ip.clear();
+    state.debug_ips.clear();
+    state.backup_ips.clear();
+}
+
 /// `StnLogic.reset` — clears the tasks and re-initialises, which in the C++
 /// means rebuilding `NetCore`.
 pub fn reset_impl() {
-    with_state(|state| {
-        state.tasks.clear();
-        state.signalling = false;
-        state.signalling_period = 0;
-        state.signalling_keep_time = 0;
-    })
+    with_state(clear)
 }
 
 /// `StnLogic.resetAndInitEncoderVersion` — `Reset()` plus the encoder the C++
@@ -113,10 +128,7 @@ pub fn reset_impl() {
 /// signalling must not find the old session still running afterwards.
 pub fn reset_and_init_encoder_version_impl(version: i32, name: &str) {
     with_state(|state| {
-        state.tasks.clear();
-        state.signalling = false;
-        state.signalling_period = 0;
-        state.signalling_keep_time = 0;
+        clear(state);
         state.encoder_version = version;
         state.encoder_name = name.to_owned();
     })
@@ -421,6 +433,38 @@ mod tests {
             reset_impl();
             set_longlink_svr_addr_impl("", &[], "1.2.3.4");
             assert!(makesure_longlink_connected_impl());
+        })
+    }
+
+    /// The order the tests run in must not matter: `Reset()` hands the state a
+    /// new `NetCore`, so the address the old one was given has to go with it.
+    #[test]
+    fn reset_drops_the_address_the_net_core_kept() {
+        isolated(|| {
+            set_longlink_svr_addr_impl("long.weixin.qq.com", &[80], "1.2.3.4");
+            set_shortlink_svr_addr_impl(80, "5.6.7.8");
+            set_debug_ip_impl("short.weixin.qq.com", "9.9.9.9");
+            set_backup_ips_impl("short.weixin.qq.com", &["1.1.1.1".to_owned()]);
+            assert!(makesure_longlink_connected_impl(), "there is an address");
+
+            reset_impl();
+            assert!(!makesure_longlink_connected_impl(), "the address is gone");
+            with_state(|state| {
+                assert!(state.longlink_host.is_empty());
+                assert!(state.longlink_ports.is_empty());
+                assert!(state.longlink_debug_ip.is_empty());
+                assert_eq!(state.shortlink_port, 0);
+                assert!(state.shortlink_debug_ip.is_empty());
+                assert!(state.debug_ips.is_empty());
+                assert!(state.backup_ips.is_empty());
+            });
+
+            // `resetAndInitEncoderVersion` is reset plus the encoder, so it
+            // drops the address as well
+            set_longlink_svr_addr_impl("long.weixin.qq.com", &[80], "");
+            reset_and_init_encoder_version_impl(2, "encoder");
+            assert!(!makesure_longlink_connected_impl());
+            with_state(|state| assert_eq!(state.encoder_name, "encoder"));
         })
     }
 
