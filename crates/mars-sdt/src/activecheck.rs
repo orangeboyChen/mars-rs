@@ -154,14 +154,19 @@ impl Check {
             profile.error_code = error_code;
             profile.rtt = rtt;
 
-            // `ipinfo.size >= 2` … a resolve that came back with no address at
-            // all is what the C++ logs an error about; there is nothing to log
-            // here, and the profile keeps its empty `ip1` / `ip2`.
-            if let Some(ip1) = ips.first() {
-                profile.ip1 = ip1.clone();
-            }
-            if let Some(ip2) = ips.get(1) {
-                profile.ip2 = ip2.clone();
+            // the C++'s `if (0 == ret)`, and its `ipinfo.size` inside it: a
+            // resolve that failed takes no address from the answer, not even
+            // one the resolver filled in on the way out, and a resolve that
+            // worked with no address at all is what the C++ logs an error
+            // about — there is nothing to log here, so the profile keeps its
+            // empty `ip1` / `ip2`.
+            if error_code == 0 {
+                if let Some(ip1) = ips.first() {
+                    profile.ip1 = ip1.clone();
+                }
+                if let Some(ip2) = ips.get(1) {
+                    profile.ip2 = ip2.clone();
+                }
             }
 
             request.checkresult_profiles.push(profile);
