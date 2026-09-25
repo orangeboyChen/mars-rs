@@ -19,6 +19,13 @@
 //! | `setMaxFileSize`          | `set_max_file_size`                           |
 //! | `setMaxAliveTime`         | `set_max_alive_duration`                      |
 //!
+//! The same seam covers the rest of the Java api: [`stn`] is
+//! `io.github.marsrs.stn.StnLogic`, and what it reaches is the net core of
+//! [`mars_stn`] — one value for the whole process, like the C++'s `NetCore`
+//! singleton — rather than a copy of it; [`sdt`], [`app_logic`],
+//! [`platform_comm`], [`alarm`] and [`wakerlock`] are the same for their own
+//! Java classes.
+//!
 //! # Panic safety
 //!
 //! A panic unwinding into the JVM is undefined behaviour, so every entry point
