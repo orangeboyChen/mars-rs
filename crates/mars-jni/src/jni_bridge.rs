@@ -27,6 +27,10 @@ use crate::platform_comm::{
 };
 
 use crate::alarm::on_alarm_impl;
+use crate::baseevent::{
+    on_create_impl, on_destroy_impl, on_exception_crash_impl, on_foreground_impl,
+    on_init_config_before_on_create_impl, on_network_change_impl, on_signal_crash_impl,
+};
 use crate::sdt::{get_load_libraries_impl as sdt_libraries, set_http_netcheck_cgi_impl};
 use crate::stn::{
     clear_task_impl, gen_sequence_id_impl, gen_task_id_impl, get_load_libraries_impl,
@@ -1484,6 +1488,79 @@ fn string_buffer<'a>(env: &mut JNIEnv<'a>) -> Option<JObject<'a>> {
 /// A `J` Java answered with — `0` for a call that could not be made.
 fn long_of(called: jni::errors::Result<JValueOwned>) -> i64 {
     called.and_then(|value| value.j()).unwrap_or(0)
+}
+
+// #################### io.github.marsrs.BaseEvent ####################
+
+/// `BaseEvent.onCreate` — the app is up, which is when the net core is made.
+#[no_mangle]
+pub extern "system" fn Java_io_github_marsrs_BaseEvent_onCreate<'local>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) {
+    guard(|| {
+        on_create_impl();
+    })
+}
+
+/// `BaseEvent.onInitConfigBeforeOnCreate`.
+#[no_mangle]
+pub extern "system" fn Java_io_github_marsrs_BaseEvent_onInitConfigBeforeOnCreate<'local>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    packer_encoder_version: jint,
+) {
+    guard(|| on_init_config_before_on_create_impl(packer_encoder_version))
+}
+
+/// `BaseEvent.onDestroy`.
+#[no_mangle]
+pub extern "system" fn Java_io_github_marsrs_BaseEvent_onDestroy<'local>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) {
+    guard(|| {
+        on_destroy_impl();
+    })
+}
+
+/// `BaseEvent.onForeground`.
+#[no_mangle]
+pub extern "system" fn Java_io_github_marsrs_BaseEvent_onForeground<'local>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    is_foreground: jboolean,
+) {
+    guard(|| on_foreground_impl(is_foreground != 0))
+}
+
+/// `BaseEvent.onNetworkChange`.
+#[no_mangle]
+pub extern "system" fn Java_io_github_marsrs_BaseEvent_onNetworkChange<'local>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) {
+    guard(on_network_change_impl)
+}
+
+/// `BaseEvent.onSingalCrash` — the signal number is not the port's to handle,
+/// so it is not read; what the crash does is close the appender.
+#[no_mangle]
+pub extern "system" fn Java_io_github_marsrs_BaseEvent_onSingalCrash<'local>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    _sig: jint,
+) {
+    guard(|| on_signal_crash_impl(_sig))
+}
+
+/// `BaseEvent.onExceptionCrash`.
+#[no_mangle]
+pub extern "system" fn Java_io_github_marsrs_BaseEvent_onExceptionCrash<'local>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) {
+    guard(on_exception_crash_impl)
 }
 
 // #################### io.github.marsrs.sdt.SdtLogic ####################
