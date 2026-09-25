@@ -24,9 +24,9 @@
 //! with their own key, mode and cache file. Handle `0` keeps writing through
 //! the process-wide appender opened by `appender_open`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Condvar, Mutex, OnceLock};
 
 use crate::{
     appender_close_instance, appender_flush, appender_flush_instance, appender_flush_sync,
@@ -124,9 +124,19 @@ struct Registry {
     /// `<prefix>.mmap3` of every live instance: one-shot recovery reads and
     /// unlinks that file, so it has to stay away from an instance that owns it.
     mmap_paths: HashMap<XloggerHandle, PathBuf>,
+    /// The prefixes whose appender is being opened right now.
+    opening: HashSet<String>,
     /// The logger handle `0` selects: `SetLevel(0, ..)` in the C++ configures
     /// the process-wide level, so it has to be reachable.
     default: XloggerCategory,
+}
+
+/// Signalled whenever a prefix leaves [`Registry::opening`], so a thread that
+/// asked for a prefix another thread is opening can wait for the answer
+/// instead of opening it a second time.
+fn opened() -> &'static Condvar {
+    static OPENED: OnceLock<Condvar> = OnceLock::new();
+    OPENED.get_or_init(Condvar::new)
 }
 
 fn registry() -> &'static Mutex<Registry> {
@@ -137,9 +147,28 @@ fn registry() -> &'static Mutex<Registry> {
             categories: HashMap::new(),
             by_prefix: HashMap::new(),
             mmap_paths: HashMap::new(),
+            opening: HashSet::new(),
             default: XloggerCategory::default(),
         })
     })
+}
+
+/// A prefix that this thread is opening: dropped when the open is over, which
+/// is when the threads waiting for that prefix are woken.
+///
+/// It is a `Drop` and not a line at the end of the open because a panic inside
+/// `appender_open_instance` would otherwise leave the prefix in
+/// [`Registry::opening`] for good, and every other thread that ever asks for it
+/// would wait for an answer that is never coming.
+struct Opening(String);
+
+impl Drop for Opening {
+    fn drop(&mut self) {
+        let mut guard = registry().lock().unwrap_or_else(|e| e.into_inner());
+        guard.opening.remove(&self.0);
+        drop(guard);
+        opened().notify_all();
+    }
 }
 
 /// Which appender a handle names.
@@ -198,37 +227,41 @@ pub fn new_xlogger_instance(config: &XLogConfig, level: LogLevel) -> XloggerHand
         return DEFAULT_HANDLE;
     }
 
-    // Fast path: already registered.
-    if let Some(handle) = registry()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .by_prefix
-        .get(&config.nameprefix)
-        .copied()
-    {
-        return handle;
-    }
+    // The C++ creates the whole instance under
+    // `ScopedLock lock(GetGlobalMutex())` (`xlogger_interface.cc`), and this is
+    // what that lock is for: two threads asking for the same prefix would
+    // otherwise both miss the table and open two appenders over one
+    // `<prefix>.mmap3`, and closing the redundant one clears the cache file the
+    // other is still writing through.
+    //
+    // What the port does not take over is *how long* the lock is held. The
+    // C++'s write path dereferences a pointer, but this registry's `lookup` is
+    // on the write path, so holding it across a `create_dir_all`, an mmap and a
+    // few writes would stall every other logger in the process — including
+    // threads that are only logging. Only the prefix is reserved, and a thread
+    // that asks for a prefix another thread is opening waits for it:
+    let mut guard = registry().lock().unwrap_or_else(|e| e.into_inner());
+    let opening = loop {
+        if let Some(handle) = guard.by_prefix.get(&config.nameprefix).copied() {
+            return handle;
+        }
+        if guard.opening.insert(config.nameprefix.clone()) {
+            break Opening(config.nameprefix.clone());
+        }
+        guard = opened()
+            .wait(guard)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    };
+    drop(guard);
 
     // Each instance opens its own appender, like the C++ `NewXloggerInstance`.
-    // That does `create_dir_all`, an mmap and several writes, so it happens
-    // outside the registry lock — otherwise every other logger in the process
-    // stalls for the whole of it.
+    // A failed open releases the prefix on the way out.
     let appender = match appender_open_instance(config.clone()) {
         Ok(id) => Some(id),
         Err(_) => return DEFAULT_HANDLE,
     };
 
     let mut registry = registry().lock().unwrap_or_else(|e| e.into_inner());
-    // Another thread may have registered the prefix while the lock was free.
-    if let Some(handle) = registry.by_prefix.get(&config.nameprefix).copied() {
-        // Ours is now redundant: close it rather than leak an appender nobody
-        // can reach.
-        if let Some(id) = appender {
-            drop(registry);
-            appender_close_instance(id);
-        }
-        return handle;
-    }
     let handle = registry.next;
     registry.next += 1;
     let mut category = XloggerCategory::default();
@@ -239,6 +272,10 @@ pub fn new_xlogger_instance(config: &XLogConfig, level: LogLevel) -> XloggerHand
     registry
         .mmap_paths
         .insert(handle, crate::appender::mmap_file_path(config));
+    drop(registry);
+    // the handle is in the table, so whoever was waiting for the prefix finds
+    // it now
+    drop(opening);
     handle
 }
 
@@ -476,6 +513,68 @@ mod tests {
             new_xlogger_instance(&config("prefix", std::path::Path::new("")), LogLevel::Info),
             DEFAULT_HANDLE
         );
+    }
+
+    /// An open that failed must not leave the prefix reserved: the thread that
+    /// asked for it is gone, and every thread that asks afterwards would wait
+    /// for an answer that is never coming.
+    #[test]
+    fn a_prefix_whose_open_failed_is_asked_for_again() {
+        let _guard = serial();
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join("not-a-dir");
+        std::fs::write(&blocked, b"a file, not a dir").unwrap();
+        let config = XLogConfig {
+            logdir: blocked,
+            nameprefix: "blocked".to_owned(),
+            ..XLogConfig::default()
+        };
+
+        assert_eq!(
+            new_xlogger_instance(&config, LogLevel::Info),
+            DEFAULT_HANDLE,
+            "the appender cannot be opened over a file"
+        );
+        // the second call is not left waiting for the first one's answer
+        assert_eq!(
+            new_xlogger_instance(&config, LogLevel::Info),
+            DEFAULT_HANDLE
+        );
+        assert_eq!(get_xlogger_instance("blocked"), DEFAULT_HANDLE);
+    }
+
+    /// Two threads asking for the same prefix at once must open **one**
+    /// appender between them: a second one over the same `<prefix>.mmap3` would
+    /// be closed again, and `close` clears the cache file the first one is
+    /// still writing through — which is why the C++ holds its mutex across
+    /// `XloggerAppender::NewInstance`.
+    #[test]
+    fn threads_asking_for_the_same_prefix_at_once_open_one_appender() {
+        let _guard = serial();
+        let dir = tempfile::tempdir().unwrap();
+        let config = config("race", dir.path());
+
+        let handles: Vec<XloggerHandle> = std::thread::scope(|scope| {
+            let threads: Vec<_> = (0..8)
+                .map(|_| scope.spawn(|| new_xlogger_instance(&config, LogLevel::Verbose)))
+                .collect();
+            threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect()
+        });
+        assert!(handles.iter().all(|handle| *handle == handles[0]));
+        assert_ne!(handles[0], DEFAULT_HANDLE);
+
+        // one category, and the cache it writes through is the one it opened
+        set_appender_mode(handles[0], AppenderMode::Sync);
+        assert!(xlogger_write(handles[0], None, Some("REC-AFTER-THE-RACE")));
+        flush(handles[0], true);
+        let text = log_text(dir.path());
+        assert!(text.contains("REC-AFTER-THE-RACE"), "{text}");
+
+        release_xlogger_instance("race");
+        crate::appender_close();
     }
 
     #[test]
