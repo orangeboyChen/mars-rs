@@ -338,8 +338,14 @@ impl LongLinkConnectMonitor {
         self.on_foreground_changed_at(mars_comm::tickcount::gettickcount(), _is_foreground)
     }
 
-    /// The same, with the reading handed in.
+    /// The same, with the reading handed in: a server that turned the trigger
+    /// off is not a reason to touch the alarms at all — the C++ asks
+    /// `longlink_.IsSvrTrigOff()` and returns before `__AutoIntervalConnect()`,
+    /// so the rebuild that is already pending stays pending.
     pub fn on_foreground_changed_at(&mut self, now: u64, _is_foreground: bool) {
+        if self.is_svr_trig_off() {
+            return;
+        }
         self.auto_interval_connect(now);
     }
 
@@ -348,8 +354,11 @@ impl LongLinkConnectMonitor {
         self.on_active_changed_at(mars_comm::tickcount::gettickcount(), _is_active)
     }
 
-    /// The same, with the reading handed in.
+    /// The same, with the reading handed in, with the same early return.
     pub fn on_active_changed_at(&mut self, now: u64, _is_active: bool) {
+        if self.is_svr_trig_off() {
+            return;
+        }
         self.auto_interval_connect(now);
     }
 
@@ -361,7 +370,16 @@ impl LongLinkConnectMonitor {
 
     /// The same, with the reading handed in: both alarms are cancelled, and a
     /// link that went down or failed to come up arms the wake one.
+    ///
+    /// Unless the server turned the trigger off, which the C++ asks *first*:
+    /// then it returns without cancelling an alarm, without arming one, and
+    /// without writing `status_` / `last_connect_time_` /
+    /// `last_connect_net_type_`, so a link the server did not ask for is not
+    /// woken up for and the monitor keeps answering for the status it had.
     pub fn on_longlink_status_changed_at(&mut self, now: u64, status: LongLinkStatus) {
+        if self.is_svr_trig_off() {
+            return;
+        }
         self.rebuild_due = None;
         self.wake_due = None;
 
@@ -1095,6 +1113,44 @@ mod tests {
         monitor.set_connect_status(|| LongLinkStatus::DisConnected);
         assert!(!monitor.make_sure_connected_at(0));
         assert_eq!(monitor.interval_connect(0, ConnectType::Task), 0);
+    }
+
+    #[test]
+    fn a_server_that_turned_the_trigger_off_is_not_reconnected_for() {
+        // `__OnSignalForeground`, `__OnSignalActive` and
+        // `__OnLongLinkStatuChanged` all ask `longlink_.IsSvrTrigOff()` before
+        // they do anything else, and `MakeSureConnected` / `__IntervalConnect`
+        // are not the only places: a signal that arrived while the server had
+        // the trigger off used to cancel the rebuild that was already pending
+        // and leave nothing armed in its place, so the link was never asked
+        // back for at all.
+        let (mut monitor, calls) = a_monitor();
+        monitor.set_is_active(|| false);
+        monitor.set_is_foreground(|| false);
+        monitor.set_dns_time(|| 0);
+        // a rebuild alarm is running: it is what would ask for the link back
+        assert_eq!(monitor.on_alarm_at(0, false), 60_000);
+        assert_eq!(monitor.rebuild_due_time(), Some(60_000));
+
+        monitor.set_is_svr_trig_off(|| true);
+        monitor.on_foreground_changed_at(0, true);
+        monitor.on_active_changed_at(0, true);
+        assert_eq!(
+            monitor.rebuild_due_time(),
+            Some(60_000),
+            "the C++ leaves the alarm it had running"
+        );
+        assert!(calls.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
+
+        // `__OnLongLinkStatuChanged` returns before it arms the wake alarm and
+        // before it writes the status: a link that went down while the trigger
+        // is off is not woken up for, and the monitor keeps answering with the
+        // status the constructor gave it
+        monitor.on_longlink_status_changed_at(1_000, LongLinkStatus::ConnectFailed);
+        assert_eq!(monitor.wake_due_time(), None);
+        assert_eq!(monitor.status(), LongLinkStatus::DisConnected);
+        assert_eq!(monitor.last_connect_time(), 0);
+        assert_eq!(monitor.last_connect_net_type(), NO_NET);
     }
 
     #[test]
