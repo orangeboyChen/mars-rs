@@ -183,20 +183,29 @@ mod tests {
         assert!(s.contains("][100, 200*][tag][hello.cc:42, main]["), "{s}");
         assert!(s.ends_with("hello body\n"), "{s}");
 
-        // The second field is "yyyy-mm-dd +z hh:mm:ss.mmm", i.e. 28 chars with
-        // the offset in hours (`tm_gmtoff / 3600.0`, "%+.1f").
+        // The second field is "yyyy-mm-dd +z hh:mm:ss.mmm", with the offset in
+        // hours (`tm_gmtoff / 3600.0`, "%+.1f"): four characters for an offset
+        // inside ten hours ("+5.5") and five for one outside it ("+10.0"),
+        // because the C++ does not pad it. What is pinned is the two spaces
+        // around the offset and not where they are — a fixed width here is a
+        // test that only passes west of Australia.
         let timestamp = s.split("][").nth(1).unwrap();
-        assert_eq!(timestamp.len(), 28, "{timestamp}");
-        assert_eq!(&timestamp[10..11], " ");
+        let (date, rest) = timestamp.split_once(' ').unwrap();
+        assert_eq!(date.len(), 10, "{timestamp}");
+        let (offset, clock) = rest.split_once(' ').unwrap();
         assert!(
-            timestamp[11..].starts_with('+') || timestamp[11..].starts_with('-'),
+            offset.starts_with('+') || offset.starts_with('-'),
             "{timestamp}"
         );
-        assert_eq!(&timestamp[15..16], " ");
-        assert_eq!(&timestamp[18..19], ":");
-        assert_eq!(&timestamp[21..22], ":");
         assert!(
-            timestamp.ends_with(".123"),
+            offset[1..].contains('.'),
+            "the offset is formatted with one decimal: {timestamp}"
+        );
+        assert_eq!(clock.len(), 12, "hh:mm:ss.mmm: {timestamp}");
+        assert_eq!(&clock[2..3], ":");
+        assert_eq!(&clock[5..6], ":");
+        assert!(
+            clock.ends_with(".123"),
             "millis of 123456 usec: {timestamp}"
         );
     }
