@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
 #
-# Builds MarsXlog.xcframework.zip: `mars-ffi` as a static library for the iOS
+# Builds MarsRS.xcframework.zip: `mars-ffi` as a static library for the iOS
 # device and for the iOS simulator, with its header and a module map next to
 # it, which is what Package.swift hands to a Swift app.
+
+# The framework is named after the project, not after xlog: the C ABI is the
+# port's, and everything the port grows into belongs in it. xlog is what it
+# carries today (Sources/MarsRS/Xlog.swift is the Swift of it), not what the
+# framework is.
 #
 #   scripts/build_xcframework.sh 0.1.0 [output-dir]
 #
 # The version is only a name for the zip's directory of origin; the binary is
 # the same whatever it says. Run it from anywhere; it finds the workspace from
-# its own path. The xcframework is left in <output-dir>/MarsXlog.xcframework.zip
+# its own path. The xcframework is left in <output-dir>/MarsRS.xcframework.zip
 # (default: target/xcframework).
 #
 # Why a static library and not a framework bundle: the C++ project ships the
 # same shape (see MarsXlog.xcframework of orangeboyChen/mars) and SwiftPM's
-# binary targets take either. `-headers` is what makes `import MarsXlogFFI`
+# binary targets take either. `-headers` is what makes `import MarsRSFFI`
 # resolve in Swift.
 
 set -euo pipefail
@@ -29,7 +34,14 @@ out="${2:-$(cd "$(dirname "$0")/.." && pwd)/target/xcframework}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
-name=MarsXlog.xcframework
+# The zip is written from a subshell that cd's elsewhere, so a relative
+# output dir has to be resolved against the workspace before that happens.
+case "$out" in
+    /*) ;;
+    *) out="$root/$out" ;;
+esac
+
+name=MarsRS.xcframework
 header_dir="$root/target/xcframework-build/headers"
 
 # `aarch64-apple-ios` is the device; the two others are the simulator on an
@@ -50,7 +62,7 @@ mkdir -p "$out" "$header_dir"
 
 cp crates/mars-ffi/include/mars_xlog.h "$header_dir/"
 cat > "$header_dir/module.modulemap" <<'MAP'
-module MarsXlogFFI {
+module MarsRSFFI {
     umbrella header "mars_xlog.h"
     export *
 }
