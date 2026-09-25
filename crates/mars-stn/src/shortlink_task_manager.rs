@@ -179,7 +179,13 @@ pub type DestroyRun = dyn FnMut(RunId) + Send;
 
 /// `fun_callback_` — a task that is over, and what the app says about it: the
 /// answer is the code the task is remembered with.
-pub type Callback = dyn FnMut(ErrCmdType, i32, TaskFailHandleType, &Task, u32) -> i32 + Send;
+///
+/// The connect profile comes along because the C++'s `NetCore::__CallBack`
+/// reads `GetConnectProfile(_taskid, …)` out of the queue it was called from,
+/// and a hook is not given a borrow of the queue that calls it: what the app is
+/// handed for a task that answered is the connect of the run that answered.
+pub type Callback =
+    dyn FnMut(ErrCmdType, i32, TaskFailHandleType, &Task, u32, &ConnectProfile) -> i32 + Send;
 
 /// `fun_notify_network_err_` — an error the app is told about, and the pair it
 /// happened on. The C++ passes `__LINE__` too, which is its own bookkeeping and
@@ -703,7 +709,9 @@ impl ShortLinkTaskManager {
     /// `fun_callback_`.
     pub fn set_callback(
         &mut self,
-        callback: impl FnMut(ErrCmdType, i32, TaskFailHandleType, &Task, u32) -> i32 + Send + 'static,
+        callback: impl FnMut(ErrCmdType, i32, TaskFailHandleType, &Task, u32, &ConnectProfile) -> i32
+            + Send
+            + 'static,
     ) {
         self.callback = Some(Box::new(callback));
     }
@@ -986,7 +994,7 @@ impl ShortLinkTaskManager {
         }
 
         let cost = now.saturating_sub(self.tasks[at].start_task_time);
-        self.tasks[at].transfer_profile.connect_profile = profile;
+        self.tasks[at].transfer_profile.connect_profile = profile.clone();
 
         let over = self.tasks[at].force_no_retry
             || self.tasks[at].remain_retry_count <= 0
@@ -998,7 +1006,14 @@ impl ShortLinkTaskManager {
             let task = self.tasks[at].task.clone();
             let was_running = self.tasks[at].running.is_some();
             let cgi_retcode = self.callback.as_mut().map_or(0, |callback| {
-                callback(err_type, err_code, fail_handle, &task, cost as u32)
+                callback(
+                    err_type,
+                    err_code,
+                    fail_handle,
+                    &task,
+                    cost as u32,
+                    &profile,
+                )
             });
             {
                 let profile = &mut self.tasks[at];
@@ -1412,13 +1427,15 @@ mod tests {
     fn endings(manager: &mut ShortLinkTaskManager) -> Ended {
         let ended: Ended = Arc::new(Mutex::new(Vec::new()));
         let recorder = ended.clone();
-        manager.set_callback(move |err_type, err_code, fail_handle, task, _cost| {
-            recorder
-                .lock()
-                .unwrap()
-                .push((err_type, err_code, fail_handle, task.taskid));
-            0
-        });
+        manager.set_callback(
+            move |err_type, err_code, fail_handle, task, _cost, _profile| {
+                recorder
+                    .lock()
+                    .unwrap()
+                    .push((err_type, err_code, fail_handle, task.taskid));
+                0
+            },
+        );
         ended
     }
 

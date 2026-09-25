@@ -127,7 +127,7 @@ impl App {
 
         let ended: Arc<Mutex<Ended>> = Arc::new(Mutex::new(Vec::new()));
         let recorder = ended.clone();
-        manager.set_callback(move |err_type, err_code, handle, task, _cost| {
+        manager.set_callback(move |err_type, err_code, handle, task, _cost, _profile| {
             recorder
                 .lock()
                 .unwrap()

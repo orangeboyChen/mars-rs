@@ -128,7 +128,14 @@
 //! channel *is* is a name the host wires the link's profile, send, stop and
 //! disconnect to.
 //!
-//! What still needs the app callbacks (`net_core`, `stn_logic`/`stn_manager`,
+//! The twenty-fourth slice is the net core itself ([`net_core`]): the two
+//! queues and the pieces they share, which queue a task is started on, and
+//! where a task that ended goes — the app's `OnTaskEnd`, or the zombie queue.
+//! Nothing in it is logic of its own, which is what makes it the wiring: the
+//! C++'s `MessageQueue` posts are a queue of follow-ups the host drains, and
+//! the C++'s `StnManager` calls are hooks.
+//!
+//! What still needs the app callbacks (`stn_logic`/`stn_manager`,
 //! `stn_callback_bridge`) comes later.
 
 /// The `static`s of this crate are one value for the whole process —
@@ -188,6 +195,7 @@ pub mod longlink_speed_test;
 pub mod longlink_task_manager;
 pub mod net_channel_factory;
 pub mod net_check_logic;
+pub mod net_core;
 pub mod net_source;
 pub mod netsource_timercheck;
 pub mod proxy_test;
@@ -241,6 +249,10 @@ pub use net_check_logic::{
     NetCheckLogic, CHECK_IF_ABOVE_COUNT, CHECK_IF_BELOW_COUNT, CHECK_TIME_SPAN_INCREMENT_STEP,
     LIMIT_COUNT, LIMIT_TIME_SPAN, MIN_CHECK_TIME_SPAN, MOST_RECENT_TASK_START_N, NET_CHECK_MODE,
     SECOND_RECENT_TASK_START_N, VALID_BITS_FILTER,
+};
+pub use net_core::{
+    CallFrom, NetCore, NetStatus, DEFAULT_LONGLINK_NAME, DEF_TASK_RETRY_COUNT,
+    FAST_SEND_LONGLINK_TASK_CNT_LIMIT, NET_TYPE_MOBILE, SHORTLINK_ERR_TIME,
 };
 pub use net_source::{
     ExtraInfo, LonglinkConfig, NetSource, TimeoutSource, CGI_DEBUG_DEFAULT_PORT,

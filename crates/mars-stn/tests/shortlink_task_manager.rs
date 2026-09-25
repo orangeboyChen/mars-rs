@@ -83,7 +83,7 @@ impl App {
 
         let ended: Arc<Mutex<Ended>> = Arc::new(Mutex::new(Vec::new()));
         let recorder = ended.clone();
-        manager.set_callback(move |err_type, err_code, handle, task, _cost| {
+        manager.set_callback(move |err_type, err_code, handle, task, _cost, _profile| {
             recorder
                 .lock()
                 .unwrap()
@@ -621,7 +621,7 @@ fn what_is_left_in_the_queue_is_failed_when_the_queue_is_dropped() {
         let mut app = App::new();
         let recorder = ended.clone();
         app.manager
-            .set_callback(move |err_type, err_code, handle, task, _cost| {
+            .set_callback(move |err_type, err_code, handle, task, _cost, _profile| {
                 recorder
                     .lock()
                     .unwrap()
