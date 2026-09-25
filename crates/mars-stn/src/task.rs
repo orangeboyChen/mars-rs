@@ -150,7 +150,16 @@ impl Task {
     /// Command ids of the minor long link carry this mask.
     pub const MINOR_LONGLINK_CMD_MASK: u32 = 0xff00_0000;
 
-    /// `Task()` — the defaults of the C++ constructor.
+    /// `Task()` — the defaults of the C++ constructor, except where the Java
+    /// `StnLogic.Task` says otherwise: `needAuthed` is `true` there and `false`
+    /// in `Task::Task()`, and it is the SDK that the JNI serves.
+    ///
+    /// `channel_select` is [`Self::CHANNEL_BOTH`] and not the C++'s `0`, which
+    /// `NetCore` fails a task for (`kEctLocalChannelSelect`) — a task the caller
+    /// never configured is one the C++ refuses to start, and a `Task::new` that
+    /// cannot be started is not a useful default. `transport_protocol` stays
+    /// [`Self::TRANSPORT_PROTOCOL_DEFAULT`]: the C++ says TCP, and the port has
+    /// no QUIC to choose between.
     pub fn new(taskid: u32, cmdid: u32) -> Self {
         Self {
             taskid,
@@ -166,7 +175,11 @@ impl Task {
             network_status_sensitive: false,
             channel_strategy: Self::CHANNEL_NORMAL_STRATEGY,
             priority: Self::TASK_PRIORITY_NORMAL,
-            retry_count: 0,
+            // `-1`, and not `0`: "the caller did not say", the one value both
+            // `Task::Task()` and the Java `Task` give it, and what `NetCore`
+            // reads [`crate::DEF_TASK_RETRY_COUNT`] for. `0` is "do not retry",
+            // so a default task would get no try back at all.
+            retry_count: -1,
             server_process_cost: 0,
             total_timeout: 0,
             long_polling: false,

@@ -22,7 +22,10 @@ fn the_constructor_fills_in_the_cpp_defaults() {
     assert!(!task.network_status_sensitive);
     assert_eq!(task.channel_strategy, Task::CHANNEL_NORMAL_STRATEGY);
     assert_eq!(task.priority, Task::TASK_PRIORITY_NORMAL);
-    assert_eq!(task.retry_count, 0);
+    // `-1` is "the caller did not say": both `Task::Task()` and the Java
+    // `Task` give it that, and `NetCore` reads `DEF_TASK_RETRY_COUNT` for it.
+    // `0` would be "do not retry".
+    assert_eq!(task.retry_count, -1);
     assert_eq!(task.server_process_cost, 0);
     assert_eq!(task.total_timeout, 0);
     assert!(!task.long_polling);

@@ -2869,6 +2869,13 @@ mod tests {
         negative.retry_count = -5;
         assert!(valid_and_init_default(&mut negative));
         assert_eq!(negative.retry_count, DEF_TASK_RETRY_COUNT);
+
+        // `Task::new` hands out `retry_count = -1`, which is the whole reason a
+        // task the caller never configured has a try to come back for: `0`
+        // would be "do not retry" and there would be none.
+        let mut plain = Task::new(7, 12);
+        assert!(valid_and_init_default(&mut plain));
+        assert_eq!(plain.retry_count, DEF_TASK_RETRY_COUNT);
     }
 
     #[test]
