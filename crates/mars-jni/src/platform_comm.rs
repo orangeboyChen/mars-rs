@@ -297,6 +297,14 @@ impl NetType {
 /// `getCurRadioAccessNetworkInfo()` answers when there is no telephony manager.
 pub const RADIO_ACCESS_NETWORK_UNKNOWN: i32 = 0;
 
+/// `kMarsDefaultNetLabel` — the label of a network that is neither a wifi one
+/// nor a mobile one.
+pub const DEFAULT_NET_LABEL: &str = "default";
+/// `kMarsWifiNetLabelPrefix`.
+pub const WIFI_NET_LABEL_PREFIX: &str = "wifi_";
+/// `kMarsMobileNetLabelPrefix`.
+pub const MOBILE_NET_LABEL_PREFIX: &str = "mobile_";
+
 /// `PlatformComm.WifiInfo`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WifiInfo {
@@ -416,6 +424,38 @@ pub fn wifi_info_impl() -> Option<WifiInfo> {
 /// `C2Java.getCurSIMInfo()` — `None` when there is no SIM.
 pub fn set_sim_info_impl(sim: Option<SimInfo>) {
     with_state(|state| state.sim = Some(sim))
+}
+
+/// `comm::getCurrNetLabel()` — the network the device is on, as the net type and
+/// the label mars keeps the history of a host under: `wifi_<ssid>`,
+/// `mobile_<isp code>`, or [`DEFAULT_NET_LABEL`] for a network that is neither.
+///
+/// This is the one `mars-stn` asks for (`NetSource::set_net_label` and
+/// `SimpleIpPortSort::set_net_label`), and here it is built out of what
+/// [`net_info_impl`], [`wifi_info_impl`] and [`sim_info_impl`] answered, the way
+/// the C++ builds it out of `getNetInfo()`, `getCurWifiInfo()` and
+/// `getCurSIMInfo()`. A wifi or a SIM the platform never answered leaves the
+/// prefix and nothing behind it, which is what a default-constructed `WifiInfo`
+/// and `SimInfo` read as in the C++.
+///
+/// Not ported: `getRealtimeNetLabel()`, whose only difference is asking the
+/// platform again with `realtime = true` — nothing here caches an answer to
+/// refresh, so it would be this same call; and `getNetworkIDLabel()`, which is
+/// the app's own wifi id (`SetWiFiIdCallBack`) in front of this same fallback.
+pub fn net_label_impl() -> (NetInfo, String) {
+    let net_info = net_info_impl();
+    let label = match net_info {
+        NetInfo::Wifi => {
+            let ssid = wifi_info_impl().map_or(String::new(), |wifi| wifi.ssid);
+            format!("{WIFI_NET_LABEL_PREFIX}{ssid}")
+        }
+        NetInfo::Mobile => {
+            let isp_code = sim_info_impl().map_or(String::new(), |sim| sim.isp_code);
+            format!("{MOBILE_NET_LABEL_PREFIX}{isp_code}")
+        }
+        NetInfo::NoNet | NetInfo::OtherNet => DEFAULT_NET_LABEL.to_owned(),
+    };
+    (net_info, label)
 }
 
 /// The SIM in the device.
@@ -688,6 +728,92 @@ mod tests {
             assert_eq!(signal_impl(true), -55);
             assert_eq!(signal_impl(false), -70);
             assert!(is_network_connected_impl());
+        })
+    }
+
+    #[test]
+    fn the_label_of_a_network_is_its_ssid_or_its_isp_code() {
+        isolated(|| {
+            set_net_info_impl(NetInfo::Wifi.as_i32());
+            set_wifi_info_impl(Some(WifiInfo {
+                ssid: "home".to_owned(),
+                bssid: "00:11:22:33:44:55".to_owned(),
+            }));
+            assert_eq!(net_label_impl(), (NetInfo::Wifi, "wifi_home".to_owned()));
+
+            set_net_info_impl(NetInfo::Mobile.as_i32());
+            set_sim_info_impl(Some(SimInfo {
+                isp_code: "46000".to_owned(),
+                isp_name: "China Mobile".to_owned(),
+            }));
+            assert_eq!(
+                net_label_impl(),
+                (NetInfo::Mobile, "mobile_46000".to_owned())
+            );
+        })
+    }
+
+    #[test]
+    fn a_network_that_is_neither_wifi_nor_mobile_keeps_the_default_label() {
+        isolated(|| {
+            // `default:` of the C++'s switch, which leaves `netInfo` as it was
+            // set at the top of the function
+            set_net_info_impl(NetInfo::NoNet.as_i32());
+            assert_eq!(
+                net_label_impl(),
+                (NetInfo::NoNet, DEFAULT_NET_LABEL.to_owned())
+            );
+
+            set_net_info_impl(NetInfo::OtherNet.as_i32());
+            assert_eq!(
+                net_label_impl(),
+                (NetInfo::OtherNet, DEFAULT_NET_LABEL.to_owned())
+            );
+        })
+    }
+
+    #[test]
+    fn a_network_the_platform_never_answered_is_labelled_after_it_anyway() {
+        isolated(|| {
+            // a wifi with no `WifiInfo` is the prefix and nothing behind it,
+            // the way a default-constructed one reads in the C++
+            set_net_info_impl(NetInfo::Wifi.as_i32());
+            set_wifi_info_impl(None);
+            assert_eq!(net_label_impl(), (NetInfo::Wifi, "wifi_".to_owned()));
+
+            set_net_info_impl(NetInfo::Mobile.as_i32());
+            set_sim_info_impl(None);
+            assert_eq!(net_label_impl(), (NetInfo::Mobile, "mobile_".to_owned()));
+        })
+    }
+
+    #[test]
+    fn the_label_is_built_out_of_the_answers_and_not_asked_of_java() {
+        isolated(|| {
+            let questions = asking(Answer::Nothing);
+            set_net_info_impl(NetInfo::Wifi.as_i32());
+            set_wifi_info_impl(Some(WifiInfo {
+                ssid: "MarsWifi".to_owned(),
+                bssid: String::new(),
+            }));
+
+            assert_eq!(
+                net_label_impl(),
+                (NetInfo::Wifi, "wifi_MarsWifi".to_owned())
+            );
+            assert!(asked(&questions).is_empty());
+        })
+    }
+
+    #[test]
+    fn a_platform_that_answered_nothing_is_labelled_default() {
+        isolated(|| {
+            // what `mars-stn` gets when there is no JVM: `kNoNet`, and the
+            // label of a network that is neither
+            assert_eq!(
+                net_label_impl(),
+                (NetInfo::NoNet, DEFAULT_NET_LABEL.to_owned())
+            );
         })
     }
 
