@@ -11,6 +11,19 @@
 //! `ErrCmdType` is the one of `mars/stn/stn.h`. Its companion is not an enum
 //! there either: `err_code` is an `int` that carries either a server code or
 //! one of the `kEctLocal*` values, so those are constants here.
+//!
+//! The other struct of that header is [`ConnectProfile`], which is the record
+//! of one connect — a long link's or a short link's — and it comes with the
+//! code that makes the connect: [`ConnectProfile::reset`] is what the C++
+//! `Reset()` clears, and the fields are the ones that code fills in. The
+//! timings that came with the later versions of mars (the tls handshake, the
+//! QUIC ones, mmtls) are not here yet; they come with the code that reads
+//! them.
+
+use mars_comm::ProxyInfo;
+
+use crate::simple_ipport_sort::{IpPortItem, IpSourceType};
+use crate::task::Task;
 
 /// `ErrCmdType` of `mars/stn/stn.h` — how a task failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -96,6 +109,171 @@ pub enum TaskFailHandleType {
     TaskTimeout = -15,
     /// `kTaskSlientHandleTaskEnd`
     SlientTaskEnd = -16,
+}
+
+/// `NoopProfile` — one heartbeat of a link: how long after the last one it
+/// went out, how long after that it *actually* went out (an alarm that fires
+/// late is how a dozing network shows itself), how long its answer took, and
+/// whether there was one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NoopProfile {
+    /// `success`
+    pub success: bool,
+    /// `noop_internal` — the interval the alarm was set to.
+    pub noop_internal: u64,
+    /// `noop_actual_internal` — the interval it really was.
+    pub noop_actual_internal: u64,
+    /// `noop_cost` — how long the answer took.
+    pub noop_cost: u64,
+    /// `noop_starttime` — when the heartbeat went out.
+    pub noop_starttime: u64,
+}
+
+/// `ConnectProfile` — the record of one connect.
+///
+/// The C++ fills it in from two places: the link that is being made
+/// (`__RunConnect`) and the run that came before it, whose
+/// [`ConnectProfile::disconn_errcode`] is the [`ConnectProfile::conn_reason`]
+/// of this one. A profile whose [`ConnectProfile::disconn_time`] is not `0` is
+/// one a link has finished with, which is what the C++ broadcasts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConnectProfile {
+    /// `net_type` — `getCurrNetLabel`, the network the connect was made on.
+    pub net_type: String,
+    /// `nettype_for_report` — `-1` until something sets it.
+    pub nettype_for_report: i32,
+    /// `start_time` — when the run began.
+    pub start_time: u64,
+    /// `dns_time` — when the ips were asked for.
+    pub dns_time: u64,
+    /// `dns_endtime` — when the last of them came back.
+    pub dns_endtime: u64,
+    /// `ip_items` — the candidates, in the order they were tried.
+    pub ip_items: Vec<IpPortItem>,
+    /// `conn_reason` — why the connect is being made: the previous run's
+    /// `disconn_errcode`.
+    pub conn_reason: i32,
+    /// `conn_time` — when the connect finished.
+    pub conn_time: u64,
+    /// `conn_errcode` — why it failed, in the platform's words.
+    pub conn_errcode: i32,
+    /// `rw_errcode` — why reading and writing failed, for a link that got that
+    /// far.
+    pub rw_errcode: i32,
+    /// `ip`, `port`, `host` — the pair that won.
+    pub ip: String,
+    pub port: u16,
+    pub host: String,
+    /// `ip_type` — where the pair came from.
+    pub ip_type: IpSourceType,
+    /// `conn_rtt` — how long the pair that won took to answer.
+    pub conn_rtt: u32,
+    /// `conn_cost` — how long the whole connect took.
+    pub conn_cost: u64,
+    /// `tryip_count` — how many candidates were tried.
+    pub tryip_count: i32,
+    /// `is0rtt` — whether the connect was a 0-rtt one.
+    pub is0rtt: i32,
+    /// `proxy_info` — the proxy the connect went through, if any.
+    pub proxy_info: ProxyInfo,
+    /// `local_ip`, `local_port` — the near end of the socket, which is
+    /// `getsockname` and therefore the host's to answer.
+    pub local_ip: String,
+    pub local_port: u16,
+    /// `ip_index` — which candidate won; `-1` for a connect that never had
+    /// one.
+    pub ip_index: i32,
+    /// `transport_protocol` — one of the `Task::TRANSPORT_PROTOCOL*` values.
+    pub transport_protocol: i32,
+    /// `link_type` — one of the `Task::CHANNEL_*` values.
+    pub link_type: i32,
+    /// `tried_443port` — whether a candidate on 443 was tried first.
+    pub tried_443port: i32,
+    /// `tried_80port` — whether a candidate on 80 was tried first.
+    pub tried_80port: i32,
+    /// `disconn_time` — when the link went away; `0` while it has not.
+    pub disconn_time: u64,
+    /// `disconn_errtype`.
+    pub disconn_errtype: ErrCmdType,
+    /// `disconn_errcode`.
+    pub disconn_errcode: i32,
+    /// `disconn_signal` — `getSignal` at the time the link went away.
+    pub disconn_signal: i32,
+    /// `nat64` — whether the local network is IPv6-only, which is what turns a
+    /// v4 address into a NAT64 one.
+    pub nat64: bool,
+    /// `noop_profiles` — every heartbeat this link sent.
+    pub noop_profiles: Vec<NoopProfile>,
+    /// `tls_handshake_mismatch` — what a run keeps across a profile update.
+    pub tls_handshake_mismatch: bool,
+    /// `tls_handshake_success`.
+    pub tls_handshake_success: bool,
+}
+
+impl ConnectProfile {
+    /// `ConnectProfile()` — `Reset()`, which is a link that has not been made.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `Reset()` — every field back to what the C++ constructor gives it:
+    /// `ip_index` is `-1`, `nettype_for_report` is `-1`, and the two tls flags
+    /// are *not* cleared (a profile update keeps them, which is the one thing
+    /// the C++'s `__UpdateProfile` carries over).
+    pub fn reset(&mut self) {
+        *self = Self {
+            tls_handshake_mismatch: self.tls_handshake_mismatch,
+            tls_handshake_success: self.tls_handshake_success,
+            ..Self::default()
+        };
+    }
+
+    /// Whether the link this profile is about has finished: the C++ broadcasts
+    /// a profile only once `disconn_time` is set.
+    pub fn is_finished(&self) -> bool {
+        self.disconn_time != 0
+    }
+}
+
+impl Default for ConnectProfile {
+    fn default() -> Self {
+        Self {
+            net_type: String::new(),
+            nettype_for_report: -1,
+            start_time: 0,
+            dns_time: 0,
+            dns_endtime: 0,
+            ip_items: Vec::new(),
+            conn_reason: 0,
+            conn_time: 0,
+            conn_errcode: 0,
+            rw_errcode: 0,
+            ip: String::new(),
+            port: 0,
+            host: String::new(),
+            ip_type: IpSourceType::Null,
+            conn_rtt: 0,
+            conn_cost: 0,
+            tryip_count: 0,
+            is0rtt: 0,
+            proxy_info: ProxyInfo::none(),
+            local_ip: String::new(),
+            local_port: 0,
+            ip_index: -1,
+            transport_protocol: Task::TRANSPORT_PROTOCOL_TCP,
+            link_type: Task::CHANNEL_LONG,
+            tried_443port: 0,
+            tried_80port: 0,
+            disconn_time: 0,
+            disconn_errtype: ErrCmdType::Ok,
+            disconn_errcode: 0,
+            disconn_signal: 0,
+            nat64: false,
+            noop_profiles: Vec::new(),
+            tls_handshake_mismatch: false,
+            tls_handshake_success: false,
+        }
+    }
 }
 
 /// `TaskFailStep` — "do not insert or delete": the C++ turns the value into a
@@ -205,6 +383,47 @@ impl TaskOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_profile_is_a_link_that_has_not_been_made() {
+        let profile = ConnectProfile::new();
+        assert_eq!(profile.ip_index, -1, "the C++ starts at -1");
+        assert_eq!(profile.nettype_for_report, -1);
+        assert_eq!(profile.transport_protocol, Task::TRANSPORT_PROTOCOL_TCP);
+        assert_eq!(profile.link_type, Task::CHANNEL_LONG);
+        assert_eq!(profile.disconn_errtype, ErrCmdType::Ok);
+        assert!(profile.ip_type == IpSourceType::Null);
+        assert!(!profile.is_finished(), "no disconn_time yet");
+    }
+
+    #[test]
+    fn resetting_a_profile_keeps_the_two_tls_flags() {
+        let mut profile = ConnectProfile::new();
+        profile.ip = "1.1.1.1".to_string();
+        profile.disconn_time = 700;
+        profile.tls_handshake_success = true;
+        assert!(profile.is_finished());
+
+        profile.reset();
+        assert_eq!(profile.ip, "");
+        assert!(!profile.is_finished());
+        // what `__UpdateProfile` carries over from the profile before it
+        assert!(profile.tls_handshake_success);
+        assert!(!profile.tls_handshake_mismatch);
+    }
+
+    #[test]
+    fn a_noop_profile_is_one_heartbeat() {
+        let noop = NoopProfile {
+            success: true,
+            noop_internal: 210_000,
+            noop_actual_internal: 240_000,
+            noop_starttime: 1_000,
+            ..NoopProfile::default()
+        };
+        assert_eq!(noop.noop_cost, 0, "until the answer comes back");
+        assert_eq!(noop.noop_actual_internal - noop.noop_internal, 30_000);
+    }
 
     #[test]
     fn a_task_that_succeeded_has_no_fail_step() {
