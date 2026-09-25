@@ -738,13 +738,13 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_redoTask<'local>(
     })
 }
 
-/// `StnLogic.touchTasks` — how many tasks there are.
+/// `StnLogic.touchTasks`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_touchTasks<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
-) -> jint {
-    guard(|| touch_tasks_impl() as jint)
+) {
+    guard(touch_tasks_impl)
 }
 
 /// `StnLogic.clearTask`.
