@@ -535,10 +535,18 @@ impl std::fmt::Debug for LongLinkSpeedTest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::longlink::{client_version, set_client_version};
     use crate::simple_ipport_sort::IpSourceType;
     use std::sync::{Arc, Mutex};
 
-    /// A pair to race, with the source a caller would have set.
+    // Every item packs a noop the moment it is made, and every answer is
+    // unpacked again — and both read `sg_client_version`, which is
+    // process-wide and which `longlink`'s own tests move under
+    // [`crate::test_lock`]. A race that is decided while another test has
+    // moved it unpacks a package of *another* version, which is
+    // `Unpacked::False`. So the tests here take the same turn.
+    //
+    // A pair to race, with the source a caller would have set.
     fn pair(ip: &str, port: u16) -> IpPortItem {
         let mut pair = IpPortItem::new(ip, port);
         pair.source_type = IpSourceType::NewDns;
@@ -547,10 +555,6 @@ mod tests {
     }
 
     /// The answer to the noop, as the long link would have received it.
-    ///
-    /// `sg_client_version` is process-wide, and `longlink_unpack` takes no
-    /// answer but one stamped with the version it reads when *it* runs — so
-    /// every test that hands this in has the crate's turn, [`crate::test_lock`].
     fn noop_answer() -> Vec<u8> {
         longlink_pack(
             LongLinkEncoder::default().noop_cmdid(),
@@ -595,6 +599,28 @@ mod tests {
         move |_items| rounds.next().ok_or(Stop::Timeout)
     }
 
+    /// Why the tests here take the crate's turn: a package of another version
+    /// is no answer at all, and `sg_client_version` is one value for the whole
+    /// process.
+    #[test]
+    fn a_package_of_another_version_is_no_answer_either() {
+        let _guard = crate::test_lock();
+        let previous = client_version();
+
+        let mut item = SpeedTestItem::new_at(0, pair("1.1.1.1", 80));
+        item.apply(SocketEvent::Writable, 0);
+        let whole = item.pending().len();
+        item.on_sent(whole as isize);
+        // the noop was packed with the version that was in force, and it is
+        // not the one any more
+        let answer = noop_answer();
+        set_client_version(previous.wrapping_add(1));
+        assert_eq!(item.on_received(&answer), Need::Nothing);
+        assert_eq!(item.state(), SpeedTestState::Fail);
+
+        set_client_version(previous);
+    }
+
     #[test]
     fn the_numbers_are_the_ones_the_c_plus_plus_writes_down() {
         assert_eq!(TIMEOUT, 10 * 1000);
@@ -604,7 +630,7 @@ mod tests {
 
     #[test]
     fn a_noop_that_is_answered_wins() {
-        let _lock = crate::test_lock();
+        let _guard = crate::test_lock();
         let mut item = SpeedTestItem::new_at(1_000, pair("1.1.1.1", 80));
         assert_eq!(item.state(), SpeedTestState::Connecting);
         assert_eq!(item.watch(), Watch::ReadWrite);
@@ -624,6 +650,7 @@ mod tests {
 
     #[test]
     fn a_noop_that_goes_out_in_two_writes_is_still_written_twice() {
+        let _guard = crate::test_lock();
         let mut item = SpeedTestItem::new_at(0, pair("1.1.1.1", 80));
         item.apply(SocketEvent::Writable, 10);
         let whole = item.pending().len();
@@ -635,6 +662,7 @@ mod tests {
 
     #[test]
     fn a_write_or_a_read_that_does_not_happen_is_a_fail() {
+        let _guard = crate::test_lock();
         let mut item = SpeedTestItem::new_at(0, pair("1.1.1.1", 80));
         item.apply(SocketEvent::Writable, 0);
         assert_eq!(item.on_sent(0), Need::Nothing);
@@ -648,7 +676,7 @@ mod tests {
 
     #[test]
     fn an_answer_that_is_not_whole_yet_is_read_again() {
-        let _lock = crate::test_lock();
+        let _guard = crate::test_lock();
         let mut item = SpeedTestItem::new_at(0, pair("1.1.1.1", 80));
         let answer = noop_answer();
         assert_eq!(item.on_received(&answer[..answer.len() - 1]), Need::Read);
@@ -659,7 +687,7 @@ mod tests {
 
     #[test]
     fn a_package_that_is_not_an_answer_to_the_noop_is_a_fail() {
-        let _lock = crate::test_lock();
+        let _guard = crate::test_lock();
         // not one of ours at all
         let mut item = SpeedTestItem::new_at(0, pair("1.1.1.1", 80));
         assert_eq!(item.on_received(&[0u8; 32]), Need::Nothing);
@@ -674,7 +702,7 @@ mod tests {
 
     #[test]
     fn an_out_of_band_package_is_not_an_answer_and_the_noop_goes_out_again() {
-        let _lock = crate::test_lock();
+        let _guard = crate::test_lock();
         let mut item = SpeedTestItem::new_at(0, pair("1.1.1.1", 80));
         item.apply(SocketEvent::Writable, 0);
         let whole = item.pending().len();
@@ -689,6 +717,7 @@ mod tests {
 
     #[test]
     fn an_exception_on_the_socket_is_a_fail_and_a_pair_that_is_done_is_left_alone() {
+        let _guard = crate::test_lock();
         let mut item = SpeedTestItem::new_at(0, pair("1.1.1.1", 80));
         assert_eq!(item.apply(SocketEvent::Exception, 0), Need::Nothing);
         assert_eq!(item.state(), SpeedTestState::Fail);
@@ -701,7 +730,7 @@ mod tests {
 
     #[test]
     fn the_race_is_won_by_the_first_pair_that_answers() {
-        let _lock = crate::test_lock();
+        let _guard = crate::test_lock();
         let mut test = LongLinkSpeedTest::new_at(0, [pair("1.1.1.1", 80), pair("2.2.2.2", 80)]);
         test.set_select(select(vec![
             vec![SocketEvent::Writable, SocketEvent::Writable],
@@ -722,6 +751,7 @@ mod tests {
 
     #[test]
     fn a_race_nobody_wins_hands_nothing_back() {
+        let _guard = crate::test_lock();
         let mut test = LongLinkSpeedTest::new_at(0, [pair("1.1.1.1", 80)]);
         test.set_select(select(vec![
             vec![SocketEvent::Writable],
@@ -735,6 +765,7 @@ mod tests {
 
     #[test]
     fn a_select_that_gives_up_ends_the_race() {
+        let _guard = crate::test_lock();
         // a timeout on the first round
         let mut test = LongLinkSpeedTest::new_at(0, [pair("1.1.1.1", 80)]);
         test.set_select(|_items| Err(Stop::Timeout));
@@ -768,6 +799,7 @@ mod tests {
 
     #[test]
     fn without_a_host_there_is_no_race() {
+        let _guard = crate::test_lock();
         let mut test = LongLinkSpeedTest::default();
         assert!(test.items().is_empty());
         assert_eq!(test.fastest_at(0), None);
