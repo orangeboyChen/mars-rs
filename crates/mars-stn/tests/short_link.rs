@@ -464,10 +464,15 @@ fn a_link_on_quic_marks_every_pair_quic() {
 fn a_link_uses_the_clock_the_host_gives_it() {
     let seen = Seen::default();
     let mut link = link(Arc::new(Mutex::new(net_source())), &seen);
+    let before = gettickcount();
     link.connect().unwrap();
+    let after = gettickcount();
+    // the reading the link took is one the clock gave it, whenever that was --
+    // and the connect may take a millisecond of its own
     assert!(
-        link.profile().dns_time >= gettickcount(),
-        "the reading of the clock, whenever that was"
+        (before..=after).contains(&link.profile().dns_time),
+        "{} is not a reading of the clock between {before} and {after}",
+        link.profile().dns_time
     );
     assert_eq!(link.profile().start_connect_time, link.profile().dns_time);
 }
