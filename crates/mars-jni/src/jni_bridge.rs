@@ -6,15 +6,19 @@
 //! is covered by `cargo test`, which is why this file is left out of the
 //! coverage measurement.
 
-use jni::objects::{JClass, JIntArray, JObject, JObjectArray, JString, JValue};
+use jni::objects::{
+    JByteArray, JClass, JIntArray, JObject, JObjectArray, JString, JValue, JValueOwned,
+};
 use jni::sys::{jboolean, jint, jlong, jobject, JNI_VERSION_1_6};
 use jni::{JNIEnv, JavaVM};
 
 use mars_appender::{AppenderMode, CompressMode, LogLevel, XLogConfig, XLoggerInfo};
-use mars_stn::Task;
+use mars_stn::{CgiProfile, Task};
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
+
+use crate::stn_c2java::{Answer, Question};
 
 use crate::alarm::on_alarm_impl;
 use crate::sdt::{get_load_libraries_impl as sdt_libraries, set_http_netcheck_cgi_impl};
@@ -842,6 +846,390 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_getLoadLibraries<'loca
     _class: JClass<'local>,
 ) -> jobject {
     guard(|| string_array_list(&mut env, &get_load_libraries_impl()))
+}
+
+// #################### the questions STN asks Java ####################
+
+/// `StnLogic` — the class the C++'s thirteen C2Java calls are static methods
+/// of. Every one of them forwards to the `ICallBack` the app handed to
+/// `setCallBack`, which is why the native side never keeps the app itself.
+const STN_CALLBACK: &str = "io/github/marsrs/stn/StnLogic";
+
+/// `StnLogic$CgiProfile` — the object `onTaskEnd` is handed.
+const STN_CGI_PROFILE: &str = "io/github/marsrs/stn/StnLogic$CgiProfile";
+
+/// One of the thirteen `C2Java_*` functions of
+/// `com_tencent_mars_stn_StnLogic_C2Java.cc`, i.e. what
+/// [`crate::stn_c2java::JavaApp::jvm`] asks: attach the thread, call the one
+/// static method, and read the answer out of what Java handed back — a
+/// `ByteArrayOutputStream`, an `int[]`, a `String[]`.
+///
+/// Without a VM (a host that linked the library instead of loading it from
+/// Java) there is nobody to ask, and the answer is the one STN takes when the
+/// app said nothing. Nothing here panics into Rust either way.
+pub(crate) fn ask_java(question: Question) -> Answer {
+    guard(|| {
+        let Some(vm) = VM.get() else {
+            return Answer::Nothing;
+        };
+        let Ok(mut env) = vm.attach_current_thread() else {
+            return Answer::Nothing;
+        };
+        let Ok(class) = env.find_class(STN_CALLBACK) else {
+            return Answer::Nothing;
+        };
+        ask_stn(&mut env, class, question)
+    })
+}
+
+fn ask_stn<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: Question) -> Answer {
+    match question {
+        Question::MakesureAuthed { host } => {
+            let Ok(host) = env.new_string(&host) else {
+                return Answer::Nothing;
+            };
+            let host = JObject::from(host);
+            let called = env.call_static_method(
+                class,
+                "makesureAuthed",
+                "(Ljava/lang/String;)Z",
+                &[JValue::Object(&host)],
+            );
+            Answer::Yes(bool_of(called))
+        }
+        Question::TrafficData { send, recv } => {
+            let _ = env.call_static_method(
+                class,
+                "trafficData",
+                "(II)V",
+                &[JValue::Int(send as jint), JValue::Int(recv as jint)],
+            );
+            Answer::Nothing
+        }
+        Question::OnNewDns { host } => {
+            let Ok(host) = env.new_string(&host) else {
+                return Answer::Nothing;
+            };
+            let host = JObject::from(host);
+            let called = env.call_static_method(
+                class,
+                "onNewDns",
+                "(Ljava/lang/String;)[Ljava/lang/String;",
+                &[JValue::Object(&host)],
+            );
+            Answer::Ips(strings_of(env, called))
+        }
+        Question::OnPush {
+            channel_id,
+            cmdid,
+            taskid,
+            body,
+        } => {
+            let Ok(channel_id) = env.new_string(&channel_id) else {
+                return Answer::Nothing;
+            };
+            let channel_id = JObject::from(channel_id);
+            let body = bytes_argument(env, &body);
+            let _ = env.call_static_method(
+                class,
+                "onPush",
+                "(Ljava/lang/String;II[B)V",
+                &[
+                    JValue::Object(&channel_id),
+                    JValue::Int(cmdid as jint),
+                    JValue::Int(taskid as jint),
+                    JValue::Object(&body),
+                ],
+            );
+            Answer::Nothing
+        }
+        Question::Req2Buf {
+            taskid,
+            channel_select,
+            host,
+            sequence,
+        } => {
+            let (Some(stream), Some(errcode)) = (byte_stream(env), int_out(env, 2)) else {
+                return Answer::Nothing;
+            };
+            let Ok(host) = env.new_string(&host) else {
+                return Answer::Nothing;
+            };
+            let host = JObject::from(host);
+            let user_context = JObject::null();
+            let errcode_argument = errcode.as_ref();
+            let called = env.call_static_method(
+                class,
+                "req2Buf",
+                "(ILjava/lang/Object;Ljava/io/ByteArrayOutputStream;[IILjava/lang/String;I)Z",
+                &[
+                    JValue::Int(taskid as jint),
+                    JValue::Object(&user_context),
+                    JValue::Object(&stream),
+                    JValue::Object(errcode_argument),
+                    JValue::Int(channel_select),
+                    JValue::Object(&host),
+                    JValue::Int(sequence as jint),
+                ],
+            );
+            if !bool_of(called) {
+                return Answer::Encoded(Err(int_at(env, &errcode, 0)));
+            }
+            Answer::Encoded(Ok(bytes_of(env, &stream)))
+        }
+        Question::Buf2Resp {
+            taskid,
+            body,
+            channel_select,
+        } => {
+            let (Some(errcode), Some(sequence)) = (int_out(env, 1), int_out(env, 1)) else {
+                return Answer::Nothing;
+            };
+            let body = bytes_argument(env, &body);
+            let user_context = JObject::null();
+            let errcode_argument = errcode.as_ref();
+            let sequence_argument = sequence.as_ref();
+            let called = env.call_static_method(
+                class,
+                "buf2Resp",
+                "(ILjava/lang/Object;[B[II[I)I",
+                &[
+                    JValue::Int(taskid as jint),
+                    JValue::Object(&user_context),
+                    JValue::Object(&body),
+                    JValue::Object(errcode_argument),
+                    JValue::Int(channel_select),
+                    JValue::Object(sequence_argument),
+                ],
+            );
+            Answer::Decoded {
+                handle: int_of(called),
+                err_code: int_at(env, &errcode, 0),
+            }
+        }
+        Question::OnTaskEnd {
+            taskid,
+            err_type,
+            err_code,
+            profile,
+        } => {
+            let Some(profile) = cgi_profile(env, &profile) else {
+                return Answer::Nothing;
+            };
+            let user_context = JObject::null();
+            let called = env.call_static_method(
+                class,
+                "onTaskEnd",
+                "(ILjava/lang/Object;IILio/github/marsrs/stn/StnLogic$CgiProfile;)I",
+                &[
+                    JValue::Int(taskid as jint),
+                    JValue::Object(&user_context),
+                    JValue::Int(err_type as jint),
+                    JValue::Int(err_code),
+                    JValue::Object(&profile),
+                ],
+            );
+            Answer::Ended(int_of(called))
+        }
+        Question::ReportConnectStatus { all, longlink } => {
+            let _ = env.call_static_method(
+                class,
+                "reportConnectStatus",
+                "(II)V",
+                &[JValue::Int(all as jint), JValue::Int(longlink as jint)],
+            );
+            Answer::Nothing
+        }
+        Question::IdentifyCheckBuffer { channel_id } => {
+            let (Some(buffer), Some(hash), Some(cmdids)) =
+                (byte_stream(env), byte_stream(env), int_out(env, 1))
+            else {
+                return Answer::Nothing;
+            };
+            let Ok(channel_id) = env.new_string(&channel_id) else {
+                return Answer::Nothing;
+            };
+            let channel_id = JObject::from(channel_id);
+            let buffer_argument = buffer.as_ref();
+            let hash_argument = hash.as_ref();
+            let cmdids_argument = cmdids.as_ref();
+            let called = env.call_static_method(
+                class,
+                "getLongLinkIdentifyCheckBuffer",
+                concat!(
+                    "(Ljava/lang/String;Ljava/io/ByteArrayOutputStream;",
+                    "Ljava/io/ByteArrayOutputStream;[I)I"
+                ),
+                &[
+                    JValue::Object(&channel_id),
+                    JValue::Object(buffer_argument),
+                    JValue::Object(hash_argument),
+                    JValue::Object(cmdids_argument),
+                ],
+            );
+            Answer::Identified {
+                mode: int_of(called),
+                buffer: bytes_of(env, buffer_argument),
+                hash: bytes_of(env, hash_argument),
+                cmdid: int_at(env, &cmdids, 0).max(0) as u32,
+            }
+        }
+        Question::IdentifyResponse {
+            channel_id,
+            response,
+            hash,
+        } => {
+            let Ok(channel_id) = env.new_string(&channel_id) else {
+                return Answer::Nothing;
+            };
+            let channel_id = JObject::from(channel_id);
+            let response = bytes_argument(env, &response);
+            let hash = bytes_argument(env, &hash);
+            let called = env.call_static_method(
+                class,
+                "onLongLinkIdentifyResp",
+                "(Ljava/lang/String;[B[B)Z",
+                &[
+                    JValue::Object(&channel_id),
+                    JValue::Object(&response),
+                    JValue::Object(&hash),
+                ],
+            );
+            Answer::Yes(bool_of(called))
+        }
+        Question::RequestSync => {
+            let _ = env.call_static_method(class, "requestDoSync", "()V", &[]);
+            Answer::Nothing
+        }
+        Question::NetCheckShortLinkHosts => {
+            let called = env.call_static_method(
+                class,
+                "requestNetCheckShortLinkHosts",
+                "()[Ljava/lang/String;",
+                &[],
+            );
+            Answer::Ips(strings_of(env, called))
+        }
+        Question::ReportTaskProfile { json } => {
+            let Ok(json) = env.new_string(&json) else {
+                return Answer::Nothing;
+            };
+            let json = JObject::from(json);
+            let _ = env.call_static_method(
+                class,
+                "reportTaskProfile",
+                "(Ljava/lang/String;)V",
+                &[JValue::Object(&json)],
+            );
+            Answer::Nothing
+        }
+    }
+}
+
+/// A `Z` Java answered with — `false` for a call that could not be made.
+fn bool_of(called: jni::errors::Result<JValueOwned>) -> bool {
+    called.and_then(|value| value.z()).unwrap_or(false)
+}
+
+/// An `I` Java answered with — `0` for a call that could not be made.
+fn int_of(called: jni::errors::Result<JValueOwned>) -> i32 {
+    called.and_then(|value| value.i()).unwrap_or(0)
+}
+
+/// A `String[]` Java answered with.
+fn strings_of(env: &mut JNIEnv<'_>, called: jni::errors::Result<JValueOwned>) -> Vec<String> {
+    let Ok(array) = called.and_then(|value| value.l()) else {
+        return Vec::new();
+    };
+    string_array(env, &array)
+}
+
+/// An `int[]` Java writes an answer into — the C++'s `env->NewIntArray`, which
+/// is two ints wide for `req2Buf` and one everywhere else.
+fn int_out<'a>(env: &mut JNIEnv<'a>, len: i32) -> Option<JIntArray<'a>> {
+    env.new_int_array(len).ok()
+}
+
+fn int_at(env: &mut JNIEnv<'_>, array: &JIntArray<'_>, index: usize) -> i32 {
+    let mut values = vec![0; index + 1];
+    if env.get_int_array_region(array, 0, &mut values).is_err() {
+        return 0;
+    }
+    values[index]
+}
+
+/// A `byte[]` argument — `null` for an empty one, which is what the C++ hands
+/// over when the buffer it is carrying has nothing in it.
+fn bytes_argument<'a>(env: &mut JNIEnv<'a>, bytes: &[u8]) -> JObject<'a> {
+    if bytes.is_empty() {
+        return JObject::null();
+    }
+    match env.byte_array_from_slice(bytes) {
+        Ok(array) => JObject::from(array),
+        Err(_) => JObject::null(),
+    }
+}
+
+/// A `ByteArrayOutputStream` — the C++ hands one to a call that answers bytes
+/// and reads it back with `toByteArray()`.
+fn byte_stream<'a>(env: &mut JNIEnv<'a>) -> Option<JObject<'a>> {
+    let Ok(class) = env.find_class("java/io/ByteArrayOutputStream") else {
+        return None;
+    };
+    env.new_object(class, "()V", &[]).ok()
+}
+
+/// `toByteArray()` of one — empty for a stream Java never wrote to, which is
+/// what the C++ ends up with too.
+fn bytes_of(env: &mut JNIEnv<'_>, stream: &JObject<'_>) -> Vec<u8> {
+    let Ok(bytes) = env.call_method(stream, "toByteArray", "()[B", &[]) else {
+        return Vec::new();
+    };
+    let Ok(bytes) = bytes.l() else {
+        return Vec::new();
+    };
+    env.convert_byte_array(JByteArray::from(bytes))
+        .unwrap_or_default()
+}
+
+/// `StnLogic$CgiProfile`, the object `onTaskEnd` is handed: the C++'s ten
+/// `SetLongField`/`SetIntField` calls.
+///
+/// Not read: `startHandshakeTime` and `handshakeSuccessfulTime`, which stay at
+/// `0` — the port's [`CgiProfile`] keeps no tls handshake, because nothing in
+/// the port writes one. Nor is the connect's `nettype`, which the Java class
+/// has no field for.
+fn cgi_profile<'a>(env: &mut JNIEnv<'a>, profile: &CgiProfile) -> Option<JObject<'a>> {
+    let Ok(class) = env.find_class(STN_CGI_PROFILE) else {
+        return None;
+    };
+    let Ok(object) = env.new_object(class, "()V", &[]) else {
+        return None;
+    };
+    for (name, value) in [
+        ("taskStartTime", profile.start_time as i64),
+        ("startConnectTime", profile.start_connect_time as i64),
+        (
+            "connectSuccessfulTime",
+            profile.connect_successful_time as i64,
+        ),
+        ("startSendPacketTime", profile.start_send_packet_time as i64),
+        ("startReadPacketTime", profile.start_read_packet_time as i64),
+        (
+            "readPacketFinishedTime",
+            profile.read_packet_finished_time as i64,
+        ),
+        ("rtt", profile.rtt as i64),
+    ] {
+        let _ = env.set_field(&object, name, "J", JValue::Long(value));
+    }
+    for (name, value) in [
+        ("channelType", profile.channel_type),
+        ("protocolType", profile.transport_protocol),
+    ] {
+        let _ = env.set_field(&object, name, "I", JValue::Int(value));
+    }
+    Some(object)
 }
 
 // #################### io.github.marsrs.sdt.SdtLogic ####################
