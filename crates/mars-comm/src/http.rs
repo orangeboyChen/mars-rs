@@ -1154,10 +1154,32 @@ fn to_u64(text: &str) -> u64 {
 /// What `strtoull(text, base)` reads: the digits of that base at the front of a
 /// token — 16 for the size of a chunk, 10 everywhere else — and `0` when there
 /// are none.
+///
+/// Two things the C++ gets from `strtoull` and a plain parse does not: a
+/// number too big for a `uint64_t` saturates instead of failing, and a sign
+/// wraps around — which is why a `Content-Length` of `-1` is a body that
+/// cannot be read rather than one of nothing.
 fn to_u64_radix(text: &str, radix: u32) -> u64 {
-    let rest = text.trim_start().trim_start_matches('+');
+    let rest = text.trim_start();
+    let (negative, rest) = match rest.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, rest.trim_start_matches('+')),
+    };
+    // `strtoull` takes `0x` in front of a hexadecimal number
+    let rest = match (radix, rest.as_bytes()) {
+        (16, [b'0', b'x' | b'X', ..]) => &rest[2..],
+        _ => rest,
+    };
     let digits: String = rest.chars().take_while(|c| c.is_digit(radix)).collect();
-    u64::from_str_radix(&digits, radix).unwrap_or(0)
+    if digits.is_empty() {
+        return 0;
+    }
+    let value = u64::from_str_radix(&digits, radix).unwrap_or(u64::MAX);
+    if negative {
+        value.wrapping_neg()
+    } else {
+        value
+    }
 }
 
 #[cfg(test)]
