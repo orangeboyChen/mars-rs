@@ -180,6 +180,11 @@ pub(crate) fn set_max_alive_time_impl(instance: u64, seconds: jlong) {
 /// The `native` methods of `io.github.marsrs.stn.StnLogic`.
 pub mod stn;
 
+// `io.github.marsrs.stn.StnLogic$ICallBack` — the app STN asks when the app is
+// Java. The module's own doc says the rest of it: a `///` here would push its
+// links out of the module they resolve in.
+pub mod stn_c2java;
+
 /// The `native` methods of `io.github.marsrs.sdt.SdtLogic`.
 pub mod sdt;
 

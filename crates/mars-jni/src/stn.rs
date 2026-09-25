@@ -8,9 +8,10 @@
 //! [`mars_stn::StnLogic`] — one value for the whole process, made the first time
 //! Java asks for it, which is the C++'s `NetCore` singleton.
 //!
-//! The app STN talks to is the Java side, so [`crate::stn::set_callback_impl`]
-//! is where it is handed over; the one that asks it through the JVM is a later
-//! slice, and until then the app is whatever the host installs.
+//! The app STN talks to is the Java side, so [`crate::stn_c2java::JavaApp`] is
+//! installed as the process-wide STN is made — the way the C++'s C2Java file is
+//! what the `NetCore` of a Java host asks. A host that answers for itself hands
+//! its own over with [`crate::stn::set_callback_impl`].
 //!
 //! What the C++'s own platform does — the threads that run the two queues and
 //! the long links — is the host's here too, so a task Java starts is one that
@@ -42,6 +43,11 @@ fn logic() -> &'static Mutex<StnLogic> {
     LOGIC.get_or_init(|| {
         let mut logic = StnLogic::new();
         logic.create();
+        // the app STN asks is Java — `StnLogic`'s callback, asked through the
+        // JVM — which is what the C++'s `SetCallback` is for the Java host. A
+        // host that wants to answer for itself hands over its own with
+        // [`set_callback_impl`], the way the C++'s `NATIVE_CALLBACK` build does.
+        logic.set_callback(crate::stn_c2java::JavaApp::jvm());
         Mutex::new(logic)
     })
 }
