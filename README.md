@@ -59,10 +59,53 @@ Two differences are known and accepted:
 
 ## Consumers
 
-* Android: `mars-jni` builds `libmarsxlog.so`, which the `mars-xlog` AAR
-  of <https://github.com/orangeboyChen/mars> packages per ABI.
-* Apple: `mars-ffi` builds the static library inside
-  `MarsXlog.xcframework`, wrapped by the Swift API of that repository.
+Every release ships a package per platform; `.github/workflows/release.yml`
+builds them when it is run by hand (Actions → Release → Run workflow) with a
+version, or with a bump and a channel — `v1.2.3-alpha1`, `v1.2.3-beta2`,
+`v1.2.3`. Anything with a suffix is published as a GitHub pre-release.
+
+### SwiftPM
+
+```swift
+// Package.swift
+.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
+```
+
+The `MarsXlog` product is Swift over the `MarsXlogFFI` binary target, which is
+the static `MarsXlog.xcframework.zip` published with the release. The tag and
+the SPM checksum are written into `Package.swift` by the release workflow on a
+`chore/package-swift-<tag>` branch, proposed as a pull request.
+
+### Android (JitPack)
+
+```kotlin
+// settings.gradle.kts
+maven { url = uri("https://jitpack.io") }
+
+// build.gradle.kts
+implementation("io.github.orangeboyChen:mars-rs:v0.1.0")
+```
+
+The AAR is `mars-xlog.aar`: `libmarsxlog.so` (crate `mars-jni`) for
+`arm64-v8a`, `armeabi-v7a` and `x86_64`, plus `io.github.marsrs.xlog.Xlog`.
+JitPack has an Android SDK but neither an NDK nor a Rust toolchain, so it
+downloads `mars-android-native.zip` of the same release first — see
+`jitpack.yml`.
+
+### The C ABI
+
+`mars-rs-<version>-<host>.tar.gz` (Linux, macOS) and `.zip` (Windows) hold
+`include/mars_xlog.h` and the static and shared libraries of `mars-ffi`, for
+`x86_64-unknown-linux-gnu`, `aarch64-apple-darwin` and
+`x86_64-pc-windows-msvc`.
+
+### Building the packages
+
+```bash
+scripts/build_xcframework.sh 0.1.0 dist   # MarsXlog.xcframework.zip
+scripts/build_android.sh dist/native      # <abi>/libmarsxlog.so
+(cd android && ./gradlew :mars-xlog:assembleRelease)
+```
 
 ## License
 

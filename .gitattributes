@@ -1,0 +1,4 @@
+# A Windows batch file that Git turned into LF endings still runs, but `goto`
+# and its labels are read line by line and do not always survive it. Gradle
+# writes gradlew.bat with CRLF, so it is stored the way it was written.
+android/gradlew.bat -text
