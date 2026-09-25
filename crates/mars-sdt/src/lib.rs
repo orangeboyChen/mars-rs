@@ -10,10 +10,12 @@
 //! four probes and the four checks around them, so a host only has to answer
 //! the probes with a network of its own. [`trafficmonitor`] is the budget a run
 //! of probes is given: how much traffic a diagnosis may cost the app.
+//! [`http_url_parser`] reads the URL one of those checks goes to.
 
 pub mod activecheck;
 pub mod checkimpl;
 pub mod constants;
+pub mod http_url_parser;
 pub mod netchecker_profile;
 pub mod sdt;
 pub mod sdt_core;
@@ -21,6 +23,7 @@ pub mod sdt_logic;
 pub mod trafficmonitor;
 
 pub use constants::*;
+pub use http_url_parser::HttpUrlParser;
 pub use netchecker_profile::{CheckRequestProfile, CheckResultProfile};
 pub use sdt::{
     Callback, CheckErrCode, CheckIPPort, CheckIPPorts, CheckStatus, CollectingCallback,
