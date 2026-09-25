@@ -144,7 +144,17 @@
 //! conversion, and the two signals an error is fanned out to before the app
 //! hears about it.
 //!
-//! What still needs the app's api (`stn_logic`/`stn_manager`) comes later.
+//! The twenty-sixth slice is the app's api over that core ([`stn_logic`]): the
+//! `stn_logic.h` calls, which in the C++ are `extern "C"` functions over one
+//! `NetCore` the process keeps — so here they are one value the app makes and
+//! asks, and the two counters the C++ keeps in `static`s are free functions of
+//! their own. What the C++ gets from a boot framework — the `OnCreate` /
+//! `OnDestroy` it is called through — a Rust value does not need, so the only
+//! thing that is left of it is what those two did: make the core, wire the
+//! callbacks into it, and throw it away.
+//!
+//! What is left of the port is the app's own pieces: the encoder and the
+//! signalling it keeps up.
 
 /// The `static`s of this crate are one value for the whole process —
 /// `sg_client_version` in [`longlink`], `outer_setted_heart_` in
@@ -216,6 +226,7 @@ pub mod smart_heartbeat;
 pub mod socket_operator;
 pub mod socket_pool;
 pub mod stn_callback_bridge;
+pub mod stn_logic;
 pub mod task;
 pub mod task_intercept;
 pub mod task_profile;
@@ -302,6 +313,7 @@ pub use stn_callback_bridge::{
     App, CgiProfile, DnsProfile, DnsType, LongLinkErrorListener, ShortLinkErrorListener,
     StnCallbackBridge,
 };
+pub use stn_logic::{gen_sequence_id, gen_task_id, StnLogic, RESERVED_TASK_ID_START};
 pub use task::{HostRedirectType, Task};
 pub use task_intercept::{TaskIntercept, TaskInterceptInfo, INTERCEPT_TIMEOUT};
 pub use task_profile::{
