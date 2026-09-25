@@ -58,9 +58,13 @@ pub struct XloggerCategory {
 }
 
 impl Default for XloggerCategory {
+    /// `TLogLevel level_ = kLevelNone` — a logger nobody has configured logs
+    /// nothing: [`XloggerCategory::is_enabled_for`] answers `false` for every
+    /// level, [`XloggerCategory::level`] answers [`LogLevel::None`], and only
+    /// [`set_level`] moves it.
     fn default() -> Self {
         Self {
-            level: LogLevel::Verbose,
+            level: LogLevel::None,
             appender: None,
         }
     }
@@ -83,7 +87,11 @@ impl XloggerCategory {
     }
 
     /// `XloggerCategory::Write` — the level filter and the pid/tid fix-up of
-    /// `__WriteImpl`.
+    /// `XloggerCategory::__WriteImpl`.
+    ///
+    /// This is the path of a handle that names an **instance**. `XloggerWrite(0,
+    /// …)` does not come here: the C++ sends it to `xlogger_Write`, which has no
+    /// level filter at all (see `write_default`).
     ///
     /// `log` of `None` mirrors the C++ `NULL == _log`: the record is written
     /// anyway, promoted to `Fatal` with a fixed message.
@@ -96,7 +104,8 @@ impl XloggerCategory {
             }
         }
 
-        // `-1 == pid && -1 == tid && -1 == maintid` means "fill these in".
+        // `-1 == pid && -1 == tid && -1 == maintid` means "fill these in":
+        // `XloggerCategory::__WriteImpl` asks for all three at once …
         if let Some(info) = info.as_mut() {
             if info.pid == -1 && info.tid == -1 && info.maintid == -1 {
                 info.pid = std::process::id() as i64;
@@ -105,14 +114,54 @@ impl XloggerCategory {
             }
         }
 
-        match log {
-            Some(log) => write_through(self.appender, info.as_ref(), log),
-            None => {
-                if let Some(info) = info.as_mut() {
-                    info.level = LogLevel::Fatal;
-                }
-                write_through(self.appender, info.as_ref(), "NULL == _log")
+        write_log(self.appender, &mut info, log)
+    }
+}
+
+/// `__xlogger_Write_impl` — what `XloggerWrite(0, …)` reaches, i.e. the
+/// `xlogger_Write` of `mars/comm/xlogger/xloggerbase.c`.
+///
+/// `xloggerbase.h` writes "no level filter" over the declaration, and the
+/// implementation keeps the promise: `gs_level` is what `xlogger_IsEnabledFor`
+/// answers *from*, and the write never looks at it. A record of any level goes
+/// out through handle `0` whatever `SetLevel(0, …)` was given — the only thing
+/// the level does there is answer [`is_enabled_for`].
+///
+/// `gs_level` also starts at `kLevelNone` and not at `kLevelVerbose`, so a
+/// process that only ever called `appender_open` answers `false` for
+/// [`LogLevel::Fatal`] and writes every record it is handed.
+fn write_default(info: Option<&XLoggerInfo>, log: Option<&str>) -> bool {
+    let mut info = info.cloned();
+
+    // … while `xlogger_Write` fills each of the three in on its own.
+    if let Some(info) = info.as_mut() {
+        if info.pid == -1 {
+            info.pid = std::process::id() as i64;
+        }
+        if info.tid == -1 {
+            info.tid = crate::sys::thread_id();
+        }
+        if info.maintid == -1 {
+            info.maintid = crate::sys::main_thread_id();
+        }
+    }
+
+    write_log(None, &mut info, log)
+}
+
+/// What both paths end with: the `NULL == _log` promotion and the write itself.
+fn write_log(
+    appender: Option<AppenderId>,
+    info: &mut Option<XLoggerInfo>,
+    log: Option<&str>,
+) -> bool {
+    match log {
+        Some(log) => write_through(appender, info.as_ref(), log),
+        None => {
+            if let Some(info) = info.as_mut() {
+                info.level = LogLevel::Fatal;
             }
+            write_through(appender, info.as_ref(), "NULL == _log")
         }
     }
 }
@@ -337,19 +386,18 @@ fn with_category_mut(handle: XloggerHandle, f: impl FnOnce(&mut XloggerCategory)
 
 /// `mars::xlog::XloggerWrite`.
 ///
-/// Handle `0` uses the default logger. An unknown non-zero handle (one whose
-/// instance was released) writes nothing: the module promises that a stale
-/// handle is a no-op, not a fall back to the default logger.
+/// Handle `0` uses the default logger, i.e. the C++'s `xlogger_Write` — which
+/// has no level filter (see `write_default`). An unknown non-zero handle (one
+/// whose instance was released) writes nothing: the module promises that a
+/// stale handle is a no-op, not a fall back to the default logger.
 pub fn xlogger_write(handle: XloggerHandle, info: Option<&XLoggerInfo>, log: Option<&str>) -> bool {
-    let category = if handle == DEFAULT_HANDLE {
-        default_category()
-    } else {
-        match lookup(handle) {
-            Some(category) => category,
-            None => return false,
-        }
-    };
-    category.write(info, log)
+    if handle == DEFAULT_HANDLE {
+        return write_default(info, log);
+    }
+    match lookup(handle) {
+        Some(category) => category.write(info, log),
+        None => false,
+    }
 }
 
 /// `mars::xlog::IsEnabledFor`.
@@ -776,16 +824,56 @@ mod tests {
         assert!(is_enabled_for(DEFAULT_HANDLE, LogLevel::Error));
         set_level(DEFAULT_HANDLE, LogLevel::Verbose);
         assert!(is_enabled_for(DEFAULT_HANDLE, LogLevel::Verbose));
+        // back to the level a fresh process starts with
+        set_level(DEFAULT_HANDLE, LogLevel::None);
     }
 
     #[test]
     fn level_filter_follows_the_cpp_rule() {
         let mut category = XloggerCategory::default();
+        // `TLogLevel level_ = kLevelNone`: a logger nobody configured answers
+        // `false` for every level, `Fatal` included.
+        assert_eq!(category.level(), LogLevel::None);
+        assert!(!category.is_enabled_for(LogLevel::Fatal));
         category.set_level(LogLevel::Warn);
         assert!(category.is_enabled_for(LogLevel::Error));
         assert!(category.is_enabled_for(LogLevel::Warn));
         assert!(!category.is_enabled_for(LogLevel::Info));
         assert!(!category.is_enabled_for(LogLevel::Verbose));
         assert_eq!(get_level(12345), None, "unknown handle");
+    }
+
+    /// `xlogger_Write` has no level filter: the record goes out through handle
+    /// `0` whatever `SetLevel(0, …)` says, because the level is only what
+    /// `IsEnabledFor` answers from.
+    #[test]
+    fn a_record_through_the_default_logger_ignores_the_level() {
+        let _guard = serial();
+        let dir = tempfile::tempdir().unwrap();
+        crate::appender_open(config("gate", dir.path())).unwrap();
+        set_appender_mode(DEFAULT_HANDLE, AppenderMode::Sync);
+        set_level(DEFAULT_HANDLE, LogLevel::Error);
+
+        let info = XLoggerInfo {
+            level: LogLevel::Verbose,
+            ..XLoggerInfo::default()
+        };
+        assert!(!is_enabled_for(DEFAULT_HANDLE, LogLevel::Verbose));
+        assert!(xlogger_write(
+            DEFAULT_HANDLE,
+            Some(&info),
+            Some("WRITTEN-ANYWAY")
+        ));
+        flush(DEFAULT_HANDLE, true);
+
+        assert!(
+            log_text(dir.path()).contains("WRITTEN-ANYWAY"),
+            "the record was filtered out: {}",
+            log_text(dir.path())
+        );
+
+        crate::appender_close();
+        // `kLevelNone`, the level a fresh process starts with.
+        set_level(DEFAULT_HANDLE, LogLevel::None);
     }
 }
