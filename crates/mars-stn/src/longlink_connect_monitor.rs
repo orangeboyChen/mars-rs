@@ -710,6 +710,234 @@ mod tests {
         assert_eq!(monitor.interval(0, ConnectType::NetworkChange), 0);
     }
 
+    /// `changeActiveLogic(activeState, activeLogic)` of the C++'s own test:
+    /// the app it puts in a state, at the tick count the table is asked at.
+    fn a_monitor_in(state: ActiveState) -> LongLinkConnectMonitor {
+        let mut monitor = LongLinkConnectMonitor::new_at(0, false);
+        match state {
+            ActiveState::Inactive => {
+                monitor.set_is_active(|| false);
+                monitor.set_is_foreground(|| false);
+            }
+            ActiveState::BackgroundActive => {
+                monitor.set_is_active(|| true);
+                monitor.set_is_foreground(|| false);
+            }
+            state => {
+                monitor.set_is_active(|| true);
+                monitor.set_is_foreground(|| true);
+                // `m_lastforegroundchangetime = gettickcount() - since`
+                let since = match state {
+                    ActiveState::ForegroundActive => 10 * 60 * 1000,
+                    ActiveState::ForegroundTenMinute => 5 * 60 * 1000,
+                    _ => 0,
+                };
+                monitor.set_last_foreground_change_time(move || NOW.saturating_sub(since));
+            }
+        }
+        // `rand() % 20`, pinned: the jitter is the one thing the table's own
+        // expectations leave out
+        monitor.set_random(|_bound| 0);
+        monitor
+    }
+
+    /// The tick count the C++'s test asks `__Interval` at: whatever the
+    /// foreground change was moved back by, ten minutes have gone by since.
+    const NOW: u64 = 10 * 60 * 1000;
+
+    /// One case of upstream's
+    /// `mars/stn/test_cases/longlink_connect_monitor_test.cc`: the network,
+    /// whether there is an account to connect for, the state the app is in, and
+    /// the interval `__Interval` answers with, in **seconds**.
+    struct Case {
+        net: i32,
+        account: bool,
+        state: ActiveState,
+        expected: u64,
+        what: &'static str,
+    }
+
+    /// `test0`–`test19`: every (network, account, state) the C++ walks, which
+    /// is the whole grid — the salt is only paid in the two states the C++
+    /// names in its `if`, `kInactive` and `kForgroundActive`.
+    ///
+    /// Four of those twenty numbers are not what the source of today answers,
+    /// and all four are the `kForgroundActive` column: the test expects
+    /// `240 * salt_rate + salt_rise` (`1320` with no network, `780` with no
+    /// account) and `240` with both, because `sg_interval[kLongLinkConnect]
+    /// [kForgroundActive]` used to be `240` and is `120` now. So this table
+    /// pins the source: `120 * 3 + 600` is `960`, and `120 * 2 + 300` is `540`.
+    #[test]
+    fn the_interval_is_the_table_the_c_plus_plus_test_writes() {
+        let cases = [
+            // no network, nothing to connect for: `test0`–`test4`
+            Case {
+                net: NO_NET,
+                account: false,
+                state: ActiveState::ForegroundActive,
+                expected: 960,
+                what: "(ENoNet, No AccountInfo, EForgroundActive)",
+            },
+            Case {
+                net: NO_NET,
+                account: false,
+                state: ActiveState::Inactive,
+                expected: NO_ACCOUNT_INFO_INACTIVE_INTERVAL,
+                what: "(ENoNet, No AccountInfo, EInactive)",
+            },
+            Case {
+                net: NO_NET,
+                account: false,
+                state: ActiveState::ForegroundOneMinute,
+                expected: INTERVALS[1][0],
+                what: "(ENoNet, No AccountInfo, EForgroundOneMinute)",
+            },
+            Case {
+                net: NO_NET,
+                account: false,
+                state: ActiveState::ForegroundTenMinute,
+                expected: INTERVALS[1][1],
+                what: "(ENoNet, No AccountInfo, EForgroundTenMinute)",
+            },
+            Case {
+                net: NO_NET,
+                account: false,
+                state: ActiveState::BackgroundActive,
+                expected: INTERVALS[1][3],
+                what: "(ENoNet, No AccountInfo, EBackgroundActive)",
+            },
+            // a network, still nothing to connect for: `test5`–`test9`
+            Case {
+                net: 1,
+                account: false,
+                state: ActiveState::ForegroundActive,
+                // `120 * kNoAccountInfoSaltRate + kNoAccountInfoSaltRise`
+                expected: 540,
+                what: "(EWifi, No AccountInfo, EForgroundActive)",
+            },
+            Case {
+                net: 1,
+                account: false,
+                state: ActiveState::Inactive,
+                expected: NO_ACCOUNT_INFO_INACTIVE_INTERVAL,
+                what: "(EWifi, No AccountInfo, EInactive)",
+            },
+            Case {
+                net: 1,
+                account: false,
+                state: ActiveState::ForegroundOneMinute,
+                expected: INTERVALS[1][0],
+                what: "(EWifi, No AccountInfo, EForgroundOneMinute)",
+            },
+            Case {
+                net: 1,
+                account: false,
+                state: ActiveState::ForegroundTenMinute,
+                expected: INTERVALS[1][1],
+                what: "(EWifi, No AccountInfo, EForgroundTenMinute)",
+            },
+            Case {
+                net: 1,
+                account: false,
+                state: ActiveState::BackgroundActive,
+                expected: INTERVALS[1][3],
+                what: "(EWifi, No AccountInfo, EBackgroundActive)",
+            },
+            // a network and an account: `test10`–`test14`, which is the only
+            // stretch of the table the jitter touches
+            Case {
+                net: 1,
+                account: true,
+                state: ActiveState::ForegroundActive,
+                expected: INTERVALS[1][2],
+                what: "(EWifi, Have AccountInfo, EForgroundActive)",
+            },
+            Case {
+                net: 1,
+                account: true,
+                state: ActiveState::Inactive,
+                expected: INTERVALS[1][4],
+                what: "(EWifi, Have AccountInfo, EInactive)",
+            },
+            Case {
+                net: 1,
+                account: true,
+                state: ActiveState::ForegroundOneMinute,
+                expected: INTERVALS[1][0],
+                what: "(EWifi, Have AccountInfo, EForgroundOneMinute)",
+            },
+            Case {
+                net: 1,
+                account: true,
+                state: ActiveState::ForegroundTenMinute,
+                expected: INTERVALS[1][1],
+                what: "(EWifi, Have AccountInfo, EForgroundTenMinute)",
+            },
+            Case {
+                net: 1,
+                account: true,
+                state: ActiveState::BackgroundActive,
+                expected: INTERVALS[1][3],
+                what: "(EWifi, Have AccountInfo, EBackgroundActive)",
+            },
+            // ... and no network, with an account: `test15`–`test19`
+            Case {
+                net: NO_NET,
+                account: true,
+                state: ActiveState::ForegroundActive,
+                expected: 960,
+                what: "(ENoNet, Have AccountInfo, EForgroundActive)",
+            },
+            Case {
+                net: NO_NET,
+                account: true,
+                state: ActiveState::Inactive,
+                // `600 * kNoNetSaltRate + kNoNetSaltRise`, which is the `2400`
+                // the C++ asks for too — and the one `__IntervalConnect` throws
+                // away, see `tests/longlink_connect_monitor.rs`
+                expected: 2_400,
+                what: "(ENoNet, Have AccountInfo, EInactive)",
+            },
+            Case {
+                net: NO_NET,
+                account: true,
+                state: ActiveState::ForegroundOneMinute,
+                expected: INTERVALS[1][0],
+                what: "(ENoNet, Have AccountInfo, EForgroundOneMinute)",
+            },
+            Case {
+                net: NO_NET,
+                account: true,
+                state: ActiveState::ForegroundTenMinute,
+                expected: INTERVALS[1][1],
+                what: "(ENoNet, Have AccountInfo, EForgroundTenMinute)",
+            },
+            Case {
+                net: NO_NET,
+                account: true,
+                state: ActiveState::BackgroundActive,
+                expected: INTERVALS[1][3],
+                what: "(ENoNet, Have AccountInfo, EBackgroundActive)",
+            },
+        ];
+
+        for case in cases {
+            let mut monitor = a_monitor_in(case.state);
+            let net = case.net;
+            monitor.set_net_info(move || net);
+            let account = case.account;
+            monitor.set_has_account(move || account);
+            // `PUBC_EXPECT_TRUE(activeState == __CurActiveState(activeLogic))`
+            assert_eq!(monitor.cur_active_state(NOW), case.state, "{}", case.what);
+            assert_eq!(
+                monitor.interval(NOW, ConnectType::LongLink),
+                case.expected,
+                "{}",
+                case.what
+            );
+        }
+    }
+
     #[test]
     fn an_active_app_that_waited_long_enough_connects_at_once() {
         let (mut monitor, calls) = a_monitor();

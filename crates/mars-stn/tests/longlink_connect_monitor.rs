@@ -12,6 +12,7 @@ use mars_stn::longlink_connect_monitor::{
     ConnectType, LongLinkConnectMonitor, LongLinkStatus, INACTIVE_BUFFER, INTERVALS,
     NO_ACCOUNT_INFO_INACTIVE_INTERVAL, UP_OR_DOWN_THRESHOLD, WAKE_ALARM_INTERVAL,
 };
+use mars_stn::smart_heartbeat::NO_NET;
 
 /// What the app was asked to do, in order.
 type Calls = Arc<Mutex<Vec<&'static str>>>;
@@ -254,6 +255,44 @@ fn without_a_host_the_monitor_still_answers() {
     monitor.reconnect();
     assert_eq!(*resets.lock().unwrap_or_else(|e| e.into_inner()), 1);
     assert!(format!("{monitor:?}").contains("LongLinkConnectMonitor"));
+}
+
+/// `__Interval` is salted for two states only — `kInactive` and
+/// `kForgroundActive` — and `__IntervalConnect` uses what it answered in one of
+/// them: while the app is active the salt is the wait, and while it is not the
+/// ladder decides and the salted interval is computed, logged, and thrown away.
+/// Upstream's own test only ever asks `__Interval`, so this is the half of the
+/// pair it does not pin.
+#[test]
+fn the_salt_is_the_wait_while_the_app_is_active_and_nothing_at_all_while_it_is_not() {
+    let (mut monitor, _calls) = a_monitor(0);
+    // in the foreground for ten minutes, and the dns was a moment ago: what is
+    // left to wait is the whole interval
+    let now = UP_OR_DOWN_THRESHOLD;
+    monitor.set_dns_time(move || now);
+
+    // `INTERVALS[1][2]` is 120 s, and with no network at all it is
+    // `120 * kNoNetSaltRate + kNoNetSaltRise` — 960 s
+    monitor.set_net_info(|| NO_NET);
+    assert_eq!(monitor.on_alarm_at(now, false), 960_000);
+    assert_eq!(monitor.rebuild_due_time(), Some(now + 960_000));
+
+    // ... and with a network but nothing to connect for it is the other salt,
+    // `120 * kNoAccountInfoSaltRate + kNoAccountInfoSaltRise` — 540 s
+    monitor.set_net_info(|| 1);
+    monitor.set_has_account(|| false);
+    assert_eq!(monitor.on_alarm_at(now, false), 540_000);
+
+    // while the app is not active the same two states buy the same two
+    // intervals — 600 s salted to 2400 s — and the answer is still the
+    // ladder's minute: `__Interval` is asked, and then `interval_final` is
+    // built out of `reconnect_interval[current_interval_index]` instead
+    monitor.set_has_account(|| true);
+    monitor.set_net_info(|| NO_NET);
+    monitor.set_is_active(|| false);
+    monitor.set_is_foreground(|| false);
+    assert_eq!(monitor.on_alarm_at(now, false), 60_000);
+    assert_eq!(monitor.current_interval_index(), 1);
 }
 
 #[test]
