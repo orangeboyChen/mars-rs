@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use mars_sdt::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
-use mars_sdt::sdt_core::SdtCore;
+use mars_sdt::sdt_core::{CancelHandle, SdtCore};
 use mars_sdt::{
     CheckIPPort, CheckIPPorts, CheckStatus, NetCheckType, NET_CHECK_BASIC, NET_CHECK_LONG,
     NET_CHECK_SHORT, UNUSE_TIMEOUT,
@@ -241,6 +241,8 @@ fn a_default_core_is_a_fresh_one() {
     assert!(core.plan().is_empty());
     assert!(core.http_netcheck_cgi().is_empty());
     assert_eq!(core.request().mode, NET_CHECK_BASIC);
+    // a handle of its own is one nothing has cancelled
+    assert!(!CancelHandle::default().is_cancelled());
 }
 
 #[test]

@@ -10,6 +10,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use crate::activecheck::Check;
+use crate::checkimpl::Ask;
 use crate::constants::{mode_basic, mode_long, mode_short};
 use crate::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
 use crate::sdt::{CheckIPPorts, CheckStatus, NetCheckType};
@@ -193,6 +195,20 @@ impl SdtCore {
         let results = std::mem::take(&mut self.check_request.checkresult_profiles);
         self.reset();
         results
+    }
+
+    /// `SdtCore::__RunOn()` with the port's own checkers — the four the C++
+    /// creates in `__InitCheckReq` — asked through `ask`.
+    ///
+    /// `network_type` is the `comm::getNetInfo()` every checker writes into its
+    /// profiles: the platform is the host's here, so it comes with the run
+    /// instead of being asked for once per result.
+    pub fn run_checks(&mut self, ask: &mut Ask, network_type: i32) -> Vec<CheckResultProfile> {
+        let mut check = Check::new(self.cancel.clone(), self.check_request.timeout());
+        let cgi = self.netcheck_cgi.clone();
+        self.run_on(|kind, request| {
+            check.start_do_check(kind, request, ask, network_type, &cgi);
+        })
     }
 
     /// `SdtCore::SetHttpNetcheckCGI(cgi)`.
