@@ -1,16 +1,16 @@
 //! `mars/stn/src/task_intercept.cc` — the answer of a task the app took over.
 //!
 //! A task the app answers itself instead of letting STN send it is written
-//! down here with its answer, so that the next attempt at the same task can
-//! hand that answer back instead of going out again. An answer is only good
-//! for a minute ([`INTERCEPT_TIMEOUT`]) and is forgotten the moment it is
-//! asked for and found to be too old.
-//!
-//! The C++ keeps one `TaskInterceptInfo` per task name, and its
-//! `GetInterceptTaskInfo` answers `false` on every path — including the one
-//! where it hands the data out — so the port answers the question the name
-//! asks instead: [`TaskIntercept::intercept_task_info_at`] is [`Some`] with
-//! the data when the answer is still good and [`None`] when it is not.
+//! down here with its answer, and an answer is only good for a minute
+//! ([`INTERCEPT_TIMEOUT`]). Nothing is ever answered out of it, though: the
+//! C++'s `GetInterceptTaskInfo` copies the answer into `_last_data` and then
+//! answers `false` on every path, so the next task of that name goes out like
+//! any other. That is the C++'s own doing and not a slip — `45426aa0` ("no
+//! need cgi intercepter") turned the `return true` into a `return false` in
+//! 2022 — so the port answers [`None`] where the C++ answers `false`:
+//! [`TaskIntercept::intercept_task_info_at`] is [`None`] whether or not there
+//! is an answer, and what is left of the look-up is the forgetting of one
+//! that has gone stale.
 
 use std::collections::HashMap;
 
@@ -74,21 +74,26 @@ impl TaskIntercept {
         );
     }
 
-    /// `GetInterceptTaskInfo(_name, _last_data)` — the answer the app gave, or
-    /// [`None`] when there is none, or when it is older than
-    /// [`INTERCEPT_TIMEOUT`] and is forgotten on the way out.
+    /// `GetInterceptTaskInfo(_name, _last_data)` — which is to say, nothing at
+    /// all: the C++ copies the answer into `_last_data` and then answers
+    /// `false`, so no task is ever answered out of what was kept, however
+    /// fresh it is. What the look-up still does is the forgetting of an answer
+    /// older than [`INTERCEPT_TIMEOUT`]; there is nothing to hand back either
+    /// way.
     pub fn intercept_task_info(&mut self, name: &str) -> Option<Vec<u8>> {
         self.intercept_task_info_at(gettickcount(), name)
     }
 
     /// The same, with the reading handed in.
     pub fn intercept_task_info_at(&mut self, now: u64, name: &str) -> Option<Vec<u8>> {
-        let info = self.intercept_tasks.get(name)?;
-        if now.saturating_sub(info.intercept_time) > INTERCEPT_TIMEOUT {
+        // `_last_data = info->second.data; return false;` — what was kept is
+        // copied out and then refused, so no task is answered out of it
+        let stale =
+            now.saturating_sub(self.intercept_tasks.get(name)?.intercept_time) > INTERCEPT_TIMEOUT;
+        if stale {
             self.intercept_tasks.remove(name);
-            return None;
         }
-        Some(info.data.clone())
+        None
     }
 
     /// How many answers are being kept.
@@ -112,32 +117,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_answer_comes_back_while_it_is_fresh() {
+    fn an_answer_is_not_handed_back_even_while_it_is_fresh() {
         let mut intercept = TaskIntercept::new();
         intercept.add_intercept_task_at(1_000, "task", b"the answer".to_vec());
         assert_eq!(intercept.len(), 1);
 
-        assert_eq!(
-            intercept.intercept_task_info_at(1_000, "task"),
-            Some(b"the answer".to_vec())
-        );
-        // ... and right up to the minute
+        // the C++ copies the answer out and then answers `false`
+        assert_eq!(intercept.intercept_task_info_at(1_000, "task"), None);
         assert_eq!(
             intercept.intercept_task_info_at(1_000 + INTERCEPT_TIMEOUT, "task"),
-            Some(b"the answer".to_vec())
+            None
         );
-    }
-
-    #[test]
-    fn an_answer_that_is_not_text_comes_back_byte_for_byte() {
-        let mut intercept = TaskIntercept::new();
-        // a response buffer, not text: protobuf with a length it in
-        let answer = vec![0x00_u8, 0xff, 0xfe, 0x80, 0x0a];
-        intercept.add_intercept_task_at(1_000, "task", answer.clone());
-        assert_eq!(
-            intercept.intercept_task_info_at(1_000, "task"),
-            Some(answer)
-        );
+        assert_eq!(intercept.len(), 1, "but it is still being kept");
     }
 
     #[test]
@@ -168,7 +159,8 @@ mod tests {
         assert_eq!(intercept.len(), 1);
         assert_eq!(
             intercept.intercept_task_info_at(1_000, "task"),
-            Some(b"the second".to_vec())
+            None,
+            "the second is what is kept, but nothing is handed out of it"
         );
 
         intercept.clear();
@@ -179,10 +171,7 @@ mod tests {
     fn the_methods_that_take_no_reading_ask_the_clock_themselves() {
         let mut intercept = TaskIntercept::default();
         intercept.add_intercept_task("task", b"the answer".to_vec());
-        assert_eq!(
-            intercept.intercept_task_info("task"),
-            Some(b"the answer".to_vec())
-        );
+        assert_eq!(intercept.intercept_task_info("task"), None);
         assert_eq!(intercept.intercept_task_info("other"), None);
         assert!(format!("{intercept:?}").contains("TaskIntercept"));
     }

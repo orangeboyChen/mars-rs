@@ -1254,6 +1254,9 @@ impl LongLinkTaskManager {
                 continue;
             }
 
+            // a cgi that was answered already: the C++ asks here too, and
+            // what it asks answers `false` whatever it has, so nothing comes
+            // of it and the task goes out like any other
             if let Some(answer) = self.intercept.intercept_task_info_at(now, &task.cgi) {
                 let len = answer.len();
                 let (err_code, handle) = self.decode(&task, &answer);
@@ -2815,7 +2818,7 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_the_app_said_to_keep_is_answered_again_without_going_out() {
+    fn an_answer_the_app_said_to_keep_is_not_answered_again() {
         let mut manager = manager();
         let (sent, ended, _, _) = wire(&mut manager);
         manager.set_should_intercept(|_err_code| true);
@@ -2831,6 +2834,7 @@ mod tests {
                 .len(),
             1
         );
+        assert_eq!(manager.intercept().len(), 1, "the answer was kept");
 
         let mut second = task(8);
         second.cgi = "/cgi-bin/kept".to_string();
@@ -2840,39 +2844,19 @@ mod tests {
             sent.lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .len(),
-            1,
-            "the second one never went out"
-        );
-        assert_eq!(
-            ended
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .len(),
-            1,
-            "and it is not over yet: the app said Normal, so the try is spent"
-        );
-        assert_eq!(
-            manager.tasks()[0].remain_retry_count,
-            0,
-            "the try it was answered with is gone"
+            2,
+            "the second one went out like the first"
         );
 
-        // the answer is still good, so the next look is the one that ends it
-        manager.run_loop_at(NOW + 30);
-        assert_eq!(
-            sent.lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .len(),
-            1,
-            "and still nothing went out"
-        );
+        manager.on_response_at(NOW + 30, answered(8, b"hello"));
+        manager.run_loop_at(NOW + 40);
         assert_eq!(
             *ended
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
             vec![
                 (ErrCmdType::Ok, 0, TaskFailHandleType::Normal, 7),
-                (ErrCmdType::EnDecode, 0, TaskFailHandleType::Normal, 8),
+                (ErrCmdType::Ok, 0, TaskFailHandleType::Normal, 8),
             ]
         );
     }
