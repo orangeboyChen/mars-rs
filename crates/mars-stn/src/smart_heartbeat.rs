@@ -17,12 +17,14 @@
 //!   network instead of looking it up, and the host keeps whatever it wants
 //!   to keep: [`SmartHeartbeat::info`] is what the C++ would have loaded and
 //!   [`SmartHeartbeat::info_mut`] is what it would have saved.
-//! * `ActiveLogic`, `getNetInfo()` and `isNetworkConnected()` are app and
-//!   platform state, so they are arguments
-//!   ([`SmartHeartbeat::get_next_heartbeat_interval`],
+//! * `ActiveLogic` and `getNetInfo()` are app and platform state, so they are
+//!   arguments ([`SmartHeartbeat::get_next_heartbeat_interval`],
 //!   [`SmartHeartbeat::judge_doze_style`]). `time(NULL)` is one too
 //!   ([`SmartHeartbeat::on_heart_result`]), which is what makes the
 //!   "a week has passed, probe a bigger interval" case testable.
+//!   `::isNetworkConnected()` is a query of its own
+//!   ([`SmartHeartbeat::set_is_network_connected`]), because it is asked on
+//!   the way *in* and not by the method the host calls to get an interval.
 //!
 //! Everything else — the order of the tests, the counters, the window MIUI's
 //! alarm alignment is judged in — is the C++'.
@@ -147,9 +149,15 @@ pub fn outer_setted_heart() -> i32 {
 /// the record it acted on, and whether the heartbeat timed out.
 pub type ReportSmartHeart = dyn FnMut(SmartHeartBeatAction, &NetHeartbeatInfo, bool) + Send;
 
+/// `::isNetworkConnected()` — whether the device has a network at all, which
+/// is what the C++ asks before it calls one *bad*: heartbeats that went
+/// unanswered while the device is offline say nothing about the network.
+pub type IsNetworkConnected = dyn FnMut() -> bool + Send;
+
 /// `SmartHeartbeat`.
 pub struct SmartHeartbeat {
     report: Option<Box<ReportSmartHeart>>,
+    is_network_connected: Option<Box<IsNetworkConnected>>,
     is_wait_heart_response: bool,
     /// `success_heart_count_` — heartbeats that answered on this TCP, whatever
     /// the interval was.
@@ -188,6 +196,7 @@ impl SmartHeartbeat {
     pub fn new() -> Self {
         Self {
             report: None,
+            is_network_connected: None,
             is_wait_heart_response: false,
             success_heart_count: 0,
             last_heart: MIN_HEART_INTERVAL,
@@ -211,6 +220,21 @@ impl SmartHeartbeat {
     /// `report_smart_heart_ = NULL`.
     pub fn clear_report(&mut self) {
         self.report = None;
+    }
+
+    /// `::isNetworkConnected()` — unset answers `true`: the port has no
+    /// platform to ask, and a host that hands nothing in keeps the report the
+    /// C++ gates on this question.
+    pub fn set_is_network_connected(
+        &mut self,
+        is_network_connected: impl FnMut() -> bool + Send + 'static,
+    ) {
+        self.is_network_connected = Some(Box::new(is_network_connected));
+    }
+
+    /// `::isNetworkConnected()` answered by nobody again.
+    pub fn clear_is_network_connected(&mut self) {
+        self.is_network_connected = None;
     }
 
     /// The record of the network the long link is on: what the C++ would have
@@ -315,7 +339,15 @@ impl SmartHeartbeat {
             } else {
                 self.info.min_heart_fail_count + 1
             };
-            if self.info.min_heart_fail_count >= BAD_NETWORK_FAIL_COUNT {
+            // `report_smart_heart_ && min_heart_fail_count_ >= 6 &&
+            // ::isNetworkConnected()`, in the C++'s order — and the count is
+            // reset *inside* that branch: with nobody to report to, or with a
+            // device that has no network to be bad, the C++ leaves it where it
+            // is. The port used to reset it either way.
+            if self.report.is_some()
+                && self.info.min_heart_fail_count >= BAD_NETWORK_FAIL_COUNT
+                && self.is_network_connected()
+            {
                 self.report(SmartHeartBeatAction::BadNetwork, false);
                 self.info.min_heart_fail_count = 0;
             }
@@ -516,6 +548,12 @@ impl SmartHeartbeat {
             report(action, &self.info, fail_of_timeout);
         }
     }
+
+    fn is_network_connected(&mut self) -> bool {
+        self.is_network_connected
+            .as_mut()
+            .is_none_or(|is_network_connected| is_network_connected())
+    }
 }
 
 #[cfg(test)]
@@ -658,6 +696,54 @@ mod tests {
             "one bad-network report, and the counter is reset after it"
         );
         assert_eq!(hb.info().min_heart_fail_count, 0);
+    }
+
+    /// A network nobody is told about is not reported, and the count the C++
+    /// only resets *inside* that branch is left where it is.
+    #[test]
+    fn the_bad_network_report_is_the_two_questions_the_c_plus_plus_asks() {
+        // nobody listening: `report_smart_heart_ == NULL`, so the C++ neither
+        // reports nor resets `min_heart_fail_count_`
+        let mut hb = SmartHeartbeat::new();
+        established(&mut hb);
+        for _ in 0..BAD_NETWORK_FAIL_COUNT {
+            heartbeat(&mut hb, false);
+        }
+        assert_eq!(
+            hb.info().min_heart_fail_count,
+            BAD_NETWORK_FAIL_COUNT,
+            "the C++ leaves the count where it is when it does not report"
+        );
+
+        // ... and a listener, on a device with no network at all:
+        // `::isNetworkConnected()` is false, so six heartbeats that went
+        // unanswered say nothing about the network
+        let mut hb = SmartHeartbeat::new();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&seen);
+        hb.set_report(move |action, _info, _timeout| {
+            sink.lock().unwrap().push(action);
+        });
+        hb.set_is_network_connected(|| false);
+        established(&mut hb);
+        for _ in 0..BAD_NETWORK_FAIL_COUNT {
+            heartbeat(&mut hb, false);
+        }
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "a device with no network is not a bad network"
+        );
+        assert_eq!(hb.info().min_heart_fail_count, BAD_NETWORK_FAIL_COUNT);
+
+        // ... and once the device is back on one, the report is the one the
+        // port has always made
+        hb.set_is_network_connected(|| true);
+        heartbeat(&mut hb, false);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![SmartHeartBeatAction::BadNetwork]
+        );
+        assert_eq!(hb.info().min_heart_fail_count, 0, "reset after reporting");
     }
 
     #[test]
