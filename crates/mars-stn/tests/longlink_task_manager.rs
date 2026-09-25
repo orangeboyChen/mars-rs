@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use mars_stn::dynamic_timeout::DynamicTimeoutStatus;
 use mars_stn::dynamic_timeout::NetworkKind;
 use mars_stn::task_profile::{
     TaskFailHandleType, LOCAL_CANCEL, LOCAL_CHANNEL_ID, LOCAL_LONG_LINK_RELEASED, LOCAL_RESET,
@@ -433,6 +434,67 @@ fn a_task_that_ran_out_of_its_own_time_is_failed_with_it() {
             (MAIN.to_string(), DisconnectInternalCode::DecodeErr),
             (MAIN.to_string(), DisconnectInternalCode::TaskTimeout),
         ]
+    );
+}
+
+#[test]
+fn a_task_the_app_gave_a_ceiling_to_runs_out_of_it_and_not_out_of_its_retries() {
+    let mut app = App::new();
+    let mut task = app.task(7);
+    // `(15s + 5s) * 2` is what the two tries in this task would be given; the
+    // ceiling cuts it to 30 s, which is what `ComputeTaskTimeout` answers
+    task.total_timeout = 30 * 1000;
+    app.start_task(task);
+    assert_eq!(app.manager.tasks()[0].task_timeout, 30 * 1000);
+    assert!(app.manager.on_send_at(START, 7));
+
+    // the first package timeout comes first — 12 s, as ever — and the try that
+    // is left goes out again after the queue's own interval
+    app.manager.run_loop_at(START + FIRST_PKG);
+    app.manager.run_loop_at(START + FIRST_PKG + RETRY_INTERNAL);
+    assert_eq!(app.sent().len(), 2, "the second try went out");
+    assert_eq!(app.manager.len(), 1, "the task is not over yet");
+
+    // ... and then the ceiling is what runs out, in the middle of that try:
+    // the task has a retry in it still, and it is failed all the same
+    app.manager.run_loop_at(START + 30 * 1000);
+    assert!(app.manager.is_empty());
+    assert_eq!(
+        app.ended(),
+        vec![(
+            ErrCmdType::Local,
+            LOCAL_TASK_TIMEOUT,
+            TaskFailHandleType::TaskTimeout,
+            7
+        )]
+    );
+}
+
+#[test]
+fn a_task_that_said_how_long_the_server_needs_waits_that_long_for_the_first_package() {
+    let mut app = App::new();
+    let mut task = app.task(7);
+    // the C++'s `test3`: 10 s the server said it needs, and the request is
+    // short enough to add nothing to it
+    task.server_process_cost = 10 * 1000;
+    app.start_task(task);
+    assert!(app.manager.on_send_at(START, 7));
+
+    assert_eq!(app.manager.due_time(), Some(START + 10 * 1000));
+    // what the server needs is not one the network's own opinion may shorten
+    assert_eq!(
+        app.manager.tasks()[0].current_dyntime_status,
+        DynamicTimeoutStatus::Evaluating
+    );
+
+    app.manager.run_loop_at(START + 10 * 1000);
+    assert_eq!(
+        app.notified(),
+        vec![(
+            MAIN.to_string(),
+            ErrCmdType::NetMsgXp,
+            LONG_FIRST_PKG_TIMEOUT
+        )]
     );
 }
 
