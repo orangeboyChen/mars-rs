@@ -241,6 +241,19 @@ impl Host {
         assert!(self.logic.start_task_at(START, task));
     }
 
+    /// `StartTask` on the long link — a task that asked for it by name, which
+    /// is what lets the app be told about the connect it ran on.
+    fn start_long(&mut self, taskid: u32) {
+        let mut task = Task::new(taskid, 12);
+        task.cgi = format!("/cgi-bin/{taskid}");
+        task.channel_select = Task::CHANNEL_LONG;
+        task.longlink_host_list = vec![LONG_HOST.to_string()];
+        task.user_id = "user".to_string();
+        task.retry_count = 1;
+        task.total_timeout = 10 * 60 * 1000;
+        assert!(self.logic.start_task_at(START, task));
+    }
+
     /// What the host's link is in: the C++ asks the link, and a sample says.
     fn bring_up(&mut self, name: &str, status: LongLinkStatus) {
         let link = Arc::clone(
@@ -321,7 +334,7 @@ fn a_task_goes_out_with_the_body_the_app_wrote_and_ends_with_what_the_app_read()
     host.write(Some(b"/cgi-bin/7"));
     host.bring_up(MAIN, LongLinkStatus::Connected);
 
-    host.start(7);
+    host.start_long(7);
     // the app was asked for the body, and told the host the task is going to
     assert_eq!(
         host.sent(),
@@ -372,7 +385,7 @@ fn an_answer_the_app_refused_ends_the_task_with_what_the_app_said() {
     host.bring_up(MAIN, LongLinkStatus::Connected);
     host.read(-500, TaskFailHandleType::TaskEnd);
 
-    host.start(7);
+    host.start_long(7);
     assert_eq!(host.answered(7), Some(RespHandle::Ended));
     assert!(!host.logic.has_task(7));
 
@@ -548,7 +561,7 @@ fn a_task_that_ended_is_reported_with_the_cgi_profile_of_the_connect_it_ran_on()
     let mut host = Host::new();
     host.write(Some(b"/cgi-bin/7"));
     host.bring_up(MAIN, LongLinkStatus::Connected);
-    host.start(7);
+    host.start_long(7);
 
     let mut profile = pair("2.2.2.2", 443);
     profile.start_send_packet_time = 140;
@@ -582,4 +595,22 @@ fn a_task_that_ended_is_reported_with_the_cgi_profile_of_the_connect_it_ran_on()
     );
     assert_eq!(host.said().profiles[0].rtt, 40);
     assert_eq!(host.said().profiles[0].nettype, "wifi");
+}
+
+#[test]
+fn a_task_that_may_use_anything_is_reported_with_no_connect() {
+    let mut host = Host::new();
+    host.write(Some(b"/cgi-bin/7"));
+    host.bring_up(MAIN, LongLinkStatus::Connected);
+    // `kChannelAll`, which is what `Host::start` asks for
+    host.start(7);
+    assert_eq!(host.answered(7), Some(RespHandle::Ended));
+
+    // the C++ asks the queue `channel_select` names, and `kChannelAll` names
+    // none of them: the app is told about no connect at all, whatever the link
+    // the task went out on made of it
+    assert_eq!(
+        host.said().ended,
+        vec![(7, ErrCmdType::Ok, 0, String::new())]
+    );
 }

@@ -283,7 +283,35 @@ fn a_task_goes_out_on_the_long_link_and_answers() {
 
     assert_eq!(app.answered(7), Some(RespHandle::Ended));
     assert!(!app.core.has_task(7));
-    // the app is given the connect the answer came in on, not the channel's
+    // the task asked for `kChannelAll`, which names no queue: whatever the
+    // answer came in on, `GetConnectProfile` answers with nothing
+    assert_eq!(
+        app.ended(),
+        vec![(7, "user".to_string(), ErrCmdType::Ok, 0, String::new())]
+    );
+
+    // what the queue asked for is the app's own report, and the host runs it
+    assert_eq!(app.core.pending_count(), 1);
+    app.run_pending();
+    assert_eq!(
+        app.long_err(),
+        vec![(ErrCmdType::Ok, 0, "2.2.2.2".to_string(), 443)]
+    );
+}
+
+#[test]
+fn a_task_that_asked_for_the_long_link_is_ended_on_the_answer_it_came_in_on() {
+    let mut app = App::new();
+    app.bring_up(MAIN, LongLinkStatus::Connected);
+    let mut long = task_of(7);
+    long.channel_select = Task::CHANNEL_LONG;
+    long.user_id = "user".to_string();
+    assert!(app.core.start_task_at(START, long));
+    assert!(app.core.longlink().has_task(7));
+
+    assert_eq!(app.answered(7), Some(RespHandle::Ended));
+    // `kChannelLong` names the queue the task went out on, and what that
+    // queue remembers is the connect the answer came in on
     assert_eq!(
         app.ended(),
         vec![(
@@ -293,14 +321,6 @@ fn a_task_goes_out_on_the_long_link_and_answers() {
             0,
             "2.2.2.2".to_string()
         )]
-    );
-
-    // what the queue asked for is the app's own report, and the host runs it
-    assert_eq!(app.core.pending_count(), 1);
-    app.run_pending();
-    assert_eq!(
-        app.long_err(),
-        vec![(ErrCmdType::Ok, 0, "2.2.2.2".to_string(), 443)]
     );
 }
 
@@ -320,15 +340,11 @@ fn a_task_goes_out_on_the_short_link_while_the_long_link_is_down() {
     assert!(!app.core.longlink().has_task(7));
 
     assert_eq!(app.answered_short(7), Some(RespHandle::Ended));
+    // `kChannelAll` names no queue, so the short link the task went out on is
+    // not asked about the connect it made
     assert_eq!(
         app.ended(),
-        vec![(
-            7,
-            "user".to_string(),
-            ErrCmdType::Ok,
-            0,
-            "2.2.2.2".to_string()
-        )]
+        vec![(7, "user".to_string(), ErrCmdType::Ok, 0, String::new())]
     );
 
     app.run_pending();

@@ -1717,9 +1717,15 @@ fn call_back(
         return end_task(hooks, task, err_type, err_code, &ConnectProfile::new());
     }
     // a task that answered, or one the app said not to try again: the app is
-    // given the connect it ran on
+    // given the connect the queue `channel_select` names remembers for it
     if err_type == ErrCmdType::Ok || handle == TaskFailHandleType::TaskEnd {
-        return end_task(hooks, task, err_type, err_code, profile);
+        return end_task(
+            hooks,
+            task,
+            err_type,
+            err_code,
+            &connect_profile(from, use_long_link, task, profile),
+        );
     }
     // a zombie that ends is over: it is not saved again
     if from == CallFrom::Zombie {
@@ -1734,6 +1740,37 @@ fn call_back(
         return 0;
     }
     end_task(hooks, task, err_type, err_code, &ConnectProfile::new())
+}
+
+/// `GetConnectProfile(_task.taskid, _task.channel_select)` — the connect a
+/// task that is over is reported on. The C++ does not hand the profile the
+/// queue ended it with on: it asks the queue `channel_select` names, and that
+/// queue answers only for a task still out on it. `kChannelAll` and
+/// `kChannelNormal` name no queue at all, and a `kChannelBoth` task that went
+/// out on the short link is one the long queue has never heard of, whatever
+/// the short one made of it — so the app is told about no connect at all.
+///
+/// Which queue answered is what the port has in `from`, and a task only ever
+/// runs on the queue `StartTask` put it on, so a queue that is asked about a
+/// task it is not running has nothing to say.
+fn connect_profile(
+    from: CallFrom,
+    use_long_link: bool,
+    task: &Task,
+    profile: &ConnectProfile,
+) -> ConnectProfile {
+    let asked = match task.channel_select {
+        Task::CHANNEL_SHORT => from == CallFrom::Short,
+        Task::CHANNEL_LONG | Task::CHANNEL_MINOR_LONG | Task::CHANNEL_BOTH => {
+            use_long_link && from == CallFrom::Long
+        }
+        _ => false,
+    };
+    if asked {
+        profile.clone()
+    } else {
+        ConnectProfile::new()
+    }
 }
 
 fn end_task(
@@ -2268,7 +2305,9 @@ mod tests {
     #[test]
     fn an_answer_that_came_back_ends_the_task_with_the_connect_it_ran_on() {
         let (mut core, rec) = wired();
-        assert!(core.start_task_at(NOW, task(7)));
+        let mut short = task(7);
+        short.channel_select = Task::CHANNEL_SHORT;
+        assert!(core.start_task_at(NOW, short));
 
         let handle = core.shortlink().on_response_at(
             NOW + 100,
@@ -2288,6 +2327,59 @@ mod tests {
             )]
         );
         assert!(!core.has_task(7));
+    }
+
+    /// `GetConnectProfile(_task.taskid, _task.channel_select)` — the app is
+    /// told about the connect of the queue the task asked for, not of the one
+    /// it went out on.
+    #[test]
+    fn a_task_is_ended_with_the_connect_of_the_queue_it_asked_for() {
+        // `kChannelAll` names no queue at all: the short link carried this
+        // one, and the C++ still reports no connect for it
+        let (mut core, rec) = wired();
+        assert!(core.start_task_at(NOW, task(7)));
+        assert!(core.shortlink().has_task(7));
+
+        core.shortlink()
+            .on_response_at(NOW + 100, RunId(7), short_answer(profile_of("1.2.3.4")));
+        assert_eq!(
+            rec.ended(),
+            vec![(7, "user".to_string(), ErrCmdType::Ok, 0, String::new())]
+        );
+
+        // ... and neither does a `kChannelBoth` one the short link carried:
+        // the long queue has never heard of it
+        let (mut core, rec) = wired();
+        let mut both = task(7);
+        both.channel_select = Task::CHANNEL_BOTH;
+        assert!(core.start_task_at(NOW, both));
+        assert!(core.shortlink().has_task(7));
+
+        core.shortlink()
+            .on_response_at(NOW + 100, RunId(7), short_answer(profile_of("1.2.3.4")));
+        assert_eq!(rec.ended()[0].4, String::new());
+
+        // ... while one the long link carried is reported on its channel
+        let (mut core, rec) = wired();
+        up(&core, LongLinkStatus::Connected);
+        let mut both = task(7);
+        both.channel_select = Task::CHANNEL_BOTH;
+        assert!(core.start_task_at(NOW, both));
+        assert!(core.longlink().has_task(7));
+
+        core.longlink()
+            .on_response_at(NOW + 100, long_answer(7, profile_of("1.2.3.4")));
+        assert_eq!(
+            rec.ended(),
+            vec![(
+                7,
+                "user".to_string(),
+                ErrCmdType::Ok,
+                0,
+                // what a link answers with is its own connect
+                "1.2.3.4".to_string()
+            )]
+        );
     }
 
     #[test]
@@ -2825,6 +2917,8 @@ mod tests {
         assert!(!core.has_task(7));
 
         let ended = rec.ended();
+        // `kChannelAll` names no queue, so `GetConnectProfile` has nothing to
+        // answer with, whatever the channel the task went out on made of it
         assert_eq!(
             ended,
             vec![(
@@ -2832,7 +2926,7 @@ mod tests {
                 "user".to_string(),
                 ErrCmdType::Local,
                 LOCAL_LONG_LINK_RELEASED,
-                "10.0.0.1".to_string()
+                String::new()
             )]
         );
     }
