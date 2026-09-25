@@ -16,8 +16,13 @@
 //! * `context_->GetManager<StnManager>()->…` — `OnTaskEnd`, `OnPush`,
 //!   `ReportConnectStatus`, `OnLongLinkNetworkError`, `OnShortLinkNetworkError`
 //!   and `OnLongLinkStatusChange` are [`NetCore::set_on_task_end`] and friends.
-//!   `user_context` — a `void*` the C++ hands straight back — is not ported,
-//!   and neither is `user_id`: the app asked for the task, so it knows both.
+//!   `user_context` — a `void*` the C++ hands straight back — is not ported, but
+//!   `user_id` is: the C++ hands `task.user_id` to `OnTaskEnd` with the task,
+//!   and an app that keeps one STN for several accounts needs it. The identify
+//!   check's two questions are [`NetCore::set_identify_check_buffer`] and
+//!   [`NetCore::set_identify_on_response`]: the C++'s checker pulls them out of
+//!   the manager when it needs them, so every link the core keeps — and every
+//!   one it makes afterwards — is wired to them.
 //! * `ActiveLogic` — `IsForeground`, `LastForegroundChangeTime` and
 //!   `IsActive` are [`NetCore::set_active`] plus a `NetInfo` hook; the
 //!   `MakeSureConnected` a foreground task asks for is not ported, because a
@@ -49,6 +54,9 @@ use mars_comm::tickcount::gettickcount;
 use crate::anti_avalanche::AntiAvalanche;
 use crate::dynamic_timeout::{DynamicTimeout, NetworkKind};
 use crate::long_link::LongLink;
+use crate::longlink_identify_checker::{
+    GetIdentifyCheckBuffer, IdentifyBuffer, OnIdentifyResponse,
+};
 use crate::net_source::NO_NET;
 use crate::task_profile::{
     ConnectProfile, ErrCmdType, PrepareProfile, TaskFailHandleType, LOCAL_CHANNEL_SELECT,
@@ -124,10 +132,12 @@ pub type TaskProcess = dyn FnMut(&mut Task) + Send;
 pub type TaskCallback =
     dyn FnMut(CallFrom, ErrCmdType, i32, TaskFailHandleType, &Task) -> i32 + Send;
 
-/// `StnManager::OnTaskEnd` — a task that is over. The answer is the code the
-/// task is remembered with, which for a short-link task that did go out is the
-/// app's own return code.
-pub type OnTaskEnd = dyn FnMut(u32, ErrCmdType, i32, &ConnectProfile) -> i32 + Send;
+/// `StnManager::OnTaskEnd` — a task that is over, and the user it was started
+/// for: the C++ hands `task.user_id` along, so an app that keeps one STN for
+/// several accounts still knows which of them the task was. The answer is the
+/// code the task is remembered with, which for a short-link task that did go out
+/// is the app's own return code.
+pub type OnTaskEnd = dyn FnMut(u32, &str, ErrCmdType, i32, &ConnectProfile) -> i32 + Send;
 
 /// `push_preprocess_signal_` — a push, before the app is given it.
 pub type PushPreprocess = dyn FnMut(u32, &[u8]) + Send;
@@ -297,6 +307,12 @@ pub struct NetCore {
     on_shortlink_network_err: Option<Box<OnShortLinkNetworkError>>,
     /// `StnManager::OnLongLinkStatusChange`.
     on_longlink_status_change: Option<Box<OnLongLinkStatusChange>>,
+    /// `GetLonglinkIdentifyCheckBuffer` — what every long link's identify
+    /// checker asks the app for. One answer shared by every link, because the
+    /// C++'s checker asks for it when it needs it rather than being handed it.
+    identify_buffer: Arc<Mutex<Option<Box<GetIdentifyCheckBuffer>>>>,
+    /// `OnLonglinkIdentifyResponse` — the app's verdict on the answer.
+    identify_response: Arc<Mutex<Option<Box<OnIdentifyResponse>>>>,
     clock: Option<Box<Clock>>,
 }
 
@@ -348,6 +364,8 @@ impl NetCore {
             on_longlink_network_err: None,
             on_shortlink_network_err: None,
             on_longlink_status_change: None,
+            identify_buffer: Arc::new(Mutex::new(None)),
+            identify_response: Arc::new(Mutex::new(None)),
             clock: None,
         };
         // `defaultConfig.longlink_encoder = default_longlink_encoder`: every
@@ -562,7 +580,7 @@ impl NetCore {
     /// `StnManager::OnTaskEnd`.
     pub fn set_on_task_end(
         &mut self,
-        end: impl FnMut(u32, ErrCmdType, i32, &ConnectProfile) -> i32 + Send + 'static,
+        end: impl FnMut(u32, &str, ErrCmdType, i32, &ConnectProfile) -> i32 + Send + 'static,
     ) {
         self.hooks.lock().unwrap_or_else(poisoned).on_task_end = Some(Box::new(end));
     }
@@ -607,6 +625,66 @@ impl NetCore {
         change: impl FnMut(LongLinkStatus) + Send + 'static,
     ) {
         self.on_longlink_status_change = Some(Box::new(change));
+    }
+
+    /// `GetLonglinkIdentifyCheckBuffer` — the check a long link is asked for
+    /// before it is used, and the app's answer to it.
+    ///
+    /// The C++'s `LongLinkIdentifyChecker` reaches the `StnManager` through its
+    /// context whenever it needs the buffer, so a link made before the app
+    /// answered is asked all the same: every link the net core keeps is wired to
+    /// this, and so is every one it makes afterwards.
+    pub fn set_identify_check_buffer(
+        &mut self,
+        check_buffer: impl FnMut(&str, u32) -> IdentifyBuffer + Send + 'static,
+    ) {
+        *self.identify_buffer.lock().unwrap_or_else(poisoned) = Some(Box::new(check_buffer));
+        self.wire_identify();
+    }
+
+    /// `OnLonglinkIdentifyResponse` — the app's verdict on the answer: whether
+    /// the link it came in on is one the app trusts.
+    pub fn set_identify_on_response(
+        &mut self,
+        on_response: impl FnMut(&str, &[u8], &[u8]) -> bool + Send + 'static,
+    ) {
+        *self.identify_response.lock().unwrap_or_else(poisoned) = Some(Box::new(on_response));
+        self.wire_identify();
+    }
+
+    /// Every link the core keeps, wired to what the app answered: a link that
+    /// was made before is asked as well, which is what pulling the buffer out of
+    /// the manager when it is needed amounts to.
+    fn wire_identify(&mut self) {
+        let names: Vec<String> = self.links.keys().cloned().collect();
+        for name in names {
+            self.wire_link_identify(&name);
+        }
+    }
+
+    /// One link: the checker asks the app through the two slots, and a link
+    /// nobody answered for gets [`IdentifyBuffer::never`] — the C++'s own
+    /// `kCheckNever` — and a verdict of `false`.
+    fn wire_link_identify(&mut self, name: &str) {
+        let buffer = Arc::clone(&self.identify_buffer);
+        let response = Arc::clone(&self.identify_response);
+        let Some(meta) = self.links.get(name) else {
+            return;
+        };
+        let mut link = meta.channel().lock().unwrap_or_else(poisoned);
+        link.set_identify_check_buffer(move |channel_id, cmdid| {
+            buffer.lock().unwrap_or_else(poisoned).as_mut().map_or_else(
+                || IdentifyBuffer::never(Vec::new()),
+                |ask| ask(channel_id, cmdid),
+            )
+        });
+        link.set_identify_on_response(move |channel_id, answer, hash| {
+            response
+                .lock()
+                .unwrap_or_else(poisoned)
+                .as_mut()
+                .is_some_and(|judge| judge(channel_id, answer, hash))
+        });
     }
 
     /// `getNetInfo()` — one hook the net core, the two queues, the net source
@@ -722,7 +800,7 @@ impl NetCore {
         let mut prepare = PrepareProfile::new_at(now);
         if !valid_and_init_default(&mut task) {
             self.end_task_at(
-                task.taskid,
+                &task,
                 ErrCmdType::Local,
                 LOCAL_TASK_PARAM,
                 &ConnectProfile::new(),
@@ -738,7 +816,7 @@ impl NetCore {
 
         if task.channel_select == 0 {
             self.end_task_at(
-                task.taskid,
+                &task,
                 ErrCmdType::Local,
                 LOCAL_CHANNEL_SELECT,
                 &ConnectProfile::new(),
@@ -755,7 +833,7 @@ impl NetCore {
             && !self.is_long_link_connected(&task.channel_name)
         {
             self.end_task_at(
-                task.taskid,
+                &task,
                 ErrCmdType::Local,
                 LOCAL_NO_NET,
                 &ConnectProfile::new(),
@@ -778,7 +856,7 @@ impl NetCore {
 
         if !start_ok {
             self.end_task_at(
-                task.taskid,
+                &task,
                 ErrCmdType::Local,
                 LOCAL_START_TASK_FAIL,
                 &ConnectProfile::new(),
@@ -1021,7 +1099,7 @@ impl NetCore {
     /// task's error code as.
     fn end_task_at(
         &mut self,
-        taskid: u32,
+        task: &Task,
         err_type: ErrCmdType,
         err_code: i32,
         profile: &ConnectProfile,
@@ -1033,7 +1111,7 @@ impl NetCore {
             .on_task_end
             .as_mut()
         {
-            Some(end) => end(taskid, err_type, err_code, profile),
+            Some(end) => end(task.taskid, &task.user_id, err_type, err_code, profile),
             None => 0,
         }
     }
@@ -1245,6 +1323,10 @@ impl NetCore {
         if config.is_main() {
             self.default_link = Some(name.clone());
         }
+        // the identify check is the app's, like every other question the links
+        // ask — and it is asked of the app whenever a link needs it, which is
+        // why a link made now is wired the same way the older ones are
+        self.wire_link_identify(&name);
         self.links.get(&name).map(|meta| Arc::clone(meta.channel()))
     }
 
@@ -1597,28 +1679,16 @@ fn call_back(
     // `kEctLocal` / `kEctLocalReset` — a task that is over because the net core
     // itself is gone
     if err_type == ErrCmdType::Local && err_code == LOCAL_RESET {
-        return end_task(
-            hooks,
-            task.taskid,
-            err_type,
-            err_code,
-            &ConnectProfile::new(),
-        );
+        return end_task(hooks, task, err_type, err_code, &ConnectProfile::new());
     }
     // a task that answered, or one the app said not to try again: the app is
     // given the connect it ran on
     if err_type == ErrCmdType::Ok || handle == TaskFailHandleType::TaskEnd {
-        return end_task(hooks, task.taskid, err_type, err_code, profile);
+        return end_task(hooks, task, err_type, err_code, profile);
     }
     // a zombie that ends is over: it is not saved again
     if from == CallFrom::Zombie {
-        return end_task(
-            hooks,
-            task.taskid,
-            err_type,
-            err_code,
-            &ConnectProfile::new(),
-        );
+        return end_task(hooks, task, err_type, err_code, &ConnectProfile::new());
     }
     if use_long_link
         && zombie
@@ -1628,24 +1698,18 @@ fn call_back(
     {
         return 0;
     }
-    end_task(
-        hooks,
-        task.taskid,
-        err_type,
-        err_code,
-        &ConnectProfile::new(),
-    )
+    end_task(hooks, task, err_type, err_code, &ConnectProfile::new())
 }
 
 fn end_task(
     hooks: &Arc<Mutex<Hooks>>,
-    taskid: u32,
+    task: &Task,
     err_type: ErrCmdType,
     err_code: i32,
     profile: &ConnectProfile,
 ) -> i32 {
     match hooks.lock().unwrap_or_else(poisoned).on_task_end.as_mut() {
-        Some(end) => end(taskid, err_type, err_code, profile),
+        Some(end) => end(task.taskid, &task.user_id, err_type, err_code, profile),
         None => 0,
     }
 }
@@ -1662,8 +1726,10 @@ mod tests {
     const MAIN: &str = DEFAULT_LONGLINK_NAME;
     const SHORT_HOST: &str = "short.weixin.qq.com";
 
-    /// `(taskid, err_type, err_code, profile.ip)`.
-    type Ended = Vec<(u32, ErrCmdType, i32, String)>;
+    /// `(taskid, user_id, err_type, err_code, profile.ip)` — the user a task
+    /// was started for goes out with the end, like the C++ hands
+    /// `task.user_id` to `OnTaskEnd`.
+    type Ended = Vec<(u32, String, ErrCmdType, i32, String)>;
     /// `(channel, taskid, cgi)`.
     type Sent = Vec<(String, u32, String)>;
     /// `(all, longlink)`.
@@ -1765,9 +1831,10 @@ mod tests {
         });
 
         let ended = rec.ended.clone();
-        core.set_on_task_end(move |taskid, err_type, err_code, profile| {
+        core.set_on_task_end(move |taskid, user_id, err_type, err_code, profile| {
             ended.lock().unwrap_or_else(poisoned).push((
                 taskid,
+                user_id.to_string(),
                 err_type,
                 err_code,
                 profile.ip.clone(),
@@ -1915,7 +1982,13 @@ mod tests {
         assert!(!core.start_task_at(NOW, task));
         assert_eq!(
             rec.ended(),
-            vec![(7, ErrCmdType::Local, LOCAL_CHANNEL_SELECT, String::new())]
+            vec![(
+                7,
+                "user".to_string(),
+                ErrCmdType::Local,
+                LOCAL_CHANNEL_SELECT,
+                String::new()
+            )]
         );
         assert!(!core.has_task(7));
     }
@@ -1929,7 +2002,13 @@ mod tests {
         assert!(!core.start_task_at(NOW, task));
         assert_eq!(
             rec.ended(),
-            vec![(7, ErrCmdType::Local, LOCAL_TASK_PARAM, String::new())]
+            vec![(
+                7,
+                "user".to_string(),
+                ErrCmdType::Local,
+                LOCAL_TASK_PARAM,
+                String::new()
+            )]
         );
     }
 
@@ -1942,7 +2021,13 @@ mod tests {
         assert!(!core.start_task_at(NOW, task));
         assert_eq!(
             rec.ended(),
-            vec![(7, ErrCmdType::Local, LOCAL_TASK_PARAM, String::new())]
+            vec![(
+                7,
+                "user".to_string(),
+                ErrCmdType::Local,
+                LOCAL_TASK_PARAM,
+                String::new()
+            )]
         );
     }
 
@@ -1955,7 +2040,13 @@ mod tests {
         assert!(!core.start_task_at(NOW, task));
         assert_eq!(
             rec.ended(),
-            vec![(7, ErrCmdType::Local, LOCAL_TASK_PARAM, String::new())]
+            vec![(
+                7,
+                "user".to_string(),
+                ErrCmdType::Local,
+                LOCAL_TASK_PARAM,
+                String::new()
+            )]
         );
     }
 
@@ -2006,7 +2097,13 @@ mod tests {
         assert!(!core.start_task_at(NOW, task));
         assert_eq!(
             rec.ended(),
-            vec![(7, ErrCmdType::Local, LOCAL_NO_NET, String::new())]
+            vec![(
+                7,
+                "user".to_string(),
+                ErrCmdType::Local,
+                LOCAL_NO_NET,
+                String::new()
+            )]
         );
     }
 
@@ -2019,7 +2116,13 @@ mod tests {
         assert!(!core.start_task_at(NOW, task));
         assert_eq!(
             rec.ended(),
-            vec![(7, ErrCmdType::Local, LOCAL_START_TASK_FAIL, String::new())]
+            vec![(
+                7,
+                "user".to_string(),
+                ErrCmdType::Local,
+                LOCAL_START_TASK_FAIL,
+                String::new()
+            )]
         );
     }
 
@@ -2068,7 +2171,13 @@ mod tests {
 
         assert_eq!(
             rec.ended(),
-            vec![(7, ErrCmdType::Ok, 0, "1.2.3.4".to_string())]
+            vec![(
+                7,
+                "user".to_string(),
+                ErrCmdType::Ok,
+                0,
+                "1.2.3.4".to_string()
+            )]
         );
         assert!(!core.has_task(7));
     }
@@ -2164,7 +2273,13 @@ mod tests {
         assert_eq!(core.zombie().len(), 0);
         assert_eq!(
             rec.ended(),
-            vec![(7, ErrCmdType::EnDecode, 9, String::new())]
+            vec![(
+                7,
+                "user".to_string(),
+                ErrCmdType::EnDecode,
+                9,
+                String::new()
+            )]
         );
     }
 
@@ -2185,7 +2300,13 @@ mod tests {
         );
         assert_eq!(
             rec.ended(),
-            vec![(7, ErrCmdType::Local, LOCAL_RESET, String::new())]
+            vec![(
+                7,
+                "user".to_string(),
+                ErrCmdType::Local,
+                LOCAL_RESET,
+                String::new()
+            )]
         );
         assert_eq!(core.zombie().len(), 0);
     }
@@ -2204,7 +2325,13 @@ mod tests {
         assert_eq!(core.zombie().len(), 0);
         assert_eq!(
             rec.ended(),
-            vec![(7, ErrCmdType::EnDecode, 9, String::new())]
+            vec![(
+                7,
+                "user".to_string(),
+                ErrCmdType::EnDecode,
+                9,
+                String::new()
+            )]
         );
     }
 
@@ -2562,10 +2689,66 @@ mod tests {
         assert!(!core.has_task(7));
 
         let ended = rec.ended();
-        assert_eq!(ended.len(), 1);
-        assert_eq!(ended[0].0, 7);
-        assert_eq!(ended[0].1, ErrCmdType::Local);
-        assert_eq!(ended[0].2, LOCAL_LONG_LINK_RELEASED);
+        assert_eq!(
+            ended,
+            vec![(
+                7,
+                "user".to_string(),
+                ErrCmdType::Local,
+                LOCAL_LONG_LINK_RELEASED,
+                "10.0.0.1".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn the_identify_check_the_app_answered_is_the_one_every_link_asks() {
+        let (mut core, _rec) = wired();
+        let asked: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = asked.clone();
+        core.set_identify_check_buffer(move |channel_id, _cmdid| {
+            recorder
+                .lock()
+                .unwrap_or_else(poisoned)
+                .push(channel_id.to_string());
+            IdentifyBuffer::now(b"check".to_vec(), b"hash".to_vec(), 99)
+        });
+        let judged: Arc<Mutex<Vec<(String, bool)>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = judged.clone();
+        core.set_identify_on_response(move |channel_id, response, hash| {
+            let accepted = response == hash;
+            recorder
+                .lock()
+                .unwrap_or_else(poisoned)
+                .push((channel_id.to_string(), accepted));
+            accepted
+        });
+
+        // a link made *after* the app answered is asked the same way the one
+        // that was already there is: the C++'s checker reaches the manager
+        // whenever it needs the buffer, not when the link is made
+        core.create_long_link(LonglinkConfig::new("second"));
+
+        for name in [MAIN, "second"] {
+            let link = Arc::clone(core.long_link(name).expect("the link"));
+            let mut link = link.lock().unwrap_or_else(poisoned);
+            link.set_status(LongLinkStatus::Connected);
+            assert!(link.noop_req_at(NOW, false));
+            assert!(link.noop_resp_at(
+                NOW + 100,
+                99,
+                Task::LONG_LINK_IDENTIFY_CHECKER_TASK_ID,
+                b"hash"
+            ));
+        }
+        assert_eq!(
+            *asked.lock().unwrap_or_else(poisoned),
+            vec![MAIN.to_string(), "second".to_string()]
+        );
+        assert_eq!(
+            *judged.lock().unwrap_or_else(poisoned),
+            vec![(MAIN.to_string(), true), ("second".to_string(), true)]
+        );
     }
 
     #[test]
