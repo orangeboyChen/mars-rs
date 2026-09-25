@@ -3,7 +3,8 @@ name: Release
 # One release for every platform:
 #
 #   * MarsRS.xcframework.zip       -> the binary target of Package.swift (SPM)
-#   * mars-xlog.aar              -> JitPack: io.github.orangeboyChen:mars-rs
+#   * mars-core.aar              -> JitPack: io.github.orangeboyChen:mars-rs
+#   * mars-xlog.aar              -> JitPack: io.github.orangeboyChen:mars-rs-xlog
 #   * mars-android-native.zip    -> the .so files, for a consumer's own AAR
 #   * mars-rs-<version>-<host>.tar.gz / .zip -> the C ABI for Linux/macOS/Windows
 #
@@ -60,12 +61,16 @@ permissions:
 env:
   XCFRAMEWORK_ZIP: MarsRS.xcframework.zip
   NATIVE_ZIP: mars-android-native.zip
+  # the whole port, and xlog alone: the pair the C++ project publishes as
+  # `mars-core` and `mars-xlog`
+  CORE_AAR: mars-core.aar
   XLOG_AAR: mars-xlog.aar
-  # What JitPack publishes the AAR as; see jitpack.yml. JitPack serves a
+  # What JitPack publishes the two AARs as; see jitpack.yml. JitPack serves a
   # repository under com.github.<owner>.<repo> whatever the pom's group is, so
   # the build is asked for under both spellings.
   JITPACK_GROUP: io.github.orangeboychen
   JITPACK_ARTIFACT: mars-rs
+  JITPACK_ARTIFACT_XLOG: mars-rs-xlog
   NDK_VERSION: 27.1.12297006
   ANDROID_HOME: /usr/local/lib/android/sdk
   ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
@@ -189,7 +194,7 @@ jobs:
           # A release that is missing an asset stays repairable, though, so
           # "complete" means every one of them.
           SKIP=false
-          ASSETS="$XCFRAMEWORK_ZIP $NATIVE_ZIP $XLOG_AAR"
+          ASSETS="$XCFRAMEWORK_ZIP $NATIVE_ZIP $CORE_AAR $XLOG_AAR"
           # one archive per host of the matrix below, in the shape that host
           # packages it in
           for HOST in x86_64-unknown-linux-gnu:tar.gz aarch64-apple-darwin:tar.gz \
@@ -283,15 +288,20 @@ jobs:
         # `RUSTFLAGS` is not exported here on purpose: an exported one replaces
         # the 16 KiB page size that .cargo/config.toml sets per Android target.
         run: scripts/build_android.sh dist/native
-      - name: Assemble the AAR
+      - name: Assemble the AARs
         run: |
           set -euo pipefail
           cd dist/native
           zip -q -r "$GITHUB_WORKSPACE/dist/$NATIVE_ZIP" .
           cd "$GITHUB_WORKSPACE"
-          mkdir -p android/mars-xlog/libs
-          cp -r dist/native/. android/mars-xlog/libs/
-          (cd android && ./gradlew --no-daemon :mars-xlog:assembleRelease)
+          # the same .so in both modules: mars-core wraps all of it, mars-xlog
+          # only the logging half
+          for MODULE in mars-core mars-xlog; do
+            mkdir -p "android/$MODULE/libs"
+            cp -r dist/native/. "android/$MODULE/libs/"
+          done
+          (cd android && ./gradlew --no-daemon :mars-core:assembleRelease :mars-xlog:assembleRelease)
+          cp android/mars-core/build/outputs/aar/mars-core-release.aar "dist/$CORE_AAR"
           cp android/mars-xlog/build/outputs/aar/mars-xlog-release.aar "dist/$XLOG_AAR"
       - uses: actions/upload-artifact@v4
         with:
@@ -474,8 +484,9 @@ jobs:
           TAG: ${{ needs.version.outputs.tag }}
         run: |
           set -euo pipefail
-          # the group the AAR is published under, and the one JitPack always
-          # answers for; both name the same repository
+          # the group the AARs are published under, and the one JitPack always
+          # answers for; both name the same repository, and one build of it
+          # publishes both modules
           TRIGGERED=""
           for REPO in "$JITPACK_GROUP.$JITPACK_ARTIFACT" "com.github.orangeboyChen.mars-rs"; do
             URL="https://jitpack.io/api/builds/$REPO/$TAG"
@@ -524,7 +535,26 @@ jobs:
             STATE=$(status || true)
             echo "JitPack $TAG: ${STATE:-unknown}"
             case "$(printf '%s' "$STATE" | tr '[:upper:]' '[:lower:]')" in
-              ok) echo "JitPack build succeeded"; exit 0 ;;
+              ok)
+                echo "JitPack build succeeded"
+                # an "ok" build is not proof that both AARs resolve: check each
+                # one, over the group spellings and the two versions JitPack
+                # answers for. A warning and not an error — the release is
+                # published either way, and the URL convention is JitPack's.
+                for ARTIFACT in "$JITPACK_ARTIFACT" "$JITPACK_ARTIFACT_XLOG"; do
+                  FOUND=""
+                  for GROUP in "$JITPACK_GROUP" "com.github.orangeboyChen.mars-rs"; do
+                    for VERSION in "$TAG" "${TAG#v}"; do
+                      URL="https://jitpack.io/$(printf '%s' "$GROUP" | tr '.' '/')/$ARTIFACT/$VERSION/$ARTIFACT-$VERSION.aar"
+                      if curl -sSfLo /dev/null "$URL"; then
+                        echo "resolved $GROUP:$ARTIFACT:$VERSION"
+                        FOUND="$URL"
+                      fi
+                    done
+                  done
+                  [ -n "$FOUND" ] || echo "::warning::$ARTIFACT did not resolve on jitpack.io for $TAG, see $LOG"
+                done
+                exit 0 ;;
               error)
                 echo "::error::JitPack build failed, see $LOG"
                 curl -sSfL "$LOG" | tail -40 || true
@@ -551,5 +581,6 @@ jobs:
             echo ""
             echo '```kotlin'
             echo "implementation(\"$JITPACK_GROUP:$JITPACK_ARTIFACT:$TAG\")"
+            echo "implementation(\"$JITPACK_GROUP:$JITPACK_ARTIFACT_XLOG:$TAG\")"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

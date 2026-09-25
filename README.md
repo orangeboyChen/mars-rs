@@ -1,9 +1,10 @@
-# mars-xlog, in Rust
+# mars, in Rust
 
-Rust implementation of the **xlog** logging pipeline of
-[Tencent/mars](https://github.com/Tencent/mars). It writes and reads exactly
-the `.xlog` format the C++ implementation produced — encrypted or plain,
-zlib- or zstd-compressed, sync or async — and is the whole logging stack:
+Rust implementation of [Tencent/mars](https://github.com/Tencent/mars): the
+**xlog** logging pipeline, the **STN** task model and the **SDT** network
+diagnosis. xlog is the half that is pinned to a file format — it writes and
+reads exactly the `.xlog` the C++ implementation produced, encrypted or plain,
+zlib- or zstd-compressed, sync or async — and this is the whole stack:
 
 | crate                 | what it is                                                        |
 |-----------------------|-------------------------------------------------------------------|
@@ -71,30 +72,44 @@ version, or with a bump and a channel — `v1.2.3-alpha1`, `v1.2.3-beta2`,
 .package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
 ```
 
-The product is `MarsRS` — one module for the port, not for one of its halves —
-and it is Swift over the `MarsRSFFI` binary target, which is the static
-`MarsRS.xcframework.zip` published with the release. The tag and the SPM
-checksum are written into `Package.swift` by the release workflow on a
-`chore/package-swift-<tag>` branch, proposed as a pull request.
+Two products, the pair the Android packages make of `mars-rs` and
+`mars-rs-xlog`: `MarsRS` is the whole port, `MarsRSXlog` is the logging half
+of it, for an app that only logs. Both are Swift over the `MarsRSFFI` binary
+target — the static `MarsRS.xcframework.zip` published with the release — so
+taking the smaller one drops nothing but the promise of STN and SDT. The tag
+and the SPM checksum are written into `Package.swift` by the release workflow
+on a `chore/package-swift-<tag>` branch, proposed as a pull request.
 
-`Sources/MarsRS/Xlog.swift` is the only file in it today: `mars-ffi` is an xlog
-C ABI (21 `mars_xlog_*` symbols, nothing else), so xlog is all the Swift layer
-can reach. `Stn.swift` and `Sdt.swift` join it when the C ABI carries them;
-orangeboyChen/mars ships xlog alone for the same reason.
+`Sources/MarsRSXlog/Xlog.swift` is what the port exposes today: `mars-ffi` is
+an xlog C ABI (21 `mars_xlog_*` symbols, nothing else), so xlog is all the Swift
+layer can reach and `MarsRS` re-exports `MarsRSXlog` and nothing more.
+`Stn.swift` and `Sdt.swift` join the umbrella when the C ABI carries them —
+that is why `MarsRS` exists as a module of its own and not just as a name for
+xlog. orangeboyChen/mars ships a single `MarsXlog` product for the same reason;
+here the xlog-only import is `import MarsRSXlog`.
 
 ### Android (JitPack)
+
+Two AARs over the same `libmarsxlog.so` — the pair the C++ project publishes
+as `mars-core` and `mars-xlog`:
 
 ```kotlin
 // settings.gradle.kts
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen:mars-rs:v0.1.0")
+implementation("io.github.orangeboychen:mars-rs:v0.1.0")       // the whole port
+implementation("io.github.orangeboychen:mars-rs-xlog:v0.1.0")  // xlog alone
 ```
 
-The AAR is `mars-xlog.aar`: `libmarsxlog.so` (crate `mars-jni`) for
-`arm64-v8a`, `armeabi-v7a` and `x86_64`, plus
-`io.github.orangeboychen.marsrs.xlog.Xlog` — the package whose natives
+| AAR | artifact | what is in it |
+|---|---|---|
+| `mars-core.aar` | `mars-rs` | every Java class whose natives `mars-jni` exports — `xlog`, `stn`, `sdt`, `app`, `comm` and `BaseEvent`/`Mars` — plus `libmarsxlog.so` for `arm64-v8a`, `armeabi-v7a` and `x86_64` |
+| `mars-xlog.aar` | `mars-rs-xlog` | `xlog.Xlog` and the `xlog.Log` facade over it, plus the same `libmarsxlog.so` |
+
+Take `mars-rs` when you want STN or SDT, `mars-rs-xlog` when the app only logs;
+both carry the whole library, because there is one `.so` and it is not split.
+The Java package is `io.github.orangeboychen.marsrs`, the package whose natives
 `mars-jni` exports, so the two are renamed together. A repository is also
 reachable on JitPack as `com.github.<owner>.<repo>`, which is the spelling its
 badge prints; the release workflow asks jitpack.io to build the tag under both
@@ -116,7 +131,8 @@ downloads `mars-android-native.zip` of the same release first — see
 ```bash
 scripts/build_xcframework.sh 0.1.0 dist   # MarsRS.xcframework.zip
 scripts/build_android.sh dist/native      # <abi>/libmarsxlog.so
-(cd android && ./gradlew :mars-xlog:assembleRelease)
+# the .so of dist/native has to be under android/<module>/libs first
+(cd android && ./gradlew :mars-core:assembleRelease :mars-xlog:assembleRelease)
 ```
 
 ## License
