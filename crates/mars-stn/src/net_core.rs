@@ -853,6 +853,11 @@ impl NetCore {
     pub fn on_network_change_at(&mut self, now: u64) {
         self.net_source.clear_cache();
         self.dynamic_timeout.reset();
+        // the two queues keep a timeout of their own — the C++ hands them the
+        // *same* one the net core has — so the network they learned is theirs
+        // to forget too
+        self.shortlink.dynamic_timeout().reset();
+        self.longlink.dynamic_timeout().reset();
         if self.use_long_link {
             self.timing_sync.on_network_change_at(now);
             self.longlink.on_network_change_at(now);
@@ -1052,10 +1057,11 @@ impl NetCore {
         self.netcheck
             .update_long_link_info_at(now, continuous_fail, err_type == ErrCmdType::Ok);
 
-        let is_main = self
-            .links
-            .get(name)
-            .is_some_and(|meta| meta.config().is_main());
+        // the C++ asks the link's own `IsMain()`; the port's `is_main` is what
+        // the config was made with, and the main link since is the one
+        // [`NetCore::mark_main_longlink`] named — a task that is out on the
+        // link the app marked is the one whose errors the app hears about
+        let is_main = self.default_link.as_deref() == Some(name);
         if is_main {
             if let Some(report) = self.on_longlink_network_err.as_mut() {
                 report(err_type, err_code, ip, port);
@@ -1263,6 +1269,12 @@ impl NetCore {
 
     /// `MarkMainLonglink_ext(_name)` — `false` when there is no such link, or
     /// when it is already the main one.
+    ///
+    /// The C++ moves the link's `fun_network_report_` and the timing sync's and
+    /// the keeper's signals over to the new link and flips `Config().isMain` on
+    /// both; the port's hooks are the app's, installed once for every channel,
+    /// so what moves here is the one thing that is asked about: which link's
+    /// errors and status are the app's business.
     pub fn mark_main_longlink(&mut self, name: &str) -> bool {
         if !self.links.contains_key(name) || self.default_link.as_deref() == Some(name) {
             return false;
@@ -1644,7 +1656,7 @@ mod tests {
     use crate::longlink_task_manager::Response as LongAnswer;
     use crate::shortlink_task_manager::Response as ShortAnswer;
     use crate::task_profile::LOCAL_LONG_LINK_RELEASED;
-    use crate::{RespHandle, RunId, TaskFailHandleType, NET_TYPE_WIFI};
+    use crate::{DynamicTimeoutStatus, RespHandle, RunId, TaskFailHandleType, NET_TYPE_WIFI};
 
     const NOW: u64 = 100 * 1000;
     const MAIN: &str = DEFAULT_LONGLINK_NAME;
@@ -2277,6 +2289,67 @@ mod tests {
         assert_eq!(
             rec.long_err(),
             vec![(ErrCmdType::Socket, -1, "1.2.3.4".to_string(), 443)]
+        );
+    }
+
+    #[test]
+    fn the_errors_the_app_hears_about_are_the_ones_of_the_link_it_marked_main() {
+        let (mut core, rec) = wired();
+        core.create_long_link(LonglinkConfig::new("second"));
+        assert!(core.mark_main_longlink("second"));
+
+        // the link the app marked is the main one now, so its errors are the
+        // app's and the first link's are not
+        core.on_longlink_network_error_at(NOW, MAIN, ErrCmdType::Socket, -1, "1.2.3.4", 443);
+        assert!(rec.long_err().is_empty());
+
+        core.on_longlink_network_error_at(NOW, "second", ErrCmdType::Socket, -1, "5.6.7.8", 443);
+        assert_eq!(
+            rec.long_err(),
+            vec![(ErrCmdType::Socket, -1, "5.6.7.8".to_string(), 443)]
+        );
+    }
+
+    #[test]
+    fn a_network_change_forgets_the_network_every_queue_learned() {
+        let (mut core, _rec) = wired();
+
+        // a network the two queues learned on their own: one that answered
+        // slowly enough to be called `Bad`
+        core.shortlink().dynamic_timeout().record_at(
+            crate::dynamic_timeout::NetworkKind::Mobile,
+            1,
+            10_000,
+            NOW,
+        );
+        core.longlink().dynamic_timeout().record_at(
+            crate::dynamic_timeout::NetworkKind::Mobile,
+            1,
+            10_000,
+            NOW,
+        );
+        core.dynamic_timeout().record_at(
+            crate::dynamic_timeout::NetworkKind::Mobile,
+            1,
+            10_000,
+            NOW,
+        );
+
+        core.on_network_change_at(NOW + 1);
+
+        // the C++ resets the one timeout all three share, which is what a
+        // change of network means: what was learned about the old one is gone
+        assert_eq!(
+            core.shortlink().dynamic_timeout().status(),
+            DynamicTimeoutStatus::Evaluating
+        );
+        assert_eq!(
+            core.longlink().dynamic_timeout().status(),
+            DynamicTimeoutStatus::Evaluating
+        );
+        assert_eq!(
+            core.dynamic_timeout().status(),
+            DynamicTimeoutStatus::Evaluating
         );
     }
 
