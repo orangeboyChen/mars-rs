@@ -28,12 +28,14 @@
 //! `mars::comm::random_shuffle` and `rand()` are the platform's rng in the C++.
 //! Both are one callback here ([`SimpleIpPortSort::set_random`]), which is what
 //! makes the shuffle a test can pin down; what it is by default is a xorshift
-//! seeded from the tick count.
+//! seeded from the tick count. The shuffle itself is the C++'s own, in
+//! [`mars_comm::shuffle::random_shuffle`].
 
 use std::collections::{HashMap, VecDeque};
 
 use crate::task::Task;
 use crate::Random;
+use mars_comm::shuffle::random_shuffle;
 
 /// `kRecordTimeout` — a record older than this, in seconds, is gone the next
 /// time the file is read or written.
@@ -577,10 +579,7 @@ impl SimpleIpPortSort {
     /// the ones without one in between.
     fn sort_by_banned(&mut self, items: &mut Vec<IpPortItem>, use_ipv6: bool) {
         // `mars::comm::random_shuffle`
-        for i in (1..items.len()).rev() {
-            let j = self.random(i + 1);
-            items.swap(i, j);
-        }
+        random_shuffle(items.as_mut_slice(), &mut *self.random);
 
         // pull the pairs that share an ip apart, so one host does not take all
         // the first tries
