@@ -8,6 +8,7 @@
 //! reduced count) and cold ones are dropped.
 
 use crate::task::Task;
+use mars_comm::adler32::adler32;
 use mars_comm::tickcount::gettickcount;
 
 /// At most this many records are tracked.
@@ -151,22 +152,4 @@ impl FrequencyLimit {
     pub fn records(&self) -> &[AvalancheRecord] {
         &self.records
     }
-}
-
-/// `::adler32(0, buffer, len)`, the hash STN keys its avalanche table on.
-///
-/// `mars/comm/adler32.c` is the public-domain Mark Adler reference
-/// implementation; this is the same arithmetic. The seed is the `0` STN passes
-/// rather than the `1` zlib starts from, so an empty body hashes to `0` and
-/// `"mars"` hashes one lower than the value everyone quotes: what matters for
-/// the table — and for the C++ it shares the table with — is that the two
-/// sides agree, not that they agree with zlib.
-pub fn adler32(data: &[u8]) -> u32 {
-    let mut a: u32 = 0;
-    let mut b: u32 = 0;
-    for byte in data {
-        a = (a + u32::from(*byte)) % 65521;
-        b = (b + a) % 65521;
-    }
-    (b << 16) | a
 }

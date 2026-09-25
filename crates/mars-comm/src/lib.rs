@@ -27,6 +27,10 @@
 //!
 //! `base64` mirrors `comm/crypt/ibase64.h` — the `Basic` a proxy is logged in
 //! with, which is the one thing mars needs an encoding for.
+//!
+//! `adler32` mirrors `comm/adler32.c`, the checksum [`frequency_limit`] and
+//! [`basepacker`] hash with, and `basepacker` mirrors `comm/basepacker.cc` —
+//! the wire format the long link spoke before `longlink_packer.cc`.
 
 /// The NAT64 prefix of [`ipv6_address`] is one value for the whole process, so
 /// the unit tests that move it need **one** lock for the crate, not one per
@@ -41,8 +45,10 @@ pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+pub mod adler32;
 pub mod alarm;
 pub mod base64;
+pub mod basepacker;
 pub mod frequency_limit;
 pub mod http;
 pub mod ipv6_address;
@@ -55,6 +61,7 @@ pub mod strutil;
 pub mod thread;
 pub mod tickcount;
 
+pub use adler32::{adler32, adler32_seeded};
 pub use frequency_limit::FrequencyLimit;
 pub use local_ipstack::LocalIpStack;
 pub use proxy::{ProxyInfo, ProxyType};
