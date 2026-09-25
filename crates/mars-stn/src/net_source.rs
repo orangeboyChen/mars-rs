@@ -32,6 +32,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::simple_ipport_sort::{IpPortItem, IpSourceType, SimpleIpPortSort};
 use crate::task::Task;
 use crate::Random;
+use mars_comm::shuffle::random_shuffle;
 use mars_comm::tickcount::gettickcount;
 
 /// `kItemDelimiter` — what [`NetSource::dump_table`] puts between the fields of
@@ -990,10 +991,7 @@ impl NetSource {
     /// `random_shuffle(_ip_items.begin() + len, _ip_items.end())` — only the
     /// pairs one host just added move; what was in the list stays put.
     fn shuffle(&mut self, items: &mut [IpPortItem]) {
-        for index in (1..items.len()).rev() {
-            let picked = (self.random)(index + 1);
-            items.swap(index, picked);
-        }
+        random_shuffle(items, &mut *self.random);
     }
 
     /// `ActiveLogic::IsActive()`.
