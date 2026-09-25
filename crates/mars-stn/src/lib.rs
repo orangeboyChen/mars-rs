@@ -37,6 +37,10 @@
 //! ([`longlink_connect_monitor`]): an interval out of a table, and a ladder it
 //! walks while the app is in the background.
 //!
+//! The eighth slice is when a run of failed tasks is a network worth
+//! diagnosing ([`net_check_logic`]): a window of the last thirty-two tasks of
+//! each link, and two limits on how often the diagnosis may start.
+//!
 //! Everything that needs the app callbacks (`net_core`, `longlink_task_manager`,
 //! `shortlink`, `stn_logic`) comes later.
 
@@ -91,6 +95,7 @@ pub mod frequency_limit;
 pub mod longlink;
 pub mod longlink_connect_monitor;
 pub mod longlink_identify_checker;
+pub mod net_check_logic;
 pub mod signalling_keeper;
 pub mod simple_ipport_sort;
 pub mod smart_heartbeat;
@@ -111,6 +116,11 @@ pub use longlink_connect_monitor::{
     START_CHECK_PERIOD, TIME_CHECK_PERIOD, UP_OR_DOWN_THRESHOLD, WAKE_ALARM_INTERVAL,
 };
 pub use longlink_identify_checker::{IdentifyMode, LongLinkIdentifyChecker};
+pub use net_check_logic::{
+    NetCheckLogic, CHECK_IF_ABOVE_COUNT, CHECK_IF_BELOW_COUNT, CHECK_TIME_SPAN_INCREMENT_STEP,
+    LIMIT_COUNT, LIMIT_TIME_SPAN, MIN_CHECK_TIME_SPAN, MOST_RECENT_TASK_START_N, NET_CHECK_MODE,
+    SECOND_RECENT_TASK_START_N, VALID_BITS_FILTER,
+};
 pub use signalling_keeper::{SignallingKeeper, DEFAULT_KEEP_TIME, DEFAULT_PERIOD};
 pub use simple_ipport_sort::{
     BanItem, IpPortItem, IpSourceType, Record, RecordItem, SimpleIpPortSort, BAN_FAIL_COUNT,

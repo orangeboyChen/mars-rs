@@ -9,3 +9,4 @@ description = "Rust port of the Mars STN task pipeline (task model, anti-avalanc
 
 [dependencies]
 mars-comm = { workspace = true }
+mars-sdt = { workspace = true }

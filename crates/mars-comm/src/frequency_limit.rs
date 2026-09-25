@@ -5,8 +5,12 @@ use std::collections::VecDeque;
 
 /// `CommFrequencyLimit`.
 ///
-/// `check()` returns `true` while fewer than `count` calls happened within the
-/// last `time_span` milliseconds, and `false` once the budget is used up.
+/// `check()` returns `true` while no more than `count` calls are on the books
+/// within the last `time_span` milliseconds, and `false` once the budget is
+/// used up — the C++'s test is `touch_times_.size() <= count_`, so `count + 1`
+/// calls go through per span. [`FrequencyLimit::new`] still asserts
+/// `count > 0` the way the C++ does, so the smallest limit there is lets two
+/// calls through, and a caller that needs one has to count them itself.
 ///
 /// The C++ amends its history when the clock jumps backwards (a user changing
 /// the device time) instead of blocking forever; the port does the same, and
