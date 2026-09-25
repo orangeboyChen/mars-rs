@@ -20,9 +20,10 @@
 //! QUIC ones, mmtls) are not here yet; they come with the code that reads
 //! them.
 
-use mars_comm::ProxyInfo;
+use mars_comm::{LocalIpStack, ProxyInfo};
 
 use crate::simple_ipport_sort::{IpPortItem, IpSourceType};
+use crate::socket_operator::SocketFd;
 use crate::task::Task;
 
 /// `ErrCmdType` of `mars/stn/stn.h` — how a task failed.
@@ -142,6 +143,14 @@ pub struct ConnectProfile {
     pub net_type: String,
     /// `nettype_for_report` — `-1` until something sets it.
     pub nettype_for_report: i32,
+    /// `ispcode` — the isp code of a mobile network, which is what
+    /// `getCurrNetLabel` writes into `net_type` for one: the label of a mobile
+    /// network *is* the isp code, as a number.
+    pub ispcode: i32,
+    /// `task_id` — the task the connect was made for.
+    pub task_id: u32,
+    /// `cgi` — what the task asked for.
+    pub cgi: String,
     /// `start_time` — when the run began.
     pub start_time: u64,
     /// `dns_time` — when the ips were asked for.
@@ -202,6 +211,26 @@ pub struct ConnectProfile {
     /// `nat64` — whether the local network is IPv6-only, which is what turns a
     /// v4 address into a NAT64 one.
     pub nat64: bool,
+    /// `local_net_stack` — what the local network carries, which is what the
+    /// nat64 flag above comes from. [`LocalIpStack`] is the C++'s `int`, with
+    /// the same numbers.
+    pub local_net_stack: LocalIpStack,
+    /// `start_connect_time` — when the connect began.
+    pub start_connect_time: u64,
+    /// `connect_successful_time` — when it came back, socket or no socket.
+    pub connect_successful_time: u64,
+    /// `socket_fd` — the socket the connect came back with; a reused one is
+    /// this too, with [`ConnectProfile::is_reused_fd`] saying so.
+    pub socket_fd: SocketFd,
+    /// `is_reused_fd` — whether the socket came out of the pool rather than
+    /// from a connect.
+    pub is_reused_fd: bool,
+    /// `connection_identify` — what the operator calls the socket in a log; one
+    /// that came out of the pool is logged with `@REUSE` after it.
+    pub connection_identify: String,
+    /// `ipv6_connect_failed` — a v6 pair was tried first and the connect
+    /// landed on a later one.
+    pub ipv6_connect_failed: bool,
     /// `noop_profiles` — every heartbeat this link sent.
     pub noop_profiles: Vec<NoopProfile>,
     /// `tls_handshake_mismatch` — what a run keeps across a profile update.
@@ -240,6 +269,9 @@ impl Default for ConnectProfile {
         Self {
             net_type: String::new(),
             nettype_for_report: -1,
+            ispcode: 0,
+            task_id: 0,
+            cgi: String::new(),
             start_time: 0,
             dns_time: 0,
             dns_endtime: 0,
@@ -269,6 +301,13 @@ impl Default for ConnectProfile {
             disconn_errcode: 0,
             disconn_signal: 0,
             nat64: false,
+            local_net_stack: LocalIpStack::None,
+            start_connect_time: 0,
+            connect_successful_time: 0,
+            socket_fd: SocketFd::INVALID,
+            is_reused_fd: false,
+            connection_identify: String::new(),
+            ipv6_connect_failed: false,
             noop_profiles: Vec::new(),
             tls_handshake_mismatch: false,
             tls_handshake_success: false,
@@ -394,6 +433,13 @@ mod tests {
         assert_eq!(profile.disconn_errtype, ErrCmdType::Ok);
         assert!(profile.ip_type == IpSourceType::Null);
         assert!(!profile.is_finished(), "no disconn_time yet");
+        assert_eq!(
+            profile.socket_fd,
+            SocketFd::INVALID,
+            "the C++ resets it to INVALID_SOCKET"
+        );
+        assert_eq!(profile.local_net_stack, LocalIpStack::None);
+        assert!(!profile.is_reused_fd);
     }
 
     #[test]

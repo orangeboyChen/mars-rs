@@ -87,8 +87,13 @@
 //! five fields mars writes for itself, and an answer that is the body when the
 //! status is 200 and `kEctHttp` with the status when it is not.
 //!
+//! The eighteenth slice is the short link itself, and the connect it is made on
+//! ([`short_link`]): the pairs a task may go out on, the proxy it goes through
+//! when it goes through one, the socket the pool still has for one of them, and
+//! the profile the connect writes as it goes.
+//!
 //! What still needs the app callbacks (`net_core`, `longlink_task_manager`, the
-//! short link itself, `stn_logic`) comes later.
+//! run that writes and reads a short link, `stn_logic`) comes later.
 
 /// The `static`s of this crate are one value for the whole process —
 /// `sg_client_version` in [`longlink`], `outer_setted_heart_` in
@@ -146,6 +151,7 @@ pub mod longlink_speed_test;
 pub mod net_check_logic;
 pub mod net_source;
 pub mod netsource_timercheck;
+pub mod short_link;
 pub mod shortlink;
 pub mod signalling_keeper;
 pub mod simple_ipport_sort;
@@ -193,6 +199,7 @@ pub use net_source::{
     DISABLE_QUIC_SECONDS, ITEM_DELIMITER, NUM_MAKE_COUNT,
 };
 pub use netsource_timercheck::{NetSourceTimerCheck, INTERVAL_TIME, MAX_SPEED_TEST_COUNT, TIMEOUT};
+pub use short_link::{NetworkLabel, ShortLink, DEFAULT_CONNECT_TIMEOUT_MS, ETIMEDOUT, K_MOBILE};
 pub use shortlink::{
     default_packer, is_keep_alive, keep_alive, pack, request_headers, request_url, Headers,
     KeepAlive, Packer,
