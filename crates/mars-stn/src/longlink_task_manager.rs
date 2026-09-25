@@ -1720,7 +1720,13 @@ fn due(profile: &TaskProfile, now: u64, network: NetworkKind) -> Vec<Timeout> {
 /// task of a channel that timed out is the one the channel is failed for.
 fn upsert(batch: &mut Vec<(String, i32, u32)>, name: String, entry: (i32, u32)) {
     match batch.iter_mut().find(|(channel, _, _)| *channel == name) {
-        Some(found) => found.1 = entry.0,
+        // `std::map::operator[] = std::make_pair(..)` — an assignment, so the
+        // whole pair is replaced: the last task of the channel that timed out
+        // wins the code *and* the task id the code belongs to
+        Some(found) => {
+            found.1 = entry.0;
+            found.2 = entry.1;
+        }
         None => batch.push((name, entry.0, entry.1)),
     }
 }
@@ -2266,6 +2272,51 @@ mod tests {
         );
         assert!(manager.has_task(7), "and it is tried again");
         assert_eq!(manager.retry_interval(), RETRY_INTERNAL);
+    }
+
+    #[test]
+    fn the_last_task_of_a_channel_that_timed_out_is_the_one_the_code_is_for() {
+        let mut manager = manager();
+        let (_, ended, _, _) = wire(&mut manager);
+        // two tasks of one channel, both out and neither with a try left
+        let mut first = task(7);
+        first.retry_count = 0;
+        let mut second = task(8);
+        second.retry_count = 0;
+        manager.start_task_at(NOW, first, Task::CHANNEL_LONG);
+        manager.start_task_at(NOW, second, Task::CHANNEL_LONG);
+        manager.on_send_at(NOW, 7);
+        manager.on_send_at(NOW, 8);
+
+        // both are out, and the second one waits `WIFI_TASK_DELAY` longer for
+        // its first package than the first (`__FirstPkgTimeout` counts the
+        // tasks that are already out), so this is the reading at which the two
+        // of them have run into it
+        let first_pkg = manager
+            .tasks()
+            .iter()
+            .map(|profile| profile.transfer_profile.first_pkg_timeout)
+            .max()
+            .expect("two tasks");
+        manager.run_loop_at(NOW + first_pkg);
+
+        // `batchMap[name] = make_pair(code, src_taskid)` replaces the whole
+        // pair, so the *last* task of the channel that timed out is the one
+        // the error code belongs to; the other is failed with `0`.
+        assert_eq!(
+            *ended
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![
+                (ErrCmdType::NetMsgXp, 0, TaskFailHandleType::Default, 7),
+                (
+                    ErrCmdType::NetMsgXp,
+                    LONG_FIRST_PKG_TIMEOUT,
+                    TaskFailHandleType::Default,
+                    8
+                ),
+            ]
+        );
     }
 
     #[test]
