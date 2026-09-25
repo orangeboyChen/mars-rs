@@ -15,7 +15,7 @@ zlib- or zstd-compressed, sync or async — and is the whole logging stack:
 | `mars-buffer`    | the mmap append buffer (`LogZlibBuffer` / `LogZstdBuffer`)        |
 | `mars-appender`  | the process-wide appender and per-instance loggers                |
 | `mars-ffi`       | C ABI (`cdylib` + `staticlib`) and its hand-written header        |
-| `mars-jni`       | JNI bindings of `io.github.marsrs.xlog.Xlog`                      |
+| `mars-jni`       | JNI bindings of `io.github.marsrs`: `Xlog`, `StnLogic`, `SdtLogic`|
 | `mars-compat`    | CLI plus the golden `.xlog` files that pin the wire format        |
 
 ## Build and test
@@ -37,9 +37,10 @@ export ANDROID_HOME=...            # .cargo/config.toml forces 16 KiB pages
 cargo build --release -p mars-jni --target aarch64-linux-android
 ```
 
-`unsafe` appears in exactly two places: the C ABI shims of `mars-ffi` and
+`unsafe` appears in exactly three places: the C ABI shims of `mars-ffi`,
 the single `memmap2::MmapOptions::map_mut` call of `mars-appender` (there
-is no safe API for creating a mapping). Both carry SAFETY notes.
+is no safe API for creating a mapping) and the one `JString::from_raw` of
+`mars-jni`, which re-wraps a borrowed local ref. All three carry SAFETY notes.
 
 ## The format is pinned by golden files
 

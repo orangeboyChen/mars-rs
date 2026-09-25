@@ -14,4 +14,7 @@ name = "marsxlog"
 
 [dependencies]
 mars-appender = { workspace = true }
+mars-comm = { workspace = true }
+mars-sdt = { workspace = true }
+mars-stn = { workspace = true }
 jni = { workspace = true }

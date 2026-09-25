@@ -170,8 +170,38 @@ pub(crate) fn set_max_alive_time_impl(instance: u64, seconds: jlong) {
     set_max_alive_duration(instance, seconds.max(0) as u64)
 }
 
+/// The `native` methods of `io.github.marsrs.stn.StnLogic`.
+pub mod stn;
+
+/// The `native` methods of `io.github.marsrs.sdt.SdtLogic`.
+pub mod sdt;
+
+/// `io.github.marsrs.comm.Alarm` — the timer the app broadcasts into.
+pub mod alarm;
+
+/// `io.github.marsrs.comm.WakerLock` — the wake lock the platform holds.
+pub mod wakerlock;
+
+/// `io.github.marsrs.app.AppLogic` — what the app is.
+pub mod app_logic;
+
+/// `io.github.marsrs.comm.PlatformComm$C2Java` — what the platform answers.
+pub mod platform_comm;
+
 /// `Xlog.appenderOpen`.
 pub mod jni_bridge;
+
+/// The state of this crate is process-wide — one alarm set, one long-link
+/// address, one appender — so the tests need **one** lock for the whole crate,
+/// not one per module: `alarm`'s reset would otherwise drop an id another
+/// module is holding.
+#[cfg(test)]
+pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[cfg(test)]
 mod tests {
