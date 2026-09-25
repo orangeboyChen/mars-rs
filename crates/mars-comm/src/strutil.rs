@@ -18,23 +18,28 @@ fn is_space(byte: u8) -> bool {
 
 /// `strutil::URLEncode` — unreserved characters pass through, a space becomes
 /// `+`, everything else becomes `%XX` with **upper-case** hex digits.
+///
+/// The escaped form of every byte is three characters, so the result is built
+/// in one allocation of `3 * len` — a buffer a caller hands in, which is what
+/// the C++'s `URLEncode(url, out)` is, is not something this needs: a caller
+/// that wants to append pushes the [`String`] it gets.
 pub fn url_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    url_encode_into(s, &mut out);
-    out
-}
-
-/// `strutil::URLEncode(url, out)` — appends to `out` instead of allocating.
-pub fn url_encode_into(s: &str, out: &mut String) {
-    for byte in s.as_bytes() {
+    let mut out = String::with_capacity(s.len() * 3);
+    for &byte in s.as_bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-' | b'_' | b'*' => {
-                out.push(*byte as char)
+                out.push(byte as char)
             }
             b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{byte:02X}")),
+            _ => {
+                use std::fmt::Write;
+                // writing into a `String` cannot fail
+                let _ = write!(out, "%{byte:02X}");
+            }
         }
     }
+    out.shrink_to_fit();
+    out
 }
 
 /// `strutil::TrimLeft`.
@@ -62,36 +67,18 @@ pub fn trim(s: &str) -> &str {
     trim_right(trim_left(s))
 }
 
-/// `strutil::ToLower`, ASCII only.
-pub fn to_lower_in_place(s: &mut String) {
-    for byte in unsafe { s.as_mut_vec() } {
-        if byte.is_ascii_uppercase() {
-            *byte += b'a' - b'A';
-        }
-    }
-}
-
-/// `strutil::ToUpper`, ASCII only.
-pub fn to_upper_in_place(s: &mut String) {
-    for byte in unsafe { s.as_mut_vec() } {
-        if byte.is_ascii_lowercase() {
-            *byte -= b'a' - b'A';
-        }
-    }
-}
-
-/// `strutil::cast_lower`.
+/// `strutil::ToLower`, ASCII only — the way [`str::to_ascii_lowercase`] does
+/// it, which is why that is all this is: the C++ walks a `char*` it owns and
+/// writes through it, and a Rust `&str` is not that, so the lower case comes
+/// back as its own [`String`]. A caller that owns one already uses
+/// [`str::make_ascii_lowercase`] on it — `String` derefs to `str`.
 pub fn cast_lower(s: &str) -> String {
-    let mut out = s.to_owned();
-    to_lower_in_place(&mut out);
-    out
+    s.to_ascii_lowercase()
 }
 
-/// `strutil::cast_upper`.
+/// `strutil::ToUpper`, ASCII only. See [`cast_lower`].
 pub fn cast_upper(s: &str) -> String {
-    let mut out = s.to_owned();
-    to_upper_in_place(&mut out);
-    out
+    s.to_ascii_uppercase()
 }
 
 /// `strutil::StartsWith`.

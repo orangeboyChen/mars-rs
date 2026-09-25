@@ -74,7 +74,7 @@ pub type Hosts = dyn FnMut() -> Vec<String> + Send;
 pub type ShortLinkPort = dyn FnMut() -> u16 + Send;
 /// `RequestNetCheckShortLinkHosts` — the C++ hands the vector in for the app
 /// to fill.
-pub type RequestHosts = dyn FnMut(&mut Vec<String>) + Send;
+pub type RequestHosts = dyn FnMut() -> Vec<String> + Send;
 /// `DnsUtil::GetNewDNS().GetHostByName` and `GetDNS().GetHostByName` — the
 /// second is only asked when the first answered nothing.
 pub type Dns = dyn FnMut(&str) -> Vec<String> + Send;
@@ -204,11 +204,12 @@ impl NetCheckLogic {
         self.short_link_port = Some(Box::new(port));
     }
 
-    /// `RequestNetCheckShortLinkHosts(_hostlist)` — the app fills the vector
-    /// in.
+    /// `RequestNetCheckShortLinkHosts(_hostlist)` — the app hands the hosts
+    /// back, which is what the C++'s `std::vector<std::string>&` it fills in
+    /// becomes: nothing is filled in from the outside here.
     pub fn set_request_short_link_hosts(
         &mut self,
-        request: impl FnMut(&mut Vec<String>) + Send + 'static,
+        request: impl FnMut() -> Vec<String> + Send + 'static,
     ) {
         self.request_short_link_hosts = Some(Box::new(request));
     }
@@ -412,10 +413,7 @@ impl NetCheckLogic {
         }
 
         let mut shortlink_check_items = CheckIPPorts::new();
-        let mut shortlink_hostlist = Vec::new();
-        if let Some(request) = self.request_short_link_hosts.as_mut() {
-            request(&mut shortlink_hostlist);
-        }
+        let shortlink_hostlist = self.request_short_link_hosts();
         let shortlink_port = self.short_link_port();
         for host in &shortlink_hostlist {
             let ips = self.resolve(host);
@@ -451,6 +449,14 @@ impl NetCheckLogic {
         }
         match self.dns.as_mut() {
             Some(dns) => dns(host),
+            None => Vec::new(),
+        }
+    }
+
+    /// `RequestNetCheckShortLinkHosts` — an unset app has no hosts to add.
+    fn request_short_link_hosts(&mut self) -> Vec<String> {
+        match self.request_short_link_hosts.as_mut() {
+            Some(request) => request(),
             None => Vec::new(),
         }
     }
@@ -513,7 +519,7 @@ mod tests {
         logic.set_long_link_hosts(|| vec!["long.example".to_string()]);
         logic.set_long_link_ports(|| vec![80, 443]);
         logic.set_short_link_port(|| 8080);
-        logic.set_request_short_link_hosts(|hosts| hosts.push("short.example".to_string()));
+        logic.set_request_short_link_hosts(|| vec!["short.example".to_string()]);
         logic.set_new_dns(|host| {
             if host.starts_with("long") {
                 vec!["1.2.3.4".to_string()]

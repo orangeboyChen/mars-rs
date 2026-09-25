@@ -7,7 +7,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use mars_stn::{IdentifyMode, LongLinkIdentifyChecker};
+use mars_stn::{IdentifyBuffer, LongLinkIdentifyChecker};
 
 /// `Task::kMinorLonglinkCmdMask`, which the public api carries on `Task`.
 const MINOR_LONGLINK_CMD_MASK: u32 = mars_stn::Task::MINOR_LONGLINK_CMD_MASK;
@@ -15,11 +15,8 @@ const MINOR_LONGLINK_CMD_MASK: u32 = mars_stn::Task::MINOR_LONGLINK_CMD_MASK;
 /// The app: it fills the buffer and the hash, and answers `kCheckNow`.
 fn app_that_checks_now() -> LongLinkIdentifyChecker {
     let mut checker = LongLinkIdentifyChecker::new("default", false);
-    checker.set_check_buffer(|_channel, buffer, hash, cmdid| {
-        buffer.extend_from_slice(b"identify");
-        hash.extend_from_slice(b"hash");
-        *cmdid = 17;
-        IdentifyMode::CheckNow
+    checker.set_check_buffer(|_channel, _cmdid| {
+        IdentifyBuffer::now(b"identify".to_vec(), b"hash".to_vec(), 17)
     });
     checker
 }
@@ -27,18 +24,12 @@ fn app_that_checks_now() -> LongLinkIdentifyChecker {
 #[test]
 fn only_a_check_that_is_made_now_hands_a_buffer_out() {
     let mut never = LongLinkIdentifyChecker::new("default", false);
-    never.set_check_buffer(|_channel, buffer, _hash, _cmdid| {
-        buffer.extend_from_slice(b"identify");
-        IdentifyMode::CheckNever
-    });
+    never.set_check_buffer(|_channel, _cmdid| IdentifyBuffer::never(Vec::new()));
     assert!(never.get_identify_buffer().is_none());
     assert!(never.has_checked(), "kCheckNever marks it checked");
 
     let mut next = LongLinkIdentifyChecker::new("default", false);
-    next.set_check_buffer(|_channel, buffer, _hash, _cmdid| {
-        buffer.extend_from_slice(b"identify");
-        IdentifyMode::CheckNext
-    });
+    next.set_check_buffer(|_channel, _cmdid| IdentifyBuffer::next(b"hash".to_vec()));
     assert!(next.get_identify_buffer().is_none());
     assert!(!next.has_checked(), "kCheckNext asks again");
 
@@ -52,9 +43,9 @@ fn a_minor_long_link_hands_its_mask_out_first() {
     let seen = Arc::new(Mutex::new(0u32));
     let recording = Arc::clone(&seen);
     let mut checker = LongLinkIdentifyChecker::new("minor", true);
-    checker.set_check_buffer(move |_channel, _buffer, _hash, cmdid| {
-        *recording.lock().unwrap_or_else(|p| p.into_inner()) = *cmdid;
-        IdentifyMode::CheckNow
+    checker.set_check_buffer(move |_channel, cmdid| {
+        *recording.lock().unwrap_or_else(|p| p.into_inner()) = cmdid;
+        IdentifyBuffer::now(Vec::new(), Vec::new(), cmdid)
     });
 
     let (_buffer, cmdid) = checker.get_identify_buffer().unwrap();
@@ -119,7 +110,7 @@ fn the_response_has_to_be_the_one_that_was_asked_for() {
 #[test]
 fn reset_lets_a_new_connection_ask_again() {
     let mut checker = LongLinkIdentifyChecker::new("default", false);
-    checker.set_check_buffer(|_channel, _buffer, _hash, _cmdid| IdentifyMode::CheckNever);
+    checker.set_check_buffer(|_channel, _cmdid| IdentifyBuffer::never(Vec::new()));
     assert!(checker.get_identify_buffer().is_none());
     assert!(checker.has_checked());
 

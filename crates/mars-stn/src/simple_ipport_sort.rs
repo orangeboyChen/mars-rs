@@ -404,12 +404,18 @@ impl SimpleIpPortSort {
 
     /// `SortandFilter(_items, _needcount, _use_IPv6)` — the tick count comes
     /// from the clock.
+    ///
+    /// The candidates go in and the ones worth trying come back: the C++ takes
+    /// `std::vector<IPPortItem>&` and reorders it where the caller left it,
+    /// which a `&mut Vec` out-parameter here would only pretend to be — the
+    /// sort *replaces* the list (banned pairs are dropped, the rest are
+    /// reordered), so it hands the new one back.
     pub fn sort_and_filter(
         &mut self,
-        items: &mut Vec<IpPortItem>,
-        need_count: i32,
+        items: impl IntoIterator<Item = IpPortItem>,
+        need_count: usize,
         use_ipv6: bool,
-    ) {
+    ) -> Vec<IpPortItem> {
         self.sort_and_filter_at(
             mars_comm::tickcount::gettickcount(),
             items,
@@ -422,23 +428,20 @@ impl SimpleIpPortSort {
     /// put the rest in the order they should be tried in, and keep at most
     /// `need_count` of them.
     ///
-    /// A negative `need_count` keeps them all — the C++'s `resize` of a
-    /// negative number is a length it cannot have.
+    /// [`usize::MAX`] keeps them all, which is the only reading `_needcount`
+    /// can have here: the C++'s `int` is `resize`d to, and a negative one is a
+    /// length a vector cannot have.
     pub fn sort_and_filter_at(
         &mut self,
         now: u64,
-        items: &mut Vec<IpPortItem>,
-        need_count: i32,
+        items: impl IntoIterator<Item = IpPortItem>,
+        need_count: usize,
         use_ipv6: bool,
-    ) {
-        self.filter_by_banned(now, items);
-        self.sort_by_banned(items, use_ipv6);
-
-        if let Ok(need_count) = usize::try_from(need_count) {
-            if need_count < items.len() {
-                items.truncate(need_count);
-            }
-        }
+    ) -> Vec<IpPortItem> {
+        let mut items = self.filter_by_banned(now, items.into_iter().collect());
+        self.sort_by_banned(&mut items, use_ipv6);
+        items.truncate(need_count);
+        items
     }
 
     /// Whether the pair is out right now: `__IsBanned`, plus what
@@ -547,11 +550,13 @@ impl SimpleIpPortSort {
         });
     }
 
-    /// `__FilterbyBanned`.
-    fn filter_by_banned(&mut self, now: u64, items: &mut Vec<IpPortItem>) {
+    /// `__FilterbyBanned` — the pairs that are out, dropped out of the list
+    /// instead of `erase`d out of the one the caller handed in.
+    fn filter_by_banned(&mut self, now: u64, mut items: Vec<IpPortItem>) -> Vec<IpPortItem> {
         items.retain(|item| {
             !self.is_banned_at(now, &item.ip, item.port) && !self.is_server_ban(now, &item.ip)
         });
+        items
     }
 
     /// `__IsServerBan` — and an ip whose ban has run out is forgotten, which is
@@ -1007,21 +1012,21 @@ mod tests {
         sort.add_server_ban_at(1_000, "");
         assert_eq!(sort.server_bans.len(), 1);
 
-        let mut items = vec![
+        let items = vec![
             IpPortItem::new("1.2.3.4", 80),
             IpPortItem::new("5.6.7.8", 80),
         ];
-        sort.sort_and_filter_at(1_000, &mut items, 10, false);
+        let items = sort.sort_and_filter_at(1_000, items, 10, false);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].ip, "5.6.7.8");
 
         // `kServerBanTime` later the ip is back, and forgotten — which only
         // happens if it is offered again, the way `__IsServerBan` erases it
-        let mut items = vec![
+        let items = vec![
             IpPortItem::new("1.2.3.4", 80),
             IpPortItem::new("5.6.7.8", 80),
         ];
-        sort.sort_and_filter_at(1_000 + SERVER_BAN_TIME, &mut items, 10, false);
+        let items = sort.sort_and_filter_at(1_000 + SERVER_BAN_TIME, items, 10, false);
         assert_eq!(items.len(), 2);
         assert!(sort.server_bans.is_empty());
     }
@@ -1032,29 +1037,29 @@ mod tests {
         for at in [0, 11_000, 22_000] {
             fail(&mut sort, at, "1.2.3.4", 80);
         }
-        let mut items = vec![
+        let items = vec![
             IpPortItem::new("1.2.3.4", 80),
             IpPortItem::new("1.2.3.4", 443),
             IpPortItem::new("5.6.7.8", 80),
         ];
-        sort.sort_and_filter_at(22_000, &mut items, 10, false);
+        let items = sort.sort_and_filter_at(22_000, items, 10, false);
         assert_eq!(items.len(), 2, "the banned pair is gone");
         assert!(items
             .iter()
             .all(|item| item.port != 80 || item.ip != "1.2.3.4"));
 
         // `_needcount` keeps the first ones only
-        let mut items: Vec<IpPortItem> = (0..5)
+        let items: Vec<IpPortItem> = (0..5)
             .map(|port| IpPortItem::new("5.6.7.8", port))
             .collect();
-        sort.sort_and_filter_at(22_000, &mut items, 2, false);
+        let items = sort.sort_and_filter_at(22_000, items, 2, false);
         assert_eq!(items.len(), 2);
-        // ... and a negative one keeps them all, which is more than the C++'s
+        // ... and `usize::MAX` keeps them all, which is more than the C++'s
         // `resize` of a negative number could do
-        let mut items: Vec<IpPortItem> = (0..5)
+        let items: Vec<IpPortItem> = (0..5)
             .map(|port| IpPortItem::new("5.6.7.8", port))
             .collect();
-        sort.sort_and_filter_at(22_000, &mut items, -1, false);
+        let items = sort.sort_and_filter_at(22_000, items, usize::MAX, false);
         assert_eq!(items.len(), 5);
     }
 
@@ -1068,11 +1073,11 @@ mod tests {
         fail(&mut sort, 11_000, "1.2.3.4", 80);
         fail(&mut sort, 22_000, "5.6.7.8", 443);
 
-        let mut items = vec![
+        let items = vec![
             IpPortItem::new("1.2.3.4", 80),
             IpPortItem::new("5.6.7.8", 443),
         ];
-        sort.sort_and_filter_at(33_000, &mut items, 10, false);
+        let items = sort.sort_and_filter_at(33_000, items, 10, false);
         assert_eq!(
             items.iter().map(|item| item.port).collect::<Vec<_>>(),
             vec![443, 80],
@@ -1084,24 +1089,24 @@ mod tests {
     #[test]
     fn the_two_families_are_tried_in_turn_when_ipv6_is_used() {
         let mut sort = a_sort("wifi");
-        let mut items = vec![
+        let items = vec![
             IpPortItem::new("1.2.3.4", 80),
             IpPortItem::new("1.2.3.4", 443),
             IpPortItem::new("2001:db8::1", 80),
             IpPortItem::new("2001:db8::2", 80),
         ];
-        sort.sort_and_filter_at(0, &mut items, 10, true);
+        let items = sort.sort_and_filter_at(0, items, 10, true);
         assert_eq!(items.len(), 4);
         // one of each, back and forth
         let v6: Vec<bool> = items.iter().map(|item| item.is_v6()).collect();
         assert_eq!(v6, vec![true, false, true, false]);
 
         // ... and with nothing but one family left, they all come back
-        let mut items = vec![
+        let items = vec![
             IpPortItem::new("1.2.3.4", 80),
             IpPortItem::new("1.2.3.4", 443),
         ];
-        sort.sort_and_filter_at(0, &mut items, 10, true);
+        let items = sort.sort_and_filter_at(0, items, 10, true);
         assert_eq!(items.len(), 2);
     }
 
@@ -1111,10 +1116,10 @@ mod tests {
         // always the first of the `0..bound` the C++'s `rand() % bound` picks
         // from
         sort.set_random(|_bound| 0);
-        let mut items: Vec<IpPortItem> = (0..4)
+        let items: Vec<IpPortItem> = (0..4)
             .map(|port| IpPortItem::new("5.6.7.8", port))
             .collect();
-        sort.sort_and_filter_at(0, &mut items, 10, false);
+        let items = sort.sort_and_filter_at(0, items, 10, false);
         assert_eq!(
             items.iter().map(|item| item.port).collect::<Vec<_>>(),
             vec![1, 2, 3, 0],
@@ -1180,8 +1185,8 @@ mod tests {
         assert!(sort.ban_list().is_empty());
         assert!(format!("{sort:?}").contains("SimpleIpPortSort"));
         // and it is usable without a host at all
-        let mut items = vec![IpPortItem::new("1.2.3.4", 80)];
-        sort.sort_and_filter(&mut items, 10, false);
+        let items = vec![IpPortItem::new("1.2.3.4", 80)];
+        let items = sort.sort_and_filter(items, 10, false);
         assert_eq!(items.len(), 1);
         sort.update(0, "1.2.3.4", 80, true);
         assert!(sort.records().is_empty(), "no network, nothing learned");

@@ -11,9 +11,12 @@ fn url_encode_keeps_unreserved_and_escapes_the_rest() {
     // upper-case hex digits, as the "%02X" of the C++
     assert_eq!(strutil::url_encode("\n"), "%0A");
     assert_eq!(strutil::url_encode("中"), "%E4%B8%AD");
+    assert_eq!(strutil::url_encode(""), "");
 
+    // a caller that appends pushes the `String` it gets — there is no
+    // "encode into" out-parameter to hand in
     let mut out = "x:".to_owned();
-    strutil::url_encode_into("a b", &mut out);
+    out.push_str(&strutil::url_encode("a b"));
     assert_eq!(out, "x:a+b");
 }
 
@@ -30,10 +33,11 @@ fn trims_ascii_whitespace_only() {
 fn case_conversion_is_ascii_only() {
     assert_eq!(strutil::cast_lower("AbC1Ä"), "abc1Ä");
     assert_eq!(strutil::cast_upper("aBc1ö"), "ABC1ö");
+    // a `String` a caller owns is lower-cased where it stands, by `std`
     let mut s = "MiXeD".to_owned();
-    strutil::to_lower_in_place(&mut s);
+    s.make_ascii_lowercase();
     assert_eq!(s, "mixed");
-    strutil::to_upper_in_place(&mut s);
+    s.make_ascii_uppercase();
     assert_eq!(s, "MIXED");
 }
 
