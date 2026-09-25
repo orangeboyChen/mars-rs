@@ -878,16 +878,25 @@ impl NetCore {
     }
 
     /// `StopTask(_taskid)` — long link, then zombies, then short link.
+    ///
+    /// `need_use_longlink_` gates the first two in the C++: a core that was
+    /// told not to use the long link asks neither of them, whatever is still
+    /// queued on them from before.
     pub fn stop_task(&mut self, taskid: u32) -> bool {
-        if self.longlink.stop_task(taskid) {
-            return true;
+        if self.use_long_link {
+            if self.longlink.stop_task(taskid) {
+                return true;
+            }
+            let stopped = self
+                .zombie
+                .lock()
+                .unwrap_or_else(poisoned)
+                .stop_task(taskid);
+            if stopped {
+                return true;
+            }
         }
-        let stopped = self
-            .zombie
-            .lock()
-            .unwrap_or_else(poisoned)
-            .stop_task(taskid);
-        stopped || self.shortlink.stop_task(taskid)
+        self.shortlink.stop_task(taskid)
     }
 
     /// `HasTask(_taskid)`.
@@ -896,10 +905,14 @@ impl NetCore {
         saved || self.longlink.has_task(taskid) || self.shortlink.has_task(taskid)
     }
 
-    /// `ClearTasks()`.
+    /// `ClearTasks()` — the long link's and the zombies' only while the core
+    /// uses one, which is the C++'s `if (need_use_longlink_)`; the short
+    /// link's are always cleared.
     pub fn clear_tasks(&mut self) {
-        self.longlink.clear_tasks();
-        self.zombie().clear_tasks();
+        if self.use_long_link {
+            self.longlink.clear_tasks();
+            self.zombie().clear_tasks();
+        }
         self.shortlink.clear_tasks();
     }
 
@@ -2772,6 +2785,34 @@ mod tests {
         assert!(!core.has_task(8));
         assert_eq!(core.shortlink().len(), 0);
         assert_eq!(core.longlink().len(), 0);
+    }
+
+    /// `if (need_use_longlink_)` in the C++'s `StopTask` and `ClearTasks`:
+    /// with the long link off, neither the long link's tasks nor the zombies
+    /// are asked about — even the ones that went out while it was still on.
+    #[test]
+    fn a_core_with_no_long_link_stops_and_clears_the_short_links_tasks_only() {
+        let (mut core, _rec) = wired();
+        up(&core, LongLinkStatus::Connected);
+        assert!(core.start_task_at(NOW, task(7)));
+        assert!(core.longlink().has_task(7));
+        core.set_need_use_long_link(false);
+
+        assert!(
+            !core.stop_task(7),
+            "the C++ does not ask the long link once the core does not use one"
+        );
+        assert!(core.longlink().has_task(7));
+
+        core.clear_tasks();
+        assert!(core.longlink().has_task(7), "the C++ leaves it where it is");
+        assert_eq!(core.shortlink().len(), 0);
+
+        // ... and a short-link task is still the core's business
+        let mut short = task(8);
+        short.channel_select = Task::CHANNEL_SHORT;
+        assert!(core.start_task_at(NOW, short));
+        assert!(core.stop_task(8));
     }
 
     #[test]
