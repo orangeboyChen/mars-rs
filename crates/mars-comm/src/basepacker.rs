@@ -36,6 +36,10 @@ pub const SIMPLE_CONTINUE: i32 = -2;
 pub const SIMPLE_CONTINUE_DATA: i32 = -1;
 /// `SIMPLE_OK`.
 pub const SIMPLE_OK: i32 = 0;
+/// What the port answers for a simple package that was refused: the C++ has no
+/// such answer, because it hands the caller a body of `_packlen - sizeof(T)`
+/// bytes whatever that comes to.
+pub const SIMPLE_FALSE: i32 = 1;
 
 /// `LONGLINKPACK_CONTINUE` — fewer bytes than a header.
 pub const LONGLINKPACK_CONTINUE: i32 = -3;
@@ -92,6 +96,11 @@ pub enum SimpleUnpacked {
         /// How long the whole package is.
         pack_len: usize,
     },
+    /// The length in front of the body is shorter than the length itself, so
+    /// there is no body to read — the C++ computes `_packlen - sizeof(T)`,
+    /// which has wrapped around, and writes that many bytes.
+    /// [`Refused::Length`] is why, and the C++ has no such answer.
+    Refused(Refused),
     /// `SIMPLE_OK` — a whole package.
     Ok {
         /// How long the whole package is.
@@ -107,6 +116,7 @@ impl SimpleUnpacked {
         match self {
             SimpleUnpacked::Continue => SIMPLE_CONTINUE,
             SimpleUnpacked::ContinueData { .. } => SIMPLE_CONTINUE_DATA,
+            SimpleUnpacked::Refused(_) => SIMPLE_FALSE,
             SimpleUnpacked::Ok { .. } => SIMPLE_OK,
         }
     }
@@ -128,7 +138,8 @@ pub fn simple_int_unpack(raw: &[u8]) -> SimpleUnpacked {
 pub enum Refused {
     /// `magic` is not the low byte of the three lengths added up.
     Magic,
-    /// The URL and the header do not fit in the length the package claims.
+    /// The header — and the URL, where there is one — does not fit in the
+    /// length the package claims.
     Length,
     /// The package claims to be bigger than [`MAX_PACKAGE_LEN`].
     TooBig,
@@ -302,6 +313,10 @@ fn simple_unpack(raw: &[u8], head_len: usize) -> SimpleUnpacked {
         2 => usize::from(u16::from_be_bytes([raw[0], raw[1]])),
         _ => be_u32(raw, 0) as usize,
     };
+
+    if pack_len < head_len {
+        return SimpleUnpacked::Refused(Refused::Length);
+    }
 
     if pack_len > raw.len() {
         return SimpleUnpacked::ContinueData { pack_len };
