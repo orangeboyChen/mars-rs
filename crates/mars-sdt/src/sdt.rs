@@ -155,6 +155,14 @@ pub enum TcpErrCode {
     TcpRespErr = -9,
 }
 
+impl TcpErrCode {
+    /// The integer of `error_code`, for a profile that is going on the air:
+    /// what the C++ writes into `profile.error_code` is the enum itself.
+    pub const fn as_i32(self) -> i32 {
+        self as i32
+    }
+}
+
 /// `CheckStatus` — whether the run loop keeps going.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CheckStatus {

@@ -4,6 +4,7 @@
 //! context; there is no context here, so [`SdtLogic`] owns the core and the
 //! callback directly.
 
+use crate::checkimpl::Ask;
 use crate::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
 use crate::sdt::{Callback, CheckIPPorts, NetCheckType};
 use crate::sdt_core::{CancelHandle, SdtCore};
@@ -124,6 +125,17 @@ impl SdtLogic {
         do_check: impl FnMut(NetCheckType, &mut CheckRequestProfile),
     ) -> Vec<CheckResultProfile> {
         let results = self.core.run_on(do_check);
+        self.report(&results);
+        results
+    }
+
+    /// [`SdtLogic::run`] with the port's own checkers: the four classes the C++
+    /// creates in `__InitCheckReq`, asked through `ask`.
+    ///
+    /// `network_type` is the `comm::getNetInfo()` every checker writes into its
+    /// profiles — the platform is the host's here, so it comes with the run.
+    pub fn run_checks(&mut self, ask: &mut Ask, network_type: i32) -> Vec<CheckResultProfile> {
+        let results = self.core.run_checks(ask, network_type);
         self.report(&results);
         results
     }
