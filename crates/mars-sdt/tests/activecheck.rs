@@ -185,6 +185,37 @@ fn the_dns_check_records_what_the_resolve_answered() {
 }
 
 #[test]
+fn a_resolve_that_failed_takes_no_address_from_the_answer() {
+    let mut request = request_of(
+        link(&[("long.host", "1.2.3.4", 80)]),
+        CheckIPPorts::new(),
+        0,
+    );
+    // a resolver that filled `ipinfo` in and still failed: the C++ reads the
+    // addresses inside `if (0 == ret)` and nowhere else, so they are not the
+    // profile's — and `DumpCheckResult` does not print an ip for a host that
+    // could not be resolved
+    let (mut ask, _) = stub(|query| match query {
+        Query::Dns { .. } => Answer::Dns {
+            error_code: -1,
+            rtt: 12,
+            ips: vec!["1.1.1.1".to_owned(), "2.2.2.2".to_owned()],
+        },
+        _ => Answer::Nothing,
+    });
+
+    let mut check = check_of(&request);
+    assert!(check.start_do_check(NetCheckType::DnsCheck, &mut request, &mut ask, 1, ""));
+
+    let profile = &request.checkresult_profiles[0];
+    assert_eq!(profile.error_code, -1);
+    assert_eq!(profile.rtt, 12);
+    assert!(profile.ip1.is_empty(), "ip1: {}", profile.ip1);
+    assert!(profile.ip2.is_empty(), "ip2: {}", profile.ip2);
+    assert_eq!(request.check_status, CheckStatus::CheckFinish);
+}
+
+#[test]
 fn the_tcp_check_records_the_noop_round_trip() {
     let mut request = request_of(
         link(&[("long.host", "1.2.3.4", 80)]),
