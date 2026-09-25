@@ -12,6 +12,12 @@
 //! takes the answers as arguments — but the long link that *uses* them does,
 //! so what is here is the format and the computation, not the connection.
 //!
+//! The third slice is what a task that ran leaves behind ([`task_profile`]) and
+//! the logic that calls the network weak ([`weak_network`]): the error a task
+//! failed with and how far it got decide whether the network is weak, and the
+//! report the C++ hands to the app is a `(key, value)` pair the port hands to a
+//! callback instead.
+//!
 //! Everything that needs the app callbacks (`net_core`, `longlink_task_manager`,
 //! `shortlink`, `stn_logic`) comes later.
 
@@ -35,6 +41,8 @@ pub mod frequency_limit;
 pub mod longlink;
 pub mod smart_heartbeat;
 pub mod task;
+pub mod task_profile;
+pub mod weak_network;
 
 pub use anti_avalanche::{AntiAvalanche, LimitKind};
 pub use dynamic_timeout::{DynamicTimeout, DynamicTimeoutStatus};
@@ -45,3 +53,5 @@ pub use smart_heartbeat::{
     NetHeartbeatInfo, SmartHeartBeatAction, SmartHeartBeatType, SmartHeartbeat,
 };
 pub use task::{HostRedirectType, Task};
+pub use task_profile::{ErrCmdType, TaskFailStep, TaskOutcome};
+pub use weak_network::{ReportWeak, WeakKey, WeakNetworkLogic};
