@@ -234,15 +234,50 @@ pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
 mod tests {
     use super::*;
     use mars_appender::is_enabled_for;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
+    use std::sync::MutexGuard;
 
     /// The process-wide appender is a singleton, so the tests that open it
-    /// must not run concurrently.
+    /// must not run concurrently — and not only with each other: the other
+    /// modules open and close the same appender and drop the same net core
+    /// under [`crate::test_lock`], so a lock of this module's own would guard
+    /// half of what these tests touch.
     fn singleton() -> MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        crate::test_lock()
+    }
+
+    /// The lock is the crate's one and not a second one of this module's: a
+    /// test that opens the singleton appender here used to be able to run
+    /// alongside one that closes it in another module.
+    #[test]
+    fn the_lock_the_appender_tests_take_is_the_crates_one() {
+        use std::sync::mpsc::{channel, RecvTimeoutError};
+        use std::time::Duration;
+
+        let (ready_tx, ready_rx) = channel();
+        let (let_go_tx, let_go_rx) = channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = crate::test_lock();
+            ready_tx.send(()).unwrap();
+            let_go_rx.recv().unwrap();
+        });
+        // the crate's lock is held from here on
+        ready_rx.recv().unwrap();
+
+        let (took_tx, took_rx) = channel();
+        let taker = std::thread::spawn(move || {
+            let _guard = singleton();
+            took_tx.send(()).unwrap();
+        });
+        assert_eq!(
+            took_rx.recv_timeout(Duration::from_millis(500)),
+            Err(RecvTimeoutError::Timeout),
+            "`singleton()` is a lock of its own, so it does not wait for the crate's"
+        );
+
+        let_go_tx.send(()).unwrap();
+        holder.join().unwrap();
+        took_rx.recv().unwrap();
+        taker.join().unwrap();
     }
 
     fn logdir(tag: &str) -> std::path::PathBuf {
@@ -335,6 +370,10 @@ mod tests {
 
     #[test]
     fn instances_are_created_looked_up_and_released() {
+        // the instances of the process-wide appender are one registry, and
+        // the prefix this test looks them up by is the one the other tests
+        // open the singleton with
+        let _guard = singleton();
         let dir = logdir("instances");
         let config = config(&dir);
         let handle = new_instance_impl(config.clone(), LogLevel::Info);
