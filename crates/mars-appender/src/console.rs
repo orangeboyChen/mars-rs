@@ -50,4 +50,18 @@ mod tests {
         console_log(Some(&info), "message");
         console_log(None, "no info");
     }
+
+    #[test]
+    fn console_log_of_the_level_that_disables_logging_does_not_panic() {
+        // `kLevelNone` is one past the C++ `levelStrings[]`.
+        let info = XLoggerInfo {
+            level: LogLevel::None,
+            tag: Some("tag".to_owned()),
+            filename: Some("/a/b/c.cc".to_owned()),
+            func_name: Some("fn".to_owned()),
+            line: 7,
+            ..Default::default()
+        };
+        console_log(Some(&info), "message");
+    }
 }
