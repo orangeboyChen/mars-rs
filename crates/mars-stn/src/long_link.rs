@@ -38,6 +38,24 @@
 //! are `ActiveLogic` and `getNetInfo` in the C++, which are singletons; here
 //! they are arguments, like the ones [`crate::AntiAvalanche`] takes.
 //!
+//! The loop that reads and writes the socket is four steps the host's run calls:
+//! [`LongLink::run_at`] is the connect, [`LongLink::write_at`] and
+//! [`LongLink::read_at`] are one turn of the C++'s `while (true)`, and
+//! [`LongLink::finish_run_at`] is what its `End:` and the rest of `__Run` do.
+//! The select between them is the host's, and so is the socket: what the host
+//! does between the steps is ask [`LongLink::disconnect_code`] whether the app
+//! took the link down, [`LongLink::is_heartbeat_due_at`] whether a noop is due,
+//! and [`LongLink::is_noop_timed_out`] whether one did not answer.
+//!
+//! Three of the C++'s pieces of that loop have no place here. Its `OnSend` and
+//! `OnRecv` are progress reports the port answers with values instead:
+//! [`Written::started`] is what `OnSend` is called for, and an answer that
+//! arrives in pieces is what [`LongLink::recv_len`] is. Its `sent_taskids`
+//! remembers the task of a package the unpacker has already named, so the port
+//! has no use for it. And what it does on the way out — reading what is left on
+//! the socket and logging which tasks never got an answer — is a report the
+//! port does not write.
+//!
 //! `fun_network_report_` carries a `__LINE__` in the C++, which is a line
 //! number in a file the port does not have; what is reported here is the error
 //! and the pair it happened on.
@@ -64,6 +82,14 @@ pub const ECT_DNS_MAKE_SOCKET_PREPARED: i32 = -10606;
 pub const ECT_SOCKET_MAKE_SOCKET_PREPARED: i32 = -10087;
 /// `EBADMSG` — what the C++ reports for an answer it could not read.
 pub const EBADMSG: i32 = 74;
+/// `kEctSocketShutdown` — a read of `0`, which is the peer hanging up.
+pub const ECT_SOCKET_SHUTDOWN: i32 = -10090;
+/// `kEctSocketRecvErr` — a heartbeat that did not answer in time.
+pub const ECT_SOCKET_RECV_ERR: i32 = -10091;
+/// `kEctSocketUserBreak` — the app took the link down itself.
+pub const ECT_SOCKET_USER_BREAK: i32 = -10095;
+/// `kEctNetMsgXPHandleBufferErr` — an answer that is not a package of ours.
+pub const ECT_NET_MSG_XP_HANDLE_BUFFER_ERR: i32 = -10504;
 /// The buffer the connect's verification reads into: `64 * 1024`, which is what
 /// the C++'s `__RunReadWrite` uses too.
 pub const RECV_BUFFER_LEN: usize = 64 * 1024;
@@ -76,6 +102,12 @@ pub const NOOP_ACTIVE_TIMEOUT: u64 = 5 * 1000;
 /// `has_late_toomuch` — how late a heartbeat has to be before the noop that
 /// follows it is given the short timeout: `15 * 60 * 1000`.
 pub const NOOP_LATE_TOO_MUCH: u64 = 15 * 60 * 1000;
+/// `NetType::kWifi` — what `getNetInfo()` answers for a wifi network, which is
+/// what the C++ asks `getSignal` with.
+pub const NET_TYPE_WIFI: i32 = 1;
+/// How long the C++'s `SocketSelect` waits: `10 * 60 * 1000`. The select is the
+/// host's here, so this is what it waits with, not what the link does.
+pub const SELECT_TIMEOUT: i32 = 10 * 60 * 1000;
 
 /// `LongLinkErrCode::TDisconnectInternalCode` — why a link is being taken
 /// down. "Note: Never Delete Item!!!Just Add!!!" is the C++'s, and so are the
@@ -198,6 +230,10 @@ pub type ResponseError = dyn FnMut(&str, ErrCmdType, i32, &ConnectProfile) + Sen
 pub type Connection = dyn FnMut(LongLinkStatus, &str) + Send;
 /// `broadcast_linkstatus_signal_` — a profile of a link that has finished.
 pub type LinkStatus = dyn FnMut(&ConnectProfile) + Send;
+/// `getSignal(getNetInfo() == kWifi)` — how strong the network was when a link
+/// went away. The C++'s two singletons are one answer here, and which network
+/// it is on is one the port asks [`NetType`] for.
+pub type Signal = dyn FnMut(bool) -> i32 + Send;
 /// `OnNoopAlarmReceived(_noop_timeout)` — one of the two noop alarms went off,
 /// which on Android is what the connect monitor counts.
 pub type NoopAlarmReceived = dyn FnMut(bool) + Send;
@@ -343,6 +379,111 @@ impl Candidate {
     }
 }
 
+/// Why a run is over — the `_errtype` and `_errcode` the C++'s `__RunReadWrite`
+/// answers through references, and what `__Run` hands to `__RunResponseError`.
+///
+/// [`RunEnd::default`] is a run that answered everything it was asked, which is
+/// the C++'s `kEctOK` and `0`: `__Run` reports nothing for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RunEnd {
+    /// `_errtype`
+    pub err_type: ErrCmdType,
+    /// `_errcode`
+    pub err_code: i32,
+}
+
+impl RunEnd {
+    /// A run that answered everything it was asked.
+    pub fn ok() -> Self {
+        Self::default()
+    }
+
+    /// `kEctOK != errtype` — whether `__Run` reports the run at all.
+    pub fn is_error(&self) -> bool {
+        self.err_type != ErrCmdType::Ok
+    }
+
+    /// The app took the link down itself: `kEctCanceld` and
+    /// `kEctSocketUserBreak`.
+    pub fn cancelled() -> Self {
+        Self {
+            err_type: ErrCmdType::Canceld,
+            err_code: ECT_SOCKET_USER_BREAK,
+        }
+    }
+
+    /// The peer hung up: a read of `0`, which is the `svr_trig_off_` one.
+    pub fn shutdown() -> Self {
+        Self {
+            err_type: ErrCmdType::Socket,
+            err_code: ECT_SOCKET_SHUTDOWN,
+        }
+    }
+
+    /// A heartbeat that did not answer in time.
+    pub fn noop_timeout() -> Self {
+        Self {
+            err_type: ErrCmdType::Socket,
+            err_code: ECT_SOCKET_RECV_ERR,
+        }
+    }
+
+    /// An answer that is not a package of ours.
+    pub fn unpack() -> Self {
+        Self {
+            err_type: ErrCmdType::NetMsgXp,
+            err_code: ECT_NET_MSG_XP_HANDLE_BUFFER_ERR,
+        }
+    }
+
+    /// What the socket said: `kEctSocket` and the platform's word for it.
+    pub fn socket(err_code: i32) -> Self {
+        Self {
+            err_type: ErrCmdType::Socket,
+            err_code,
+        }
+    }
+}
+
+/// What came back on the link: one whole package, which is either the answer to
+/// the heartbeat that is out or a task's.
+///
+/// The C++ calls `OnResponse` from inside its loop and `OnRecv` for a package
+/// that is not whole yet; the port hands the answers back instead, which is what
+/// [`LongLink::read_at`] returns. A package that is still missing bytes is
+/// neither: it stays in the link's buffer, and nothing is handed back for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answer {
+    /// A task's answer — the C++'s `OnResponse(kEctOK, 0, ...)`.
+    Task {
+        /// What the package says it is.
+        cmdid: u32,
+        /// The task it is the answer to.
+        taskid: u32,
+        /// The body: everything after the header.
+        body: Vec<u8>,
+    },
+    /// The answer to the heartbeat that is out, which
+    /// [`LongLink::noop_resp_at`] has already taken.
+    Heartbeat {
+        /// What the package says it is.
+        cmdid: u32,
+        /// The task it is the answer to.
+        taskid: u32,
+    },
+}
+
+/// What the host's run wrote: how many bytes went out, and which tasks the
+/// first bytes of theirs were — the C++'s `OnSend(_taskid)`, once per task, as
+/// that task starts going out.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Written {
+    /// How many bytes of the queue went out.
+    pub len: usize,
+    /// The tasks whose first bytes they were.
+    pub started: Vec<u32>,
+}
+
 /// `LongLink`.
 pub struct LongLink {
     config: LonglinkConfig,
@@ -359,6 +500,12 @@ pub struct LongLink {
     identify: LongLinkIdentifyChecker,
     /// `lstsenddata_` — what is queued to go out, in order.
     queue: VecDeque<SendData>,
+    /// `bufrecv` — what has been read off the socket but is not a whole package
+    /// yet. The C++'s is a local of `__RunReadWrite`, so a run starts with a
+    /// new one.
+    recv: Vec<u8>,
+    /// `lastrecvtime_` — the reading the last package arrived at.
+    last_recv: u64,
     /// `isnooping_` — a heartbeat is out and has not answered.
     nooping: bool,
     /// `lastheartbeat_` — the interval the heartbeat in force is on.
@@ -382,6 +529,7 @@ pub struct LongLink {
     local_stack: Option<Box<LocalStack>>,
     net_label: Option<Box<NetLabel>>,
     net_type: Option<Box<NetType>>,
+    signal: Option<Box<Signal>>,
     local_address: Option<Box<LocalAddress>>,
     network_report: Option<Box<NetworkReport>>,
     on_response: Option<Box<ResponseError>>,
@@ -420,6 +568,8 @@ impl LongLink {
             heartbeat: None,
             identify,
             queue: VecDeque::new(),
+            recv: Vec::new(),
+            last_recv: 0,
             nooping: false,
             last_heartbeat: 0,
             noop_interval: NoopAlarm::new(),
@@ -434,6 +584,7 @@ impl LongLink {
             local_stack: None,
             net_label: None,
             net_type: None,
+            signal: None,
             local_address: None,
             network_report: None,
             on_response: None,
@@ -566,6 +717,25 @@ impl LongLink {
         self.proxy = Some(Box::new(proxy));
     }
 
+    /// `getSignal(getNetInfo() == kWifi)` — unset answers `0`, which is no
+    /// signal at all.
+    pub fn set_signal(&mut self, signal: impl FnMut(bool) -> i32 + Send + 'static) {
+        self.signal = Some(Box::new(signal));
+    }
+
+    /// `bufrecv.Length()` — what has been read off the socket and is not a
+    /// whole package yet, which is what the next [`LongLink::read_at`] starts
+    /// from.
+    pub fn recv_len(&self) -> usize {
+        self.recv.len()
+    }
+
+    /// `lastrecvtime_` — the reading the last package arrived at, `0` while
+    /// none has.
+    pub fn last_recv(&self) -> u64 {
+        self.last_recv
+    }
+
     /// `NetSource::GetLongLinkDebugIP` — unset answers none.
     pub fn set_longlink_debug_ip(&mut self, debug_ip: impl FnMut() -> String + Send + 'static) {
         self.debug_ip = Some(Box::new(debug_ip));
@@ -686,6 +856,8 @@ impl LongLink {
             // the next one with a heartbeat it cannot have
             self.identify.reset();
             self.queue.clear();
+            self.recv.clear();
+            self.last_recv = 0;
             self.nooping = false;
             self.last_heartbeat = 0;
             self.noop_interval = NoopAlarm::new();
@@ -844,6 +1016,31 @@ impl LongLink {
         self.connect_at(mars_comm::tickcount::gettickcount())
     }
 
+    /// `__Run()` up to the loop: the socket the run reads and writes on, or why
+    /// there is none.
+    ///
+    /// A connect that did not happen is a run that is over before it started:
+    /// the profile is finished with the time and the signal and broadcast, and
+    /// nothing is reported — [`LongLink::connect_at`] has answered it already,
+    /// which is what the C++'s `kConnectFailed` leaves behind.
+    pub fn run_at(&mut self, now: u64) -> Result<SocketFd, ConnectFail> {
+        match self.connect_at(now) {
+            Ok(socket) => Ok(socket),
+            Err(fail) => {
+                self.profile.disconn_time = now;
+                self.profile.disconn_signal = self.signal();
+                self.broadcast_profile();
+                self.end_run();
+                Err(fail)
+            }
+        }
+    }
+
+    /// The same, with the reading of the clock the host's `gettickcount()`.
+    pub fn run(&mut self) -> Result<SocketFd, ConnectFail> {
+        self.run_at(mars_comm::tickcount::gettickcount())
+    }
+
     /// `LongLinkConnectObserver::OnVerifySend` and `OnVerifyRecv` — a noop on
     /// a socket that is already up, which is how the C++ checks that the
     /// connect really reached the server.
@@ -852,11 +1049,11 @@ impl LongLink {
     /// host's connect has already picked one, so here it fails the connect.
     pub fn verify(&mut self, socket: SocketFd) -> bool {
         let request = longlink_pack(self.encoder.noop_cmdid(), Task::NOOP_TASK_ID, &[]);
-        if let Err(error_code) = self.write(socket, &request, -1) {
+        if let Err(error_code) = self.socket_send(socket, &request, -1) {
             self.network_report(ErrCmdType::Socket, error_code);
             return false;
         }
-        match self.read(socket) {
+        match self.socket_recv(socket) {
             Err(error_code) => {
                 self.network_report(ErrCmdType::Socket, error_code);
                 false
@@ -978,6 +1175,118 @@ impl LongLink {
         }
     }
 
+    /// The write step of the C++'s `__RunReadWrite`: the head of the queue goes
+    /// out, and the interval alarm starts over.
+    ///
+    /// The C++ hands the whole queue to one `writev` on POSIX and only the head
+    /// of it to `send` on Windows; the port writes the head, which is what the
+    /// Windows branch does, and [`Written::started`] is the `OnSend` it calls
+    /// for a task whose first bytes these are.
+    ///
+    /// A queue with nothing in it writes nothing and is not an error, which is
+    /// the `!lstsenddata_.empty()` the C++ puts the socket in the write set for.
+    pub fn write_at(
+        &mut self,
+        now: u64,
+        socket: SocketFd,
+        is_active: bool,
+    ) -> Result<Written, RunEnd> {
+        let Some(head) = self.queue.front() else {
+            return Ok(Written::default());
+        };
+        let started = (head.pos == 0).then_some(head.task.taskid);
+        let rest = head.buffer[head.pos..].to_vec();
+
+        // what the C++ asks `socket_error(_sock)` for when the write went
+        // nowhere: the platform's word is the host's, and `0` is all it has
+        match self.socket_send(socket, &rest, -1) {
+            Ok(0) => Err(RunEnd::socket(0)),
+            Ok(len) => {
+                self.wrote(len);
+                // a link that is carrying traffic has no heartbeat to send:
+                // every write starts the interval over
+                self.last_heartbeat = self.next_heartbeat_interval(is_active);
+                self.noop_interval.cancel();
+                if self.last_heartbeat != 0 {
+                    self.noop_interval.start_at(now, self.last_heartbeat);
+                }
+                Ok(Written {
+                    len,
+                    started: started.into_iter().collect(),
+                })
+            }
+            Err(err_code) => Err(RunEnd::socket(err_code)),
+        }
+    }
+
+    /// The same, with the reading of the clock the host's `gettickcount()`.
+    pub fn write(&mut self, socket: SocketFd, is_active: bool) -> Result<Written, RunEnd> {
+        self.write_at(mars_comm::tickcount::gettickcount(), socket, is_active)
+    }
+
+    /// The read step of the C++'s `__RunReadWrite`: what the socket has is
+    /// unpacked, and every whole package in it is handed back.
+    ///
+    /// A package that is missing bytes is kept for the next read — it is the
+    /// `LONGLINK_UNPACK_CONTINUE` the C++ breaks out of its loop for, and what
+    /// [`LongLink::recv_len`] is.
+    pub fn read_at(&mut self, now: u64, socket: SocketFd) -> Result<Vec<Answer>, RunEnd> {
+        let bytes = match self.socket_recv(socket) {
+            Ok(bytes) => bytes,
+            Err(err_code) => return Err(RunEnd::socket(err_code)),
+        };
+        if bytes.is_empty() {
+            // `0 == recvlen`: the peer hung up, which the next run writes on
+            // the profile rather than reporting
+            self.server_triggered_off = true;
+            return Err(RunEnd::shutdown());
+        }
+        self.last_recv = now;
+        self.recv.extend_from_slice(&bytes);
+
+        let mut answers = Vec::new();
+        while !self.recv.is_empty() {
+            let unpacked = longlink_unpack(&self.recv);
+            match unpacked {
+                Unpacked::False => return Err(RunEnd::unpack()),
+                // not a whole package yet: what came stays for the next read
+                Unpacked::Continue => break,
+                Unpacked::Package {
+                    cmdid,
+                    seq,
+                    package_len,
+                    body,
+                } => {
+                    if package_len == 0 {
+                        // a header that claims no bytes at all: the C++
+                        // advances its buffer by `packlen` and so walks in
+                        // place for ever, which is no answer at all. The port
+                        // ends the run on it, the way it ends one on a package
+                        // that is not a package
+                        return Err(RunEnd::unpack());
+                    }
+                    let answer = if self.noop_resp_at(now, cmdid, seq, &body) {
+                        Answer::Heartbeat { cmdid, taskid: seq }
+                    } else {
+                        Answer::Task {
+                            cmdid,
+                            taskid: seq,
+                            body,
+                        }
+                    };
+                    self.recv.drain(..package_len);
+                    answers.push(answer);
+                }
+            }
+        }
+        Ok(answers)
+    }
+
+    /// The same, with the reading of the clock the host's `gettickcount()`.
+    pub fn read(&mut self, socket: SocketFd) -> Result<Vec<Answer>, RunEnd> {
+        self.read_at(mars_comm::tickcount::gettickcount(), socket)
+    }
+
     /// `__GetNextHeartbeatInterval()` — how long until the next heartbeat: the
     /// encoder's interval when it has one of its own, the minimum when there is
     /// no smart heartbeat, and the heartbeat's own answer otherwise.
@@ -1034,6 +1343,40 @@ impl LongLink {
         }
     }
 
+    /// Whether the heartbeat that is out did not answer in time: the C++'s
+    /// `isnooping_ && alarmnooptimeout_.Status() == kOnAlarm`, which ends the
+    /// run with [`RunEnd::noop_timeout`].
+    pub fn is_noop_timed_out(&self) -> bool {
+        self.nooping && self.noop_timeout.status() == AlarmStatus::OnAlarm
+    }
+
+    /// `End:` and what `__Run` does once `__RunReadWrite` is back: the socket is
+    /// closed, the profile is finished with how the run ended, a profile that is
+    /// finished is broadcast, and a run that ended in an error is reported.
+    ///
+    /// A heartbeat that is still out when a run ends is one that never answered,
+    /// which is the C++'s `if (isnooping_)` on the way out.
+    pub fn finish_run_at(&mut self, now: u64, socket: SocketFd, end: RunEnd) {
+        if self.nooping {
+            self.notify_heartbeat_heart_result_at(now, false, end.err_code == ECT_SOCKET_RECV_ERR);
+        }
+        self.close_socket(socket);
+        self.profile.disconn_time = now;
+        self.profile.disconn_errtype = end.err_type;
+        self.profile.disconn_errcode = end.err_code;
+        self.profile.disconn_signal = self.signal();
+        self.set_status(LongLinkStatus::DisConnected);
+        self.broadcast_profile();
+        if end.is_error() {
+            self.run_response_error(end.err_type, end.err_code, true);
+        }
+        self.end_run();
+    }
+
+    /// The same, with the reading of the clock the host's `gettickcount()`.
+    pub fn finish_run(&mut self, socket: SocketFd, end: RunEnd) {
+        self.finish_run_at(mars_comm::tickcount::gettickcount(), socket, end)
+    }
     /// The step the C++'s `__RunReadWrite` runs whenever the interval alarm is
     /// not waiting: the noop goes out, the heartbeat is told, and the alarm is
     /// started again on the interval that is in force now.
@@ -1352,14 +1695,19 @@ impl LongLink {
     }
 
     /// What the socket is asked for, which is the host's to answer.
-    fn write(&mut self, socket: SocketFd, buffer: &[u8], timeout_ms: i32) -> Result<usize, i32> {
+    fn socket_send(
+        &mut self,
+        socket: SocketFd,
+        buffer: &[u8],
+        timeout_ms: i32,
+    ) -> Result<usize, i32> {
         match self.operator.as_mut() {
             Some(operator) => operator.send(socket, buffer, timeout_ms),
             None => Err(0),
         }
     }
 
-    fn read(&mut self, socket: SocketFd) -> Result<Vec<u8>, i32> {
+    fn socket_recv(&mut self, socket: SocketFd) -> Result<Vec<u8>, i32> {
         match self.operator.as_mut() {
             Some(operator) => operator.recv(socket, RECV_BUFFER_LEN, -1, false),
             None => Err(0),
@@ -1414,9 +1762,27 @@ impl LongLink {
         }
     }
 
+    /// `socket_close(_sock)` — what the C++ does with the socket when a run is
+    /// over, which is the host's socket to close.
+    fn close_socket(&mut self, socket: SocketFd) {
+        if let Some(operator) = self.operator.as_mut() {
+            operator.close(socket);
+        }
+    }
+
     fn net_type(&mut self) -> i32 {
         match self.net_type.as_mut() {
             Some(net_type) => net_type(),
+            None => 0,
+        }
+    }
+
+    fn signal(&mut self) -> i32 {
+        // `::getSignal(::getNetInfo() == kWifi)`, which is two singletons the
+        // port asks one host for
+        let is_wifi = self.net_type() == NET_TYPE_WIFI;
+        match self.signal.as_mut() {
+            Some(signal) => signal(is_wifi),
             None => 0,
         }
     }
@@ -1487,7 +1853,19 @@ mod tests {
         seen: Seen,
         next: i64,
         profile: SocketProfile,
+        /// What a write answers with, which is the whole buffer unless a test
+        /// says otherwise: an error, or a socket that took nothing.
+        write: Write,
         breaker: Breaker,
+    }
+
+    /// What the host's `send` answers: the whole buffer, an error, or nothing.
+    #[derive(Default)]
+    enum Write {
+        #[default]
+        All,
+        Error(i32),
+        Nothing,
     }
 
     impl Host {
@@ -1496,6 +1874,7 @@ mod tests {
                 seen,
                 next: 3,
                 profile: SocketProfile::default(),
+                write: Write::All,
                 breaker: Breaker::default(),
             }
         }
@@ -1528,7 +1907,11 @@ mod tests {
             _timeout_ms: i32,
         ) -> Result<usize, i32> {
             self.seen.sent.lock().unwrap().push(buffer.to_vec());
-            Ok(buffer.len())
+            match self.write {
+                Write::All => Ok(buffer.len()),
+                Write::Error(error_code) => Err(error_code),
+                Write::Nothing => Ok(0),
+            }
         }
 
         fn recv(
@@ -2352,5 +2735,236 @@ mod tests {
         assert!(!link.is_heartbeat_due_at(1_000 + 600_000));
 
         crate::smart_heartbeat::set_heartbeat(-1);
+    }
+
+    #[test]
+    fn the_write_step_writes_the_head_and_starts_the_interval_over() {
+        // what a package carries is the client version, which is one value for
+        // the whole process
+        let _lock = crate::test_lock();
+        let mut link = connected();
+        assert!(link.send(Task::new(7, 12), b"hello"));
+
+        let written = link.write_at(2_000, SocketFd(3), false).unwrap();
+        assert_eq!(written.started, vec![7], "`OnSend`");
+        assert!(written.len > 0);
+        assert!(link.queued().is_empty(), "all of it went out");
+        // ... and a link that is carrying traffic has no heartbeat to send:
+        // every write starts the interval over
+        assert_eq!(link.last_heartbeat(), 210_000);
+        assert_eq!(link.noop_due(), Some(2_000 + 210_000));
+
+        // a queue with nothing in it writes nothing, and is not an error
+        assert_eq!(
+            link.write_at(3_000, SocketFd(3), false),
+            Ok(Written::default())
+        );
+    }
+
+    #[test]
+    fn a_write_that_went_nowhere_ends_the_run() {
+        let _lock = crate::test_lock();
+        let mut link = connected();
+        assert!(link.send(Task::new(7, 12), b"hello"));
+
+        // what the platform says when a write did not happen
+        let failed = Host {
+            write: Write::Error(-10053),
+            ..Host::new(Seen::default())
+        };
+        link.operator = Some(Box::new(failed));
+        assert_eq!(
+            link.write_at(2_000, SocketFd(3), false),
+            Err(RunEnd::socket(-10053))
+        );
+        assert_eq!(
+            link.queued().len(),
+            1,
+            "nothing of it went out, so it stays"
+        );
+
+        // ... and a socket that took nothing is a run that is over too
+        let nothing = Host {
+            write: Write::Nothing,
+            ..Host::new(Seen::default())
+        };
+        link.operator = Some(Box::new(nothing));
+        assert_eq!(
+            link.write_at(2_000, SocketFd(3), false),
+            Err(RunEnd::socket(0))
+        );
+    }
+
+    #[test]
+    fn the_read_step_hands_back_the_answers_of_a_whole_package() {
+        let _lock = crate::test_lock();
+        let (mut link, seen) = link();
+        link.make_sure_connected();
+        let socket = link.connect_at(1_000).unwrap();
+        *seen.answer.lock().unwrap() = longlink_pack(12, 7, b"hello");
+
+        assert_eq!(
+            link.read_at(2_000, socket).unwrap(),
+            vec![Answer::Task {
+                cmdid: 12,
+                taskid: 7,
+                body: b"hello".to_vec(),
+            }]
+        );
+        assert_eq!(link.last_recv(), 2_000);
+        assert_eq!(link.recv_len(), 0, "the whole of it was a package");
+    }
+
+    #[test]
+    fn what_is_read_stays_until_it_is_a_whole_package() {
+        let _lock = crate::test_lock();
+        let (mut link, seen) = link();
+        link.make_sure_connected();
+        let socket = link.connect_at(1_000).unwrap();
+        let packed = longlink_pack(12, 7, b"hello");
+
+        // half a package, which is the `LONGLINK_UNPACK_CONTINUE` the C++ breaks
+        // its loop for
+        *seen.answer.lock().unwrap() = packed[..packed.len() / 2].to_vec();
+        assert_eq!(link.read_at(2_000, socket).unwrap(), vec![]);
+        assert_eq!(link.recv_len(), packed.len() / 2);
+
+        // ... and the rest of it makes a whole one, out of both reads
+        *seen.answer.lock().unwrap() = packed[packed.len() / 2..].to_vec();
+        assert_eq!(
+            link.read_at(2_100, socket).unwrap(),
+            vec![Answer::Task {
+                cmdid: 12,
+                taskid: 7,
+                body: b"hello".to_vec(),
+            }]
+        );
+        assert_eq!(link.recv_len(), 0);
+    }
+
+    #[test]
+    fn a_package_that_claims_no_bytes_ends_the_read() {
+        // `head_length` of `0` and `body_length` of `0`: a package the stream
+        // cannot be advanced past, which is what `longlink_unpack` answers for
+        // it. The C++ moves its buffer by `packlen` and walks in place for ever
+        let (mut link, seen) = link();
+        link.make_sure_connected();
+        let socket = link.connect_at(1_000).unwrap();
+        *seen.answer.lock().unwrap() = vec![0; crate::longlink::HEADER_LEN];
+        assert_eq!(link.read_at(2_000, socket), Err(RunEnd::unpack()));
+    }
+
+    #[test]
+    fn a_read_of_nothing_is_the_peer_hanging_up() {
+        let mut link = connected();
+        assert_eq!(link.read_at(2_000, SocketFd(3)), Err(RunEnd::shutdown()));
+        // `svr_trig_off_`, which the next run writes on the profile rather than
+        // reporting
+        assert!(link.is_server_triggered_off());
+    }
+
+    #[test]
+    fn the_answer_of_the_heartbeat_is_handed_back_as_one() {
+        let _lock = crate::test_lock();
+        let (mut link, seen) = link();
+        link.make_sure_connected();
+        let socket = link.connect_at(1_000).unwrap();
+        assert!(link.send_heartbeat_at(1_000, false, false));
+        written(&mut link);
+        *seen.answer.lock().unwrap() = longlink_pack(NOOP_CMDID, Task::NOOP_TASK_ID, &[]);
+
+        assert_eq!(
+            link.read_at(1_500, socket).unwrap(),
+            vec![Answer::Heartbeat {
+                cmdid: NOOP_CMDID,
+                taskid: Task::NOOP_TASK_ID,
+            }]
+        );
+        assert!(!link.is_nooping(), "the heartbeat answered");
+    }
+
+    #[test]
+    fn a_run_that_ended_is_written_on_the_profile_and_broadcast() {
+        let (mut link, seen) = link();
+        let (broadcast, mut record) = sink();
+        link.set_on_link_status(move |profile| record(profile.clone()));
+        let (responses, mut record_response) = sink();
+        link.set_on_response(move |_name, err_type, err_code, _profile| {
+            record_response((err_type, err_code))
+        });
+        let (reported, mut record_report) = sink();
+        link.set_network_report(move |err_type, err_code, _ip, _port| {
+            record_report((err_type, err_code))
+        });
+        link.set_net_type(|| NET_TYPE_WIFI);
+        link.set_signal(|is_wifi| if is_wifi { 4 } else { 0 });
+        link.make_sure_connected();
+        let socket = link.connect_at(1_000).unwrap();
+
+        link.finish_run_at(3_000, socket, RunEnd::noop_timeout());
+
+        let profile = link.profile();
+        assert_eq!(profile.disconn_time, 3_000);
+        assert_eq!(profile.disconn_errtype, ErrCmdType::Socket);
+        assert_eq!(profile.disconn_errcode, ECT_SOCKET_RECV_ERR);
+        assert_eq!(profile.disconn_signal, 4, "`getSignal(true)`");
+        assert_eq!(link.connect_status(), LongLinkStatus::DisConnected);
+        assert!(!link.is_running(), "the run is over");
+        assert_eq!(*seen.closed.lock().unwrap(), vec![socket]);
+        // what the C++ broadcasts and reports for a run that ended in an error
+        assert_eq!(broadcast.lock().unwrap().len(), 1);
+        assert_eq!(
+            *responses.lock().unwrap(),
+            vec![(ErrCmdType::Socket, ECT_SOCKET_RECV_ERR)]
+        );
+        assert_eq!(
+            *reported.lock().unwrap(),
+            // the link coming up, and the run that ended
+            vec![
+                (ErrCmdType::Ok, 0),
+                (ErrCmdType::Socket, ECT_SOCKET_RECV_ERR)
+            ]
+        );
+
+        // ... and a run that answered everything it was asked is not reported
+        responses.lock().unwrap().clear();
+        link.make_sure_connected();
+        let socket = link.connect_at(4_000).unwrap();
+        link.finish_run_at(5_000, socket, RunEnd::ok());
+        assert!(responses.lock().unwrap().is_empty());
+        assert_eq!(link.profile().disconn_errtype, ErrCmdType::Ok);
+    }
+
+    #[test]
+    fn a_connect_that_did_not_happen_is_a_run_that_is_over() {
+        let mut link = LongLink::new(LonglinkConfig::new("long.example"));
+        let (broadcast, mut record) = sink();
+        link.set_on_link_status(move |profile| record(profile.clone()));
+
+        assert_eq!(link.make_sure_connected(), MakeSure::Run { new_one: true });
+        assert_eq!(link.run_at(1_000), Err(ConnectFail::NoAddress));
+        assert_eq!(link.profile().disconn_time, 1_000);
+        assert!(!link.is_running(), "the run is over");
+        assert_eq!(broadcast.lock().unwrap().len(), 1);
+        assert_eq!(
+            link.connect_status(),
+            LongLinkStatus::ConnectFailed,
+            "`kDisConnected` is only for a run that was up"
+        );
+    }
+
+    #[test]
+    fn the_run_asks_the_clock_itself_for_the_steps_that_take_one() {
+        let (mut link, _) = link();
+        link.make_sure_connected();
+        // `run`, `write` and `read` are the `_at` ones with the host's
+        // `gettickcount`
+        assert!(link.run().is_ok());
+        assert_eq!(link.connect_status(), LongLinkStatus::Connected);
+        assert!(link.send(Task::new(7, 12), b"hello"));
+        assert!(link.write(SocketFd(3), false).is_ok());
+        assert_eq!(link.read(SocketFd(3)), Err(RunEnd::shutdown()));
+        link.finish_run(SocketFd(3), RunEnd::ok());
+        assert!(!link.is_running());
     }
 }

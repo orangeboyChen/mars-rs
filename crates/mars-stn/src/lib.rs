@@ -75,9 +75,12 @@
 //! The fifteenth slice is the heartbeat that keeps it up ([`long_link`]): the
 //! two alarms a host's run reads instead of waiting on, the noop that goes out
 //! when the interval is up, the identify check that rides on the first one, and
-//! what a heartbeat that answered — or did not — leaves on the profile. What
-//! the C++ does on a thread, the loop that reads and writes the socket, comes
-//! after it.
+//! what a heartbeat that answered — or did not — leaves on the profile.
+//!
+//! The sixteenth slice is the run that reads and writes it ([`long_link`]): the
+//! four steps a host's loop calls — the connect, one write, one read, and what
+//! the C++ does when the run is over — and what a read hands back: the answer
+//! to a task, or the answer to the heartbeat that was out.
 //!
 //! Everything that needs the app callbacks (`net_core`, `longlink_task_manager`,
 //! `shortlink`, `stn_logic`) comes later.
@@ -155,9 +158,11 @@ pub use dynamic_timeout::{DynamicTimeout, DynamicTimeoutStatus};
 pub use flow_limit::FlowLimit;
 pub use frequency_limit::FrequencyLimit;
 pub use long_link::{
-    AlarmStatus, ConnectFail, DisconnectInternalCode, LongLink, MakeSure, NoopAlarm, SendData,
-    EBADMSG, ECT_DNS_MAKE_SOCKET_PREPARED, ECT_SOCKET_MAKE_SOCKET_PREPARED, NOOP_ACTIVE_TIMEOUT,
-    NOOP_LATE_TOO_MUCH, NOOP_TIMEOUT, RECV_BUFFER_LEN,
+    AlarmStatus, Answer, ConnectFail, DisconnectInternalCode, LongLink, MakeSure, NoopAlarm,
+    RunEnd, SendData, Written, EBADMSG, ECT_DNS_MAKE_SOCKET_PREPARED,
+    ECT_NET_MSG_XP_HANDLE_BUFFER_ERR, ECT_SOCKET_MAKE_SOCKET_PREPARED, ECT_SOCKET_RECV_ERR,
+    ECT_SOCKET_SHUTDOWN, ECT_SOCKET_USER_BREAK, NET_TYPE_WIFI, NOOP_ACTIVE_TIMEOUT,
+    NOOP_LATE_TOO_MUCH, NOOP_TIMEOUT, RECV_BUFFER_LEN, SELECT_TIMEOUT,
 };
 pub use longlink::{LongLinkEncoder, Unpacked};
 pub use longlink_connect_monitor::{
