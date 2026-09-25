@@ -135,8 +135,16 @@
 //! C++'s `MessageQueue` posts are a queue of follow-ups the host drains, and
 //! the C++'s `StnManager` calls are hooks.
 //!
-//! What still needs the app callbacks (`stn_logic`/`stn_manager`,
-//! `stn_callback_bridge`) comes later.
+//! The twenty-fifth slice is the app itself ([`stn_callback_bridge`]): the
+//! `Callback` of `stn.h`, which is a trait with an answer for every question
+//! STN asks, and the bridge the answers go through on their way to it — whose
+//! one piece of logic is the `CgiProfile` an app is handed for a task that
+//! ended. A `dyn App` is already what the C++'s bridge is for (its other half
+//! calls into Java), so what is left of it is the app it holds, that
+//! conversion, and the two signals an error is fanned out to before the app
+//! hears about it.
+//!
+//! What still needs the app's api (`stn_logic`/`stn_manager`) comes later.
 
 /// The `static`s of this crate are one value for the whole process —
 /// `sg_client_version` in [`longlink`], `outer_setted_heart_` in
@@ -207,6 +215,7 @@ pub mod simple_ipport_sort;
 pub mod smart_heartbeat;
 pub mod socket_operator;
 pub mod socket_pool;
+pub mod stn_callback_bridge;
 pub mod task;
 pub mod task_intercept;
 pub mod task_profile;
@@ -289,6 +298,10 @@ pub use socket_operator::{
     contain_ipv6, is_impatient, tcp_identify, OpBreaker, SocketFd, SocketOperator, SocketProfile,
 };
 pub use socket_pool::{CachedSocket, SocketPool, BAN_INTERVAL, DEFAULT_MAX_KEEPALIVE_TIME};
+pub use stn_callback_bridge::{
+    App, CgiProfile, DnsProfile, DnsType, LongLinkErrorListener, ShortLinkErrorListener,
+    StnCallbackBridge,
+};
 pub use task::{HostRedirectType, Task};
 pub use task_intercept::{TaskIntercept, TaskInterceptInfo, INTERCEPT_TIMEOUT};
 pub use task_profile::{

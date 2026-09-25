@@ -282,18 +282,17 @@ mod tests {
             counter.fetch_add(1, Ordering::SeqCst);
         });
 
-        // 200 ms, not 20: the short dispatch below asks for 5 ms but a
-        // loaded machine hands it more than that, and what it spends there
-        // is part of the delay this alarm is waiting out.
+        // 200 ms: long enough that the clock this runs on cannot round the
+        // delay away, short enough that the test does not sit on it. What
+        // proves the alarm waited is `elapse_time` below and not a shorter
+        // dispatch in between: a `wait_timeout` is only ever a lower bound,
+        // so a dispatch that asked for 5 ms may sleep the whole 200 ms on a
+        // loaded runner, and then the alarm *is* due and firing it is right.
         assert!(alarm.start(200));
         assert!(alarm.is_waiting());
         assert_eq!(alarm.status(), Status::Start);
         assert!(!alarm.start(200), "a waiting alarm must not start again");
 
-        assert!(
-            !RunLoop::dispatch_timeout(queue, Duration::from_millis(5)),
-            "not due yet"
-        );
         assert_eq!(fired.load(Ordering::SeqCst), 0, "nothing ran yet");
         assert!(RunLoop::dispatch_timeout(
             queue,

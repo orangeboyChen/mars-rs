@@ -201,22 +201,31 @@ fn an_after_message_waits_for_its_due_time() {
         queue,
     );
 
+    // nothing is due on a queue that has nothing on it, however long the
+    // wait it was handed turns out to be
+    assert!(
+        !RunLoop::dispatch_timeout(queue, Duration::from_millis(5)),
+        "an empty queue has nothing to dispatch"
+    );
+
     let start = Instant::now();
     post_message(
         &handler,
         Message::new(MessageTitle(1), "later"),
         MessageTiming::After(40),
     );
-    assert!(
-        !RunLoop::dispatch_timeout(queue, Duration::from_millis(5)),
-        "must not run yet"
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        0,
+        "a post does not run its handler"
     );
-    assert_eq!(hits.load(Ordering::SeqCst), 0);
 
-    // … and it runs once its 40 ms are up. The wait is measured from the
-    // post and not from this call: the short dispatch above asks for 5 ms
-    // but a coarse clock may well hand it more, and what it spends there
-    // is part of the 40 ms the message is waiting for.
+    // … and it runs once its 40 ms are up, and not before. What is asserted
+    // is the time it ran at and not that a shorter dispatch did not run it:
+    // a `wait_timeout` is only ever a lower bound, so on a loaded runner a
+    // dispatch that asked for 5 ms may well sleep the whole 40 ms — and then
+    // the message *is* due and running it is the right answer, which would
+    // make an assertion that it did not run a lie.
     assert!(RunLoop::dispatch_timeout(queue, Duration::from_millis(300)));
     assert!(
         start.elapsed() >= Duration::from_millis(40),
