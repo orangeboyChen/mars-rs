@@ -82,8 +82,13 @@
 //! the C++ does when the run is over — and what a read hands back: the answer
 //! to a task, or the answer to the heartbeat that was out.
 //!
-//! Everything that needs the app callbacks (`net_core`, `longlink_task_manager`,
-//! `shortlink`, `stn_logic`) comes later.
+//! The seventeenth slice is what a short-link task goes out as
+//! ([`shortlink`]) and what comes back for it: a `POST` of the cgi with the
+//! five fields mars writes for itself, and an answer that is the body when the
+//! status is 200 and `kEctHttp` with the status when it is not.
+//!
+//! What still needs the app callbacks (`net_core`, `longlink_task_manager`, the
+//! short link itself, `stn_logic`) comes later.
 
 /// The `static`s of this crate are one value for the whole process —
 /// `sg_client_version` in [`longlink`], `outer_setted_heart_` in
@@ -141,6 +146,7 @@ pub mod longlink_speed_test;
 pub mod net_check_logic;
 pub mod net_source;
 pub mod netsource_timercheck;
+pub mod shortlink;
 pub mod signalling_keeper;
 pub mod simple_ipport_sort;
 pub mod smart_heartbeat;
@@ -187,6 +193,10 @@ pub use net_source::{
     DISABLE_QUIC_SECONDS, ITEM_DELIMITER, NUM_MAKE_COUNT,
 };
 pub use netsource_timercheck::{NetSourceTimerCheck, INTERVAL_TIME, MAX_SPEED_TEST_COUNT, TIMEOUT};
+pub use shortlink::{
+    default_packer, is_keep_alive, keep_alive, pack, request_headers, request_url, Headers,
+    KeepAlive, Packer,
+};
 pub use signalling_keeper::{SignallingKeeper, DEFAULT_KEEP_TIME, DEFAULT_PERIOD};
 pub use simple_ipport_sort::{
     BanItem, IpPortItem, IpSourceType, Record, RecordItem, SimpleIpPortSort, BAN_FAIL_COUNT,
