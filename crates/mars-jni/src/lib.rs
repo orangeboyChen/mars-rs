@@ -194,7 +194,9 @@ pub mod alarm;
 /// `io.github.marsrs.comm.WakerLock` — the wake lock the platform holds.
 pub mod wakerlock;
 
-/// `io.github.marsrs.app.AppLogic` — what the app is.
+// `io.github.marsrs.app.AppLogic` — what the app is. The module's own doc says
+// it all, and its links resolve in the module: a `///` here would push them out
+// of it, which is why this one is a `//` too.
 pub mod app_logic;
 
 /// `io.github.marsrs.comm.PlatformComm$C2Java` — what the platform answers.

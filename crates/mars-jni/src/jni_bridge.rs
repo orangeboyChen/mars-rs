@@ -20,6 +20,8 @@ use std::sync::OnceLock;
 
 use crate::stn_c2java::{Answer, Question};
 
+use crate::app_logic::{AccountInfo, Answer as AppAnswer, DeviceInfo, Question as AppQuestion};
+
 use crate::alarm::on_alarm_impl;
 use crate::sdt::{get_load_libraries_impl as sdt_libraries, set_http_netcheck_cgi_impl};
 use crate::stn::{
@@ -1136,6 +1138,26 @@ fn int_of(called: jni::errors::Result<JValueOwned>) -> i32 {
     called.and_then(|value| value.i()).unwrap_or(0)
 }
 
+/// An `L` Java answered with — nothing for a call that could not be made, or
+/// for one that answered `null`, which is the C++'s own `NULL` check.
+fn object_of<'a>(called: jni::errors::Result<JValueOwned<'a>>) -> Option<JObject<'a>> {
+    let object = called.and_then(|value| value.l()).ok()?;
+    (!object.is_null()).then_some(object)
+}
+
+/// A `String` Java answered with — empty for a call that could not be made, or
+/// for one that answered `null`, which is the C++'s `""` too.
+fn string_of(env: &mut JNIEnv<'_>, called: jni::errors::Result<JValueOwned>) -> String {
+    let Some(object) = object_of(called) else {
+        return String::new();
+    };
+    let jstring = JString::from(object);
+    let Ok(java) = env.get_string(&jstring) else {
+        return String::new();
+    };
+    java.to_string_lossy().into_owned()
+}
+
 /// A `String[]` Java answered with.
 fn strings_of(env: &mut JNIEnv<'_>, called: jni::errors::Result<JValueOwned>) -> Vec<String> {
     let Ok(array) = called.and_then(|value| value.l()) else {
@@ -1230,6 +1252,84 @@ fn cgi_profile<'a>(env: &mut JNIEnv<'a>, profile: &CgiProfile) -> Option<JObject
         let _ = env.set_field(&object, name, "I", JValue::Int(value));
     }
     Some(object)
+}
+
+// #################### the questions the app is asked ####################
+
+/// `AppLogic` — the class the C++'s four C2Java calls are static methods of.
+/// Unlike [`STN_CALLBACK`], it forwards nothing: what it answers is the app's
+/// own, which is why the native side never keeps the app itself.
+const APP_LOGIC: &str = "io/github/marsrs/app/AppLogic";
+
+/// One of the four `C2Java_*` functions of
+/// `com_tencent_mars_app_AppLogic_C2Java.cc`, i.e. what
+/// [`crate::app_logic::Ask::jvm`] asks: attach the thread, call the one static
+/// method, and read the answer out of what Java handed back — a `String`, an
+/// `int`, and the two objects `getAccountInfo` and `getDeviceType` answer with.
+///
+/// Without a VM (a host that linked the library instead of loading it from
+/// Java) there is nobody to ask, and the answer is the one the port reads when
+/// the app said nothing: no directory, nobody logged in, no version, no device.
+/// Nothing here panics into Rust either way.
+pub(crate) fn ask_app_logic(question: AppQuestion) -> AppAnswer {
+    guard(|| {
+        let Some(vm) = VM.get() else {
+            return AppAnswer::Nothing;
+        };
+        let Ok(mut env) = vm.attach_current_thread() else {
+            return AppAnswer::Nothing;
+        };
+        let Ok(class) = env.find_class(APP_LOGIC) else {
+            return AppAnswer::Nothing;
+        };
+        ask_app(&mut env, class, question)
+    })
+}
+
+fn ask_app<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: AppQuestion) -> AppAnswer {
+    match question {
+        AppQuestion::AppFilePath => {
+            let called =
+                env.call_static_method(class, "getAppFilePath", "()Ljava/lang/String;", &[]);
+            AppAnswer::Path(string_of(env, called))
+        }
+        AppQuestion::AccountInfo => {
+            // `AppLogic$AccountInfo` — `uin` and `userName`.
+            let called = env.call_static_method(
+                class,
+                "getAccountInfo",
+                "()Lio/github/marsrs/app/AppLogic$AccountInfo;",
+                &[],
+            );
+            let Some(account) = object_of(called) else {
+                return AppAnswer::Nothing;
+            };
+            AppAnswer::Account(AccountInfo::new(
+                long_field(env, &account, "uin"),
+                string_field(env, &account, "userName"),
+            ))
+        }
+        AppQuestion::ClientVersion => {
+            let called = env.call_static_method(class, "getClientVersion", "()I", &[]);
+            AppAnswer::Version(int_of(called))
+        }
+        AppQuestion::DeviceInfo => {
+            // `AppLogic$DeviceInfo` — `devicename` and `devicetype`.
+            let called = env.call_static_method(
+                class,
+                "getDeviceType",
+                "()Lio/github/marsrs/app/AppLogic$DeviceInfo;",
+                &[],
+            );
+            let Some(device) = object_of(called) else {
+                return AppAnswer::Nothing;
+            };
+            AppAnswer::Device(DeviceInfo::new(
+                string_field(env, &device, "devicename"),
+                string_field(env, &device, "devicetype"),
+            ))
+        }
+    }
 }
 
 // #################### io.github.marsrs.sdt.SdtLogic ####################
