@@ -23,6 +23,11 @@
 //! ([`longlink_identify_checker`]) and the signalling that keeps a mapping up
 //! while the app waits ([`signalling_keeper`]).
 //!
+//! The fifth slice is the task that outlived the link it was started on
+//! ([`zombie_task_manager`]): it is saved instead of failed, and started again
+//! when the link comes back or when its periodic check decides it waited long
+//! enough.
+//!
 //! Everything that needs the app callbacks (`net_core`, `longlink_task_manager`,
 //! `shortlink`, `stn_logic`) comes later.
 
@@ -51,6 +56,7 @@ pub mod smart_heartbeat;
 pub mod task;
 pub mod task_profile;
 pub mod weak_network;
+pub mod zombie_task_manager;
 
 pub use anti_avalanche::{AntiAvalanche, LimitKind};
 pub use dynamic_timeout::{DynamicTimeout, DynamicTimeoutStatus};
@@ -63,5 +69,6 @@ pub use smart_heartbeat::{
     NetHeartbeatInfo, SmartHeartBeatAction, SmartHeartBeatType, SmartHeartbeat,
 };
 pub use task::{HostRedirectType, Task};
-pub use task_profile::{ErrCmdType, TaskFailStep, TaskOutcome};
+pub use task_profile::{ErrCmdType, TaskFailHandleType, TaskFailStep, TaskOutcome};
 pub use weak_network::{ReportWeak, WeakKey, WeakNetworkLogic};
+pub use zombie_task_manager::ZombieTaskManager;
