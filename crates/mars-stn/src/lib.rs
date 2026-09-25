@@ -319,7 +319,7 @@ pub use task_intercept::{TaskIntercept, TaskInterceptInfo, INTERCEPT_TIMEOUT};
 pub use task_profile::{
     compare_task, compute_task_timeout, first_pkg_timeout, read_write_timeout, ConnectProfile,
     ErrCmdType, NoopProfile, PrepareProfile, RunId, TaskFailHandleType, TaskFailStep, TaskOutcome,
-    TaskProfile, TransferProfile,
+    TaskProfile, TransferProfile, LOCAL_START_TASK_FAIL,
 };
 pub use timing_sync::{
     alarm_time, TimingSync, ACTIVE_SYNC_INTERVAL, INACTIVE_SYNC_INTERVAL, NONET_SALT_RATE,
