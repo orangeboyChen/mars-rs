@@ -112,8 +112,8 @@ both carry the whole library, because there is one `.so` and it is not split.
 The Java package is `io.github.orangeboychen.marsrs`, the package whose natives
 `mars-jni` exports, so the two are renamed together. A repository is also
 reachable on JitPack as `com.github.<owner>.<repo>`, which is the spelling its
-badge prints; the release workflow asks jitpack.io to build the tag under both
-and reports which one answered.
+badge prints; the release workflow asks jitpack.io to build the tag under both,
+reports which one answered, and then checks that both AARs resolve.
 
 JitPack has an Android SDK but neither an NDK nor a Rust toolchain, so it
 downloads `mars-android-native.zip` of the same release first — see
