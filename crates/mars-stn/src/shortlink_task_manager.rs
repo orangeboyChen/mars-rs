@@ -221,6 +221,11 @@ pub type ShouldIntercept = dyn FnMut(i32) -> bool + Send;
 /// the two package intervals a task is given between two packages.
 pub type NetInfo = dyn FnMut() -> NetworkKind + Send;
 
+/// `StnManager::GenSequenceId()` — the sequence id of the request, which the
+/// C++ draws again for every try: `client_sequence_id 在buf2resp这里生成,防止重
+/// 试sequence_id一样`, a retry is not taken for the request it is a retry of.
+pub type GenSequenceId = dyn FnMut() -> u16 + Send;
+
 /// `ShortLinkTaskManager`.
 pub struct ShortLinkTaskManager {
     /// `lst_cmd_`, sorted by [`crate::task_profile::compare_task`].
@@ -252,6 +257,7 @@ pub struct ShortLinkTaskManager {
     anti_avalanche: Option<Box<AntiAvalancheCheck>>,
     should_intercept: Option<Box<ShouldIntercept>>,
     net_info: Option<Box<NetInfo>>,
+    gen_sequence_id: Option<Box<GenSequenceId>>,
     /// `closefunc` — what the C++ closes a socket with, which the queue needs
     /// for one a run answered badly on. The pool's own is
     /// [`SocketPool::set_close`].
@@ -283,6 +289,7 @@ impl ShortLinkTaskManager {
             anti_avalanche: None,
             should_intercept: None,
             net_info: None,
+            gen_sequence_id: None,
             close: None,
         }
     }
@@ -780,6 +787,13 @@ impl ShortLinkTaskManager {
         self.net_info = Some(Box::new(net_info));
     }
 
+    /// `StnManager::GenSequenceId()` — unset is a task that is reported under
+    /// sequence id `0`, which is what the C++ warns about: a retry of it would
+    /// be taken for the request it is a retry of.
+    pub fn set_gen_sequence_id(&mut self, gen: impl FnMut() -> u16 + Send + 'static) {
+        self.gen_sequence_id = Some(Box::new(gen));
+    }
+
     /// `closefunc` — what a socket the queue is done with is closed with.
     pub fn set_close_socket(&mut self, close: impl FnMut(SocketFd) + Send + 'static) {
         self.close = Some(Box::new(close));
@@ -867,11 +881,20 @@ impl ShortLinkTaskManager {
             }
             let host = hosts[0].clone();
 
-            let task = self.tasks[i].task.clone();
+            let mut task = self.tasks[i].task.clone();
             if task.need_authed && !self.authed(&host, &task.user_id) {
                 i += 1;
                 continue;
             }
+
+            // `first->task.client_sequence_id = …GenSequenceId()` — one per
+            // try, and before `Req2Buf`, which is what the app is handed the
+            // request to write with: a retry goes out under a new one
+            let sequence_id = self.sequence_id();
+            self.tasks[i].task.client_sequence_id = sequence_id;
+            // what the C++ makes the worker from is the task it just drew on,
+            // not a copy one number behind it
+            task.client_sequence_id = sequence_id;
 
             let body = match self.encode(&task) {
                 Ok(body) => body,
@@ -1180,6 +1203,13 @@ impl ShortLinkTaskManager {
         match self.should_intercept.as_mut() {
             Some(should) => should(err_code),
             None => false,
+        }
+    }
+
+    fn sequence_id(&mut self) -> u16 {
+        match self.gen_sequence_id.as_mut() {
+            Some(gen) => gen(),
+            None => 0,
         }
     }
 
@@ -1642,6 +1672,47 @@ mod tests {
             manager.connect_profile(7).is_some(),
             "the second try is out"
         );
+    }
+
+    /// `first->task.client_sequence_id = …GenSequenceId()` — the C++ draws one
+    /// for every try, in `Req2Buf`'s own block, so that a retry is not taken
+    /// for the request it is a retry of.
+    #[test]
+    fn every_try_of_a_task_is_written_under_a_sequence_id_of_its_own() {
+        let mut manager = ShortLinkTaskManager::new();
+        let drawn: Arc<Mutex<u16>> = Arc::new(Mutex::new(0));
+        let counter = Arc::clone(&drawn);
+        manager.set_gen_sequence_id(move || {
+            let mut drawn = counter.lock().unwrap();
+            *drawn += 1;
+            *drawn
+        });
+        let written: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&written);
+        manager.set_req2buf(move |task| {
+            recorder.lock().unwrap().push(task.client_sequence_id);
+            Ok(b"body".to_vec())
+        });
+        manager.set_start_run(move |task, _request| Some(RunId(u64::from(task.taskid))));
+
+        manager.start_task_at(100_000, task(7), prepare());
+        assert_eq!(*written.lock().unwrap(), vec![1]);
+        assert_eq!(manager.tasks()[0].task.client_sequence_id, 1);
+
+        // the answer is a failure the task is tried again for, and the retry is
+        // a request of its own and not a copy of the one that failed
+        assert!(manager.on_send_at(100_000, RunId(7)));
+        assert_eq!(
+            manager.on_response_at(
+                100_500,
+                RunId(7),
+                failed(ErrCmdType::Socket, ECT_SOCKET_SHUTDOWN)
+            ),
+            Some(RespHandle::Retried)
+        );
+        manager.run_loop_at(102_000);
+        assert_eq!(*written.lock().unwrap(), vec![1, 2]);
+        assert_eq!(manager.tasks()[0].task.client_sequence_id, 2);
     }
 
     #[test]
