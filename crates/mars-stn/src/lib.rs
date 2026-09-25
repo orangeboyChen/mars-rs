@@ -92,8 +92,14 @@
 //! when it goes through one, the socket the pool still has for one of them, and
 //! the profile the connect writes as it goes.
 //!
+//! The nineteenth slice is the run on the socket that connect made
+//! ([`short_link`]): the request the task goes out as, one read at a time of the
+//! answer that comes back, the fork on its status, and the socket itself —
+//! handed back to the pool when both the task and the server asked for it, and
+//! closed when one of them did not.
+//!
 //! What still needs the app callbacks (`net_core`, `longlink_task_manager`, the
-//! run that writes and reads a short link, `stn_logic`) comes later.
+//! task managers that own the tasks, `stn_logic`) comes later.
 
 /// The `static`s of this crate are one value for the whole process —
 /// `sg_client_version` in [`longlink`], `outer_setted_heart_` in
@@ -199,7 +205,13 @@ pub use net_source::{
     DISABLE_QUIC_SECONDS, ITEM_DELIMITER, NUM_MAKE_COUNT,
 };
 pub use netsource_timercheck::{NetSourceTimerCheck, INTERVAL_TIME, MAX_SPEED_TEST_COUNT, TIMEOUT};
-pub use short_link::{NetworkLabel, ShortLink, DEFAULT_CONNECT_TIMEOUT_MS, ETIMEDOUT, K_MOBILE};
+// `ConnectFail` is not here: [`long_link`] already has one of that name, so the
+// short link's is [`short_link::ConnectFail`].
+pub use short_link::{
+    NetworkLabel, Read, RunFail, ShortLink, DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_RW_TIMEOUT_MS,
+    ECT_HTTP_PARSE_STATUS_LINE, ECT_HTTP_SPLIT_HTTP_HEAD_AND_BODY, ECT_SOCKET_READ_ONCE,
+    ECT_SOCKET_WRITEN_WITH_NON_BLOCK, ENOTCONN, ETIMEDOUT, K_BUFFER_SIZE, K_MOBILE, K_WIFI,
+};
 pub use shortlink::{
     default_packer, is_keep_alive, keep_alive, pack, request_headers, request_url, Headers,
     KeepAlive, Packer,
