@@ -204,6 +204,11 @@ pub mod app_logic;
 // here would push them out of it, which is why this one is a `//` too.
 pub mod platform_comm;
 
+// `io.github.marsrs.BaseEvent` — what the app tells the port happened to it.
+// The module's own doc says it all, and its links resolve in the module: a
+// `///` here would push them out of it, which is why this one is a `//` too.
+pub mod baseevent;
+
 /// `Xlog.appenderOpen`.
 pub mod jni_bridge;
 

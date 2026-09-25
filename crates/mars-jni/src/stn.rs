@@ -52,9 +52,11 @@ fn logic() -> &'static Mutex<StnLogic> {
     })
 }
 
-/// Runs `f` on the process-wide STN. A poisoned lock keeps the state a panic
-/// left behind rather than resetting it, which is what the C++ would leave.
-fn with_logic<R>(f: impl FnOnce(&mut StnLogic) -> R) -> R {
+/// Runs `f` on the process-wide STN, which is also how the rest of the crate
+/// reaches it: [`crate::baseevent`] hands its own events here. A poisoned lock
+/// keeps the state a panic left behind rather than resetting it, which is what
+/// the C++ would leave.
+pub(crate) fn with_logic<R>(f: impl FnOnce(&mut StnLogic) -> R) -> R {
     let mut logic = logic()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
