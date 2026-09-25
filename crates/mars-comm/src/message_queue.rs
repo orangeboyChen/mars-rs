@@ -579,9 +579,9 @@ impl RunLoop {
         // spurious wake-up reports "nothing to do" before an `After` message
         // is due.
         let deadline = timeout.map(|timeout| Instant::now() + timeout);
-        let next = {
+        let (handlers, message) = {
             let mut state = queue.lock();
-            loop {
+            let index = loop {
                 let now = Instant::now();
                 if let Some(index) = state
                     .messages
@@ -605,15 +605,13 @@ impl RunLoop {
                 }
                 let (guard, _) = queue.cond.wait_timeout(state, wait).unwrap();
                 state = guard;
-            }
-        };
-        let Some(index) = next else { return false };
+            };
+            let Some(index) = index else { return false };
 
-        // Take the message out, re-arm it when it is periodic, and collect the
-        // handlers to call — all while holding the lock, so that a handler can
-        // post or cancel from inside a message.
-        let (handlers, message) = {
-            let mut state = queue.lock();
+            // Take the message out, re-arm it when it is periodic, and collect the
+            // handlers to call — all while holding the same lock the wait ended
+            // on, so that a handler can post or cancel from inside a message and
+            // the index still names the message it was computed for.
             let Some(mut entry) = state.messages.remove(index) else {
                 return false;
             };
