@@ -199,7 +199,9 @@ pub mod wakerlock;
 // of it, which is why this one is a `//` too.
 pub mod app_logic;
 
-/// `io.github.marsrs.comm.PlatformComm$C2Java` — what the platform answers.
+// `io.github.marsrs.comm.PlatformComm$C2Java` — what the platform answers. The
+// module's own doc says it all, and its links resolve in the module: a `///`
+// here would push them out of it, which is why this one is a `//` too.
 pub mod platform_comm;
 
 /// `Xlog.appenderOpen`.
