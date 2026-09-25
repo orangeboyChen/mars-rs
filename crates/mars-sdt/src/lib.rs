@@ -8,7 +8,8 @@
 //! is here is the vocabulary (the profiles and the constants), the plan the mode
 //! turns into, the run loop, and — in [`checkimpl`] and [`activecheck`] — the
 //! four probes and the four checks around them, so a host only has to answer
-//! the probes with a network of its own.
+//! the probes with a network of its own. [`trafficmonitor`] is the budget a run
+//! of probes is given: how much traffic a diagnosis may cost the app.
 
 pub mod activecheck;
 pub mod checkimpl;
@@ -17,6 +18,7 @@ pub mod netchecker_profile;
 pub mod sdt;
 pub mod sdt_core;
 pub mod sdt_logic;
+pub mod trafficmonitor;
 
 pub use constants::*;
 pub use netchecker_profile::{CheckRequestProfile, CheckResultProfile};
@@ -26,3 +28,4 @@ pub use sdt::{
 };
 pub use sdt_core::SdtCore;
 pub use sdt_logic::SdtLogic;
+pub use trafficmonitor::{NetCheckTrafficMonitor, DEFAULT_WIFI_DATA_THRESHOLD};
