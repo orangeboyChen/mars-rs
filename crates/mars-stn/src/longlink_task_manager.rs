@@ -615,15 +615,19 @@ impl LongLinkTaskManager {
             return None;
         }
 
-        let at = self.locate(response.taskid)?;
+        // The C++ locates before it asks whether the answer is an error:
+        // `__Locate` has no answer for `kInvalidTaskID`, and an error that came
+        // in for the channel — not for a task — carries exactly that.
+        let at = self.locate(response.taskid);
         let taskid = response.taskid;
-        let name = self.tasks[at].channel_name.clone();
 
         if response.err_type != ErrCmdType::Ok {
             if response.err_code == HANDSHAKE_MISUNDERSTAND {
-                // the two ends did not agree on the handshake: a try that is
-                // not the task's to pay for
-                self.tasks[at].remain_retry_count += 1;
+                if let Some(at) = at {
+                    // the two ends did not agree on the handshake: a try that is
+                    // not the task's to pay for
+                    self.tasks[at].remain_retry_count += 1;
+                }
             }
             // one error for the whole channel it came in on
             self.batch_error_resp_handle_at(
@@ -637,8 +641,23 @@ impl LongLinkTaskManager {
                 },
                 true,
             );
-            return Some(still_there(self.has_task(taskid)));
+            // The C++ answers nothing; the port says whether there is still a
+            // task waiting, which for an error with no task id of its own is
+            // any task on the channel.
+            let waiting = if taskid == Task::INVALID_TASK_ID {
+                !self.tasks.is_empty()
+            } else {
+                self.has_task(taskid)
+            };
+            return Some(still_there(waiting));
         }
+
+        let Some(at) = at else {
+            // "task no found": an answer for a task that is over, or one that
+            // carries no task id at all
+            return None;
+        };
+        let name = self.tasks[at].channel_name.clone();
 
         let task = self.tasks[at].task.clone();
         let len = response.body.len();
@@ -2171,6 +2190,33 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .is_empty(),
             "a socket error is the link's own, not one to take it down for"
+        );
+    }
+
+    #[test]
+    fn an_error_for_no_task_in_particular_fails_the_channel_anyway() {
+        let mut manager = manager();
+        let (_, ended, _, _) = wire(&mut manager);
+        let mut no_retry = task(7);
+        no_retry.retry_count = 0;
+        manager.start_task_at(NOW, no_retry, Task::CHANNEL_LONG);
+
+        // `kInvalidTaskID`: the read failed for the link and not for one task,
+        // and `__Locate` has no answer for that id. The C++ fails the channel
+        // all the same.
+        assert_eq!(
+            manager.on_response_at(
+                NOW + 10,
+                failed(Task::INVALID_TASK_ID, ErrCmdType::Socket, -5001)
+            ),
+            Some(RespHandle::Ended)
+        );
+        assert_eq!(
+            *ended
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![(ErrCmdType::Socket, -5001, TaskFailHandleType::Default, 7)],
+            "the app hears about it and the task leaves the queue"
         );
     }
 
