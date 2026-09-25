@@ -6,8 +6,12 @@
 //! server?" by running ping, DNS, TCP and HTTP checks against the hosts STN
 //! uses. The checks themselves are sockets, which this crate does not own: what
 //! is here is the vocabulary (the profiles and the constants), the plan the mode
-//! turns into, and the run loop — so a host can plug real checkers in.
+//! turns into, the run loop, and — in [`checkimpl`] and [`activecheck`] — the
+//! four probes and the four checks around them, so a host only has to answer
+//! the probes with a network of its own.
 
+pub mod activecheck;
+pub mod checkimpl;
 pub mod constants;
 pub mod netchecker_profile;
 pub mod sdt;
