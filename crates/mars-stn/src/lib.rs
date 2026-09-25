@@ -119,8 +119,17 @@
 //! `ShortLinkInterface` are the host's here, so what a run *is* is an opaque
 //! [`RunId`] the host hands out with the task and hands back with the answer.
 //!
-//! What still needs the app callbacks (`net_core`, `longlink_task_manager`, the
-//! task managers that own the tasks, `stn_logic`) comes later.
+//! The twenty-third slice is the queue the long-link tasks wait in
+//! ([`longlink_task_manager`]): the channels they go out on, the four timeouts a
+//! task that answered nothing runs into, and the difference from the short-link
+//! queue — an answer here is for a *channel*, so one task that heard nothing
+//! fails with everything else that was out on the same link, and takes the link
+//! down with it. The C++'s `LongLinkMetaData` is the host's here too, so what a
+//! channel *is* is a name the host wires the link's profile, send, stop and
+//! disconnect to.
+//!
+//! What still needs the app callbacks (`net_core`, `stn_logic`/`stn_manager`,
+//! `stn_callback_bridge`) comes later.
 
 /// The `static`s of this crate are one value for the whole process —
 /// `sg_client_version` in [`longlink`], `outer_setted_heart_` in
@@ -176,6 +185,7 @@ pub mod longlink_connect_monitor;
 pub mod longlink_identify_checker;
 pub mod longlink_metadata;
 pub mod longlink_speed_test;
+pub mod longlink_task_manager;
 pub mod net_channel_factory;
 pub mod net_check_logic;
 pub mod net_source;
@@ -219,6 +229,12 @@ pub use longlink_metadata::LongLinkMetaData;
 pub use longlink_speed_test::{
     Fastest, LongLinkSpeedTest, Need, Socket, SocketEvent, SpeedTestItem, SpeedTestState, Stop,
     Watch, MAX_RETRIES, OUT_OF_BAND_CMDID,
+};
+// `Timeout` is not here: [`shortlink_task_manager`] already exports one of that
+// name, and this queue's four are [`longlink_task_manager::Timeout`].
+pub use longlink_task_manager::{
+    ChannelProfile, DisconnectChannel, GenSequenceId, LongLinkTaskManager, MakeSureConnected,
+    NetworkChange, NotifyNetworkErr, OnPush, ResetChannel, Response, SendOnChannel, StopOnChannel,
 };
 pub use net_channel_factory::{ChannelFactory, CreateLongLink, CreateShortLink};
 pub use net_check_logic::{

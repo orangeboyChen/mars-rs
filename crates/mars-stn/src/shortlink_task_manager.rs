@@ -107,7 +107,8 @@ impl Timeout {
     }
 }
 
-/// What [`ShortLinkTaskManager::on_response_at`] did with the answer.
+/// What a queue did with an answer: [`ShortLinkTaskManager::on_response_at`]
+/// and [`crate::LongLinkTaskManager::on_response_at`] both answer with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RespHandle {
     /// The task is over: it left the queue and the app was told.
@@ -117,8 +118,7 @@ pub enum RespHandle {
     Retried,
     /// The task answered, but the app was asked about *every* task instead
     /// (`kTaskFailHandleSessionTimeout` / `kTaskFailHandleRetryAllTasks`): it
-    /// stays in the queue until [`ShortLinkTaskManager::retry_tasks_at`] says
-    /// what to do.
+    /// stays in the queue until the queue's own `retry_tasks` says what to do.
     Deferred,
 }
 
