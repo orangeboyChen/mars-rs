@@ -1301,9 +1301,10 @@ fn may_start(profile: &TaskProfile, now: u64) -> bool {
     profile.retry_time_interval <= now.saturating_sub(profile.retry_start_time)
 }
 
-/// The timeout a task is waiting on, and when it runs out: the earliest of the
-/// five of `__RunOnTimeout` that apply to it.
-fn next_deadline(profile: &TaskProfile, network: NetworkKind) -> Option<(Timeout, u64)> {
+/// The five timeouts of `__RunOnTimeout` that apply to a task, and when each of
+/// them runs out — in the order the C++ asks about them, which is the order it
+/// takes its one answer from.
+fn deadlines(profile: &TaskProfile, network: NetworkKind) -> [Option<(Timeout, u64)>; 5] {
     let running = profile.running.is_some();
     let sent = profile.transfer_profile.start_send_time;
     let pkg = profile.transfer_profile.last_receive_pkg_time;
@@ -1333,15 +1334,26 @@ fn next_deadline(profile: &TaskProfile, network: NetworkKind) -> Option<(Timeout
         (running && sent > 0 && pkg > 0)
             .then_some((Timeout::PkgPkg, pkg.saturating_add(pkg_pkg_interval))),
     ]
-    .into_iter()
-    .flatten()
-    .min_by_key(|(_, at)| *at)
 }
 
-/// Which of the five timeouts a task has run into at `now`, if any.
+/// The timeout a task is waiting on, and when it runs out: the soonest of the
+/// five, which is when the host has to look again.
+fn next_deadline(profile: &TaskProfile, network: NetworkKind) -> Option<(Timeout, u64)> {
+    deadlines(profile, network)
+        .into_iter()
+        .flatten()
+        .min_by_key(|(_, at)| *at)
+}
+
+/// Which of the five a task has run into at `now`, if any: the C++'s
+/// `if ... else if ...` takes the first one it asks about that has, not the
+/// one that ran out first — a loop that runs late reports the task's own
+/// timeout before the read's, and the read's before the first package's.
 fn timed_out(profile: &TaskProfile, now: u64, network: NetworkKind) -> Option<Timeout> {
-    next_deadline(profile, network)
-        .filter(|(_, at)| *at <= now)
+    deadlines(profile, network)
+        .into_iter()
+        .flatten()
+        .find(|(_, at)| *at <= now)
         .map(|(timeout, _)| timeout)
 }
 
@@ -1522,9 +1534,16 @@ mod tests {
             Some((Timeout::PkgPkg, 108_500)),
             "8s of wifi between two packages"
         );
+        // by 110_000 the package-to-package one is out and nothing else is
+        assert_eq!(
+            timed_out(profile, 110_000, NetworkKind::Wifi),
+            Some(Timeout::PkgPkg)
+        );
+        // by 117_333 the read as a whole is out too, and the C++ asks about it
+        // first: it is the read that is reported, not the earlier one
         assert_eq!(
             timed_out(profile, 117_333, NetworkKind::Wifi),
-            Some(Timeout::PkgPkg)
+            Some(Timeout::ReadWrite)
         );
     }
 
@@ -1568,6 +1587,31 @@ mod tests {
         assert_eq!(manager.tasks()[0].retry_time_interval, RETRY_INTERNAL);
         assert!(ended.lock().unwrap().is_empty(), "nothing is over yet");
         assert_eq!(manager.tasks_continuous_fail_count(), 1);
+    }
+
+    #[test]
+    fn a_loop_that_runs_late_reports_the_timeout_the_cpp_asks_about_first() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        let ended = endings(&mut manager);
+        let mut task = task(7);
+        task.retry_count = 0;
+        manager.start_task_at(100_000, task, prepare());
+        assert!(manager.on_send_at(100_000, RunId(7)));
+
+        // by 118_000 both the first package (112_000) and the read as a whole
+        // (117_333) are out: the C++'s `if ... else if` never gets as far as
+        // the first package, so the read is what the app is told ran out
+        manager.run_loop_at(118_000);
+        assert_eq!(
+            *ended.lock().unwrap(),
+            vec![(
+                ErrCmdType::Http,
+                HTTP_READ_WRITE_TIMEOUT,
+                TaskFailHandleType::Default,
+                7
+            )]
+        );
     }
 
     #[test]
