@@ -496,3 +496,57 @@ fn dispatch_waits_for_the_due_time_not_for_the_whole_timeout() {
     );
     destroy_message_queue(queue);
 }
+
+#[test]
+fn a_periodic_message_can_ask_for_itself_while_it_runs() {
+    // A periodic message stays in the queue while it runs — the C++ hands the
+    // very same `Message` to the handlers — so asking for it from inside the
+    // handler has to be answered without locking the payload the dispatcher
+    // is holding. It used to deadlock: the queue thread waited for a lock it
+    // held itself.
+    let queue = create_message_queue();
+    let handler_slot = Arc::new(Mutex::new(None));
+    let slot = Arc::clone(&handler_slot);
+    let (done, waited) = mpsc::channel();
+    let said = Mutex::new(Some(done));
+    let handler = install(
+        move |_| {
+            let handler = slot.lock().unwrap().unwrap();
+            let asked = singleton_message(false, &handler, Message::new(MessageTitle(7), "tick"));
+            let replaced = singleton_message(
+                true,
+                &handler,
+                Message::new(MessageTitle(7), "tick").with_body1(String::from("payload")),
+            );
+            if let Some(done) = said.lock().unwrap().take() {
+                done.send((asked, replaced)).unwrap();
+            }
+        },
+        false,
+        queue,
+    );
+    *handler_slot.lock().unwrap() = Some(handler);
+
+    let post = post_message(
+        &handler,
+        Message::new(MessageTitle(7), "tick"),
+        MessageTiming::Period {
+            after: 0,
+            period: 10,
+        },
+    );
+
+    // on another thread, so that a queue that never answers is a test that
+    // fails instead of one that never finishes
+    let runner = thread::spawn(move || RunLoop::dispatch_timeout(queue, Duration::from_secs(1)));
+    let (asked, replaced) = waited
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the queue thread is stuck asking for the message it is running");
+    assert_eq!(
+        asked, post,
+        "the pending message is the one that is running"
+    );
+    assert_eq!(replaced, post);
+    runner.join().unwrap();
+    destroy_message_queue(queue);
+}
