@@ -7,15 +7,22 @@
 //! gets, a link the app took down itself, which is the one connect failure
 //! that is *not* answered, and a minor long link on a debug ip, which is the
 //! one that never goes through a proxy.
+//!
+//! The heartbeat is the same: the noop that goes out when the interval is up
+//! and the eight seconds it has to answer in, the one the app asks for, which
+//! is not the one the interval asked for, the identify check the first of them
+//! carries, and the two [`NoopProfile`]s a run that answered twice leaves on
+//! the profile.
 
 use std::sync::{Arc, Mutex};
 
 use mars_comm::local_ipstack::LocalIpStack;
 use mars_comm::{ProxyInfo, ProxyType, SocketAddress};
 use mars_stn::{
-    ConnectFail, DisconnectInternalCode, ErrCmdType, IpPortItem, IpSourceType, LongLink,
-    LongLinkStatus, LonglinkConfig, MakeSure, OpBreaker, SmartHeartbeat, SocketFd, SocketOperator,
-    SocketProfile, Task, ECT_DNS_MAKE_SOCKET_PREPARED, ECT_SOCKET_MAKE_SOCKET_PREPARED,
+    AlarmStatus, ConnectFail, DisconnectInternalCode, ErrCmdType, IdentifyBuffer, IpPortItem,
+    IpSourceType, LongLink, LongLinkStatus, LonglinkConfig, MakeSure, NoopProfile, OpBreaker,
+    SmartHeartbeat, SocketFd, SocketOperator, SocketProfile, Task, ECT_DNS_MAKE_SOCKET_PREPARED,
+    ECT_SOCKET_MAKE_SOCKET_PREPARED,
 };
 
 /// A host's `OPBreaker`: the port has nothing blocking to give up.
@@ -392,4 +399,189 @@ fn the_verification_of_a_connect_is_a_noop_the_server_answers() {
     // and an answer that is not a package is not an answer
     link.set_socket_operator(Host::new(Arc::clone(&record)));
     assert!(!link.verify(SocketFd(4)));
+}
+
+/// A link that is up, which is what every heartbeat starts from.
+fn a_connected_longlink() -> (LongLink, Recorder) {
+    let (mut link, record) = a_longlink();
+    link.make_sure_connected();
+    assert!(link.connect_at(1_000).is_ok());
+    (link, record)
+}
+
+/// What the host's run does with what it wrote: the whole of what is at the
+/// head of the queue has gone out.
+fn wrote(link: &mut LongLink) {
+    let len = link
+        .queued()
+        .front()
+        .map(|data| data.buffer.len())
+        .unwrap_or(0);
+    link.wrote(len);
+}
+
+#[test]
+fn the_heartbeat_goes_out_on_the_socket_and_its_answer_ends_it() {
+    let (mut link, _) = a_connected_longlink();
+
+    assert!(link.send_heartbeat_at(1_000, false, false));
+    // the noop: `kNoopTaskID` with `kNoopCmdID`, waiting for the host's run to
+    // write it
+    assert_eq!(
+        link.queued()[0].buffer,
+        mars_stn::longlink::longlink_pack(mars_stn::longlink::NOOP_CMDID, Task::NOOP_TASK_ID, &[])
+    );
+    assert!(link.is_nooping());
+    // and it has eight seconds to answer
+    assert_eq!(link.noop_timeout_due(), Some(1_000 + 8 * 1000));
+
+    // what the server answers to it, 500 later
+    assert!(link.noop_resp_at(
+        1_500,
+        mars_stn::longlink::NOOP_CMDID,
+        Task::NOOP_TASK_ID,
+        &[]
+    ));
+    assert!(!link.is_nooping());
+    assert_eq!(link.noop_timeout_due(), None, "the alarm was cancelled");
+}
+
+#[test]
+fn the_heartbeats_of_a_run_are_what_the_profile_reports() {
+    let (mut link, _) = a_connected_longlink();
+    link.set_smart_heartbeat(SmartHeartbeat::new());
+
+    // the first heartbeat of a run, and its answer 500 later
+    assert!(link.send_heartbeat_at(1_000, false, false));
+    assert!(link.noop_resp_at(
+        1_500,
+        mars_stn::longlink::NOOP_CMDID,
+        Task::NOOP_TASK_ID,
+        &[]
+    ));
+    // ... and the second one, one interval later
+    wrote(&mut link);
+    assert!(link.send_heartbeat_at(1_000 + 210_000, false, false));
+    assert!(link.noop_resp_at(
+        1_000 + 210_000 + 700,
+        mars_stn::longlink::NOOP_CMDID,
+        Task::NOOP_TASK_ID,
+        &[]
+    ));
+
+    assert_eq!(
+        link.profile().noop_profiles,
+        vec![
+            NoopProfile {
+                success: true,
+                noop_internal: 0,
+                noop_actual_internal: 0,
+                noop_cost: 500,
+                noop_starttime: 1_000,
+            },
+            // `after` is the interval the alarm was set to, and the actual one
+            // is what it really was: the same, because the reading came on time
+            NoopProfile {
+                success: true,
+                noop_internal: 210_000,
+                noop_actual_internal: 210_000,
+                noop_cost: 700,
+                noop_starttime: 211_000,
+            },
+        ]
+    );
+}
+
+#[test]
+fn the_answer_of_a_noop_the_app_asked_for_is_what_the_heartbeat_before_it_reports() {
+    let (mut link, _) = a_connected_longlink();
+    link.set_smart_heartbeat(SmartHeartbeat::new());
+
+    assert!(link.send_heartbeat_at(1_000, false, false));
+    assert!(link.noop_resp_at(
+        1_500,
+        mars_stn::longlink::NOOP_CMDID,
+        Task::NOOP_TASK_ID,
+        &[]
+    ));
+    assert_eq!(link.profile().noop_profiles[0].noop_cost, 500);
+
+    // ... and one the app asked for: the C++ gives it no profile of its own, so
+    // its answer is written on the heartbeat before it
+    wrote(&mut link);
+    link.trig_noop_at(2_000);
+    assert!(link.noop_resp_at(
+        2_200,
+        mars_stn::longlink::NOOP_CMDID,
+        Task::NOOP_TASK_ID,
+        &[]
+    ));
+    assert_eq!(link.profile().noop_profiles.len(), 1);
+    assert_eq!(link.profile().noop_profiles[0].noop_cost, 1_200);
+}
+
+#[test]
+fn the_heartbeat_the_app_asks_for_is_not_the_one_the_interval_asked_for() {
+    let (mut link, _) = a_connected_longlink();
+    let said: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
+    let alarms = Arc::clone(&said);
+    link.set_on_noop_alarm_received(move |noop_timeout| {
+        alarms
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(noop_timeout)
+    });
+
+    // `TrigNoop`, which is what the app's `trigNooping` is
+    link.trig_noop_at(2_000);
+    assert!(link.is_nooping());
+    assert_eq!(
+        link.queued()[0].buffer,
+        mars_stn::longlink::longlink_pack(mars_stn::longlink::NOOP_CMDID, Task::NOOP_TASK_ID, &[])
+    );
+    // the interval alarm is not what this heartbeat is waiting on
+    assert_eq!(link.noop_due(), None);
+
+    // ... and when the timeout goes off, the link is told which one it was
+    assert!(!link.on_noop_alarm_at(2_000 + 8 * 1000 - 1, true));
+    assert!(link.on_noop_alarm_at(2_000 + 8 * 1000, true));
+    assert_eq!(link.noop_timeout_status(), AlarmStatus::OnAlarm);
+    assert_eq!(*said.lock().unwrap_or_else(|e| e.into_inner()), vec![true]);
+    assert!(link.is_nooping(), "the heartbeat is still out");
+}
+
+#[test]
+fn the_identify_check_is_what_the_first_heartbeat_carries() {
+    let (mut link, _) = a_connected_longlink();
+    let said: Arc<Mutex<Vec<(ErrCmdType, i32)>>> = Arc::new(Mutex::new(Vec::new()));
+    let reported = Arc::clone(&said);
+    link.set_network_report(move |err_type, err_code, _ip, _port| {
+        reported
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((err_type, err_code))
+    });
+    link.set_identify_check_buffer(|_channel, _cmdid| IdentifyBuffer::now(vec![7], vec![7], 42));
+    link.set_identify_on_response(|_channel, response, hash| response == hash);
+
+    assert!(link.send_heartbeat_at(1_000, false, false));
+    assert_eq!(
+        link.queued()[0].buffer,
+        mars_stn::longlink::longlink_pack(42, Task::LONG_LINK_IDENTIFY_CHECKER_TASK_ID, &[7])
+    );
+
+    // the answer the server sent back is the hash the app handed out
+    assert!(link.noop_resp_at(1_100, 42, Task::LONG_LINK_IDENTIFY_CHECKER_TASK_ID, &[7]));
+    assert!(link.identify().has_checked());
+    assert!(!link.is_nooping());
+    // a link the server identified is reported as one that came up
+    assert_eq!(
+        *said.lock().unwrap_or_else(|e| e.into_inner()),
+        vec![(ErrCmdType::Ok, 0)]
+    );
+
+    // ... and the next heartbeat is a plain noop
+    wrote(&mut link);
+    assert!(link.send_heartbeat_at(2_000, false, false));
+    assert_eq!(link.queued()[0].task.taskid, Task::NOOP_TASK_ID);
 }
