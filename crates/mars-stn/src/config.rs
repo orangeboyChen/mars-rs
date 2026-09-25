@@ -83,3 +83,35 @@ pub const MAX_INI_SECTIONS: usize = 20;
 /// milliseconds, for the network to look like it is dozing (MIUI aligns alarms
 /// to five-minute marks, which is what this is for).
 pub const DOZE_JUDGE_WINDOW: i64 = 20 * 1000;
+
+/// `kWifiPackageInterval` / `kGPRSPackageInterval` — how long a task may wait
+/// between two packages of the answer it is reading, in milliseconds.
+pub const WIFI_PACKAGE_INTERVAL: u64 = 8 * 1000;
+pub const MOBILE_PACKAGE_INTERVAL: u64 = 12 * 1000;
+
+/// `kWifiMinRate` / `kGPRSMinRate` — bytes per second a read is assumed to
+/// manage, which is what turns a length into a timeout.
+pub const WIFI_MIN_RATE: u64 = 12 * 1024;
+pub const MOBILE_MIN_RATE: u64 = 4 * 1024;
+
+/// `kMaxRecvLen` — the answer a read is given the time for, however long the
+/// one that is coming really is.
+pub const MAX_RECV_LEN: u64 = 64 * 1024;
+
+/// `kBaseFirstPackageWifiTimeout` / `kBaseFirstPackageGPRSTimeout` — what a
+/// first package is waited for when the server said nothing about how long it
+/// takes — and the `kMaxFirstPackage*` ceiling it is clipped to.
+pub const BASE_FIRST_PACKAGE_WIFI_TIMEOUT: u64 = 12 * 1000;
+pub const BASE_FIRST_PACKAGE_GPRS_TIMEOUT: u64 = 15 * 1000;
+pub const MAX_FIRST_PACKAGE_WIFI_TIMEOUT: u64 = 22 * 1000;
+pub const MAX_FIRST_PACKAGE_GPRS_TIMEOUT: u64 = 30 * 1000;
+
+/// `kDynTimeFirstPackageWifiTimeout` / `kDynTimeFirstPackageGPRSTimeout` — the
+/// shorter wait a network that has been excellent earns.
+pub const DYN_TIME_FIRST_PACKAGE_WIFI_TIMEOUT: u64 = 7 * 1000;
+pub const DYN_TIME_FIRST_PACKAGE_GPRS_TIMEOUT: u64 = 10 * 1000;
+
+/// `kWifiTaskDelay` / `kGPRSTaskDelay` — how much longer every task that is
+/// already out makes the first-package timeout of the next one.
+pub const WIFI_TASK_DELAY: u64 = 1500;
+pub const MOBILE_TASK_DELAY: u64 = 3000;
