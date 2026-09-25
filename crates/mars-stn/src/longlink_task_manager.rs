@@ -869,9 +869,18 @@ impl LongLinkTaskManager {
     }
 
     /// `fun_callback_`.
+    /// `fun_callback_` — a task that is over, and what the app says about it:
+    /// the answer is the code the task is remembered with.
+    ///
+    /// The connect profile comes along for the same reason it does in
+    /// [`crate::ShortLinkTaskManager::set_callback`]: the C++ reads it out of
+    /// the queue from inside `NetCore::__CallBack`, and a hook cannot borrow
+    /// the queue that called it.
     pub fn set_callback(
         &mut self,
-        callback: impl FnMut(ErrCmdType, i32, TaskFailHandleType, &Task, u32) -> i32 + Send + 'static,
+        callback: impl FnMut(ErrCmdType, i32, TaskFailHandleType, &Task, u32, &ConnectProfile) -> i32
+            + Send
+            + 'static,
     ) {
         self.callback = Some(Box::new(callback));
     }
@@ -1317,7 +1326,14 @@ impl LongLinkTaskManager {
             let task = self.tasks[at].task.clone();
             let was_running = self.tasks[at].is_running();
             let cgi_retcode = self.callback.as_mut().map_or(0, |callback| {
-                callback(err_type, err_code, fail_handle, &task, cost as u32)
+                callback(
+                    err_type,
+                    err_code,
+                    fail_handle,
+                    &task,
+                    cost as u32,
+                    &profile,
+                )
             });
             {
                 let profile = &mut self.tasks[at];
@@ -1757,7 +1773,7 @@ mod tests {
         });
 
         let record = Arc::clone(&ended);
-        manager.set_callback(move |err_type, err_code, handle, task, _cost| {
+        manager.set_callback(move |err_type, err_code, handle, task, _cost, _profile| {
             record
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
