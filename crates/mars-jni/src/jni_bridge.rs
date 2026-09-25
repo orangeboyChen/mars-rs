@@ -21,6 +21,10 @@ use std::sync::OnceLock;
 use crate::stn_c2java::{Answer, Question};
 
 use crate::app_logic::{AccountInfo, Answer as AppAnswer, DeviceInfo, Question as AppQuestion};
+use crate::platform_comm::{
+    Answer as PlatformAnswer, ApnInfo, NetInfo, NetType, Question as PlatformQuestion, SimInfo,
+    WifiInfo,
+};
 
 use crate::alarm::on_alarm_impl;
 use crate::sdt::{get_load_libraries_impl as sdt_libraries, set_http_netcheck_cgi_impl};
@@ -1330,6 +1334,156 @@ fn ask_app<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: AppQuestion) -
             ))
         }
     }
+}
+
+// #################### the questions the platform is asked ####################
+
+/// `PlatformComm$C2Java` — the class the C++'s nine C2Java calls are static
+/// methods of.
+const PLATFORM_COMM: &str = "io/github/marsrs/comm/PlatformComm$C2Java";
+
+/// One of the nine functions of `mars/comm/jni/platform_comm.cc`, i.e. what
+/// [`crate::platform_comm::Ask::jvm`] asks: attach the thread, call the one
+/// static method, and read the answer out of what Java handed back — an `int`,
+/// a `long`, a `StringBuffer` the host is written into, and the three objects
+/// `getCurWifiInfo`, `getCurSIMInfo` and `getAPNInfo` answer with.
+///
+/// Without a VM (a host that linked the library instead of loading it from
+/// Java) there is nobody to ask, and the answer is the one the port reads when
+/// the platform said nothing: offline, no proxy, no wifi, no SIM, no access
+/// point, no signal. Nothing here panics into Rust either way.
+pub(crate) fn ask_platform_comm(question: PlatformQuestion) -> PlatformAnswer {
+    guard(|| {
+        let Some(vm) = VM.get() else {
+            return PlatformAnswer::Nothing;
+        };
+        let Ok(mut env) = vm.attach_current_thread() else {
+            return PlatformAnswer::Nothing;
+        };
+        let Ok(class) = env.find_class(PLATFORM_COMM) else {
+            return PlatformAnswer::Nothing;
+        };
+        ask_platform(&mut env, class, question)
+    })
+}
+
+fn ask_platform<'a>(
+    env: &mut JNIEnv<'a>,
+    class: JClass<'a>,
+    question: PlatformQuestion,
+) -> PlatformAnswer {
+    match question {
+        PlatformQuestion::NetInfo => {
+            let called = env.call_static_method(class, "getNetInfo", "()I", &[]);
+            PlatformAnswer::NetInfo(NetInfo::of(int_of(called)))
+        }
+        PlatformQuestion::StatisticsNetType => {
+            let called = env.call_static_method(class, "getStatisticsNetType", "()I", &[]);
+            PlatformAnswer::StatisticsNetType(NetType::of(int_of(called)))
+        }
+        PlatformQuestion::ProxyInfo => {
+            // the host comes back in the buffer Java was handed, the port in
+            // what the call answered
+            let Some(buffer) = string_buffer(env) else {
+                return PlatformAnswer::Nothing;
+            };
+            let argument = JValue::Object(buffer.as_ref());
+            let called = env.call_static_method(
+                class,
+                "getProxyInfo",
+                "(Ljava/lang/StringBuffer;)I",
+                &[argument],
+            );
+            let port = int_of(called);
+            let called = env.call_method(&buffer, "toString", "()Ljava/lang/String;", &[]);
+            PlatformAnswer::Proxy {
+                port,
+                host: string_of(env, called),
+            }
+        }
+        PlatformQuestion::WifiInfo => {
+            // `PlatformComm$WifiInfo` — `ssid` and `bssid`.
+            let called = env.call_static_method(
+                class,
+                "getCurWifiInfo",
+                "()Lio/github/marsrs/comm/PlatformComm$WifiInfo;",
+                &[],
+            );
+            let Some(wifi) = object_of(called) else {
+                return PlatformAnswer::Nothing;
+            };
+            PlatformAnswer::Wifi(Some(WifiInfo {
+                ssid: string_field(env, &wifi, "ssid"),
+                bssid: string_field(env, &wifi, "bssid"),
+            }))
+        }
+        PlatformQuestion::SimInfo => {
+            // `PlatformComm$SIMInfo` — `ispCode` and `ispName`, both strings:
+            // the Java writes `"" + ispCode`.
+            let called = env.call_static_method(
+                class,
+                "getCurSIMInfo",
+                "()Lio/github/marsrs/comm/PlatformComm$SIMInfo;",
+                &[],
+            );
+            let Some(sim) = object_of(called) else {
+                return PlatformAnswer::Nothing;
+            };
+            PlatformAnswer::Sim(Some(SimInfo {
+                isp_code: string_field(env, &sim, "ispCode"),
+                isp_name: string_field(env, &sim, "ispName"),
+            }))
+        }
+        PlatformQuestion::ApnInfo => {
+            // `PlatformComm$APNInfo` — `netType`, `subNetType` and `extraInfo`.
+            let called = env.call_static_method(
+                class,
+                "getAPNInfo",
+                "()Lio/github/marsrs/comm/PlatformComm$APNInfo;",
+                &[],
+            );
+            let Some(apn) = object_of(called) else {
+                return PlatformAnswer::Nothing;
+            };
+            PlatformAnswer::Apn(Some(ApnInfo {
+                net_type: int_field(env, &apn, "netType"),
+                sub_net_type: int_field(env, &apn, "subNetType"),
+                extra_info: string_field(env, &apn, "extraInfo"),
+            }))
+        }
+        PlatformQuestion::RadioAccessNetwork => {
+            let called = env.call_static_method(class, "getCurRadioAccessNetworkInfo", "()I", &[]);
+            PlatformAnswer::RadioAccessNetwork(int_of(called))
+        }
+        PlatformQuestion::Signal { wifi } => {
+            let called = env.call_static_method(
+                class,
+                "getSignal",
+                "(Z)J",
+                &[JValue::Bool(wifi as jboolean)],
+            );
+            PlatformAnswer::Signal(long_of(called))
+        }
+        PlatformQuestion::NetworkConnected => {
+            let called = env.call_static_method(class, "isNetworkConnected", "()Z", &[]);
+            PlatformAnswer::Connected(bool_of(called))
+        }
+    }
+}
+
+/// A `StringBuffer` Java writes an answer into — the C++'s own
+/// `NewObject(StringBuffer)`, handed to `getProxyInfo` and read back with
+/// `toString()`.
+fn string_buffer<'a>(env: &mut JNIEnv<'a>) -> Option<JObject<'a>> {
+    let Ok(class) = env.find_class("java/lang/StringBuffer") else {
+        return None;
+    };
+    env.new_object(class, "()V", &[]).ok()
+}
+
+/// A `J` Java answered with — `0` for a call that could not be made.
+fn long_of(called: jni::errors::Result<JValueOwned>) -> i64 {
+    called.and_then(|value| value.j()).unwrap_or(0)
 }
 
 // #################### io.github.marsrs.sdt.SdtLogic ####################
