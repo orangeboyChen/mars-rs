@@ -139,3 +139,42 @@ fn a_head_that_is_read_on_its_own_leaves_the_body_behind() {
     assert!(parser.body().is_empty());
     assert_eq!(parser.buffered(), b"hello", "what is left to read");
 }
+
+#[test]
+fn a_number_that_does_not_fit_is_the_longest_body_there_can_be() {
+    // `strtoull` saturates at `ULLONG_MAX`, so a length nobody can deliver is
+    // a body that cannot be read — where a parse that fails on overflow would
+    // have answered `0`, and an empty body that is done
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"HTTP/1.1 200 OK\r\nContent-Length: 99999999999999999999999\r\n\r\n"),
+        RecvStatus::BodyError
+    );
+    assert_eq!(parser.fields().content_length(), u64::MAX);
+
+    // ... and the same for a chunk: a size that big is not the last chunk
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nffffffffffffffffff\r\n"),
+        RecvStatus::BodyError
+    );
+
+    // `-1` is what `strtoull` makes of a negative number: it wraps around
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\n"),
+        RecvStatus::BodyError
+    );
+}
+
+#[test]
+fn the_size_of_a_chunk_is_hexadecimal() {
+    // `strtoull(_, 16)` reads the `0x` in front of it, which a parse of the
+    // digits alone does not: `0` is the chunk that ends the body
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0x2\r\nhi\r\n0\r\n\r\n"),
+        RecvStatus::End
+    );
+    assert_eq!(parser.body(), b"hi");
+}
