@@ -89,9 +89,12 @@ implementation("io.github.orangeboychen:mars-rs:v0.1.0")
 The AAR is `mars-xlog.aar`: `libmarsxlog.so` (crate `mars-jni`) for
 `arm64-v8a`, `armeabi-v7a` and `x86_64`, plus
 `io.github.orangeboychen.marsrs.xlog.Xlog` — the package whose natives
-`mars-jni` exports, so the two are renamed together. JitPack serves the same
-AAR as `com.github.orangeboyChen.mars-rs:mars-rs`, the spelling its own badge
-prints. It has an Android SDK but neither an NDK nor a Rust toolchain, so it
+`mars-jni` exports, so the two are renamed together. A repository is also
+reachable on JitPack as `com.github.<owner>.<repo>`, which is the spelling its
+badge prints; the release workflow asks jitpack.io to build the tag under both
+and reports which one answered.
+
+JitPack has an Android SDK but neither an NDK nor a Rust toolchain, so it
 downloads `mars-android-native.zip` of the same release first — see
 `jitpack.yml`.
 
