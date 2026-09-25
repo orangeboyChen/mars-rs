@@ -6,7 +6,7 @@ use mars_comm::basepacker::{
     simple_short_pack, simple_short_pack_length, simple_short_unpack, PackerUnpacked, Refused,
     SimpleUnpacked, HEAD_LEN, LONGLINKPACK_CONTINUE, LONGLINKPACK_CONTINUE_DATA,
     LONGLINKPACK_CONTINUE_HEAD, LONGLINKPACK_FALSE, LONGLINKPACK_OK, MAX_URL_LEN, SIMPLE_CONTINUE,
-    SIMPLE_CONTINUE_DATA, SIMPLE_OK, VER,
+    SIMPLE_CONTINUE_DATA, SIMPLE_FALSE, SIMPLE_OK, VER,
 };
 
 fn head(raw: &[u8]) -> (u8, u8, u8, u8, u32, u32, u32) {
@@ -311,6 +311,47 @@ fn a_simple_package_that_has_not_arrived_whole_is_continued() {
     assert_eq!(
         simple_int_unpack(&simple_int_pack(b"hello")[..6]),
         SimpleUnpacked::ContinueData { pack_len: 9 }
+    );
+}
+
+#[test]
+fn a_simple_package_whose_length_is_shorter_than_its_header_is_refused() {
+    // `_packlen` counts the length in front of the body, so a length of four is
+    // a package with no body at all and one of two asks for a body that ends
+    // before its own header: the C++ hands over `_packlen - sizeof(T)` bytes,
+    // which is a size that has wrapped around
+    let short = [0, 1, 9, 9, 9, 9];
+    assert_eq!(
+        simple_short_unpack(&short),
+        SimpleUnpacked::Refused(Refused::Length)
+    );
+    assert_eq!(simple_short_unpack(&short).code(), SIMPLE_FALSE);
+
+    let int = [0, 0, 0, 2, 9, 9, 9, 9, 9, 9];
+    assert_eq!(
+        simple_int_unpack(&int),
+        SimpleUnpacked::Refused(Refused::Length)
+    );
+    assert_eq!(simple_int_unpack(&int).code(), SIMPLE_FALSE);
+
+    // ... and a length of nothing is the same refusal, with no body behind it
+    assert_eq!(
+        simple_short_unpack(&[0, 0]),
+        SimpleUnpacked::Refused(Refused::Length)
+    );
+    assert_eq!(
+        simple_int_unpack(&[0, 0, 0, 0]),
+        SimpleUnpacked::Refused(Refused::Length)
+    );
+
+    // the length itself is what is refused, not the bytes behind it: a package
+    // whose length is exactly its header is an empty one
+    assert_eq!(
+        simple_int_unpack(&[0, 0, 0, 4]),
+        SimpleUnpacked::Ok {
+            pack_len: 4,
+            data: Vec::new()
+        }
     );
 }
 
