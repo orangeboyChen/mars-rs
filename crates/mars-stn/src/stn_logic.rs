@@ -43,7 +43,6 @@ use mars_comm::tickcount::gettickcount;
 use crate::net_core::NetCore;
 use crate::signalling_keeper::set_strategy;
 use crate::stn_callback_bridge::{App, StnCallbackBridge};
-use crate::task_profile::ConnectProfile;
 use crate::{xorshift, LongLink, LongLinkEncoder, LongLinkStatus, LonglinkConfig, NetStatus, Task};
 
 /// `kReservedTaskIDStart` — the id the counter is put back to `1` at, so a
@@ -575,11 +574,9 @@ impl StnLogic {
         });
 
         let wired = Arc::clone(bridge);
-        core.set_on_task_end(
-            move |taskid, err_type, err_code, profile: &ConnectProfile| {
-                locked(&wired).on_task_end(taskid, "", err_type, err_code, profile)
-            },
-        );
+        core.set_on_task_end(move |taskid, user_id, err_type, err_code, profile| {
+            locked(&wired).on_task_end(taskid, user_id, err_type, err_code, profile)
+        });
         let wired = Arc::clone(bridge);
         core.set_on_push(move |channel, cmdid, taskid, body| {
             locked(&wired).on_push(channel, cmdid, taskid, body)
@@ -599,6 +596,16 @@ impl StnLogic {
         let wired = Arc::clone(bridge);
         core.set_on_longlink_status_change(move |status: LongLinkStatus| {
             locked(&wired).on_long_link_status_change(status)
+        });
+        // the identify check, which a link asks the app for when it needs it
+        // rather than being handed at startup
+        let wired = Arc::clone(bridge);
+        core.set_identify_check_buffer(move |channel_id, cmdid| {
+            locked(&wired).identify_check_buffer(channel_id, cmdid)
+        });
+        let wired = Arc::clone(bridge);
+        core.set_identify_on_response(move |channel_id, response, hash| {
+            locked(&wired).identify_response(channel_id, response, hash)
         });
 
         let wired = Arc::clone(bridge);
@@ -630,8 +637,9 @@ fn host_of(hosts: &[String]) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::longlink_identify_checker::IdentifyBuffer;
     use crate::task_profile::TaskFailHandleType;
-    use crate::DEFAULT_LONGLINK_NAME;
+    use crate::{CgiProfile, ErrCmdType, DEFAULT_LONGLINK_NAME};
     use std::sync::mpsc;
 
     /// An app that writes down what it was asked and answers the way a sample
@@ -692,6 +700,38 @@ mod tests {
 
         fn request_sync(&mut self) {
             self.asked.lock().unwrap().push("sync".to_string());
+        }
+
+        fn identify_check_buffer(&mut self, channel_id: &str, cmdid: u32) -> IdentifyBuffer {
+            self.asked
+                .lock()
+                .unwrap()
+                .push(format!("identify {channel_id} {cmdid}"));
+            IdentifyBuffer::now(b"check".to_vec(), b"hash".to_vec(), 99)
+        }
+
+        fn identify_response(&mut self, channel_id: &str, response: &[u8], hash: &[u8]) -> bool {
+            let accepted = response == hash;
+            self.asked
+                .lock()
+                .unwrap()
+                .push(format!("identified {channel_id} {accepted}"));
+            accepted
+        }
+
+        fn on_task_end(
+            &mut self,
+            taskid: u32,
+            user_id: &str,
+            _err_type: ErrCmdType,
+            _err_code: i32,
+            _profile: &CgiProfile,
+        ) -> i32 {
+            self.asked
+                .lock()
+                .unwrap()
+                .push(format!("end {taskid} {user_id}"));
+            0
         }
     }
 
@@ -812,6 +852,47 @@ mod tests {
             asked_of(&asked),
             vec!["newdns long.host".to_string(), "sync".to_string()]
         );
+    }
+
+    #[test]
+    fn the_app_is_asked_the_identify_check_before_the_link_is_used() {
+        let (mut logic, asked) = logic();
+        let core = logic.net_core().expect("no core");
+        let link = Arc::clone(
+            core.long_link(DEFAULT_LONGLINK_NAME)
+                .expect("the default link"),
+        );
+        let mut link = link.lock().unwrap();
+        link.set_status(LongLinkStatus::Connected);
+        assert!(link.noop_req_at(1000, false));
+        assert!(link.noop_resp_at(1100, 99, Task::LONG_LINK_IDENTIFY_CHECKER_TASK_ID, b"hash"));
+        drop(link);
+
+        // the channel the check belongs to is what the app is handed, and the
+        // answer the server gave is judged against the hash it handed out
+        assert_eq!(
+            asked_of(&asked),
+            vec![
+                format!("identify {DEFAULT_LONGLINK_NAME} 0"),
+                format!("identified {DEFAULT_LONGLINK_NAME} true"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_task_that_is_over_comes_back_with_the_user_it_was_started_for() {
+        let (mut logic, asked) = logic();
+        let mut task = Task::new(7, 12);
+        task.cgi = "/cgi-bin/7".to_string();
+        task.channel_select = Task::CHANNEL_ALL;
+        task.shortlink_host_list = vec!["short.host".to_string()];
+        task.user_id = "user".to_string();
+        // a task the net core refuses before it goes anywhere, which is the
+        // shortest way to a task that is over
+        task.retry_count = 31;
+        assert!(!logic.start_task_at(1000, task));
+
+        assert_eq!(asked_of(&asked), vec!["end 7 user".to_string()]);
     }
 
     #[test]
