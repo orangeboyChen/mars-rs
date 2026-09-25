@@ -109,13 +109,20 @@ pub enum Answer {
         /// The addresses, up to the two the profile has room for.
         ips: Vec<String>,
     },
-    /// The noop round trip.
+    /// The noop round trip: `tcp_send` and then `tcp_receive`, which is why it
+    /// answers for both. The C++ keeps the return value of the last call it
+    /// made in one `ret`; here each call keeps its own.
     Tcp {
-        /// `0` when the noop went out and something came back; below `0` when
-        /// the send or the receive failed, which the checker turns into
-        /// [`TcpErrCode::SndRcvErr`](crate::TcpErrCode::SndRcvErr) whatever the
-        /// socket's own error was.
-        error_code: i32,
+        /// `tcp_send` — `0` and above is a noop that went out, below `0` a
+        /// send that failed.
+        sent: i32,
+        /// `tcp_receive` — `0` and above is an answer that came back, below
+        /// `0` a receive that failed after a noop that went out. Read for a
+        /// noop that went out only: a send that failed is not received on, and
+        /// the checker records
+        /// [`TcpErrCode::SndRcvErr`](crate::TcpErrCode::SndRcvErr) for either
+        /// one, whatever the socket's own error was.
+        received: i32,
         /// `__NoopResp` — whether what came back was the answer to the noop
         /// that went out.
         is_noop_resp: bool,
@@ -163,16 +170,17 @@ impl Answer {
         }
     }
 
-    /// The noop round trip: `(-1, false, 0)` when this is not what was
-    /// answered, which is a send or a receive that failed.
-    pub fn tcp(&self) -> (i32, bool, u64) {
+    /// The noop round trip: `(-1, 0, false, 0)` when this is not what was
+    /// answered, which is a send that failed.
+    pub fn tcp(&self) -> (i32, i32, bool, u64) {
         match self {
             Self::Tcp {
-                error_code,
+                sent,
+                received,
                 is_noop_resp,
                 rtt,
-            } => (*error_code, *is_noop_resp, *rtt),
-            _ => (-1, false, 0),
+            } => (*sent, *received, *is_noop_resp, *rtt),
+            _ => (-1, 0, false, 0),
         }
     }
 
