@@ -2,7 +2,7 @@ name: Release
 
 # One release for every platform:
 #
-#   * MarsXlog.xcframework.zip   -> the binary target of Package.swift (SPM)
+#   * MarsRS.xcframework.zip       -> the binary target of Package.swift (SPM)
 #   * mars-xlog.aar              -> JitPack: io.github.orangeboyChen:mars-rs
 #   * mars-android-native.zip    -> the .so files, for a consumer's own AAR
 #   * mars-rs-<version>-<host>.tar.gz / .zip -> the C ABI for Linux/macOS/Windows
@@ -58,7 +58,7 @@ permissions:
   pull-requests: write
 
 env:
-  XCFRAMEWORK_ZIP: MarsXlog.xcframework.zip
+  XCFRAMEWORK_ZIP: MarsRS.xcframework.zip
   NATIVE_ZIP: mars-android-native.zip
   XLOG_AAR: mars-xlog.aar
   # What JitPack publishes the AAR as; see jitpack.yml. JitPack serves a

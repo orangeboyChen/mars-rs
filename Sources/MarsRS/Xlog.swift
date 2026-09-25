@@ -1,7 +1,11 @@
 // The Swift face of the C ABI in `mars_xlog.h` (crate `mars-ffi`).
 //
+// Xlog.swift is one file of the `MarsRS` module, not the module: the module is
+// the port, and this is the part of it `mars-ffi` exposes today. Stn.swift and
+// Sdt.swift belong next to it as soon as the C ABI carries them.
+//
 // The binary target of Package.swift is a static library plus a module map, so
-// what `import MarsXlogFFI` gives a caller is the C surface itself: pointers to
+// what `import MarsRSFFI` gives a caller is the C surface itself: pointers to
 // C strings, `int` modes and a config struct that has to be filled field by
 // field. This file is that surface in Swift — `String`s, enums and a
 // `MarsXlogConfiguration` with defaults — and re-exports the C module, so
@@ -13,8 +17,8 @@
 
 import Foundation
 
-// Re-exported so that `import MarsXlog` also gives the C symbols.
-@_exported import MarsXlogFFI
+// Re-exported so that `import MarsRS` also gives the C symbols.
+@_exported import MarsRSFFI
 
 /// `TLogLevel`; `.none` is `MARS_LEVEL_NONE`, which the filter understands but
 /// the C enum does not carry.

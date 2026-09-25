@@ -71,10 +71,16 @@ version, or with a bump and a channel — `v1.2.3-alpha1`, `v1.2.3-beta2`,
 .package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
 ```
 
-The `MarsXlog` product is Swift over the `MarsXlogFFI` binary target, which is
-the static `MarsXlog.xcframework.zip` published with the release. The tag and
-the SPM checksum are written into `Package.swift` by the release workflow on a
+The product is `MarsRS` — one module for the port, not for one of its halves —
+and it is Swift over the `MarsRSFFI` binary target, which is the static
+`MarsRS.xcframework.zip` published with the release. The tag and the SPM
+checksum are written into `Package.swift` by the release workflow on a
 `chore/package-swift-<tag>` branch, proposed as a pull request.
+
+`Sources/MarsRS/Xlog.swift` is the only file in it today: `mars-ffi` is an xlog
+C ABI (21 `mars_xlog_*` symbols, nothing else), so xlog is all the Swift layer
+can reach. `Stn.swift` and `Sdt.swift` join it when the C ABI carries them;
+orangeboyChen/mars ships xlog alone for the same reason.
 
 ### Android (JitPack)
 
@@ -108,7 +114,7 @@ downloads `mars-android-native.zip` of the same release first — see
 ### Building the packages
 
 ```bash
-scripts/build_xcframework.sh 0.1.0 dist   # MarsXlog.xcframework.zip
+scripts/build_xcframework.sh 0.1.0 dist   # MarsRS.xcframework.zip
 scripts/build_android.sh dist/native      # <abi>/libmarsxlog.so
 (cd android && ./gradlew :mars-xlog:assembleRelease)
 ```

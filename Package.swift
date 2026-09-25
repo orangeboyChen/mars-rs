@@ -6,7 +6,7 @@
 //
 //  and then
 //
-//      import MarsXlog
+//      import MarsRS
 //
 //      var config = MarsXlogConfiguration(logDirectory: logDir)
 //      config.namePrefix = "Ham"
@@ -16,7 +16,11 @@
 //      MarsXlog.write(.info, tag: "Net", message: "hello")
 //      MarsXlog.flush(sync: true)
 //
-//  The package ships a prebuilt MarsXlog.xcframework built by
+//  One module for the whole project, named after it: `MarsRS`. What the C ABI
+//  carries today is xlog, so Xlog.swift is the only file in Sources/MarsRS —
+//  Stn.swift and Sdt.swift join it as mars-ffi grows past the logging half.
+//
+//  The package ships a prebuilt MarsRS.xcframework built by
 //  .github/workflows/release.yml (scripts/build_xcframework.sh), so consumers
 //  need neither a Rust toolchain nor an NDK.
 //
@@ -33,14 +37,14 @@ let package = Package(
         .iOS(.v12)
     ],
     products: [
-        .library(name: "MarsXlog", targets: ["MarsXlog"])
+        .library(name: "MarsRS", targets: ["MarsRS"])
     ],
     targets: [
         // Prebuilt binary: ios-arm64 + ios-arm64_x86_64-simulator, each with
-        // `mars_xlog.h` and the module map that names it `MarsXlogFFI`.
+        // `mars_xlog.h` and the module map that names it `MarsRSFFI`.
         .binaryTarget(
-            name: "MarsXlogFFI",
-            url: "https://github.com/orangeboyChen/mars-rs/releases/download/v0.0.0/MarsXlog.xcframework.zip",
+            name: "MarsRSFFI",
+            url: "https://github.com/orangeboyChen/mars-rs/releases/download/v0.0.0/MarsRS.xcframework.zip",
             checksum: "0000000000000000000000000000000000000000000000000000000000000000"
         ),
         // A thin Swift face of the C ABI: a binary target is a module of C
@@ -57,9 +61,9 @@ let package = Package(
         // linking. (The C++ project names libc++ and libz here; the port
         // needs neither — it is Rust, and its zlib is `zlib-rs`.)
         .target(
-            name: "MarsXlog",
-            dependencies: ["MarsXlogFFI"],
-            path: "Sources/MarsXlog",
+            name: "MarsRS",
+            dependencies: ["MarsRSFFI"],
+            path: "Sources/MarsRS",
             linkerSettings: [
                 .linkedFramework("CoreFoundation"),
             ]
