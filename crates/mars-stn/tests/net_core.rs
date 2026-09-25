@@ -41,9 +41,9 @@ struct Sent {
     body: Vec<u8>,
 }
 
-/// What the app was told about a task that is over: the task, how it failed,
-/// and the ip of the connect it ran on.
-type Ended = Vec<(u32, ErrCmdType, i32, String)>;
+/// What the app was told about a task that is over: the task, the user it was
+/// started for, how it failed, and the ip of the connect it ran on.
+type Ended = Vec<(u32, String, ErrCmdType, i32, String)>;
 /// What the app was told about the connection.
 type Status = Vec<(NetStatus, NetStatus)>;
 /// What the app was told about a pair of a link.
@@ -119,11 +119,14 @@ impl App {
 
         let ended: Arc<Mutex<Ended>> = Arc::new(Mutex::new(Vec::new()));
         let recorder = ended.clone();
-        core.set_on_task_end(move |taskid, err_type, err_code, profile| {
-            recorder
-                .lock()
-                .unwrap()
-                .push((taskid, err_type, err_code, profile.ip.clone()));
+        core.set_on_task_end(move |taskid, user_id, err_type, err_code, profile| {
+            recorder.lock().unwrap().push((
+                taskid,
+                user_id.to_string(),
+                err_type,
+                err_code,
+                profile.ip.clone(),
+            ));
             err_code
         });
         let status: Arc<Mutex<Status>> = Arc::new(Mutex::new(Vec::new()));
@@ -283,7 +286,13 @@ fn a_task_goes_out_on_the_long_link_and_answers() {
     // the app is given the connect the answer came in on, not the channel's
     assert_eq!(
         app.ended(),
-        vec![(7, ErrCmdType::Ok, 0, "2.2.2.2".to_string())]
+        vec![(
+            7,
+            "user".to_string(),
+            ErrCmdType::Ok,
+            0,
+            "2.2.2.2".to_string()
+        )]
     );
 
     // what the queue asked for is the app's own report, and the host runs it
@@ -313,7 +322,13 @@ fn a_task_goes_out_on_the_short_link_while_the_long_link_is_down() {
     assert_eq!(app.answered_short(7), Some(RespHandle::Ended));
     assert_eq!(
         app.ended(),
-        vec![(7, ErrCmdType::Ok, 0, "2.2.2.2".to_string())]
+        vec![(
+            7,
+            "user".to_string(),
+            ErrCmdType::Ok,
+            0,
+            "2.2.2.2".to_string()
+        )]
     );
 
     app.run_pending();
@@ -454,7 +469,8 @@ fn a_second_long_link_is_made_marked_main_and_destroyed() {
     assert!(!app.core.has_task(7));
     assert_eq!(app.ended().len(), 1);
     assert_eq!(app.ended()[0].0, 7);
-    assert_eq!(app.ended()[0].1, ErrCmdType::Local);
+    assert_eq!(app.ended()[0].1, "user");
+    assert_eq!(app.ended()[0].2, ErrCmdType::Local);
 }
 
 #[test]
@@ -583,7 +599,7 @@ fn a_task_the_network_cannot_take_is_not_started() {
 
     assert!(!app.core.start_task_at(START, task));
     assert_eq!(app.ended().len(), 1);
-    assert_eq!(app.ended()[0].1, ErrCmdType::Local);
+    assert_eq!(app.ended()[0].2, ErrCmdType::Local);
     assert!(app.sent().is_empty());
 }
 
