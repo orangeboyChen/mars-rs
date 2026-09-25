@@ -1155,7 +1155,7 @@ impl LongLinkTaskManager {
             }
 
             let name = self.tasks[i].channel_name.clone();
-            let task = self.tasks[i].task.clone();
+            let mut task = self.tasks[i].task.clone();
             // `get_real_host_` is not here: the hosts the task came with are
             // the ones it is given
             let host = task.longlink_host_list.first().cloned().unwrap_or_default();
@@ -1175,7 +1175,11 @@ impl LongLinkTaskManager {
             if !self.tasks[i].antiavalanche_checked {
                 // once: a retry is the same request, and the sequence id is
                 // what ties the task to the server-side report
-                self.tasks[i].task.client_sequence_id = self.sequence_id();
+                let sequence_id = self.sequence_id();
+                self.tasks[i].task.client_sequence_id = sequence_id;
+                // the C++ makes it on the task it then hands to `Req2Buf` and
+                // puts on the wire, not on a copy one number behind it
+                task.client_sequence_id = sequence_id;
             }
 
             let body = match self.encode(&task) {
@@ -2771,6 +2775,43 @@ mod tests {
             "and it kept its sequence id"
         );
         assert_eq!(manager.tasks()[0].task.client_sequence_id, 1);
+    }
+
+    #[test]
+    fn the_sequence_id_the_request_is_made_with_is_the_one_the_task_keeps() {
+        let mut manager = manager();
+        let (sent, _, _, _) = wire(&mut manager);
+        let mut next: u16 = 0;
+        manager.set_gen_sequence_id(move || {
+            next += 1;
+            next
+        });
+        let made_with = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&made_with);
+        manager.set_req2buf(move |task| {
+            record
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(task.client_sequence_id);
+            Ok(vec![0; 4])
+        });
+
+        manager.start_task_at(NOW, task(7), Task::CHANNEL_LONG);
+
+        assert_eq!(
+            *made_with
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            // the C++ generates it on the task it then hands to `Req2Buf`, so
+            // the request is made with the number the task is reported under
+            vec![manager.tasks()[0].task.client_sequence_id]
+        );
+        assert_eq!(
+            sent.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            1
+        );
     }
 
     #[test]
