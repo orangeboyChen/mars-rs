@@ -31,6 +31,9 @@
 //! `adler32` mirrors `comm/adler32.c`, the checksum [`frequency_limit`] and
 //! [`basepacker`] hash with, and `basepacker` mirrors `comm/basepacker.cc` —
 //! the wire format the long link spoke before `longlink_packer.cc`.
+//!
+//! `shuffle` mirrors `comm/shuffle.h` — the one shuffle mars asks for, with the
+//! C++'s `RAND_bytes` draw taken as a callback the way its `rand()` is.
 
 /// The NAT64 prefix of [`ipv6_address`] is one value for the whole process, so
 /// the unit tests that move it need **one** lock for the crate, not one per
@@ -55,6 +58,7 @@ pub mod ipv6_address;
 pub mod local_ipstack;
 pub mod message_queue;
 pub mod proxy;
+pub mod shuffle;
 pub mod singleton;
 pub mod socket_address;
 pub mod strutil;
