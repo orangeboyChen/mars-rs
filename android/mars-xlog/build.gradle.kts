@@ -12,12 +12,12 @@ plugins {
     id("maven-publish")
 }
 
-val publishedGroup: String = (findProperty("publishedGroup") as String?) ?: "io.github.orangeboyChen"
+val publishedGroup: String = (findProperty("publishedGroup") as String?) ?: "io.github.orangeboychen"
 val publishedArtifact: String = (findProperty("publishedArtifact") as String?) ?: "mars-rs"
 val publishedVersion: String = (findProperty("publishedVersion") as String?) ?: "0.0.0"
 
 android {
-    namespace = "io.github.marsrs.xlog"
+    namespace = "io.github.orangeboychen.marsrs.xlog"
     compileSdk = 36
 
     defaultConfig {

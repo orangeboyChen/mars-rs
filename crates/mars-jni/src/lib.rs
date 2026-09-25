@@ -1,7 +1,7 @@
 //! JNI bindings for the Rust port of Mars xlog.
 //!
 //! Every symbol here is the counterpart of one `native` method in
-//! `io.github.marsrs.xlog.Xlog` (and of one function in
+//! `io.github.orangeboychen.marsrs.xlog.Xlog` (and of one function in
 //! `mars/xlog/jni/Java2C_Xlog.cc`), so the Java side does not have to change:
 //!
 //! | Java                      | this crate                                    |
@@ -20,7 +20,7 @@
 //! | `setMaxAliveTime`         | `set_max_alive_duration`                      |
 //!
 //! The same seam covers the rest of the Java api: [`stn`] is
-//! `io.github.marsrs.stn.StnLogic`, and what it reaches is the net core of
+//! `io.github.orangeboychen.marsrs.stn.StnLogic`, and what it reaches is the net core of
 //! [`mars_stn`] — one value for the whole process, like the C++'s `NetCore`
 //! singleton — rather than a copy of it; [`sdt`], [`app_logic`],
 //! [`platform_comm`], [`alarm`] and [`wakerlock`] are the same for their own
@@ -177,24 +177,24 @@ pub(crate) fn set_max_alive_time_impl(instance: u64, seconds: jlong) {
     set_max_alive_duration(instance, seconds.max(0) as u64)
 }
 
-/// The `native` methods of `io.github.marsrs.stn.StnLogic`.
+/// The `native` methods of `io.github.orangeboychen.marsrs.stn.StnLogic`.
 pub mod stn;
 
-// `io.github.marsrs.stn.StnLogic$ICallBack` — the app STN asks when the app is
+// `io.github.orangeboychen.marsrs.stn.StnLogic$ICallBack` — the app STN asks when the app is
 // Java. The module's own doc says the rest of it: a `///` here would push its
 // links out of the module they resolve in.
 pub mod stn_c2java;
 
-/// The `native` methods of `io.github.marsrs.sdt.SdtLogic`.
+/// The `native` methods of `io.github.orangeboychen.marsrs.sdt.SdtLogic`.
 pub mod sdt;
 
-/// `io.github.marsrs.comm.Alarm` — the timer the app broadcasts into.
+/// `io.github.orangeboychen.marsrs.comm.Alarm` — the timer the app broadcasts into.
 pub mod alarm;
 
-/// `io.github.marsrs.comm.WakerLock` — the wake lock the platform holds.
+/// `io.github.orangeboychen.marsrs.comm.WakerLock` — the wake lock the platform holds.
 pub mod wakerlock;
 
-// `io.github.marsrs.app.AppLogic` — what the app is. The module's own doc says
+// `io.github.orangeboychen.marsrs.app.AppLogic` — what the app is. The module's own doc says
 // it all, and its links resolve in the module: a `///` here would push them out
 // of it, which is why this one is a `//` too.
 pub mod app_logic;
@@ -205,12 +205,12 @@ pub mod app_logic;
 // `//` too.
 pub mod traffic_statistics;
 
-// `io.github.marsrs.comm.PlatformComm$C2Java` — what the platform answers. The
+// `io.github.orangeboychen.marsrs.comm.PlatformComm$C2Java` — what the platform answers. The
 // module's own doc says it all, and its links resolve in the module: a `///`
 // here would push them out of it, which is why this one is a `//` too.
 pub mod platform_comm;
 
-// `io.github.marsrs.BaseEvent` — what the app tells the port happened to it.
+// `io.github.orangeboychen.marsrs.BaseEvent` — what the app tells the port happened to it.
 // The module's own doc says it all, and its links resolve in the module: a
 // `///` here would push them out of it, which is why this one is a `//` too.
 pub mod baseevent;

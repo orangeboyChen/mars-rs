@@ -15,7 +15,7 @@ zlib- or zstd-compressed, sync or async — and is the whole logging stack:
 | `mars-buffer`    | the mmap append buffer (`LogZlibBuffer` / `LogZstdBuffer`)        |
 | `mars-appender`  | the process-wide appender and per-instance loggers                |
 | `mars-ffi`       | C ABI (`cdylib` + `staticlib`) and its hand-written header        |
-| `mars-jni`       | JNI bindings of `io.github.marsrs`: `Xlog`, `StnLogic`, `SdtLogic`|
+| `mars-jni`       | JNI bindings of `io.github.orangeboychen.marsrs`: `Xlog`, `StnLogic`, `SdtLogic`|
 | `mars-compat`    | CLI plus the golden `.xlog` files that pin the wire format        |
 
 ## Build and test
@@ -83,12 +83,15 @@ the SPM checksum are written into `Package.swift` by the release workflow on a
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboyChen:mars-rs:v0.1.0")
+implementation("io.github.orangeboychen:mars-rs:v0.1.0")
 ```
 
 The AAR is `mars-xlog.aar`: `libmarsxlog.so` (crate `mars-jni`) for
-`arm64-v8a`, `armeabi-v7a` and `x86_64`, plus `io.github.marsrs.xlog.Xlog`.
-JitPack has an Android SDK but neither an NDK nor a Rust toolchain, so it
+`arm64-v8a`, `armeabi-v7a` and `x86_64`, plus
+`io.github.orangeboychen.marsrs.xlog.Xlog` — the package whose natives
+`mars-jni` exports, so the two are renamed together. JitPack serves the same
+AAR as `com.github.orangeboyChen.mars-rs:mars-rs`, the spelling its own badge
+prints. It has an Android SDK but neither an NDK nor a Rust toolchain, so it
 downloads `mars-android-native.zip` of the same release first — see
 `jitpack.yml`.
 

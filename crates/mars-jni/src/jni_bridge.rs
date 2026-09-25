@@ -79,7 +79,7 @@ pub fn report_signal_detect_results(json: String) {
         let Ok(mut env) = vm.attach_current_thread() else {
             return;
         };
-        let Ok(class) = env.find_class("io/github/marsrs/sdt/SdtLogic") else {
+        let Ok(class) = env.find_class("io/github/orangeboychen/marsrs/sdt/SdtLogic") else {
             return;
         };
         let Ok(message) = env.new_string(&json) else {
@@ -131,7 +131,7 @@ fn string_field(env: &mut JNIEnv<'_>, obj: &JObject<'_>, name: &str) -> String {
     })
 }
 
-/// Reads `io.github.marsrs.xlog.Xlog$XLogConfig`.
+/// Reads `io.github.orangeboychen.marsrs.xlog.Xlog$XLogConfig`.
 fn config_from_java(env: &mut JNIEnv<'_>, config: &JObject<'_>) -> Option<(XLogConfig, LogLevel)> {
     if config.is_null() {
         return None;
@@ -187,7 +187,7 @@ fn java_string(env: &mut JNIEnv<'_>, value: &JObject<'_>) -> String {
 }
 
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_appenderOpen<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderOpen<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     config: JObject<'local>,
@@ -202,7 +202,7 @@ pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_appenderOpen<'local>(
 
 /// `Xlog.appenderClose`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_appenderClose<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderClose<'local>(
     _env: JNIEnv<'local>,
     _this: JObject<'local>,
 ) {
@@ -211,7 +211,7 @@ pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_appenderClose<'local>(
 
 /// `Xlog.appenderFlush`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_appenderFlush<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderFlush<'local>(
     _env: JNIEnv<'local>,
     _this: JObject<'local>,
     instance: jlong,
@@ -222,7 +222,7 @@ pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_appenderFlush<'local>(
 
 /// `Xlog.newXlogInstance` — returns the handle, or `0` on a bad config.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_newXlogInstance<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_newXlogInstance<'local>(
     mut env: JNIEnv<'local>,
     _this: JObject<'local>,
     config: JObject<'local>,
@@ -235,7 +235,7 @@ pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_newXlogInstance<'local>(
 
 /// `Xlog.getXlogInstance` — the handle for `nameprefix`, or `0`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_getXlogInstance<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_getXlogInstance<'local>(
     mut env: JNIEnv<'local>,
     _this: JObject<'local>,
     nameprefix: JString<'local>,
@@ -251,7 +251,7 @@ pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_getXlogInstance<'local>(
 
 /// `Xlog.releaseXlogInstance`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_releaseXlogInstance<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_releaseXlogInstance<'local>(
     mut env: JNIEnv<'local>,
     _this: JObject<'local>,
     nameprefix: JString<'local>,
@@ -267,7 +267,7 @@ pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_releaseXlogInstance<'loca
 
 /// `Xlog.logWrite` — writes through the process-wide appender.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_logWrite<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logWrite<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     info: JObject<'local>,
@@ -302,7 +302,7 @@ pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_logWrite<'local>(
 /// `Xlog.logWrite2` — writes through a specific instance.
 #[allow(clippy::too_many_arguments)]
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_logWrite2<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logWrite2<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     instance: jlong,
@@ -338,7 +338,7 @@ pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_logWrite2<'local>(
 
 /// `Xlog.getLogLevel` — `-1` for an unknown handle.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_getLogLevel(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_getLogLevel(
     _env: JNIEnv<'_>,
     _this: JObject<'_>,
     instance: jlong,
@@ -348,7 +348,7 @@ pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_getLogLevel(
 
 /// `Xlog.setLogLevel`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_setLogLevel(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_setLogLevel(
     _env: JNIEnv<'_>,
     _this: JObject<'_>,
     instance: jlong,
@@ -359,7 +359,7 @@ pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_setLogLevel(
 
 /// `Xlog.setAppenderMode`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_setAppenderMode(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_setAppenderMode(
     _env: JNIEnv<'_>,
     _this: JObject<'_>,
     instance: jlong,
@@ -370,7 +370,7 @@ pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_setAppenderMode(
 
 /// `Xlog.setConsoleLogOpen`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_setConsoleLogOpen(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_setConsoleLogOpen(
     _env: JNIEnv<'_>,
     _this: JObject<'_>,
     instance: jlong,
@@ -381,7 +381,7 @@ pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_setConsoleLogOpen(
 
 /// `Xlog.setMaxFileSize`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_setMaxFileSize(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_setMaxFileSize(
     _env: JNIEnv<'_>,
     _this: JObject<'_>,
     instance: jlong,
@@ -392,7 +392,7 @@ pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_setMaxFileSize(
 
 /// `Xlog.setMaxAliveTime`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_setMaxAliveTime(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_setMaxAliveTime(
     _env: JNIEnv<'_>,
     _this: JObject<'_>,
     instance: jlong,
@@ -401,7 +401,7 @@ pub extern "system" fn Java_io_github_marsrs_xlog_Xlog_setMaxAliveTime(
     guard(|| set_max_alive_time_impl(instance as u64, seconds))
 }
 
-// #################### io.github.marsrs.stn.StnLogic ####################
+// #################### io.github.orangeboychen.marsrs.stn.StnLogic ####################
 
 /// Reads a Java `int[]`.
 fn int_array(env: &mut JNIEnv<'_>, array: &JObject<'_>) -> Vec<i32> {
@@ -524,7 +524,7 @@ fn string_map(env: &mut JNIEnv<'_>, map: &JObject<'_>) -> BTreeMap<String, Strin
     }
 }
 
-/// Reads `io.github.marsrs.stn.StnLogic$Task` into a [`Task`]. The fields the
+/// Reads `io.github.orangeboychen.marsrs.stn.StnLogic$Task` into a [`Task`]. The fields the
 /// C++ reads are the ones below; the rest of the Java class has no counterpart
 /// in the port's `Task`.
 fn task_from_java(env: &mut JNIEnv<'_>, task: &JObject<'_>) -> Option<Task> {
@@ -604,7 +604,7 @@ fn string_array_list(env: &mut JNIEnv<'_>, values: &[String]) -> jobject {
 
 /// `StnLogic.reset`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_reset<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_reset<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) {
@@ -613,7 +613,9 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_reset<'local>(
 
 /// `StnLogic.resetAndInitEncoderVersion`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_resetAndInitEncoderVersion<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_resetAndInitEncoderVersion<
+    'local,
+>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     version: jint,
@@ -630,7 +632,9 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_resetAndInitEncoderVer
 
 /// `StnLogic.setLonglinkSvrAddr` — the `int[]` arrives as a plain object.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_setLonglinkSvrAddr<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setLonglinkSvrAddr<
+    'local,
+>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     host: JString<'local>,
@@ -652,7 +656,9 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_setLonglinkSvrAddr<'lo
 
 /// `StnLogic.setShortlinkSvrAddr`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_setShortlinkSvrAddr<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setShortlinkSvrAddr<
+    'local,
+>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     port: jint,
@@ -669,7 +675,7 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_setShortlinkSvrAddr<'l
 
 /// `StnLogic.setDebugIP`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_setDebugIP<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setDebugIP<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     host: JString<'local>,
@@ -690,7 +696,7 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_setDebugIP<'local>(
 
 /// `StnLogic.setBackupIPs`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_setBackupIPs<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setBackupIPs<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     host: JString<'local>,
@@ -707,7 +713,7 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_setBackupIPs<'local>(
 
 /// `StnLogic.startTask`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_startTask<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_startTask<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     task: JObject<'local>,
@@ -721,7 +727,7 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_startTask<'local>(
 
 /// `StnLogic.stopTask`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_stopTask<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_stopTask<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
     taskid: jint,
@@ -733,7 +739,7 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_stopTask<'local>(
 
 /// `StnLogic.hasTask`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_hasTask<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_hasTask<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
     taskid: jint,
@@ -743,7 +749,7 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_hasTask<'local>(
 
 /// `StnLogic.redoTask`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_redoTask<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_redoTask<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) {
@@ -754,7 +760,7 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_redoTask<'local>(
 
 /// `StnLogic.touchTasks`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_touchTasks<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_touchTasks<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) {
@@ -763,7 +769,7 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_touchTasks<'local>(
 
 /// `StnLogic.clearTask`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_clearTask<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_clearTask<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) {
@@ -774,7 +780,9 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_clearTask<'local>(
 
 /// `StnLogic.makesureLongLinkConnected`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_makesureLongLinkConnected<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_makesureLongLinkConnected<
+    'local,
+>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) {
@@ -785,7 +793,9 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_makesureLongLinkConnec
 
 /// `StnLogic.setSignallingStrategy`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_setSignallingStrategy<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setSignallingStrategy<
+    'local,
+>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
     period: jlong,
@@ -796,7 +806,7 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_setSignallingStrategy<
 
 /// `StnLogic.keepSignalling`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_keepSignalling<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_keepSignalling<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) {
@@ -805,7 +815,7 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_keepSignalling<'local>
 
 /// `StnLogic.stopSignalling`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_stopSignalling<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_stopSignalling<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) {
@@ -814,7 +824,7 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_stopSignalling<'local>
 
 /// `StnLogic.setClientVersion`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_setClientVersion<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setClientVersion<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
     version: jint,
@@ -824,7 +834,7 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_setClientVersion<'loca
 
 /// `StnLogic.genTaskID`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_genTaskID<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_genTaskID<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jint {
@@ -833,7 +843,7 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_genTaskID<'local>(
 
 /// `StnLogic.genSequenceId` — declared by the C++ but not by the Java class.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_genSequenceId<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_genSequenceId<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jint {
@@ -842,7 +852,7 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_genSequenceId<'local>(
 
 /// `StnLogic.trigNooping` — declared by the C++ but not by the Java class.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_trigNooping<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_trigNooping<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) {
@@ -851,7 +861,7 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_trigNooping<'local>(
 
 /// `StnLogic.getLoadLibraries`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_getLoadLibraries<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_getLoadLibraries<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jobject {
@@ -863,10 +873,10 @@ pub extern "system" fn Java_io_github_marsrs_stn_StnLogic_getLoadLibraries<'loca
 /// `StnLogic` — the class the C++'s thirteen C2Java calls are static methods
 /// of. Every one of them forwards to the `ICallBack` the app handed to
 /// `setCallBack`, which is why the native side never keeps the app itself.
-const STN_CALLBACK: &str = "io/github/marsrs/stn/StnLogic";
+const STN_CALLBACK: &str = "io/github/orangeboychen/marsrs/stn/StnLogic";
 
 /// `StnLogic$CgiProfile` — the object `onTaskEnd` is handed.
-const STN_CGI_PROFILE: &str = "io/github/marsrs/stn/StnLogic$CgiProfile";
+const STN_CGI_PROFILE: &str = "io/github/orangeboychen/marsrs/stn/StnLogic$CgiProfile";
 
 /// One of the thirteen `C2Java_*` functions of
 /// `com_tencent_mars_stn_StnLogic_C2Java.cc`, i.e. what
@@ -1030,7 +1040,7 @@ fn ask_stn<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: Question) -> A
             let called = env.call_static_method(
                 class,
                 "onTaskEnd",
-                "(ILjava/lang/Object;IILio/github/marsrs/stn/StnLogic$CgiProfile;)I",
+                "(ILjava/lang/Object;IILio/github/orangeboychen/marsrs/stn/StnLogic$CgiProfile;)I",
                 &[
                     JValue::Int(taskid as jint),
                     JValue::Object(&user_context),
@@ -1267,7 +1277,7 @@ fn cgi_profile<'a>(env: &mut JNIEnv<'a>, profile: &CgiProfile) -> Option<JObject
 /// `AppLogic` — the class the C++'s four C2Java calls are static methods of.
 /// Unlike [`STN_CALLBACK`], it forwards nothing: what it answers is the app's
 /// own, which is why the native side never keeps the app itself.
-const APP_LOGIC: &str = "io/github/marsrs/app/AppLogic";
+const APP_LOGIC: &str = "io/github/orangeboychen/marsrs/app/AppLogic";
 
 /// One of the four `C2Java_*` functions of
 /// `com_tencent_mars_app_AppLogic_C2Java.cc`, i.e. what
@@ -1306,7 +1316,7 @@ fn ask_app<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: AppQuestion) -
             let called = env.call_static_method(
                 class,
                 "getAccountInfo",
-                "()Lio/github/marsrs/app/AppLogic$AccountInfo;",
+                "()Lio/github/orangeboychen/marsrs/app/AppLogic$AccountInfo;",
                 &[],
             );
             let Some(account) = object_of(called) else {
@@ -1326,7 +1336,7 @@ fn ask_app<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: AppQuestion) -
             let called = env.call_static_method(
                 class,
                 "getDeviceType",
-                "()Lio/github/marsrs/app/AppLogic$DeviceInfo;",
+                "()Lio/github/orangeboychen/marsrs/app/AppLogic$DeviceInfo;",
                 &[],
             );
             let Some(device) = object_of(called) else {
@@ -1344,7 +1354,7 @@ fn ask_app<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: AppQuestion) -
 
 /// `PlatformComm$C2Java` — the class the C++'s nine C2Java calls are static
 /// methods of.
-const PLATFORM_COMM: &str = "io/github/marsrs/comm/PlatformComm$C2Java";
+const PLATFORM_COMM: &str = "io/github/orangeboychen/marsrs/comm/PlatformComm$C2Java";
 
 /// One of the nine functions of `mars/comm/jni/platform_comm.cc`, i.e. what
 /// [`crate::platform_comm::Ask::jvm`] asks: attach the thread, call the one
@@ -1410,7 +1420,7 @@ fn ask_platform<'a>(
             let called = env.call_static_method(
                 class,
                 "getCurWifiInfo",
-                "()Lio/github/marsrs/comm/PlatformComm$WifiInfo;",
+                "()Lio/github/orangeboychen/marsrs/comm/PlatformComm$WifiInfo;",
                 &[],
             );
             let Some(wifi) = object_of(called) else {
@@ -1427,7 +1437,7 @@ fn ask_platform<'a>(
             let called = env.call_static_method(
                 class,
                 "getCurSIMInfo",
-                "()Lio/github/marsrs/comm/PlatformComm$SIMInfo;",
+                "()Lio/github/orangeboychen/marsrs/comm/PlatformComm$SIMInfo;",
                 &[],
             );
             let Some(sim) = object_of(called) else {
@@ -1443,7 +1453,7 @@ fn ask_platform<'a>(
             let called = env.call_static_method(
                 class,
                 "getAPNInfo",
-                "()Lio/github/marsrs/comm/PlatformComm$APNInfo;",
+                "()Lio/github/orangeboychen/marsrs/comm/PlatformComm$APNInfo;",
                 &[],
             );
             let Some(apn) = object_of(called) else {
@@ -1490,11 +1500,11 @@ fn long_of(called: jni::errors::Result<JValueOwned>) -> i64 {
     called.and_then(|value| value.j()).unwrap_or(0)
 }
 
-// #################### io.github.marsrs.BaseEvent ####################
+// #################### io.github.orangeboychen.marsrs.BaseEvent ####################
 
 /// `BaseEvent.onCreate` — the app is up, which is when the net core is made.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_BaseEvent_onCreate<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onCreate<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) {
@@ -1505,7 +1515,9 @@ pub extern "system" fn Java_io_github_marsrs_BaseEvent_onCreate<'local>(
 
 /// `BaseEvent.onInitConfigBeforeOnCreate`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_BaseEvent_onInitConfigBeforeOnCreate<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onInitConfigBeforeOnCreate<
+    'local,
+>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
     packer_encoder_version: jint,
@@ -1515,7 +1527,7 @@ pub extern "system" fn Java_io_github_marsrs_BaseEvent_onInitConfigBeforeOnCreat
 
 /// `BaseEvent.onDestroy`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_BaseEvent_onDestroy<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onDestroy<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) {
@@ -1526,7 +1538,7 @@ pub extern "system" fn Java_io_github_marsrs_BaseEvent_onDestroy<'local>(
 
 /// `BaseEvent.onForeground`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_BaseEvent_onForeground<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onForeground<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
     is_foreground: jboolean,
@@ -1536,7 +1548,7 @@ pub extern "system" fn Java_io_github_marsrs_BaseEvent_onForeground<'local>(
 
 /// `BaseEvent.onNetworkChange`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_BaseEvent_onNetworkChange<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onNetworkChange<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) {
@@ -1546,7 +1558,7 @@ pub extern "system" fn Java_io_github_marsrs_BaseEvent_onNetworkChange<'local>(
 /// `BaseEvent.onSingalCrash` — the signal number is not the port's to handle,
 /// so it is not read; what the crash does is close the appender.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_BaseEvent_onSingalCrash<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onSingalCrash<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
     _sig: jint,
@@ -1556,18 +1568,20 @@ pub extern "system" fn Java_io_github_marsrs_BaseEvent_onSingalCrash<'local>(
 
 /// `BaseEvent.onExceptionCrash`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_BaseEvent_onExceptionCrash<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onExceptionCrash<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) {
     guard(on_exception_crash_impl)
 }
 
-// #################### io.github.marsrs.sdt.SdtLogic ####################
+// #################### io.github.orangeboychen.marsrs.sdt.SdtLogic ####################
 
 /// `SdtLogic.setHttpNetcheckCGI`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_sdt_SdtLogic_setHttpNetcheckCGI<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_setHttpNetcheckCGI<
+    'local,
+>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     cgi: JString<'local>,
@@ -1583,19 +1597,19 @@ pub extern "system" fn Java_io_github_marsrs_sdt_SdtLogic_setHttpNetcheckCGI<'lo
 
 /// `SdtLogic.getLoadLibraries`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_sdt_SdtLogic_getLoadLibraries<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_getLoadLibraries<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jobject {
     guard(|| string_array_list(&mut env, &sdt_libraries()))
 }
 
-// #################### io.github.marsrs.comm.Alarm ####################
+// #################### io.github.orangeboychen.marsrs.comm.Alarm ####################
 
 /// `Alarm.onAlarm(id)` — the one `native` method of the Java class, called from
 /// `onReceive` once the broadcast found the id.
 #[no_mangle]
-pub extern "system" fn Java_io_github_marsrs_comm_Alarm_onAlarm<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_comm_Alarm_onAlarm<'local>(
     _env: JNIEnv<'local>,
     _this: JObject<'local>,
     id: jlong,

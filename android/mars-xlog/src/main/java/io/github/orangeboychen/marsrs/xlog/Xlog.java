@@ -1,9 +1,9 @@
-package io.github.marsrs.xlog;
+package io.github.orangeboychen.marsrs.xlog;
 
 /**
  * The Java face of {@code libmarsxlog.so} (crate {@code mars-jni}).
  *
- * Every {@code native} here is one of the {@code Java_io_github_marsrs_xlog_Xlog_*}
+ * Every {@code native} here is one of the {@code Java_io_github_orangeboychen_marsrs_xlog_Xlog_*}
  * symbols of that crate, and the field names of {@link XLogConfig} are the ones
  * its {@code config_from_java} reads, so the two must be changed together.
  *

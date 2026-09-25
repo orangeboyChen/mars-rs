@@ -1,4 +1,4 @@
-//! `io.github.marsrs.app.AppLogic` — what the app is, as the network layer
+//! `io.github.orangeboychen.marsrs.app.AppLogic` — what the app is, as the network layer
 //! needs it.
 //!
 //! `com/tencent/mars/app/AppLogic.java` declares no `native` method: it is the
@@ -324,12 +324,15 @@ mod tests {
             set_account_info_impl(100_001, "alice");
             set_device_info_impl("Pixel", "phone");
             set_client_version_impl(0x0102_0304);
-            set_app_file_path_impl("/data/data/io.github.marsrs/app_mars");
+            set_app_file_path_impl("/data/data/io.github.orangeboychen.marsrs/app_mars");
 
             assert_eq!(account_info_impl(), AccountInfo::new(100_001, "alice"));
             assert_eq!(device_info_impl(), DeviceInfo::new("Pixel", "phone"));
             assert_eq!(client_version_impl(), 0x0102_0304);
-            assert_eq!(app_file_path_impl(), "/data/data/io.github.marsrs/app_mars");
+            assert_eq!(
+                app_file_path_impl(),
+                "/data/data/io.github.orangeboychen.marsrs/app_mars"
+            );
         })
     }
 
@@ -348,14 +351,17 @@ mod tests {
             // one answer per question, which is what four C2Java calls are
             set_ask(Ask::new(|question| match question {
                 Question::AppFilePath => {
-                    Answer::Path("/data/data/io.github.marsrs/app_mars".to_owned())
+                    Answer::Path("/data/data/io.github.orangeboychen.marsrs/app_mars".to_owned())
                 }
                 Question::AccountInfo => Answer::Account(AccountInfo::new(100_001, "alice")),
                 Question::ClientVersion => Answer::Version(0x0102_0304),
                 Question::DeviceInfo => Answer::Device(DeviceInfo::new("Pixel", "phone")),
             }));
 
-            assert_eq!(app_file_path_impl(), "/data/data/io.github.marsrs/app_mars");
+            assert_eq!(
+                app_file_path_impl(),
+                "/data/data/io.github.orangeboychen.marsrs/app_mars"
+            );
             assert_eq!(account_info_impl(), AccountInfo::new(100_001, "alice"));
             assert_eq!(client_version_impl(), 0x0102_0304);
             assert_eq!(device_info_impl(), DeviceInfo::new("Pixel", "phone"));
@@ -392,12 +398,15 @@ mod tests {
             set_account_info_impl(100_001, "alice");
             set_device_info_impl("Pixel", "phone");
             set_client_version_impl(0x0102_0304);
-            set_app_file_path_impl("/data/data/io.github.marsrs/app_mars");
+            set_app_file_path_impl("/data/data/io.github.orangeboychen.marsrs/app_mars");
 
             assert_eq!(account_info_impl(), AccountInfo::new(100_001, "alice"));
             assert_eq!(device_info_impl(), DeviceInfo::new("Pixel", "phone"));
             assert_eq!(client_version_impl(), 0x0102_0304);
-            assert_eq!(app_file_path_impl(), "/data/data/io.github.marsrs/app_mars");
+            assert_eq!(
+                app_file_path_impl(),
+                "/data/data/io.github.orangeboychen.marsrs/app_mars"
+            );
 
             // a host that answered is the C++'s `NATIVE_CALLBACK` build
             assert!(asked(&questions).is_empty());

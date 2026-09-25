@@ -1,4 +1,4 @@
-//! `io.github.marsrs.comm.WakerLock` — the port of
+//! `io.github.orangeboychen.marsrs.comm.WakerLock` — the port of
 //! `com/tencent/mars/comm/WakerLock.java`.
 //!
 //! The C++ reaches the Java class through `platform_comm.cc`
