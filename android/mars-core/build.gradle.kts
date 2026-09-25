@@ -1,7 +1,7 @@
 // The Android AAR of the whole port: `libmarsxlog.so` (crate `mars-jni`) for
-// every ABI, plus every Java class whose natives it implements — xlog, STN,
+// every ABI, plus every Kotlin class whose natives it implements — xlog, STN,
 // SDT, the app and the platform callbacks. `mars-xlog` is the same library with
-// the xlog half of the Java only, the way the C++ project publishes
+// the xlog half of the Kotlin only, the way the C++ project publishes
 // `mars-core` and `mars-xlog` apart.
 //
 // The .so files are not built here. Neither JitPack nor a plain `./gradlew`
@@ -12,7 +12,17 @@
 
 plugins {
     id("com.android.library")
+    // No `org.jetbrains.kotlin.android`: AGP 9 compiles Kotlin on its own and
+    // refuses the plugin (issuetracker.google.com/438678642).
     id("maven-publish")
+}
+
+// `mars-jni` asks for Java 17 bytecode, and the Kotlin compiler targets 1.8
+// unless it is told otherwise.
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
 }
 
 val publishedGroup: String = (findProperty("publishedGroup") as String?) ?: "io.github.orangeboychen"

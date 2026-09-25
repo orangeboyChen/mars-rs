@@ -9,7 +9,7 @@
 #   implementation 'com.github.orangeboyChen.mars-rs:mars-rs-xlog:v0.1.0'
 #
 # The pair is the one the C++ project publishes as `mars-core` and `mars-xlog`:
-# `android/mars-core` carries the whole Java face of the port with
+# `android/mars-core` carries the whole Kotlin face of the port with
 # `libmarsxlog.so`, `android/mars-xlog` the logging half with the same library.
 #
 # JitPack has an Android SDK but neither an NDK nor a Rust toolchain, so the
@@ -34,7 +34,7 @@ before_install:
     done
   - test -s mars-android-native.zip || { echo "could not download mars-android-native.zip"; exit 1; }
   # <abi>/libmarsxlog.so, which is what jniLibs.srcDirs("libs") reads in both
-  # modules: the same .so, two sets of Java classes over it
+  # modules: the same .so, two sets of Kotlin classes over it
   - unzip -q -o mars-android-native.zip -d android/mars-core/libs
   - unzip -q -o mars-android-native.zip -d android/mars-xlog/libs
   - find android/*/libs -name '*.so' | sort

@@ -104,13 +104,15 @@ implementation("io.github.orangeboychen:mars-rs-xlog:v0.1.0")  // xlog alone
 
 | AAR | artifact | what is in it |
 |---|---|---|
-| `mars-core.aar` | `mars-rs` | every Java class whose natives `mars-jni` exports — `xlog`, `stn`, `sdt`, `app`, `comm` and `BaseEvent`/`Mars` — plus `libmarsxlog.so` for `arm64-v8a`, `armeabi-v7a` and `x86_64` |
+| `mars-core.aar` | `mars-rs` | every Kotlin class whose natives `mars-jni` exports — `xlog`, `stn`, `sdt`, `app`, `comm` and `BaseEvent`/`Mars` — plus `libmarsxlog.so` for `arm64-v8a`, `armeabi-v7a` and `x86_64` |
 | `mars-xlog.aar` | `mars-rs-xlog` | `xlog.Xlog` and the `xlog.Log` facade over it, plus the same `libmarsxlog.so` |
 
 Take `mars-rs` when you want STN or SDT, `mars-rs-xlog` when the app only logs;
 both carry the whole library, because there is one `.so` and it is not split.
-The Java package is `io.github.orangeboychen.marsrs`, the package whose natives
-`mars-jni` exports, so the two are renamed together. A repository is also
+The Kotlin and Java package is `io.github.orangeboychen.marsrs`, the package
+whose natives `mars-jni` exports, so the two are renamed together. The AAR's face
+is Kotlin — `Xlog`, `Log`, `StnLogic`, `SdtLogic` and the rest — written so that
+an app in Java sees the same statics the C++ project's Java had. A repository is also
 reachable on JitPack as `com.github.<owner>.<repo>`, which is the spelling its
 badge prints; the release workflow asks jitpack.io to build the tag under both,
 reports which one answered, and then checks that both AARs resolve.

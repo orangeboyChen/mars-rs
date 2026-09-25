@@ -1,11 +1,11 @@
 // The xlog-only Android AAR of mars-rs: `libmarsxlog.so` (crate `mars-jni`)
-// for every ABI, plus the two Java classes of the logging half — `Xlog` and the
-// `Log` facade over it. The whole port is the `mars-core` module; this is the
+// for every ABI, plus the two Kotlin classes of the logging half — `Xlog` and
+// the `Log` facade over it. The whole port is the `mars-core` module; this is the
 // package for an app that only logs, the way the C++ project's `mars-xlog` is.
 //
-// Its two Java files are byte-for-byte mars-core's — the same xlog API over the
-// same `.so`, with the rest of the port left out — so a change to one belongs in
-// both. They are copied and not shared because a module that took mars-core's
+// Its two source files are byte-for-byte mars-core's — the same xlog API over
+// the same `.so`, with the rest of the port left out — so a change to one
+// belongs in both. They are copied and not shared because a module that took mars-core's
 // sources would take all of them, which is what this module exists not to do.
 //
 // The .so files are not built here. Neither JitPack nor a plain `./gradlew`
@@ -16,7 +16,17 @@
 
 plugins {
     id("com.android.library")
+    // No `org.jetbrains.kotlin.android`: AGP 9 compiles Kotlin on its own and
+    // refuses the plugin (issuetracker.google.com/438678642).
     id("maven-publish")
+}
+
+// `mars-jni` asks for Java 17 bytecode, and the Kotlin compiler targets 1.8
+// unless it is told otherwise.
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
 }
 
 val publishedGroup: String = (findProperty("publishedGroup") as String?) ?: "io.github.orangeboychen"
