@@ -1,45 +1,15 @@
-//! Process-wide knobs that have no counterpart in `mars-appender`.
+//! The fields of `XLoggerInfo` that the C++ filled in from `xlogger_pid()` and
+//! friends, so that a record written through the FFI names the process and the
+//! thread it came from the way the C++ would have.
 //!
-//! Two groups of state live here:
-//!
-//! 1. the **level filter** ([`set_min_level`] / [`level_enabled`]), which is the
-//!    port of `xlogger_SetLevel` / `xlogger_IsEnabledFor` from
-//!    `mars/comm/xlogger/xlogger.cc`. The appender itself is level-agnostic
-//!    (it formats whatever it is handed), so the gate belongs to the seam.
-//! 2. the **identity fields** of `XLoggerInfo` (`pid` / `tid` / `maintid` /
-//!    `timeval`) that the C++ filled in from `xlogger_pid()` and friends.
+//! The **level filter** is not here: it lives in `mars-appender`'s default
+//! logger (handle `0`, [`mars_appender::set_level`]), which is also what
+//! answers `get_level` / `is_enabled_for` for every instance. Two stores would
+//! answer two different levels for the same logger.
 //!
 //! Everything is lock-free and `Send + Sync`; there is no `unsafe` here.
 
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-/// Level below which records are dropped. Mirrors the C++ global in
-/// `xlogger.cc`; `MarsLevelVerbose` (0) means "log everything".
-static MIN_LEVEL: AtomicI32 = AtomicI32::new(0);
-
-/// `xlogger_maintid()` — see [`mars_appender::main_thread_id`], which
-/// captures the first caller once so worker threads still report the real main
-/// thread id.
-/// Sets the minimum level that [`level_enabled`] lets through.
-///
-/// Levels below `kLevelVerbose` (i.e. negative) clamp to "log everything"; any
-/// value above `kLevelNone` (6) disables logging altogether, exactly like
-/// `xlogger_SetLevel(kLevelNone)`.
-pub fn set_min_level(level: i32) {
-    MIN_LEVEL.store(level.max(0), Ordering::Relaxed);
-}
-
-/// The currently configured minimum level.
-pub fn min_level() -> i32 {
-    MIN_LEVEL.load(Ordering::Relaxed)
-}
-
-/// Port of `xlogger_IsEnabledFor(TLogLevel)`: `true` when `level` is at or above
-/// the configured minimum.
-pub fn level_enabled(level: i32) -> bool {
-    level >= min_level()
-}
 
 /// `xlogger_pid()` — the OS process id.
 pub fn pid() -> i64 {
@@ -70,60 +40,6 @@ pub fn now_timeval() -> (i64, i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
-
-    /// The level filter is process-global, so the tests that touch it must not
-    /// run concurrently.
-    fn level_lock() -> MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-    }
-
-    #[test]
-    fn default_logs_everything() {
-        let _guard = level_lock();
-        set_min_level(0);
-        for level in 0..=5 {
-            assert!(
-                level_enabled(level),
-                "level {level} should pass the default filter"
-            );
-        }
-    }
-
-    #[test]
-    fn higher_level_gates_lower_records() {
-        let _guard = level_lock();
-        set_min_level(3);
-        assert!(!level_enabled(0));
-        assert!(!level_enabled(2));
-        assert!(level_enabled(3));
-        assert!(level_enabled(5));
-        set_min_level(0);
-    }
-
-    #[test]
-    fn level_none_disables_everything() {
-        let _guard = level_lock();
-        set_min_level(6);
-        for level in 0..=5 {
-            assert!(
-                !level_enabled(level),
-                "level {level} should be filtered out"
-            );
-        }
-        set_min_level(0);
-    }
-
-    #[test]
-    fn negative_level_clamps_to_verbose() {
-        let _guard = level_lock();
-        set_min_level(-7);
-        assert_eq!(min_level(), 0);
-        assert!(level_enabled(0));
-    }
 
     #[test]
     fn identity_fields_are_sane() {

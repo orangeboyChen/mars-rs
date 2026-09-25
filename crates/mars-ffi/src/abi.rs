@@ -2,8 +2,9 @@
 //!
 //! Every function in this module is a mechanical translation of one C++ entry
 //! point: null-check the pointers, convert to the Rust types of
-//! `mars-appender`, delegate. Nothing else — all policy (level filtering,
-//! identity fields) lives in [`crate::state`], all pointer handling in
+//! `mars-appender`, delegate. Nothing else — the level filter is
+//! `mars-appender`'s (one store, shared with every instance), the identity
+//! fields of a record come from [`crate::state`], and all pointer handling from
 //! [`crate::cstr`].
 
 use std::ffi::{c_char, c_int, c_longlong, c_uchar, c_uint, c_ulonglong};
@@ -12,7 +13,8 @@ use std::path::Path;
 use mars_appender::{
     appender_close, appender_flush, appender_flush_sync, appender_get_current_log_path,
     appender_open, appender_set_console_log, appender_set_max_alive_duration,
-    appender_set_max_file_size, appender_write, AppenderMode, LogLevel, XLogConfig, XLoggerInfo,
+    appender_set_max_file_size, appender_write, is_enabled_for, set_level, AppenderMode, LogLevel,
+    XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
 };
 use mars_buffer::CompressMode;
 
@@ -195,13 +197,15 @@ pub extern "C" fn mars_xlog_write(
     message: *const c_char,
 ) {
     guard((), || {
-        if !state::level_enabled(level) {
-            return;
-        }
+        // A record of a level that is not `Verbose..=Fatal` — `kLevelNone`, or
+        // a negative one — is dropped, the way `xlogger_IsEnabledFor` answers
+        // for it.
         let Some(level) = to_log_level(level) else {
-            // `kLevelNone` (6) and anything else out of range: log nothing.
             return;
         };
+        if !is_enabled_for(DEFAULT_HANDLE, level) {
+            return;
+        }
 
         // SAFETY: each pointer is null-checked inside the helper and otherwise
         // points to a caller-owned NUL-terminated string.
@@ -250,12 +254,17 @@ pub extern "C" fn mars_xlog_close() {
     guard((), appender_close);
 }
 
-/// `xlogger_SetLevel(TLogLevel)` — sets the minimum level [`mars_xlog_write`]
-/// forwards to the appender. Negative values clamp to `MarsLevelVerbose`;
-/// `MARS_LEVEL_NONE` (6) or higher disables logging completely.
+/// `xlogger_SetLevel(TLogLevel)` — the minimum level a record must have to be
+/// written. `MARS_LEVEL_NONE` (6) or higher disables logging completely, and a
+/// negative value is "log everything", the way `(TLogLevel)-1` was in the C++.
+///
+/// It is the **default logger's** level: `0` is the process-wide appender, and
+/// [`mars_xlog_get_level`], [`mars_xlog_is_enabled_for`] and
+/// [`mars_xlog_write_instance`] all read that one. A level of its own here
+/// would have the ABI answer two different levels for the same logger.
 #[no_mangle]
 pub extern "C" fn mars_xlog_set_level(level: c_int) {
-    guard((), || state::set_min_level(level));
+    guard((), || set_level(DEFAULT_HANDLE, to_filter_level(level)));
 }
 
 /// `mars::xlog::appender_set_console_log(bool)`; any non-zero `open` is `true`.
@@ -337,7 +346,9 @@ unsafe fn write_path_into(bytes: Vec<u8>, out: *mut c_uchar, len: c_uint) -> c_i
 }
 
 /// Maps a raw `TLogLevel` onto [`LogLevel`]; `None` for anything outside
-/// `Verbose..=Fatal` (e.g. C++ `kLevelNone`).
+/// `Verbose..=Fatal`. Those are the levels a *record* can have: `kLevelNone`
+/// (6) is not one of them, and the C++'s own `levelStrings[]` has no string for
+/// it either.
 fn to_log_level(level: c_int) -> Option<LogLevel> {
     let level = level as i64;
     if level == MarsLogLevel::Verbose as i64 {
@@ -354,6 +365,19 @@ fn to_log_level(level: c_int) -> Option<LogLevel> {
         Some(LogLevel::Fatal)
     } else {
         None
+    }
+}
+
+/// What a raw `TLogLevel` means as a *filter*, which is what
+/// `xlogger_SetLevel((TLogLevel)_level)` does with it: the C++ casts straight
+/// to the enum, so `kLevelNone` (6) — and anything above it — disables logging
+/// altogether, and a negative value is "everything", which is
+/// [`LogLevel::Verbose`].
+fn to_filter_level(level: c_int) -> LogLevel {
+    match to_log_level(level) {
+        Some(level) => level,
+        None if level < 0 => LogLevel::Verbose,
+        None => LogLevel::None,
     }
 }
 
@@ -478,8 +502,9 @@ pub extern "C" fn mars_xlog_release_instance(name_prefix: *const c_char) {
 
 /// Writes through a specific instance (`0` = the process-wide appender).
 ///
-/// Unlike [`mars_xlog_write`], this honours the instance's own level: a record
-/// below it is dropped, and an unknown non-zero handle writes nothing.
+/// The instance's own level decides: a record below it is dropped, and an
+/// unknown non-zero handle writes nothing. For `0` that level is the one
+/// [`mars_xlog_set_level`] set, the same one [`mars_xlog_write`] asks.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[no_mangle]
 pub extern "C" fn mars_xlog_write_instance(
@@ -504,8 +529,14 @@ pub extern "C" fn mars_xlog_write_instance(
         if log.is_empty() {
             return 0;
         }
+        // A record's level is `Verbose..=Fatal` here as well: `kLevelNone` is
+        // nothing to write, not a verbose record, which is what turning it into
+        // one would make it.
+        let Some(level) = to_log_level(level) else {
+            return 0;
+        };
         let info = XLoggerInfo {
-            level: to_log_level(level).unwrap_or(LogLevel::Verbose),
+            level,
             tag: Some(tag.to_owned()),
             filename: Some(filename.to_owned()),
             func_name: Some(func_name.to_owned()),
@@ -541,12 +572,15 @@ pub extern "C" fn mars_xlog_get_level(instance: c_longlong) -> c_int {
 }
 
 /// `mars::xlog::SetLevel` for an instance (`0` = the default logger).
+///
+/// `kLevelNone` (6) and anything above it disables the instance, and a
+/// negative level logs everything: the C++ casts the value straight to
+/// `TLogLevel`, and a level outside `Verbose..=Fatal` is not one to answer
+/// nothing at all to.
 #[no_mangle]
 pub extern "C" fn mars_xlog_set_level_instance(instance: c_longlong, level: c_int) {
     let _ = guard(0, || {
-        if let Some(level) = to_log_level(level) {
-            mars_appender::set_level(instance as u64, level);
-        }
+        set_level(instance as u64, to_filter_level(level));
         0
     });
 }
