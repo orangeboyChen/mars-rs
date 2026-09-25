@@ -102,3 +102,39 @@ fn the_gates_run_against_the_real_clock_too() {
     assert_eq!(avalanche.check(&task(), b"body", false), Ok(()));
     assert_eq!(avalanche.frequency_limit().records().len(), 1);
 }
+
+/// Upstream's `test1` and `test2`: a megabyte a time, until the funnel says no.
+///
+/// Its `checkTimes == 8` is the `kMaxVol` of the day — 8 MiB. `MAX_VOL` is
+/// 80 MiB now, so the funnel holds eighty of them and not eight, and the
+/// hundred the wi-fi case sends are all let through (the frequency gate's 105
+/// is not reached either).
+#[test]
+fn a_megabyte_a_time_fills_the_funnel_on_mobile_and_not_on_wifi() {
+    let megabyte = vec![0u8; 1024 * 1024];
+
+    let mut avalanche = AntiAvalanche::new_at(true, T0);
+    for send in 0..80 {
+        assert_eq!(
+            avalanche.check_at(&task(), &megabyte, true, T0),
+            Ok(()),
+            "send {send} of eighty"
+        );
+    }
+    assert_eq!(
+        avalanche.check_at(&task(), &megabyte, true, T0),
+        Err(LimitKind::Flow),
+        "the eighty-first megabyte does not fit"
+    );
+
+    // wi-fi: the flow gate is not consulted at all, so the loop the C++ runs
+    // — a hundred of them — never leaves one behind
+    let mut avalanche = AntiAvalanche::new_at(true, T0);
+    for send in 0..100 {
+        assert_eq!(
+            avalanche.check_at(&task(), &megabyte, false, T0),
+            Ok(()),
+            "send {send} of a hundred"
+        );
+    }
+}
