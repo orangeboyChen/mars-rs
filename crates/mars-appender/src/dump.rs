@@ -125,4 +125,43 @@ mod tests {
         // The budget cuts the dump off mid-input rather than truncating a line.
         assert!(dump.len() < bytes.len() * 6);
     }
+
+    /// `calc_dump_required_length()` — what a line costs, in characters.
+    #[test]
+    fn a_line_costs_six_characters_a_byte_and_the_newline_between_them() {
+        assert_eq!(dump_line_len(1), 7);
+        assert_eq!(dump_line_len(LINE_BYTES), 193);
+        // ... which is why a whole `MAX_DUMP_LENGTH` line can never be rendered
+        // inside the budget
+        assert_eq!(dump_line_len(MAX_DUMP_LENGTH), 24_577);
+    }
+
+    #[test]
+    fn the_dump_is_exactly_as_long_as_the_c_plus_plus_makes_it() {
+        // `\n<len> bytes:\n`, then `6 * bytes` for the line and one more for
+        // the newline that ends it
+        assert_eq!(xlogger_memory_dump(&[0x5a]).len(), 18);
+        // 121 bytes: three full lines and one of 25
+        assert_eq!(xlogger_memory_dump(&[0x5a; 121]).len(), 746);
+        // 128 bytes: four full lines
+        assert_eq!(xlogger_memory_dump(&[0x5a; 128]).len(), 788);
+        // 673 bytes: 21 full ones and one shrunk to a single byte, which is
+        // all the budget has room for — so the dump ends there however much
+        // input is left, and four kilobytes of it is dumped the same
+        assert_eq!(xlogger_memory_dump(&[0x5a; 673]).len(), 4094);
+        // ... and four kilobytes of input ends one character further along,
+        // which is the extra digit of its own header and nothing else
+        assert_eq!(xlogger_memory_dump(&[0x5a; 4096]).len(), 4095);
+    }
+
+    #[test]
+    fn only_the_graphic_bytes_are_printed_as_themselves() {
+        let dump = xlogger_memory_dump(&[0x20, 0x21, 0x7e, 0x7f]);
+        let body = dump.strip_prefix("\n4 bytes:\n").expect("header");
+        let mut lines = body.split('\n');
+        assert_eq!(lines.next().unwrap(), "20 21 7e 7f ");
+        // `isgraph(c) ? c : ' '` in the C locale: 0x21..=0x7e are themselves,
+        // and the space and DEL either side of them are blanks
+        assert_eq!(lines.next().unwrap(), "   !  ~     ");
+    }
 }
