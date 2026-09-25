@@ -19,9 +19,16 @@
 //!
 //! Everything else the JVM touches lives in [`crate::jni_bridge`]; what is here
 //! is plain Rust and is covered by `cargo test`.
+//!
+//! The checks themselves are [`mars_sdt`]'s: [`sdt::run_active_check_impl`]
+//! runs the planned checks with the four checkers the C++ creates in
+//! `__InitCheckReq`, which ask the network — DNS, TCP, HTTP, ping — through the
+//! [`mars_sdt::checkimpl::Ask`] the host hands over, the way the C++ opens a
+//! socket for each of them.
 
 use std::sync::{Arc, Mutex, OnceLock};
 
+use mars_sdt::checkimpl::Ask;
 use mars_sdt::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
 use mars_sdt::{Callback, CheckIPPorts, NetCheckType, SdtLogic};
 
@@ -139,6 +146,26 @@ pub fn run_checks_impl(
     with_state(|state| state.logic.run(do_check))
 }
 
+/// [`run_checks_impl`] with the port's own checkers: the four classes the C++
+/// creates in `__InitCheckReq`, asked through `ask` — the host's network is the
+/// socket the C++ would have opened for every one of these probes.
+///
+/// `network_type` is the `comm::getNetInfo()` every checker writes into its
+/// profiles. The platform is the host's here, which is why it comes with the
+/// run: [`run_active_check_with_net_info_impl`] is this call with the one
+/// [`crate::platform_comm::net_info_impl`] answered.
+pub fn run_active_check_impl(ask: &mut Ask, network_type: i32) -> Vec<CheckResultProfile> {
+    with_state(|state| state.logic.run_checks(ask, network_type))
+}
+
+/// [`run_active_check_impl`] with the network type of the platform: the
+/// `comm::getNetInfo()` the C++ asks from inside every check is
+/// [`crate::platform_comm::net_info_impl`] here, which is the JVM's answer
+/// (`PlatformComm.getNetInfo`) when nobody has set one.
+pub fn run_active_check_with_net_info_impl(ask: &mut Ask) -> Vec<CheckResultProfile> {
+    run_active_check_impl(ask, crate::platform_comm::net_info_impl().as_i32())
+}
+
 /// Takes everything the checks have reported since the last call.
 pub fn take_reported_impl() -> Vec<CheckResultProfile> {
     with_state(|state| {
@@ -241,7 +268,12 @@ pub fn get_load_libraries_impl() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mars_sdt::{CheckIPPort, NetCheckType as Kind, NET_CHECK_BASIC, UNUSE_TIMEOUT};
+    use crate::platform_comm::{self, NetInfo};
+    use mars_sdt::checkimpl::{Answer, PingStatus, Query};
+    use mars_sdt::{
+        CheckIPPort, NetCheckType as Kind, NET_CHECK_BASIC, NET_CHECK_LONG, NET_CHECK_SHORT,
+        UNUSE_TIMEOUT,
+    };
     use std::collections::BTreeMap;
 
     fn isolated<R>(f: impl FnOnce() -> R) -> R {
@@ -263,6 +295,33 @@ mod tests {
         request
             .checkresult_profiles
             .push(CheckResultProfile::of(kind));
+    }
+
+    /// A network that answers every probe the way a healthy one would: what the
+    /// C++ gets from the sockets it opens for these four.
+    fn network() -> Ask {
+        Ask::new(|query| match query {
+            Query::Dns { .. } => Answer::Dns {
+                error_code: 0,
+                rtt: 10,
+                ips: vec!["1.2.3.4".to_owned()],
+            },
+            Query::Tcp { .. } => Answer::Tcp {
+                error_code: 0,
+                is_noop_resp: true,
+                rtt: 10,
+            },
+            Query::Http { .. } => Answer::Http {
+                error_code: 0,
+                status_code: 200,
+                rtt: 10,
+            },
+            Query::Ping { .. } => Answer::Ping {
+                error_code: 0,
+                rtt: 10,
+                status: Some(PingStatus::new(0.0, 12.5)),
+            },
+        })
     }
 
     #[test]
@@ -314,6 +373,100 @@ mod tests {
             ));
             cancel_active_check_impl();
             assert!(run_checks_impl(record).is_empty());
+        })
+    }
+
+    #[test]
+    fn a_diagnosis_runs_with_the_checkers_of_the_port() {
+        isolated(|| {
+            set_http_netcheck_cgi_impl("/cgi-bin/netcheck");
+            assert!(start_active_check_impl(
+                &hosts("long.weixin.qq.com"),
+                &hosts("short.weixin.qq.com"),
+                NET_CHECK_BASIC | NET_CHECK_SHORT | NET_CHECK_LONG,
+                UNUSE_TIMEOUT
+            ));
+
+            let results = run_active_check_impl(&mut network(), NetInfo::Wifi.as_i32());
+            let kinds: Vec<Kind> = results
+                .iter()
+                .filter_map(CheckResultProfile::kind)
+                .collect();
+            assert_eq!(
+                kinds,
+                vec![
+                    Kind::PingCheck,
+                    Kind::PingCheck,
+                    Kind::DnsCheck,
+                    Kind::DnsCheck,
+                    Kind::HttpCheck,
+                    Kind::TcpCheck
+                ]
+            );
+
+            // what the host answered is what the profiles say: the status of
+            // the ping, the address the resolve came back with, and the URL the
+            // HTTP check went to — the CGI on the short-link host
+            assert_eq!(results[0].loss_rate, "0.000000");
+            assert_eq!(results[0].rtt_str, "12.500000");
+            assert_eq!(results[0].network_type, NetInfo::Wifi.as_i32());
+            assert_eq!(results[2].domain_name, "long.weixin.qq.com");
+            assert_eq!(results[2].ip1, "1.2.3.4");
+            assert_eq!(
+                results[4].url,
+                "http://short.weixin.qq.com/cgi-bin/netcheck"
+            );
+            assert_eq!(results[4].status_code, 200);
+            // the noop the TCP check sent: the long-link ip, and the round trip
+            // the host measured
+            assert_eq!(results[5].ip, "1.2.3.4");
+            assert_eq!(results[5].port, 80);
+            assert_eq!(results[5].error_code, 0);
+            assert_eq!(results[5].rtt, 10);
+
+            // a run with the port's own checkers is a diagnosis like any
+            // other: what ran is what was reported, and the app is told
+            assert_eq!(take_reported_impl().len(), 6);
+            let delivered = take_delivered_impl();
+            assert_eq!(delivered.len(), 1);
+            assert!(
+                delivered[0].contains("\"networkType\":1"),
+                "{}",
+                delivered[0]
+            );
+        })
+    }
+
+    #[test]
+    fn the_network_type_of_a_run_is_the_one_the_platform_answered() {
+        isolated(|| {
+            // `comm::getNetInfo()` is `PlatformComm.getNetInfo` here, and a
+            // host that answered "mobile" is what the checkers write in
+            platform_comm::set_net_info_impl(NetInfo::Mobile.as_i32());
+            assert!(start_active_check_impl(
+                &hosts("long"),
+                &hosts("short"),
+                NET_CHECK_BASIC,
+                UNUSE_TIMEOUT
+            ));
+            let results = run_active_check_with_net_info_impl(&mut network());
+            assert_eq!(results.len(), 2, "a ping and a resolve for the long link");
+            assert_eq!(results[0].network_type, NetInfo::Mobile.as_i32());
+
+            // a platform that answered nothing is offline, which is what the
+            // port says about a JVM that has not answered either — and the
+            // platform is asked again for every run, not once
+            platform_comm::set_net_info_impl(NetInfo::NoNet.as_i32());
+            assert!(start_active_check_impl(
+                &hosts("long"),
+                &hosts("short"),
+                NET_CHECK_BASIC,
+                UNUSE_TIMEOUT
+            ));
+            let results = run_active_check_with_net_info_impl(&mut network());
+            assert_eq!(results[0].network_type, NetInfo::NoNet.as_i32());
+
+            // the platform's own tests reset what was set here
         })
     }
 
