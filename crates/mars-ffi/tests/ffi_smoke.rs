@@ -310,18 +310,23 @@ fn the_level_one_function_sets_is_the_one_every_write_sees() {
     open_sync(dir.path());
 
     // `mars_xlog_set_level` is the level of the default logger, and instance
-    // `0` is that logger: a level of its own would have the two writes below
-    // disagree about the very same filter.
+    // `0` is that logger: a level of its own would have `get_level(0)` and
+    // `is_enabled_for(0, ..)` disagree with the level that was set.
     mars_xlog_set_level(4); // Error
-    write_instance(2, "smoke", "instance-path-must-drop-this");
-    write_instance(4, "smoke", "instance-path-must-keep-this");
+    assert_eq!(mars_ffi::abi::mars_xlog_get_level(0), 4);
+
+    // A write through instance `0` is `XloggerWrite(0, …)`, i.e. the C++'s
+    // `xlogger_Write`, and `xloggerbase.h` says "no level filter" over it: the
+    // record goes out whatever the level is. The level is only what
+    // `is_enabled_for` answers from — the C++'s own `xinfo2` asks that itself,
+    // before it ever reaches `xlogger_Write`.
+    write_instance(2, "smoke", "instance-path-has-no-filter");
     mars_xlog_flush_sync();
 
     let bytes = fs::read(log_file(dir.path())).unwrap();
-    assert!(any_view_contains(&bytes, "instance-path-must-keep-this"));
     assert!(
-        !any_view_contains(&bytes, "instance-path-must-drop-this"),
-        "the default logger did not use the level mars_xlog_set_level set"
+        any_view_contains(&bytes, "instance-path-has-no-filter"),
+        "the default logger filtered a record the C++ writes"
     );
 
     // `MARS_LEVEL_NONE` through the instance path, which used to be ignored.
