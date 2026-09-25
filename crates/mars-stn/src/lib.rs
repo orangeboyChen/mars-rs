@@ -51,6 +51,10 @@
 //! is on and asks, at most so many times an hour, whether one of the other
 //! pairs is reachable now.
 //!
+//! The twelfth slice is the race a link runs between its pairs
+//! ([`longlink_speed_test`]): the same noop goes out on all of them at once,
+//! and the first one whose answer comes back is the one the link is made on.
+//!
 //! Everything that needs the app callbacks (`net_core`, `longlink_task_manager`,
 //! `shortlink`, `stn_logic`) comes later.
 
@@ -105,6 +109,7 @@ pub mod frequency_limit;
 pub mod longlink;
 pub mod longlink_connect_monitor;
 pub mod longlink_identify_checker;
+pub mod longlink_speed_test;
 pub mod net_check_logic;
 pub mod netsource_timercheck;
 pub mod signalling_keeper;
@@ -129,6 +134,10 @@ pub use longlink_connect_monitor::{
     START_CHECK_PERIOD, TIME_CHECK_PERIOD, UP_OR_DOWN_THRESHOLD, WAKE_ALARM_INTERVAL,
 };
 pub use longlink_identify_checker::{IdentifyMode, LongLinkIdentifyChecker};
+pub use longlink_speed_test::{
+    Fastest, LongLinkSpeedTest, Need, Socket, SocketEvent, SpeedTestItem, SpeedTestState, Stop,
+    Watch, MAX_RETRIES, OUT_OF_BAND_CMDID,
+};
 pub use net_check_logic::{
     NetCheckLogic, CHECK_IF_ABOVE_COUNT, CHECK_IF_BELOW_COUNT, CHECK_TIME_SPAN_INCREMENT_STEP,
     LIMIT_COUNT, LIMIT_TIME_SPAN, MIN_CHECK_TIME_SPAN, MOST_RECENT_TASK_START_N, NET_CHECK_MODE,
