@@ -1275,6 +1275,11 @@ mod tests {
 
     #[test]
     fn the_verification_is_a_noop_the_server_answers() {
+        // `sg_client_version` is process-wide: `longlink_pack` stamps the
+        // version it reads *then*, and `longlink_unpack` takes no answer but
+        // one stamped with the version it reads *later* — so a test that
+        // packs and unpacks has the crate's turn, the way `longlink`'s own do
+        let _lock = crate::test_lock();
         let (mut link, seen) = link();
         let noop = longlink_pack(NOOP_CMDID, Task::NOOP_TASK_ID, &[]);
         *seen.answer.lock().unwrap() = noop.clone();

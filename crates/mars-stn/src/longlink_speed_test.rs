@@ -547,6 +547,10 @@ mod tests {
     }
 
     /// The answer to the noop, as the long link would have received it.
+    ///
+    /// `sg_client_version` is process-wide, and `longlink_unpack` takes no
+    /// answer but one stamped with the version it reads when *it* runs — so
+    /// every test that hands this in has the crate's turn, [`crate::test_lock`].
     fn noop_answer() -> Vec<u8> {
         longlink_pack(
             LongLinkEncoder::default().noop_cmdid(),
@@ -600,6 +604,7 @@ mod tests {
 
     #[test]
     fn a_noop_that_is_answered_wins() {
+        let _lock = crate::test_lock();
         let mut item = SpeedTestItem::new_at(1_000, pair("1.1.1.1", 80));
         assert_eq!(item.state(), SpeedTestState::Connecting);
         assert_eq!(item.watch(), Watch::ReadWrite);
@@ -643,6 +648,7 @@ mod tests {
 
     #[test]
     fn an_answer_that_is_not_whole_yet_is_read_again() {
+        let _lock = crate::test_lock();
         let mut item = SpeedTestItem::new_at(0, pair("1.1.1.1", 80));
         let answer = noop_answer();
         assert_eq!(item.on_received(&answer[..answer.len() - 1]), Need::Read);
@@ -653,6 +659,7 @@ mod tests {
 
     #[test]
     fn a_package_that_is_not_an_answer_to_the_noop_is_a_fail() {
+        let _lock = crate::test_lock();
         // not one of ours at all
         let mut item = SpeedTestItem::new_at(0, pair("1.1.1.1", 80));
         assert_eq!(item.on_received(&[0u8; 32]), Need::Nothing);
@@ -667,6 +674,7 @@ mod tests {
 
     #[test]
     fn an_out_of_band_package_is_not_an_answer_and_the_noop_goes_out_again() {
+        let _lock = crate::test_lock();
         let mut item = SpeedTestItem::new_at(0, pair("1.1.1.1", 80));
         item.apply(SocketEvent::Writable, 0);
         let whole = item.pending().len();
@@ -693,6 +701,7 @@ mod tests {
 
     #[test]
     fn the_race_is_won_by_the_first_pair_that_answers() {
+        let _lock = crate::test_lock();
         let mut test = LongLinkSpeedTest::new_at(0, [pair("1.1.1.1", 80), pair("2.2.2.2", 80)]);
         test.set_select(select(vec![
             vec![SocketEvent::Writable, SocketEvent::Writable],
