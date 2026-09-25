@@ -91,6 +91,32 @@ fn open_rejects_a_bad_config_before_touching_the_disk() {
 }
 
 #[test]
+fn the_level_is_one_store_whatever_the_question_is() {
+    let _guard = serial();
+
+    // `mars_xlog_set_level` is the level of the default logger, which is the
+    // store `get_level` / `is_enabled_for` / `write_instance` read. It used to
+    // be kept beside them, in the seam, and the two answered differently.
+    mars_xlog_set_level(3);
+    assert_eq!(mars_xlog_get_level(0), 3, "one level, two answers");
+    assert_eq!(mars_xlog_is_enabled_for(0, 2), 0);
+    assert_eq!(mars_xlog_is_enabled_for(0, 3), 1);
+
+    // `MARS_LEVEL_NONE` through the instance path, which used to be dropped
+    // for want of a `LogLevel` to turn it into.
+    mars_xlog_set_level_instance(0, 6);
+    assert_eq!(mars_xlog_get_level(0), 6);
+    assert_eq!(mars_xlog_is_enabled_for(0, 5), 0);
+
+    // `(TLogLevel)-1` is "everything", not "nothing at all".
+    mars_xlog_set_level_instance(0, -1);
+    assert_eq!(mars_xlog_get_level(0), 0);
+    assert_eq!(mars_xlog_is_enabled_for(0, 0), 1);
+
+    mars_xlog_set_level(0);
+}
+
+#[test]
 fn the_whole_abi_runs_over_one_appender() {
     let _guard = serial();
     let dir = tempdir("surface");

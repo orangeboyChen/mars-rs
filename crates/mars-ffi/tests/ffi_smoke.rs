@@ -285,6 +285,58 @@ fn current_log_path_is_reported() {
     mars_xlog_close();
 }
 
+/// Writes through instance `0`, i.e. the process-wide appender.
+fn write_instance(level: c_int, tag: &str, message: &str) {
+    let tag = CString::new(tag).unwrap();
+    let file = CString::new("ffi_smoke.rs").unwrap();
+    let func = CString::new("write_instance").unwrap();
+    let message = CString::new(message).unwrap();
+    mars_ffi::abi::mars_xlog_write_instance(
+        0,
+        level,
+        tag.as_ptr(),
+        file.as_ptr(),
+        func.as_ptr(),
+        42,
+        message.as_ptr(),
+    );
+}
+
+#[test]
+fn the_level_one_function_sets_is_the_one_every_write_sees() {
+    let _g = lock();
+    let _close = CloseOnDrop;
+    let dir = tempfile::tempdir().unwrap();
+    open_sync(dir.path());
+
+    // `mars_xlog_set_level` is the level of the default logger, and instance
+    // `0` is that logger: a level of its own would have the two writes below
+    // disagree about the very same filter.
+    mars_xlog_set_level(4); // Error
+    write_instance(2, "smoke", "instance-path-must-drop-this");
+    write_instance(4, "smoke", "instance-path-must-keep-this");
+    mars_xlog_flush_sync();
+
+    let bytes = fs::read(log_file(dir.path())).unwrap();
+    assert!(any_view_contains(&bytes, "instance-path-must-keep-this"));
+    assert!(
+        !any_view_contains(&bytes, "instance-path-must-drop-this"),
+        "the default logger did not use the level mars_xlog_set_level set"
+    );
+
+    // `MARS_LEVEL_NONE` through the instance path, which used to be ignored.
+    mars_ffi::abi::mars_xlog_set_level_instance(0, 6);
+    write(5, "smoke", "a-level-none-filter-drops-everything");
+    mars_xlog_flush_sync();
+    let bytes = fs::read(log_file(dir.path())).unwrap();
+    assert!(!any_view_contains(
+        &bytes,
+        "a-level-none-filter-drops-everything"
+    ));
+
+    mars_xlog_set_level(0); // back to Verbose
+}
+
 #[test]
 fn level_filter_gates_writes() {
     let _g = lock();
