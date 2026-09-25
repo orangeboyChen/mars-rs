@@ -6,7 +6,7 @@
 
 # The framework is named after the project, not after xlog: the C ABI is the
 # port's, and everything the port grows into belongs in it. xlog is what it
-# carries today (Sources/MarsRS/Xlog.swift is the Swift of it), not what the
+# carries today (Sources/MarsRSXlog/Xlog.swift is the Swift of it), not what the
 # framework is.
 #
 #   scripts/build_xcframework.sh 0.1.0 [output-dir]

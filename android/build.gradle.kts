@@ -1,8 +1,11 @@
 // Top-level build file of the Android packaging of mars-rs.
 //
-// There is one module: `mars-xlog`, the AAR that carries `libmarsxlog.so` per
-// ABI plus the Java class whose natives it implements. Nothing is compiled
-// from Rust here — see the comment at the top of mars-xlog/build.gradle.kts.
+// Two modules over the same `libmarsxlog.so`: `mars-core`, the AAR that carries
+// it per ABI plus every Java class whose natives it implements (xlog, STN, SDT,
+// the app and the platform callbacks), and `mars-xlog`, the same library with
+// the logging half of the Java only — the pair the C++ project publishes as
+// `mars-core` and `mars-xlog`. Nothing is compiled from Rust here — see the
+// comment at the top of mars-core/build.gradle.kts.
 
 plugins {
     // Declared here and applied in the module, so that the version of the

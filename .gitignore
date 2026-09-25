@@ -1,9 +1,9 @@
 /target
 
 # the Android project: what the release workflow unpacks and what Gradle writes
-android/mars-xlog/libs/
+android/*/libs/
 android/.gradle/
 android/build/
-android/mars-xlog/build/
+android/*/build/
 android/local.properties
 /dist

@@ -6,7 +6,7 @@
 //
 //  and then
 //
-//      import MarsRS
+//      import MarsRS          // the whole port
 //
 //      var config = MarsXlogConfiguration(logDirectory: logDir)
 //      config.namePrefix = "Ham"
@@ -16,9 +16,16 @@
 //      MarsXlog.write(.info, tag: "Net", message: "hello")
 //      MarsXlog.flush(sync: true)
 //
-//  One module for the whole project, named after it: `MarsRS`. What the C ABI
-//  carries today is xlog, so Xlog.swift is the only file in Sources/MarsRS —
-//  Stn.swift and Sdt.swift join it as mars-ffi grows past the logging half.
+//  or, for an app that only logs:
+//
+//      import MarsRSXlog      // xlog alone, and the same API
+//
+//  Two products over one prebuilt library: `MarsRS` is the port, `MarsRSXlog`
+//  is the logging half of it, the way the Android packages split `mars-rs` and
+//  `mars-rs-xlog`. Nothing is saved by taking the smaller one while both wrap
+//  one xcframework — `mars-ffi` is xlog and nothing else today — but the
+//  import stays honest about what an app uses, and `Stn.swift` / `Sdt.swift`
+//  will land in `MarsRS` and not in `MarsRSXlog`.
 //
 //  The package ships a prebuilt MarsRS.xcframework built by
 //  .github/workflows/release.yml (scripts/build_xcframework.sh), so consumers
@@ -37,7 +44,9 @@ let package = Package(
         .iOS(.v12)
     ],
     products: [
-        .library(name: "MarsRS", targets: ["MarsRS"])
+        .library(name: "MarsRS", targets: ["MarsRS"]),
+        // for a consumer who logs and nothing else
+        .library(name: "MarsRSXlog", targets: ["MarsRSXlog"]),
     ],
     targets: [
         // Prebuilt binary: ios-arm64 + ios-arm64_x86_64-simulator, each with
@@ -61,12 +70,19 @@ let package = Package(
         // linking. (The C++ project names libc++ and libz here; the port
         // needs neither — it is Rust, and its zlib is `zlib-rs`.)
         .target(
-            name: "MarsRS",
+            name: "MarsRSXlog",
             dependencies: ["MarsRSFFI"],
-            path: "Sources/MarsRS",
+            path: "Sources/MarsRSXlog",
             linkerSettings: [
                 .linkedFramework("CoreFoundation"),
             ]
+        ),
+        // The umbrella: everything the port exposes, so that one import is
+        // enough. It carries no symbols of its own while `mars-ffi` is xlog
+        // only; `Stn.swift` and `Sdt.swift` go here when the C ABI has them.
+        .target(
+            name: "MarsRS",
+            dependencies: ["MarsRSXlog"]
         )
     ]
 )

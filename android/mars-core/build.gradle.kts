@@ -1,12 +1,8 @@
-// The xlog-only Android AAR of mars-rs: `libmarsxlog.so` (crate `mars-jni`)
-// for every ABI, plus the two Java classes of the logging half — `Xlog` and the
-// `Log` facade over it. The whole port is the `mars-core` module; this is the
-// package for an app that only logs, the way the C++ project's `mars-xlog` is.
-//
-// Its two Java files are byte-for-byte mars-core's — the same xlog API over the
-// same `.so`, with the rest of the port left out — so a change to one belongs in
-// both. They are copied and not shared because a module that took mars-core's
-// sources would take all of them, which is what this module exists not to do.
+// The Android AAR of the whole port: `libmarsxlog.so` (crate `mars-jni`) for
+// every ABI, plus every Java class whose natives it implements — xlog, STN,
+// SDT, the app and the platform callbacks. `mars-xlog` is the same library with
+// the xlog half of the Java only, the way the C++ project publishes
+// `mars-core` and `mars-xlog` apart.
 //
 // The .so files are not built here. Neither JitPack nor a plain `./gradlew`
 // has an NDK and a Rust toolchain, so .github/workflows/release.yml builds
@@ -20,11 +16,11 @@ plugins {
 }
 
 val publishedGroup: String = (findProperty("publishedGroup") as String?) ?: "io.github.orangeboychen"
-val publishedArtifact: String = (findProperty("publishedArtifact") as String?) ?: "mars-rs-xlog"
+val publishedArtifact: String = (findProperty("publishedArtifact") as String?) ?: "mars-rs"
 val publishedVersion: String = (findProperty("publishedVersion") as String?) ?: "0.0.0"
 
 android {
-    namespace = "io.github.orangeboychen.marsrs.xlog"
+    namespace = "io.github.orangeboychen.marsrs"
     compileSdk = 36
 
     defaultConfig {
@@ -71,8 +67,8 @@ publishing {
 
             pom {
                 packaging = "aar"
-                name.set("mars-rs-xlog")
-                description.set("Android AAR of the Rust port of Tencent/mars: xlog")
+                name.set("mars-rs")
+                description.set("Android AAR of the Rust port of Tencent/mars: xlog, STN and SDT")
                 url.set("https://github.com/orangeboyChen/mars-rs")
                 licenses {
                     license {
@@ -100,5 +96,5 @@ afterEvaluate {
                 ".github/workflows/release.yml)."
         )
     }
-    println("mars-xlog: packaging ${abis.map { it.name }.sorted().joinToString(", ")}")
+    println("mars-core: packaging ${abis.map { it.name }.sorted().joinToString(", ")}")
 }
