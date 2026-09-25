@@ -830,7 +830,7 @@ impl NetCore {
 
         if task.network_status_sensitive
             && self.net() == NO_NET
-            && !self.is_long_link_connected(&task.channel_name)
+            && self.long_link_is_down(&task.channel_name)
         {
             self.end_task_at(
                 &task,
@@ -1506,6 +1506,20 @@ impl NetCore {
         self.released
     }
 
+    /// `longlink && LongLink::kConnected != longlink->Channel()->ConnectStatus()`
+    /// — a link the core has for the name, that is not up.
+    ///
+    /// `need_use_longlink_` is what makes the C++ look one up at all
+    /// (`longlink` stays `nullptr` without it), and a name no link answers to
+    /// is a `nullptr` too: in both cases the C++ asks no question of the
+    /// network and lets the task out.
+    fn long_link_is_down(&self, name: &str) -> bool {
+        self.use_long_link
+            && self.long_link(name).is_some_and(|link| {
+                link.lock().unwrap_or_else(poisoned).connect_status() != LongLinkStatus::Connected
+            })
+    }
+
     /// `__ChooseChannel(...)` — long link, short link, or the channel the task
     /// asked for: a task that may use either is put on the long link while it
     /// is up, and a `kChannelFastStrategy` one only while nothing else of that
@@ -2091,10 +2105,10 @@ mod tests {
     fn a_task_the_network_cannot_take_is_failed_when_the_task_is_sensitive() {
         let (mut core, rec) = wired();
         core.set_net_info(|| NO_NET);
-        let mut task = task(7);
-        task.network_status_sensitive = true;
+        let mut sensitive = task(7);
+        sensitive.network_status_sensitive = true;
 
-        assert!(!core.start_task_at(NOW, task));
+        assert!(!core.start_task_at(NOW, sensitive));
         assert_eq!(
             rec.ended(),
             vec![(
@@ -2105,6 +2119,46 @@ mod tests {
                 String::new()
             )]
         );
+
+        // ... and a link that is up is a network the task can be given to
+        up(&core, LongLinkStatus::Connected);
+        let mut later = task(8);
+        later.network_status_sensitive = true;
+        assert!(core.start_task_at(NOW, later));
+        assert!(rec.ended().is_empty());
+    }
+
+    /// `longlink` is `nullptr` in the C++ when nothing was looked up — no long
+    /// link at all, or a channel no link answers to — and a `nullptr` asks no
+    /// question of the network: the task goes out.
+    #[test]
+    fn a_sensitive_task_with_no_link_to_ask_about_is_not_failed_for_the_network() {
+        // the long link is off: `need_use_longlink_` is false, so the C++
+        // never looks one up
+        let (mut core, rec) = wired();
+        core.set_need_use_long_link(false);
+        core.set_net_info(|| NO_NET);
+        let mut off = task(7);
+        off.network_status_sensitive = true;
+
+        assert!(
+            core.start_task_at(NOW, off),
+            "with no long link there is nothing to ask"
+        );
+        assert!(core.shortlink().has_task(7));
+        assert!(rec.ended().is_empty());
+
+        // ... and the long link is on, but the task names a channel the core
+        // has no link for
+        let (mut core, rec) = wired();
+        core.set_net_info(|| NO_NET);
+        let mut named = task(7);
+        named.network_status_sensitive = true;
+        named.channel_name = "no-such-link".to_string();
+
+        assert!(core.start_task_at(NOW, named));
+        assert!(core.shortlink().has_task(7));
+        assert!(rec.ended().is_empty());
     }
 
     #[test]
