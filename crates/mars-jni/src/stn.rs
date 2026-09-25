@@ -258,7 +258,14 @@ pub fn stop_signalling_impl() {
 }
 
 /// `StnLogic.setClientVersion`.
+///
+/// The version is not only kept here: it is what every long-link package goes
+/// out with, and the only one `longlink_unpack` accepts back, so it is handed
+/// to [`mars_stn::longlink::set_client_version`] as well — that is
+/// `mars::stn::SetClientVersion`, which `StnLogic.setClientVersion` reaches
+/// through `stn_logic.cc`.
 pub fn set_client_version_impl(version: u32) {
+    mars_stn::longlink::set_client_version(version);
     with_state(|state| state.client_version = version)
 }
 
@@ -424,13 +431,15 @@ mod tests {
     #[test]
     fn makesure_longlink_connected_needs_an_address() {
         isolated(|| {
+            // `reset()` drops the tasks and the signalling but not the
+            // addresses the app set, so this one takes them away first
+            set_longlink_svr_addr_impl("", &[], "");
             assert!(!makesure_longlink_connected_impl(), "no address yet");
 
             set_longlink_svr_addr_impl("long.weixin.qq.com", &[80], "");
             assert!(makesure_longlink_connected_impl());
 
             // a debug ip alone is enough for the C++ as well
-            reset_impl();
             set_longlink_svr_addr_impl("", &[], "1.2.3.4");
             assert!(makesure_longlink_connected_impl());
         })
@@ -523,12 +532,43 @@ mod tests {
         isolated(|| {
             set_client_version_impl(0x0102_0304);
             with_state(|state| assert_eq!(state.client_version, 0x0102_0304));
+            // … and it is the one the long-link packages go out with
+            assert_eq!(mars_stn::longlink::client_version(), 0x0102_0304);
 
             trig_nooping_impl();
             trig_nooping_impl();
             with_state(|state| assert_eq!(state.noop_count, 2));
 
             assert_eq!(get_load_libraries_impl(), vec!["marsxlog".to_owned()]);
+
+            set_client_version_impl(0);
+        })
+    }
+
+    #[test]
+    fn a_noop_packed_with_the_client_version_comes_back() {
+        isolated(|| {
+            set_client_version_impl(300);
+            let packed = mars_stn::longlink::longlink_pack(
+                mars_stn::longlink::NOOP_CMDID,
+                Task::NOOP_TASK_ID,
+                b"",
+            );
+            let unpacked = mars_stn::longlink::longlink_unpack(&packed);
+            let mars_stn::Unpacked::Package { cmdid, seq, .. } = unpacked else {
+                panic!("{unpacked:?}");
+            };
+            assert_eq!(cmdid, mars_stn::longlink::NOOP_CMDID);
+            assert_eq!(seq, Task::NOOP_TASK_ID);
+
+            // a package of another version is not one of ours
+            set_client_version_impl(301);
+            assert_eq!(
+                mars_stn::longlink::longlink_unpack(&packed),
+                mars_stn::Unpacked::False
+            );
+
+            set_client_version_impl(0);
         })
     }
 }
