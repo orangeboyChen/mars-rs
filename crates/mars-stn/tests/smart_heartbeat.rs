@@ -204,3 +204,98 @@ fn the_heartbeat_count_that_decides_a_network_is_stable() {
     assert_eq!(hb.info().cur_heart, MIN_HEART_INTERVAL);
     assert!(!hb.info().is_stable);
 }
+/// Upstream's `mars/stn/test_cases/smart_heartbeat_test.cc` says three
+/// successes buy `MinHeartInterval + HeartStep` (`test0`) and three failures buy
+/// `MinHeartInterval + HeartStep - SuccessStep` (`test1`), and asks for the
+/// minimum after six failures (`test2`) and for the minimum while the app is
+/// active (`test8`). None of those numbers is what the source of today
+/// produces: it takes `NET_STABLE_TEST_COUNT` results to clear the stability
+/// test and `BASE_SUCC_COUNT` more to move one step, and the C++ test leaves
+/// `OnHeartbeatStart()` commented out, without which `OnHeartResult` ignores
+/// everything it is told. So what is pinned here is the ladder the source walks,
+/// which is the shape of those four cases and not their numbers.
+#[test]
+fn the_interval_climbs_one_step_at_a_time() {
+    let _guard = hearts();
+    let mut hb = SmartHeartbeat::new();
+    hb.on_longlink_established("wifi-home", 1);
+
+    let intervals = session(&mut hb, 40, |_| true);
+    // the first `NET_STABLE_TEST_COUNT` results only test the minimum, and
+    // every step up costs `BASE_SUCC_COUNT` more: six beats a rung
+    assert_eq!(intervals[..8], [MIN_HEART_INTERVAL; 8], "{intervals:?}");
+    assert_eq!(intervals[8], MIN_HEART_INTERVAL + HEART_STEP);
+    assert_eq!(
+        intervals[8..14],
+        [MIN_HEART_INTERVAL + HEART_STEP; 6],
+        "{intervals:?}"
+    );
+    assert_eq!(intervals[14], MIN_HEART_INTERVAL + 2 * HEART_STEP);
+    assert_eq!(intervals[20], MIN_HEART_INTERVAL + 3 * HEART_STEP);
+    // and the last rung it can reach is the margin below the ceiling, which is
+    // where the port settles — see `the_interval_grows_while_the_network_answers`
+    assert_eq!(intervals[38], MIN_HEART_INTERVAL + 6 * HEART_STEP);
+}
+
+#[test]
+fn two_failures_on_a_rung_drop_it_by_a_step_and_the_margin() {
+    let _guard = hearts();
+    let mut hb = SmartHeartbeat::new();
+    hb.on_longlink_established("wifi-home", 1);
+
+    // up to the second rung and no further, so the network is not stable yet:
+    // a twentieth result would have bought a third step
+    session(&mut hb, 19, |_| true);
+    assert_eq!(hb.info().cur_heart, MIN_HEART_INTERVAL + 2 * HEART_STEP);
+    assert!(!hb.info().is_stable);
+
+    // `MAX_HEART_FAIL_COUNT` failures on it: a step and the margin back, and
+    // this time it settles there
+    let intervals = session(&mut hb, 2, |_| false);
+    assert_eq!(
+        intervals,
+        vec![MIN_HEART_INTERVAL + 2 * HEART_STEP; 2],
+        "{intervals:?}"
+    );
+    assert_eq!(
+        hb.info().cur_heart,
+        MIN_HEART_INTERVAL + HEART_STEP - SUCCESS_STEP
+    );
+    assert!(hb.info().is_stable, "the shorter interval was settled on");
+
+    // and two more on the interval it settled on give the whole thing up and
+    // start over at the minimum — the C++'s `kActionReCalc`
+    let intervals = session(&mut hb, 2, |_| false);
+    assert_eq!(
+        intervals,
+        vec![MIN_HEART_INTERVAL + HEART_STEP - SUCCESS_STEP; 2],
+        "{intervals:?}"
+    );
+    assert_eq!(hb.info().cur_heart, MIN_HEART_INTERVAL);
+    assert!(!hb.info().is_stable);
+    // a failure on the minimum says nothing about any bigger interval, so it
+    // stays there however long the network stays quiet
+    let intervals = session(&mut hb, 10, |_| false);
+    assert_eq!(intervals, vec![MIN_HEART_INTERVAL; 10]);
+}
+
+#[test]
+fn an_active_app_is_given_the_minimum_whatever_the_network_earned() {
+    let _guard = hearts();
+    let mut hb = SmartHeartbeat::new();
+    hb.on_longlink_established("wifi-home", 1);
+
+    session(&mut hb, 60, |_| true);
+    assert!(hb.info().cur_heart > MIN_HEART_INTERVAL);
+
+    // while the app is in the foreground there is nothing to save: the
+    // interval is the minimum, and the record is left alone
+    assert_eq!(hb.get_next_heartbeat_interval(true), MIN_HEART_INTERVAL);
+    assert_eq!(hb.info().cur_heart, MAX_HEART_INTERVAL - SUCCESS_STEP);
+    // ... and the next time the app is in the background it is the record that
+    // is asked again, not the minimum the foreground was given
+    assert_eq!(
+        hb.get_next_heartbeat_interval(false),
+        MAX_HEART_INTERVAL - SUCCESS_STEP
+    );
+}
