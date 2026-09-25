@@ -537,10 +537,19 @@ mod tests {
         }
     }
 
+    /// `outer_setted_heart_` is one value for the whole process, and
+    /// [`with_outer_heart`] holds the crate's turn while it moves it — so a test
+    /// that *reads* it has to take the same turn, or it reads the interval
+    /// another test set. These tests run in parallel.
+    fn next_interval(hb: &mut SmartHeartbeat, is_active: bool) -> u32 {
+        let _guard = crate::test_lock();
+        hb.get_next_heartbeat_interval(is_active)
+    }
+
     /// One heartbeat the way the long link drives it: it asks what interval to
     /// wait, sends the noop, and reports the answer at `now`.
     fn heartbeat_at(hb: &mut SmartHeartbeat, success: bool, now: i64) {
-        hb.get_next_heartbeat_interval(false);
+        next_interval(hb, false);
         hb.on_heartbeat_start(0);
         hb.on_heart_result(success, false, now);
     }
@@ -557,7 +566,7 @@ mod tests {
         // no network yet, and no heartbeat to judge
         assert!(!hb.info().has_network());
         assert!(!hb.is_doze_style());
-        assert_eq!(hb.get_next_heartbeat_interval(false), MIN_HEART_INTERVAL);
+        assert_eq!(next_interval(&mut hb, false), MIN_HEART_INTERVAL);
     }
 
     /// `outer_setted_heart_` is process-wide, so the test that moves it takes
@@ -609,8 +618,8 @@ mod tests {
         stable(&mut hb);
         // even a computed interval is dropped while the app is in front
         hb.info_mut().cur_heart = MAX_HEART_INTERVAL - SUCCESS_STEP;
-        assert_eq!(hb.get_next_heartbeat_interval(true), MIN_HEART_INTERVAL);
-        assert_eq!(hb.get_next_heartbeat_interval(false), hb.info().cur_heart);
+        assert_eq!(next_interval(&mut hb, true), MIN_HEART_INTERVAL);
+        assert_eq!(next_interval(&mut hb, false), hb.info().cur_heart);
     }
 
     #[test]
@@ -854,7 +863,7 @@ mod tests {
         hb.info_mut().is_stable = false;
         hb.info_mut().cur_heart = MIN_HEART_INTERVAL + HEART_STEP;
         assert_eq!(
-            hb.get_next_heartbeat_interval(false),
+            next_interval(&mut hb, false),
             MIN_HEART_INTERVAL + HEART_STEP
         );
         hb.on_longlink_disconnect(0);
@@ -967,10 +976,10 @@ mod tests {
         stable(&mut hb);
 
         hb.info_mut().cur_heart = MAX_HEART_INTERVAL + 1;
-        assert_eq!(hb.get_next_heartbeat_interval(false), MIN_HEART_INTERVAL);
+        assert_eq!(next_interval(&mut hb, false), MIN_HEART_INTERVAL);
 
         hb.info_mut().cur_heart = MIN_HEART_INTERVAL - 1;
-        assert_eq!(hb.get_next_heartbeat_interval(false), MIN_HEART_INTERVAL);
+        assert_eq!(next_interval(&mut hb, false), MIN_HEART_INTERVAL);
     }
 
     #[test]
