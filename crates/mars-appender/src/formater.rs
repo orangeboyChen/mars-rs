@@ -16,8 +16,13 @@ use mars_core::PtrBuffer;
 
 use crate::config::{LogLevel, XLoggerInfo};
 
-/// `levelStrings[]` in `formater.cc` / `ConsoleLog.cc`.
-pub(crate) const LEVEL_STRINGS: [&str; 6] = ["V", "D", "I", "W", "E", "F"];
+/// `levelStrings[]` in `formater.cc` / `ConsoleLog.cc`, plus the one level the
+/// C++ array has no string for: `kLevelNone` is 6 and `kLevelFatal` is the last
+/// entry, so `levelStrings[_info->level]` reads one past the end for it. A
+/// record of that level is not impossible — `Xlog.logWrite2` hands the port
+/// whatever `Xlog.LEVEL_*` the caller passed — and the port writes `N` where
+/// the C++ reads out of bounds.
+pub(crate) const LEVEL_STRINGS: [&str; 7] = ["V", "D", "I", "W", "E", "F", "N"];
 
 /// `mars::comm::ExtractFileName` — the part of `_path` after the last
 /// `/` or `\`.
@@ -194,6 +199,37 @@ mod tests {
             timestamp.ends_with(".123"),
             "millis of 123456 usec: {timestamp}"
         );
+    }
+
+    #[test]
+    fn a_record_of_the_level_that_disables_logging_has_a_string() {
+        // `kLevelNone` (6) is one past the C++ `levelStrings[]`, which stops at
+        // `kLevelFatal`: the C++ reads out of bounds, the port used to panic.
+        let mut backing = [0u8; 16 * 1024];
+        let mut buf = PtrBuffer::new(&mut backing);
+        log_formater(Some(&info(LogLevel::None)), Some("body"), &mut buf);
+
+        let s = std::str::from_utf8(&buf.as_slice()[..buf.len()]).unwrap();
+        assert!(s.starts_with("[N]["), "{s}");
+        assert!(s.contains("][100, 200*][tag][hello.cc:42, main]["), "{s}");
+        assert!(s.ends_with("body\n"), "{s}");
+    }
+
+    #[test]
+    fn every_level_has_a_string() {
+        // The array is indexed with the level, so a level with no string is a
+        // panic on the write path.
+        for level in [
+            LogLevel::Verbose,
+            LogLevel::Debug,
+            LogLevel::Info,
+            LogLevel::Warn,
+            LogLevel::Error,
+            LogLevel::Fatal,
+            LogLevel::None,
+        ] {
+            assert!(!LEVEL_STRINGS[level as usize].is_empty(), "{level:?}");
+        }
     }
 
     #[test]
