@@ -848,7 +848,15 @@ impl NetCore {
             }
             Task::CHANNEL_SHORT => {
                 let mut task = task.clone();
-                task.shortlink_fallback_hostlist = task.shortlink_host_list.clone();
+                // `task.shortlink_fallback_hostlist = task.shortlink_host_list;`
+                // is the `kChannelShort` arm of the C++'s switch and nothing
+                // else: the `!need_use_longlink_` path hands `StartTask` the
+                // task as it came in, so what a retry of it goes out on is
+                // whatever the app put there — for a task that put nothing,
+                // nowhere at all
+                if self.use_long_link {
+                    task.shortlink_fallback_hostlist = task.shortlink_host_list.clone();
+                }
                 self.shortlink.start_task_at(now, task, prepare)
             }
             _ => false,
@@ -2159,6 +2167,39 @@ mod tests {
         assert!(core.start_task_at(NOW, named));
         assert!(core.shortlink().has_task(7));
         assert!(rec.ended().is_empty());
+    }
+
+    /// `case Task::kChannelShort: task.shortlink_fallback_hostlist =
+    /// task.shortlink_host_list;` — the arm of the C++'s switch, which a core
+    /// that does not use the long link never reaches: its `StartTask` gets the
+    /// task as it came in, and a retry of it goes out on the hosts the app
+    /// asked for a fallback to.
+    #[test]
+    fn a_core_with_no_long_link_leaves_the_fallback_hosts_alone() {
+        let (mut core, _rec) = wired();
+        core.set_need_use_long_link(false);
+        let mut short = task(7);
+        short.channel_select = Task::CHANNEL_SHORT;
+
+        assert!(core.start_task_at(NOW, short));
+        assert!(
+            core.shortlink().tasks()[0]
+                .task
+                .shortlink_fallback_hostlist
+                .is_empty(),
+            "the C++ does not fill the fallback hosts in on this path"
+        );
+
+        // ... and with a long link, the short arm is the one that runs
+        let (mut core, _rec) = wired();
+        let mut short = task(7);
+        short.channel_select = Task::CHANNEL_SHORT;
+
+        assert!(core.start_task_at(NOW, short));
+        assert_eq!(
+            core.shortlink().tasks()[0].task.shortlink_fallback_hostlist,
+            vec![SHORT_HOST.to_string()]
+        );
     }
 
     #[test]
