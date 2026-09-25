@@ -404,17 +404,27 @@ pub fn singleton_message(replace: bool, handler: &MessageHandler, message: Messa
     let title = message.title;
     if let Some(queue) = queue(handler.queue) {
         let state = queue.lock();
+        // The title is matched on the queue entry and the payload is only
+        // locked to replace it, never to look at it: a periodic message is
+        // still in the queue while it runs — the C++ hands the very same
+        // `Message` to the handlers — and the dispatcher holds its lock. A
+        // `Mutex` is not reentrant, so a handler asking for its own message
+        // would stop the queue thread for good.
         if let Some(index) = state
             .messages
             .iter()
-            .position(|m| m.post.reg.seq == handler.seq && m.message.lock().unwrap().title == title)
+            .position(|m| m.post.reg.seq == handler.seq && m.title == title)
         {
             if replace {
                 let pending = Arc::clone(&state.messages[index].message);
-                let mut pending = pending.lock().unwrap();
-                pending.body1 = message.body1;
-                pending.body2 = message.body2;
-                pending.invoke = message.invoke;
+                // `try_lock`, for the same reason: a message that is being
+                // dispatched right now is left alone rather than waited for.
+                let locked = pending.try_lock();
+                if let Ok(mut pending) = locked {
+                    pending.body1 = message.body1;
+                    pending.body2 = message.body2;
+                    pending.invoke = message.invoke;
+                }
             }
             return state.messages[index].post;
         }
