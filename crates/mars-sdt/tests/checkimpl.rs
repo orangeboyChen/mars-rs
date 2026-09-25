@@ -14,16 +14,17 @@ fn an_answer_read_as_another_probe_is_that_probe_failing() {
     assert_eq!(dns.dns().1, 12);
     assert_eq!(dns.dns().2, ["1.2.3.4".to_owned()]);
     // the same answer, read as the three probes it is not
-    assert_eq!(dns.tcp(), (-1, false, 0));
+    assert_eq!(dns.tcp(), (-1, 0, false, 0));
     assert_eq!(dns.http(), (-1, 0, 0));
     assert_eq!(dns.ping(), (-1, 0, None));
 
     let tcp = Answer::Tcp {
-        error_code: 0,
+        sent: 0,
+        received: 0,
         is_noop_resp: true,
         rtt: 5,
     };
-    assert_eq!(tcp.tcp(), (0, true, 5));
+    assert_eq!(tcp.tcp(), (0, 0, true, 5));
     assert!(tcp.dns().2.is_empty());
     assert_eq!(tcp.http(), (-1, 0, 0));
     assert_eq!(tcp.ping(), (-1, 0, None));
@@ -35,7 +36,7 @@ fn an_answer_read_as_another_probe_is_that_probe_failing() {
     };
     assert_eq!(http.http(), (0, 200, 40));
     assert!(http.dns().2.is_empty());
-    assert_eq!(http.tcp(), (-1, false, 0));
+    assert_eq!(http.tcp(), (-1, 0, false, 0));
     assert_eq!(http.ping(), (-1, 0, None));
 
     let status = PingStatus::new(1.0, 0.0);
@@ -46,7 +47,7 @@ fn an_answer_read_as_another_probe_is_that_probe_failing() {
     };
     assert_eq!(ping.ping(), (0, 60, Some(&status)));
     assert!(ping.dns().2.is_empty());
-    assert_eq!(ping.tcp(), (-1, false, 0));
+    assert_eq!(ping.tcp(), (-1, 0, false, 0));
     assert_eq!(ping.http(), (-1, 0, 0));
 }
 
@@ -57,7 +58,7 @@ fn an_answer_nobody_gave_is_every_probe_failing() {
     let nothing = Answer::Nothing;
     assert!(nothing.dns().2.is_empty());
     assert_eq!(nothing.dns(), (-1, 0, [].as_slice()));
-    assert_eq!(nothing.tcp(), (-1, false, 0));
+    assert_eq!(nothing.tcp(), (-1, 0, false, 0));
     assert_eq!(nothing.http(), (-1, 0, 0));
     assert_eq!(nothing.ping(), (-1, 0, None));
 }

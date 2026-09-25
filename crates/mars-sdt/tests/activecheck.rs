@@ -59,7 +59,8 @@ fn slow(query: &Query) -> Answer {
             ips: vec!["1.1.1.1".to_owned(), "2.2.2.2".to_owned()],
         },
         Query::Tcp { .. } => Answer::Tcp {
-            error_code: 0,
+            sent: 0,
+            received: 0,
             is_noop_resp: true,
             rtt: 100,
         },
@@ -249,8 +250,10 @@ fn a_noop_that_did_not_go_out_is_a_send_error() {
         0,
     );
     let (mut ask, _) = stub(|query| match query {
+        // a noop that did not go out is not received on
         Query::Tcp { .. } => Answer::Tcp {
-            error_code: -1,
+            sent: -1,
+            received: 0,
             is_noop_resp: false,
             rtt: 9,
         },
@@ -268,6 +271,46 @@ fn a_noop_that_did_not_go_out_is_a_send_error() {
 }
 
 #[test]
+fn a_receive_that_failed_is_not_the_last_host_the_check_looks_at() {
+    let mut request = request_of(
+        link(&[("a.host", "1.1.1.1", 80), ("b.host", "2.2.2.2", 80)]),
+        CheckIPPorts::new(),
+        1000,
+    );
+    // `a.host` takes the noop and then fails the receive, and it takes longer
+    // than the whole run was given; `b.host` answers
+    let (mut ask, _) = stub(|query| match query {
+        Query::Tcp { ip, .. } if ip == "1.1.1.1" => Answer::Tcp {
+            sent: 0,
+            received: -1,
+            is_noop_resp: false,
+            rtt: 1200,
+        },
+        _ => Answer::Tcp {
+            sent: 0,
+            received: 0,
+            is_noop_resp: true,
+            rtt: 10,
+        },
+    });
+    let mut check = check_of(&request);
+    assert!(check.start_do_check(NetCheckType::TcpCheck, &mut request, &mut ask, 1, ""));
+
+    // two profiles, not one: the C++ `continue`s out of a receive that failed
+    assert_eq!(request.checkresult_profiles.len(), 2);
+    let failed = &request.checkresult_profiles[0];
+    assert_eq!(failed.ip, "1.1.1.1");
+    assert_eq!(failed.error_code, TcpErrCode::SndRcvErr.as_i32());
+    assert_eq!(failed.rtt, 0, "no round trip to report");
+    assert_eq!(request.checkresult_profiles[1].error_code, 0);
+
+    // and neither the status the run reports nor the timeout it has left is
+    // the failed receive's to decide: the 1200 ms it cost is not spent
+    assert_eq!(request.check_status, CheckStatus::CheckContinue);
+    assert_eq!(check.remaining(), 990);
+}
+
+#[test]
 fn an_answer_that_was_not_the_noops_is_a_response_error() {
     let mut request = request_of(
         link(&[("long.host", "1.2.3.4", 80)]),
@@ -276,7 +319,8 @@ fn an_answer_that_was_not_the_noops_is_a_response_error() {
     );
     let (mut ask, _) = stub(|query| match query {
         Query::Tcp { .. } => Answer::Tcp {
-            error_code: 0,
+            sent: 0,
+            received: 0,
             is_noop_resp: false,
             rtt: 9,
         },

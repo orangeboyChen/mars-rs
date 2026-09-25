@@ -215,12 +215,14 @@ impl Check {
                 port: port.port,
                 timeout_ms,
             });
-            let (sent, is_noop_resp, rtt) = answer.tcp();
+            let (sent, received, is_noop_resp, rtt) = answer.tcp();
 
             // `kSndRcvErr` for a noop that did not go out or that nothing came
             // back from, `kTcpRespErr` for an answer that was not the noop's:
-            // what the C++ records is never the socket's own error code.
-            let (error_code, rtt) = if sent < 0 {
+            // what the C++ records is never the socket's own error code, and
+            // `cost_time` is the C++'s, which it takes only for a round trip
+            // that worked.
+            let (error_code, rtt) = if sent < 0 || received < 0 {
                 (TcpErrCode::SndRcvErr.as_i32(), 0)
             } else if !is_noop_resp {
                 (TcpErrCode::TcpRespErr.as_i32(), rtt)
@@ -231,6 +233,15 @@ impl Check {
             profile.rtt = rtt;
 
             request.checkresult_profiles.push(profile);
+
+            // The C++ `continue`s on a receive that failed — and only on that:
+            // the profile is recorded, but neither the status the run reports
+            // nor the timeout it has left is the failed receive's to decide,
+            // so the next host is probed with the budget as it was.
+            if sent >= 0 && received < 0 {
+                continue;
+            }
+
             request.check_status = if error_code == 0 {
                 CheckStatus::CheckContinue
             } else {

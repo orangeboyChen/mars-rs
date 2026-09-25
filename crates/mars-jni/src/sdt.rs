@@ -307,7 +307,8 @@ mod tests {
                 ips: vec!["1.2.3.4".to_owned()],
             },
             Query::Tcp { .. } => Answer::Tcp {
-                error_code: 0,
+                sent: 0,
+                received: 0,
                 is_noop_resp: true,
                 rtt: 10,
             },
