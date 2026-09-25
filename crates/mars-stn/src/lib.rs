@@ -46,6 +46,11 @@
 //! ([`task_intercept`]): one alarm restarted by every change, and one table
 //! of answers that are good for a minute.
 //!
+//! The tenth slice is the check that gets the long link off a backup ip
+//! ([`netsource_timercheck`]): a periodic post that resolves the host the link
+//! is on and asks, at most so many times an hour, whether one of the other
+//! pairs is reachable now.
+//!
 //! Everything that needs the app callbacks (`net_core`, `longlink_task_manager`,
 //! `shortlink`, `stn_logic`) comes later.
 
@@ -101,6 +106,7 @@ pub mod longlink;
 pub mod longlink_connect_monitor;
 pub mod longlink_identify_checker;
 pub mod net_check_logic;
+pub mod netsource_timercheck;
 pub mod signalling_keeper;
 pub mod simple_ipport_sort;
 pub mod smart_heartbeat;
@@ -128,6 +134,7 @@ pub use net_check_logic::{
     LIMIT_COUNT, LIMIT_TIME_SPAN, MIN_CHECK_TIME_SPAN, MOST_RECENT_TASK_START_N, NET_CHECK_MODE,
     SECOND_RECENT_TASK_START_N, VALID_BITS_FILTER,
 };
+pub use netsource_timercheck::{NetSourceTimerCheck, INTERVAL_TIME, MAX_SPEED_TEST_COUNT, TIMEOUT};
 pub use signalling_keeper::{SignallingKeeper, DEFAULT_KEEP_TIME, DEFAULT_PERIOD};
 pub use simple_ipport_sort::{
     BanItem, IpPortItem, IpSourceType, Record, RecordItem, SimpleIpPortSort, BAN_FAIL_COUNT,
