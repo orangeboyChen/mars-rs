@@ -723,8 +723,11 @@ impl LongLinkTaskManager {
                 self.tasks.remove(at);
                 Some(RespHandle::Ended)
             }
-            // `kTaskFailHandleDefault` and anything the app made up: the C++'s
-            // `default:`, which fails the channel and not just the task
+            // `kTaskFailHandleDefault`, and `kTaskFailHandleTaskTimeout`
+            // together with anything else the app made up, which is the C++'s
+            // `default:`. Both fail the channel and not just the task, and
+            // both hand `__BatchErrorRespHandle` the code the decoder read --
+            // but they report different things to the app.
             TaskFailHandleType::Default | TaskFailHandleType::TaskTimeout => {
                 self.batch_error_resp_handle_at(
                     now,
@@ -737,10 +740,18 @@ impl LongLinkTaskManager {
                     },
                     true,
                 );
+                let reported = match handle {
+                    // `fun_notify_network_err_(..., err_code, ...)`: what the
+                    // app's own decoder read out of the body
+                    TaskFailHandleType::Default => err_code,
+                    // `default:` has no code of its own to name and reports
+                    // the handle
+                    made_up => made_up as i32,
+                };
                 self.notify_network_err(
                     &response.name,
                     ErrCmdType::EnDecode,
-                    handle as i32,
+                    reported,
                     &response.profile,
                 );
                 Some(still_there(self.has_task(taskid)))
@@ -2078,9 +2089,9 @@ mod tests {
     fn an_answer_the_app_could_not_read_fails_every_task_of_the_channel() {
         let mut manager = manager();
         let (_, ended, notified, down) = wire(&mut manager);
-        // `-1` is what the app read out of the body; only the task the answer
+        // `-7` is what the app read out of the body; only the task the answer
         // was about is failed with it
-        manager.set_buf2resp(|_task, _body| (-1, TaskFailHandleType::Default));
+        manager.set_buf2resp(|_task, _body| (-7, TaskFailHandleType::Default));
         manager.start_task_at(NOW, task(7), Task::CHANNEL_LONG);
         manager.start_task_at(NOW, task(8), Task::CHANNEL_LONG);
 
@@ -2097,14 +2108,36 @@ mod tests {
             *notified
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
-            vec![(CHANNEL.to_string(), ErrCmdType::EnDecode, -1)],
-            "the app is told what the *handle* was"
+            vec![(CHANNEL.to_string(), ErrCmdType::EnDecode, -7)],
+            "the app is told the code the decoder read, not the handle (-1)"
         );
         assert_eq!(
             *down.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
             vec![(CHANNEL.to_string(), DisconnectInternalCode::DecodeErr)]
         );
         assert_eq!(manager.retry_interval(), RETRY_INTERNAL);
+    }
+
+    #[test]
+    fn a_handle_with_no_arm_of_its_own_is_reported_as_itself() {
+        let mut manager = manager();
+        let (_, _, notified, _) = wire(&mut manager);
+        // `kTaskFailHandleTaskTimeout` is not one of the C++'s cases: it falls
+        // into `default:`, which names the handle and not the code
+        manager.set_buf2resp(|_task, _body| (-7, TaskFailHandleType::TaskTimeout));
+        manager.start_task_at(NOW, task(7), Task::CHANNEL_LONG);
+
+        manager.on_response_at(NOW + 100, answered(7, b"hello"));
+        assert_eq!(
+            *notified
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![(
+                CHANNEL.to_string(),
+                ErrCmdType::EnDecode,
+                TaskFailHandleType::TaskTimeout as i32
+            )]
+        );
     }
 
     #[test]
