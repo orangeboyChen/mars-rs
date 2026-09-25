@@ -61,8 +61,10 @@ env:
   XCFRAMEWORK_ZIP: MarsXlog.xcframework.zip
   NATIVE_ZIP: mars-android-native.zip
   XLOG_AAR: mars-xlog.aar
-  # What JitPack publishes the AAR as; see jitpack.yml.
-  JITPACK_GROUP: io.github.orangeboyChen
+  # What JitPack publishes the AAR as; see jitpack.yml. JitPack serves a
+  # repository under com.github.<owner>.<repo> whatever the pom's group is, so
+  # the build is asked for under both spellings.
+  JITPACK_GROUP: io.github.orangeboychen
   JITPACK_ARTIFACT: mars-rs
   NDK_VERSION: 27.1.12297006
   ANDROID_HOME: /usr/local/lib/android/sdk
@@ -224,11 +226,15 @@ jobs:
   apple:
     needs: version
     if: needs.version.outputs.skip != 'true'
-    runs-on: macos-latest
+    runs-on: macos-15
     env:
       RUSTFLAGS: '-D warnings'
     steps:
       - uses: actions/checkout@v4
+      - name: Show build environment
+        run: |
+          xcodebuild -version
+          swift --version 2>/dev/null | head -2
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the xcframework
@@ -248,20 +254,29 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '17'
       # `android-actions/setup-android` is deliberately not used: it installs
       # the long-removed `tools` SDK package, so its `sdkmanager` call exits
       # non-zero and the job fails before any Rust code is compiled. What the
-      # runner image ships is enough.
-      - name: Install the Android NDK
+      # runner image ships is enough — the reason orangeboyChen/mars installs
+      # the SDK by hand too.
+      - name: Install the Android SDK components
         run: |
           set -euo pipefail
-          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          SDKMANAGER=$(command -v sdkmanager || true)
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1 || true)
+          fi
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager not found under $ANDROID_HOME"
+            exit 1
+          fi
+          echo "sdkmanager: $SDKMANAGER"
           # `yes` is killed by SIGPIPE as soon as sdkmanager stops reading, and
           # under `pipefail` that 141 would fail the job although sdkmanager
           # itself succeeded.
-          { yes || true; } | "$sdkmanager" --licenses > /dev/null
-          "$sdkmanager" --install "ndk;${NDK_VERSION}"
+          { yes || true; } | "$SDKMANAGER" --licenses > /dev/null
+          "$SDKMANAGER" --install "platforms;android-34" "build-tools;34.0.0" "ndk;${NDK_VERSION}"
           test -d "$ANDROID_HOME/ndk/${NDK_VERSION}"
       - uses: Swatinem/rust-cache@v2
       - name: Build the native libraries
@@ -340,7 +355,9 @@ jobs:
   publish:
     needs: [version, apple, android, host]
     if: needs.version.outputs.skip != 'true'
-    runs-on: ubuntu-latest
+    # macOS so that the checksum is the one SwiftPM itself computes, the same
+    # way orangeboyChen/mars does it
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -352,10 +369,9 @@ jobs:
 
       - name: Compute the SPM checksum
         id: checksum
-        # `swift package compute-checksum` is a sha256 of the zip; this is the
-        # same number without needing a macOS runner for it.
         run: |
-          echo "checksum=$(sha256sum "dist/$XCFRAMEWORK_ZIP" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          CHECKSUM=$(swift package compute-checksum "dist/$XCFRAMEWORK_ZIP")
+          echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
 
       - name: Point Package.swift at this release
         if: needs.version.outputs.is_new == 'true'

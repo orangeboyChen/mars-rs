@@ -48,10 +48,21 @@ let package = Package(
         // `mars_xlog.h` become something Swift can call. It re-exports the C
         // module too, so `mars_xlog_*` stays available for the callers who
         // want it.
+        //
+        // The framework the static library needs and cannot name for itself:
+        // a Rust static library carries no link flags, and the time zone
+        // lookup of `iana-time-zone` calls `CFTimeZone*`. `import Foundation`
+        // would bring it in for this module's own sake; naming it is what
+        // keeps a caller who takes the C surface, or drops Foundation,
+        // linking. (The C++ project names libc++ and libz here; the port
+        // needs neither — it is Rust, and its zlib is `zlib-rs`.)
         .target(
             name: "MarsXlog",
             dependencies: ["MarsXlogFFI"],
-            path: "Sources/MarsXlog"
+            path: "Sources/MarsXlog",
+            linkerSettings: [
+                .linkedFramework("CoreFoundation"),
+            ]
         )
     ]
 )

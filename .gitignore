@@ -6,3 +6,4 @@ android/.gradle/
 android/build/
 android/mars-xlog/build/
 android/local.properties
+/dist
