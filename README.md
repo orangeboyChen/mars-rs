@@ -137,8 +137,8 @@ as `mars-core` and `mars-xlog`:
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen:mars-rs:v0.1.0")       // the whole port
-implementation("io.github.orangeboychen:mars-rs-xlog:v0.1.0")  // xlog alone
+implementation("io.github.orangeboychen:mars-rs:0.1.0")       // the whole port
+implementation("io.github.orangeboychen:mars-rs-xlog:0.1.0")  // xlog alone
 ```
 
 | AAR | artifact | what is in it |

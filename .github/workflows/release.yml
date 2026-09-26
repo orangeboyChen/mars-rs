@@ -583,7 +583,9 @@ jobs:
             echo "Package.swift PR: ${{ steps.package.outputs.pr || 'not needed, the tag exists already' }}"
             echo ""
             echo '```kotlin'
-            echo "implementation(\"$JITPACK_GROUP:$JITPACK_ARTIFACT:$TAG\")"
-            echo "implementation(\"$JITPACK_GROUP:$JITPACK_ARTIFACT_XLOG:$TAG\")"
+            # the version a consumer writes, without the "v" of the tag: the
+            # coordinate is a maven version, and the tag is not
+            echo "implementation(\"$JITPACK_GROUP:$JITPACK_ARTIFACT:${TAG#v}\")"
+            echo "implementation(\"$JITPACK_GROUP:$JITPACK_ARTIFACT_XLOG:${TAG#v}\")"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
