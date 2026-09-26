@@ -91,7 +91,10 @@ fn open(dir: &std::path::Path) {
         cache_dir: empty.as_ptr(),
         cache_days: 0,
     };
-    assert_eq!(mars_xlog_open(&cfg), MARS_XLOG_OK, "mars_xlog_open failed");
+    // SAFETY: `cfg` borrows the `CString`s above, which are alive across the
+    // call, and a null `cfg` is answered inside rather than dereferenced.
+    let opened = unsafe { mars_xlog_open(&cfg) };
+    assert_eq!(opened, MARS_XLOG_OK, "mars_xlog_open failed");
     // Another test may have raised the process-wide level.
     mars_xlog_set_level(0);
 }
@@ -102,14 +105,19 @@ fn open(dir: &std::path::Path) {
 /// window — the cost being measured is the one inside `mars_xlog_write`, not
 /// the cost of a host building its arguments.
 fn write(tag: &CStr, file: &CStr, func: &CStr, message: &CStr) {
-    mars_xlog_write(
-        2,
-        tag.as_ptr(),
-        file.as_ptr(),
-        func.as_ptr(),
-        42,
-        message.as_ptr(),
-    );
+    // SAFETY: the four pointers are borrowed from `CStr`s the caller keeps
+    // alive across the call, so each is null-terminated and readable for as
+    // long as the callee holds it.
+    unsafe {
+        mars_xlog_write(
+            2,
+            tag.as_ptr(),
+            file.as_ptr(),
+            func.as_ptr(),
+            42,
+            message.as_ptr(),
+        );
+    }
 }
 
 #[test]
