@@ -25,12 +25,20 @@ fn header_declares_every_exported_symbol() {
         "mars_xlog_write",
         "mars_xlog_flush",
         "mars_xlog_flush_sync",
+        "mars_xlog_flush_all",
         "mars_xlog_close",
         "mars_xlog_set_level",
         "mars_xlog_set_console_log",
+        "mars_xlog_set_console_log_instance",
         "mars_xlog_set_max_file_size",
+        "mars_xlog_set_max_file_size_instance",
         "mars_xlog_set_max_alive_duration",
+        "mars_xlog_set_max_alive_duration_instance",
         "mars_xlog_current_log_path",
+        "mars_xlog_current_log_cache_path",
+        "mars_xlog_oneshot_flush",
+        "mars_xlog_make_logfile_name",
+        "mars_xlog_getfilepath_from_timespan",
     ] {
         assert!(
             header.contains(symbol),
@@ -70,6 +78,32 @@ fn header_declares_the_types_and_config_fields() {
         header.contains("typedef struct"),
         "MarsXLogConfig must be a C struct"
     );
+}
+
+/// `mars_xlog_oneshot_flush` answers a `TFileIOAction`, so the header's
+/// `MARS_XLOG_ACTION_*` values are part of the contract too.
+#[test]
+fn action_codes_match_the_header_defines() {
+    use mars_appender::FileIoAction;
+
+    let header = header();
+    for (name, value) in [
+        ("MARS_XLOG_ACTION_NONE", FileIoAction::None),
+        ("MARS_XLOG_ACTION_SUCCESS", FileIoAction::Success),
+        ("MARS_XLOG_ACTION_UNNECESSARY", FileIoAction::Unnecessary),
+        ("MARS_XLOG_ACTION_OPEN_FAILED", FileIoAction::OpenFailed),
+        ("MARS_XLOG_ACTION_READ_FAILED", FileIoAction::ReadFailed),
+        ("MARS_XLOG_ACTION_WRITE_FAILED", FileIoAction::WriteFailed),
+        ("MARS_XLOG_ACTION_CLOSE_FAILED", FileIoAction::CloseFailed),
+        ("MARS_XLOG_ACTION_REMOVE_FAILED", FileIoAction::RemoveFailed),
+    ] {
+        let needle = format!("{name} {value}", value = value as i32);
+        assert!(
+            header.contains(&needle),
+            "include/mars_xlog.h out of sync: expected `{name}` = {}",
+            value as i32
+        );
+    }
 }
 
 #[test]

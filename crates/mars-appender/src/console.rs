@@ -6,7 +6,7 @@
 use std::io::Write;
 
 use crate::config::XLoggerInfo;
-use crate::formater::{extract_file_name, LEVEL_STRINGS};
+use crate::formater::{extract_file_name, extract_function_name, LEVEL_STRINGS};
 
 /// `mars::xlog::ConsoleLog`.
 ///
@@ -20,7 +20,10 @@ pub(crate) fn console_log(info: Option<&XLoggerInfo>, log: &str) {
     let level = LEVEL_STRINGS[info.level as usize];
     let tag = info.tag.as_deref().unwrap_or("");
     let file_name = extract_file_name(info.filename.as_deref());
-    let func_name = info.func_name.as_deref().unwrap_or("");
+    // `ConsoleLog.cc` trims the name on every platform (`char
+    // strFuncName[128]` filled by `ExtractFunctionName`), unlike `formater.cc`,
+    // which only does it on Windows.
+    let func_name = extract_function_name(info.func_name.as_deref());
 
     // `eprintln!` panics when stderr cannot be written (EPIPE, full device).
     // On the async writer thread there is no panic barrier, so that one panic

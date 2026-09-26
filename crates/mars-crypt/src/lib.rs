@@ -199,7 +199,18 @@ struct KeyPair {
 ///
 /// Returns `None` for any failure; the caller then keeps `is_crypt_ == false`,
 /// which mirrors the C++ early returns.
+/// `uECC_make_key` + `uECC_shared_secret`: a fresh client key pair per
+/// process, so two runs never agree on a key.
 fn make_key(svr_pubkey: &[u8]) -> Option<KeyPair> {
+    let mut rng = k256::elliptic_curve::rand_core::OsRng;
+    let client_pri = k256::SecretKey::random(&mut rng);
+    derive_key(svr_pubkey, &client_pri)
+}
+
+/// The deterministic half of [`make_key`]: the same handshake with the client
+/// private key *given* instead of generated, which is what lets a
+/// known-answer vector pin the shared secret and the TEA key it becomes.
+fn derive_key(svr_pubkey: &[u8], client_pri: &k256::SecretKey) -> Option<KeyPair> {
     use k256::elliptic_curve::sec1::ToEncodedPoint;
 
     if svr_pubkey.len() != CLIENT_PUBKEY_LEN {
@@ -214,8 +225,6 @@ fn make_key(svr_pubkey: &[u8]) -> Option<KeyPair> {
 
     let server_pub = k256::PublicKey::from_sec1_bytes(&sec1).ok()?;
 
-    let mut rng = k256::elliptic_curve::rand_core::OsRng;
-    let client_pri = k256::SecretKey::random(&mut rng);
     let client_pub = client_pri.public_key();
 
     let encoded = client_pub.to_encoded_point(false);
@@ -982,6 +991,68 @@ mod tests {
         assert_eq!(out.len(), 16);
         assert_eq!(remain, 0);
         assert_ne!(out, payload);
+    }
+
+    /// The handshake is the one part of the crypt layer only an outside answer
+    /// can check: [`make_key`] generates a random client key, so every
+    /// in-process assertion about the shared secret is satisfied by whatever
+    /// the code happens to produce. This pins the whole chain — secp256k1
+    /// ECDH, `memcpy(tea_key_, ecdh_key, sizeof(tea_key_))` on a little-endian
+    /// host, `__TeaEncrypt` — to a vector computed outside this crate (the
+    /// curve arithmetic and TEA re-implemented from their definitions, not
+    /// read off `k256`).
+    #[test]
+    fn ecdh_matches_an_externally_computed_vector() {
+        // `X || Y` of `0x4a7b…5a4b * G`: the 128 hex characters a host passes
+        // to `LogCrypt::new`.
+        let svr_pubkey = hex_to_buffer(
+            "cc7f35af89a891a4bd45a9f73b6783a66fef522e2bfdb2d669676cd546138b8\
+             c5834d0a4f864bcab2ba50f98834646dd0b0f37bb4566922df8f60fcae5d81d90",
+        )
+        .unwrap();
+        // The generated client key is the only random part, so it is supplied
+        // here instead: `0x03a2…4a3`.
+        let client_pri = k256::SecretKey::from_slice(
+            &hex_to_buffer("03a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b4c3d2e1f0a9b8c7d6e5f4a3")
+                .unwrap(),
+        )
+        .unwrap();
+
+        let pair = derive_key(&svr_pubkey, &client_pri).expect("the handshake must succeed");
+
+        // `client_pubkey_` = `0x03a2…4a3 * G`, the 64 bytes every header
+        // carries in the clear.
+        let expected_pubkey = hex_to_buffer(
+            "be7288310928da1c217ecf507df5cc36472ce78f2916276cb90f8d2a0ad0f71\
+             f10ef0530019817aaa2726afccfa9724f7a48178d6e0888b513e8c691494d350c",
+        )
+        .unwrap();
+        assert_eq!(&pair.client_pubkey[..], &expected_pubkey[..]);
+
+        // `x(client_priv * server_pub)` = `cff28578…91be`, and the TEA key is
+        // the first 16 of those bytes read as four **little-endian** `u32`s —
+        // so `tea_key_[0]` is the *high* four bytes reversed, `cff28578` →
+        // `0x7885f2cf`. Read it the other way round and everything still
+        // encrypts and still decrypts in-process, which is exactly why the
+        // answer has to come from outside this crate.
+        assert_eq!(
+            pair.tea_key,
+            [0x7885_f2cf, 0x2726_3841, 0xcf97_7dac, 0x2c9d_80f2]
+        );
+
+        // ... and the key it produced encrypts to what the C++ encrypts to:
+        // `"mars tea"` under this key.
+        let crypt = LogCrypt {
+            seq_: 0,
+            tea_key_: pair.tea_key,
+            client_pubkey_: pair.client_pubkey,
+            is_crypt_: true,
+        };
+        let mut out = Vec::new();
+        let mut remain = 0;
+        crypt.crypt_async_log(b"mars tea", &mut out, &mut remain);
+        assert_eq!(remain, 0);
+        assert_eq!(out, hex_to_buffer("0a4cd25aef241592").unwrap());
     }
 
     #[test]

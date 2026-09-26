@@ -195,6 +195,24 @@ pub(crate) fn format_local_timestamp(tv_sec: i64) -> String {
     }
 }
 
+/// `__DATE__` / `__TIME__` of `appender.cc`'s open and close banners: **when
+/// this crate was built**, not when the appender was opened.
+///
+/// The C++ splices the compiler's `__DATE__` / `__TIME__` into the banner, so a
+/// log file says which build produced it. Rust has no such constant, so
+/// `build.rs` captures the time of the build and this reads it back. A
+/// translation unit keeps its stamp until it is recompiled, and so does this.
+pub(crate) fn build_stamp() -> (String, String) {
+    let built_at: i64 = env!("MARS_XLOG_BUILD_TIMESTAMP").parse().unwrap_or(0);
+    match Local.timestamp_opt(built_at, 0).single() {
+        Some(dt) => (
+            dt.format("%Y-%m-%d").to_string(),
+            dt.format("%H:%M:%S").to_string(),
+        ),
+        None => ("1970-01-01".to_owned(), "00:00:00".to_owned()),
+    }
+}
+
 /// The day-rollover check of `XloggerAppender::__OpenLogFile`
 /// (`filetm.tm_year == tcur.tm_year && filetm.tm_mon == ...`).
 pub(crate) fn same_local_day(a: i64, b: i64) -> bool {

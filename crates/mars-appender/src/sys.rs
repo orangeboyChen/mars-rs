@@ -4,7 +4,8 @@
 //! | C++                                                   | Rust                |
 //! |-------------------------------------------------------|---------------------|
 //! | `gettid()` / `pthread_threadid_np` / `GetCurrentThreadId` | [`thread_id`]   |
-//! | `boost::filesystem::space(dir).available`             | [`available_space`] |
+//! | `boost::filesystem::space(dir)`                          | [`space_info`]  |
+//! | `boost::filesystem::space(dir).available`                | [`available_space`] |
 //!
 //! Both are `unsafe` underneath (raw libc / win32 calls), so they are fenced
 //! off in this module — the rest of the crate stays `#![deny(unsafe_code)]`.
@@ -129,13 +130,16 @@ fn os_main_thread_id() -> i64 {
     }
 }
 
-/// Free space of the filesystem holding `path`, in bytes.
+/// `boost::filesystem::space(dir)` — `(capacity, free, available)` in bytes.
 ///
-/// `boost::filesystem::space(dir).available` — `statvfs`' `f_bavail * f_frsize`
-/// on unix, `GetDiskFreeSpaceExW`'s "available to caller" on Windows. Returns
-/// `None` when the query fails, which the caller treats as "unknown" rather
-/// than "no space".
-pub fn available_space(path: &Path) -> Option<u64> {
+/// `statvfs` on unix (`f_blocks` / `f_bfree` / `f_bavail`, each times
+/// `f_frsize`) and `GetDiskFreeSpaceExW` on Windows. Returns `None` when the
+/// query fails, which the caller treats as "unknown" rather than "no space".
+///
+/// `appender.cc` prints all three in its `cache dir space info` / `log dir
+/// space info` records, and compares `available` against the 1 GiB threshold
+/// of `__CacheLogs`.
+pub fn space_info(path: &Path) -> Option<(u64, u64, u64)> {
     #[cfg(unix)]
     {
         use std::ffi::CString;
@@ -146,9 +150,14 @@ pub fn available_space(path: &Path) -> Option<u64> {
         if unsafe { libc::statvfs(path.as_ptr(), &mut stat) } != 0 {
             return None;
         }
-        // `f_bavail` is the space available to unprivileged users, i.e. what
-        // `boost::filesystem::space_info::available` reports.
-        Some((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64))
+        let block = stat.f_frsize as u64;
+        Some((
+            (stat.f_blocks as u64).saturating_mul(block),
+            (stat.f_bfree as u64).saturating_mul(block),
+            // `f_bavail` is the space available to unprivileged users, i.e.
+            // what `boost::filesystem::space_info::available` reports.
+            (stat.f_bavail as u64).saturating_mul(block),
+        ))
     }
 
     #[cfg(windows)]
@@ -167,15 +176,11 @@ pub fn available_space(path: &Path) -> Option<u64> {
 
         let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
         let mut available: u64 = 0;
-        let ok = unsafe {
-            GetDiskFreeSpaceExW(
-                wide.as_ptr(),
-                &mut available,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        (ok != 0).then_some(available)
+        let mut capacity: u64 = 0;
+        let mut free: u64 = 0;
+        let ok =
+            unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut available, &mut capacity, &mut free) };
+        (ok != 0).then_some((capacity, free, available))
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -183,6 +188,15 @@ pub fn available_space(path: &Path) -> Option<u64> {
         let _ = path;
         None
     }
+}
+
+/// Free space of the filesystem holding `path`, in bytes.
+///
+/// `boost::filesystem::space(dir).available` — the `available` third of
+/// [`space_info`]. Returns `None` when the query fails, which the caller treats
+/// as "unknown" rather than "no space".
+pub fn available_space(path: &Path) -> Option<u64> {
+    space_info(path).map(|(_capacity, _free, available)| available)
 }
 
 #[cfg(test)]
