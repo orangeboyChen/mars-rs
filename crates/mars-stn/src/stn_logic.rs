@@ -572,6 +572,9 @@ impl StnLogic {
         core.shortlink().set_make_sure_authed(move |host, user_id| {
             locked(&wired).makesure_authed(host, user_id)
         });
+        // the short link draws one for every try, where the long link keeps the
+        // one it drew for the task
+        core.shortlink().set_gen_sequence_id(gen_sequence_id);
 
         let wired = Arc::clone(bridge);
         core.set_on_task_end(move |taskid, user_id, err_type, err_code, profile| {
