@@ -1,9 +1,14 @@
+// The constants below carry the name the C++ project's Java gives them, spelled
+// the way Kotlin spells a constant: `K_PING_CHECK` there is `K_PING_CHECK` here.
+// The JNI reaches a constant by the number it carries and not by its name, so
+// nothing on the Rust side had to change with them.
+
 package io.github.orangeboychen.marsrs.sdt
 
 import io.github.orangeboychen.marsrs.Mars
 
 /**
- * 信令探测工具类
+ * The signal detection utility class
  *
  * Two `external`s, both of them statics of this very class — that is what makes
  * them the `Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_*` symbols
@@ -18,45 +23,45 @@ object SdtLogic {
     }
 
     object NetCheckType {
-        const val kPingCheck: Int = 0
-        const val kDnsCheck: Int = 1
-        const val kNewDnsCheck: Int = 2
-        const val kTcpCheck: Int = 3
-        const val kHttpCheck: Int = 4
+        const val K_PING_CHECK: Int = 0
+        const val K_DNS_CHECK: Int = 1
+        const val K_NEW_DNS_CHECK: Int = 2
+        const val K_TCP_CHECK: Int = 3
+        const val K_HTTP_CHECK: Int = 4
     }
 
     object TcpCheckErrCode {
-        const val kTcpSucc: Int = 0
-        const val kTcpNonErr: Int = 1
-        const val kSelectErr: Int = -1
-        const val kPipeIntr: Int = -2
-        const val kSndRcvErr: Int = -3
-        const val kAssertErr: Int = -4
-        const val kTimeoutErr: Int = -5
-        const val kSelectExpErr: Int = -6
-        const val kPipeExp: Int = -7
-        const val kConnectErr: Int = -8
-        const val kTcpRespErr: Int = -9
+        const val K_TCP_SUCC: Int = 0
+        const val K_TCP_NON_ERR: Int = 1
+        const val K_SELECT_ERR: Int = -1
+        const val K_PIPE_INTR: Int = -2
+        const val K_SND_RCV_ERR: Int = -3
+        const val K_ASSERT_ERR: Int = -4
+        const val K_TIMEOUT_ERR: Int = -5
+        const val K_SELECT_EXP_ERR: Int = -6
+        const val K_PIPE_EXP: Int = -7
+        const val K_CONNECT_ERR: Int = -8
+        const val K_TCP_RESP_ERR: Int = -9
     }
 
-    /** 信令探测回调接口，启动信令探测 */
+    /** The signal detection callback interface, which starts a signal detection */
     interface ICallBack {
         fun reportSignalDetectResults(resultsJson: String?)
     }
 
     private var callBack: ICallBack? = null
 
-    /** 设置信令探测回调实例，探测结果将通过该实例通知上层 */
+    /** Sets the signal detection callback instance: it is how the results reach the app */
     @JvmStatic
     fun setCallBack(callback: ICallBack?) {
         callBack = callback
     }
 
-    /** 设置一个Http连通状态探测的URI */
+    /** Sets the URI of an HTTP connectivity check */
     @JvmStatic
     external fun setHttpNetcheckCGI(requestURI: String?)
 
-    /** 获取底层已加载模块 */
+    /** Gets the modules the native side has loaded */
     @JvmStatic
     private external fun getLoadLibraries(): ArrayList<String>?
 

@@ -86,7 +86,7 @@ impl Default for AlarmState {
 ///
 /// `false` when the message could not be posted.
 pub fn on_system_alarm(id: i64) -> bool {
-    let queue = crate::message_queue::KDefQueueID;
+    let queue = crate::message_queue::DEFAULT_QUEUE_ID;
     let post = broadcast_message(
         queue,
         Message::new(ALARM_SYSTEM_TITLE, "Alarm.onAlarm")
@@ -94,7 +94,7 @@ pub fn on_system_alarm(id: i64) -> bool {
             .with_body2(queue),
         MessageTiming::Immediate,
     );
-    post != crate::message_queue::KNullPost
+    post != crate::message_queue::NULL_POST
 }
 
 /// A one-shot timer.
@@ -161,7 +161,7 @@ impl Alarm {
         let queue = self
             .handler
             .map(|h| h.queue)
-            .unwrap_or(crate::message_queue::KDefQueueID);
+            .unwrap_or(crate::message_queue::DEFAULT_QUEUE_ID);
         let mut alarm = self.state.lock().unwrap();
         // `INVAILD_SEQ != seq_`: already waiting, and the C++ refuses to
         // start a second time.
@@ -177,7 +177,7 @@ impl Alarm {
                 .with_body2(queue),
             MessageTiming::After(after_ms as u64),
         );
-        if post == crate::message_queue::KNullPost {
+        if post == crate::message_queue::NULL_POST {
             return false;
         }
         alarm.post = Some(post);

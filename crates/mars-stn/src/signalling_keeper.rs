@@ -194,12 +194,9 @@ impl SignallingKeeper {
         }
         // `xassert2(now >= last_touch_time_)`, and the C++ treats a clock that
         // went backwards the same way it treats a `keepTime` that ran out.
-        let last = match self.last_touch_time {
-            Some(last) => last,
-            None => {
-                self.keeping = false;
-                return;
-            }
+        let Some(last) = self.last_touch_time else {
+            self.keeping = false;
+            return;
         };
         if now < last || now.saturating_sub(last) > keep_time() {
             self.keeping = false;

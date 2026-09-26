@@ -53,20 +53,24 @@ public struct MarsXlogConfiguration {
     /// The level the appender is opened at; `mars_xlog_set_level` after the
     /// open, which is where the C ABI keeps it.
     public var level: MarsXlogLevel = .info
+    /// Whether the appender writes on its own thread or on the caller's.
     public var mode: MarsXlogMode = .async
+    /// Where the log files go: the one field with no default.
     public var logDirectory: String
     /// Written verbatim, as the C++ does: no default.
     public var namePrefix: String = ""
     /// Empty means the log is written unencrypted.
     public var publicKey: String = ""
+    /// How the log is compressed; `.zlib` is what the C++ defaults to.
     public var compression: MarsXlogCompression = .zlib
     /// `0` keeps the appender's own default (6).
     public var compressionLevel: Int32 = 0
     /// `nil` puts the mmap cache in the log directory.
-    public var cacheDirectory: String? = nil
+    public var cacheDirectory: String?
     /// `0` keeps every file.
     public var cacheDays: Int32 = 0
 
+    /// The only way in: every field but `logDirectory` has a default of its own.
     public init(logDirectory: String) {
         self.logDirectory = logDirectory
     }
@@ -78,6 +82,7 @@ public struct MarsXlogInstance {
     /// The handle, as `mars_xlog_new_instance` gave it.
     public let handle: Int64
 
+    /// Wraps a handle the C ABI has already answered with.
     public init(handle: Int64) {
         self.handle = handle
     }
@@ -250,10 +255,16 @@ public enum MarsXlog {
         namePrefix.withCString { mars_xlog_release_instance($0) }
     }
 
+    /// The buffer `mars_xlog_current_log_path` writes into; a path never fills
+    /// it, and the C ABI answers a length instead of a pointer when it would.
+    private static let pathBufferSize = 1_024
+
     private static func path(of body: (UnsafeMutablePointer<CChar>, UInt32) -> Int32) -> String? {
-        var buffer = [CChar](repeating: 0, count: 1024)
+        var buffer = [CChar](repeating: 0, count: pathBufferSize)
         let written = body(&buffer, UInt32(buffer.count))
-        guard written > 0 else { return nil }
+        guard written > 0 else {
+            return nil
+        }
         return String(cString: buffer)
     }
 }

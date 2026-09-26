@@ -128,7 +128,7 @@ mod tests {
     fn ref_round_trip() {
         let value = 42u32;
         // SAFETY: `&value` is a valid, aligned, initialised `u32`.
-        assert_eq!(unsafe { ptr_to_ref(&value as *const u32) }, Some(&42));
+        assert_eq!(unsafe { ptr_to_ref(std::ptr::from_ref(&value)) }, Some(&42));
         // SAFETY: null is explicitly allowed by the contract.
         assert_eq!(unsafe { ptr_to_ref(std::ptr::null::<u32>()) }, None);
     }

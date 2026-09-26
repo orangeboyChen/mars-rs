@@ -948,21 +948,18 @@ impl ShortLink {
             return Read::Done(Err(RunFail::Canceld));
         }
 
-        let bytes = match read {
-            Ok(bytes) => bytes,
-            Err(_) => {
-                // a read that timed out: on quic, that is the end of the run
-                if self.protocol() == Task::TRANSPORT_PROTOCOL_QUIC {
-                    self.keep_alive = false;
-                    return self.over(
-                        RunFail::Socket {
-                            err_code: ECT_SOCKET_RECV_ERR,
-                        },
-                        true,
-                    );
-                }
-                return Read::Again;
+        let Ok(bytes) = read else {
+            // a read that timed out: on quic, that is the end of the run
+            if self.protocol() == Task::TRANSPORT_PROTOCOL_QUIC {
+                self.keep_alive = false;
+                return self.over(
+                    RunFail::Socket {
+                        err_code: ECT_SOCKET_RECV_ERR,
+                    },
+                    true,
+                );
             }
+            return Read::Again;
         };
         if bytes.is_empty() {
             if self.protocol() == Task::TRANSPORT_PROTOCOL_QUIC {

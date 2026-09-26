@@ -40,3 +40,556 @@ tempfile = "3"
 serde_json = "1"
 jni = "0.21"
 md5 = "0.7"
+
+# ---------------------------------------------------------------------------
+# Lints — the Rust half of the gate that `.swiftlint.yml` and `detekt.yml` are
+# for Swift and Kotlin.
+#
+# CI runs `cargo clippy --workspace --all-targets -- -D warnings` with
+# `RUSTFLAGS: '-D warnings'`, so a warning is already an error and every level
+# below is `deny` to make that true for `cargo test` and `cargo build` too, not
+# only for the clippy job.
+#
+# The set was then re-measured end to end: every workspace crate rebuilt from
+# scratch with the whole table at `warn`, so that a lint hidden behind a crate
+# that cargo never got round to compiling could not pass unmeasured.
+#
+# The rule the list was built by: enable every lint that fires zero times on
+# the workspace today, and nothing else. There is deliberately no `#[allow]`
+# anywhere in the sources — a lint that fires is either fixed or left out of
+# these tables, never silenced at the site.
+#
+# Every entry was measured with
+#   cargo clippy --workspace --all-targets --message-format=json
+# over the whole lint space (all 821 clippy lints plus all 53 rustc
+# allow-by-default lints turned on at once), so the counts quoted in the
+# comments are the findings that made the cut-off lints fail, not guesses.
+# ---------------------------------------------------------------------------
+
+[workspace.lints.rust]
+# The whole future-incompatibility group: nothing here may warn today.
+future_incompatible = "deny"
+# `use foo::bar` where `foo` is neither `crate`, `self`, nor an extern crate.
+absolute_paths_not_starting_with_crate = "deny"
+# `-1i32.pow(2)`: a `-` that binds where it reads as if it did not.
+ambiguous_negative_literals = "deny"
+# A closure returning `async {}` where an async closure would do.
+closure_returning_async_block = "deny"
+# An item that still compiles today but will not in a later edition.
+deprecated_in_future = "deny"
+# A call that is safe in edition 2021 and unsafe in edition 2024.
+deprecated_safe_2024 = "deny"
+# A `Deref` whose target is a supertrait object that upcasting now shadows.
+deref_into_dyn_supertrait = "deny"
+# `expr` in a macro matcher, which edition 2024 parses differently.
+edition_2024_expr_fragment_specifier = "deny"
+# `T: 'a` bounds the compiler infers on its own.
+explicit_outlives_requirements = "deny"
+# A call across the FFI boundary that may unwind — the JNI and C ABI crates
+# live on exactly that boundary.
+ffi_unwind_calls = "deny"
+# `if let` whose temporary is dropped earlier in edition 2024.
+if_let_rescope = "deny"
+# `impl Trait` capturing more lifetimes in edition 2024 than intended.
+impl_trait_overcaptures = "deny"
+# A `use<>` precise-capturing list that only restates the default.
+impl_trait_redundant_captures = "deny"
+# An identifier that became a keyword in edition 2018.
+keyword_idents_2018 = "deny"
+# `#[macro_use] extern crate`, which a plain `use` replaces.
+macro_use_extern_crate = "deny"
+# A macro matcher no transcriber can ever match.
+meta_variable_misuse = "deny"
+# An identifier outside ASCII.
+non_ascii_idents = "deny"
+# A lifetime bound the compiler already infers.
+redundant_lifetimes = "deny"
+# A closure capture that edition 2021 changed.
+rust_2021_incompatible_closure_captures = "deny"
+# An or-pattern whose bindings edition 2021 changed.
+rust_2021_incompatible_or_patterns = "deny"
+# A `#`-prefixed token that means something else in edition 2021.
+rust_2021_prefixes_incompatible_syntax = "deny"
+# A name the edition 2021 prelude added collides with.
+rust_2021_prelude_collisions = "deny"
+# A `#` inside a guarded string literal, which edition 2024 rejects.
+rust_2024_guarded_string_incompatible_syntax = "deny"
+# A pattern edition 2024 parses differently.
+rust_2024_incompatible_pat = "deny"
+# A name the edition 2024 prelude added collides with.
+rust_2024_prelude_collisions = "deny"
+# A binding whose value is `()`.
+unit_bindings = "deny"
+# A type that is reachable but cannot be named.
+unnameable_types = "deny"
+# `#![feature(..)]`: nothing in this port may need a nightly compiler.
+unstable_features = "deny"
+# An `extern crate` that is never used.
+unused_extern_crates = "deny"
+# `use foo::{bar}` — braces around a single item.
+unused_import_braces = "deny"
+# A lifetime parameter that is never used.
+unused_lifetimes = "deny"
+# A `macro_rules!` that is never expanded.
+unused_macro_rules = "deny"
+# An enum whose variants differ wildly in size, which makes every value pay for
+# the largest one.
+variant_size_differences = "deny"
+
+[workspace.lints.clippy]
+# Clippy's own default set — correctness, suspicious, style, complexity and
+# perf — promoted from warning to error.
+all = "deny"
+
+# -- allocation and conversion ----------------------------------------------
+# `alloc::` where `core::` would do.
+alloc_instead_of_core = "deny"
+# `try_from` where a bounds check is done by hand.
+checked_conversions = "deny"
+# A cast that silently loses precision, e.g. `u64 as f32`.
+cast_precision_loss = "deny"
+# A cast from a pointer to a more strictly aligned pointer.
+cast_ptr_alignment = "deny"
+# `&self`-taking `as_ptr` then cast to `*mut T`.
+as_ptr_cast_mut = "deny"
+# `ptr as *const _` / `ptr as *mut _`.
+as_pointer_underscore = "deny"
+# `x as _`, a cast that does not say what it casts to.
+as_underscore = "deny"
+# A binding typed one way and cast to another every time it is used.
+needless_type_cast = "deny"
+# A function pointer cast to an integer.
+fn_to_numeric_cast_any = "deny"
+# `transmute` from a pointer to a pointer, or a reference to a reference.
+transmute_ptr_to_ptr = "deny"
+# `transmute` to or from a type whose representation is not defined.
+transmute_undefined_repr = "deny"
+# Tuple/array conversions done by hand instead of `.into()`.
+tuple_array_conversions = "deny"
+
+# -- control flow ------------------------------------------------------------
+# `if cond { 1 } else { 0 }`.
+bool_to_int_with_if = "deny"
+# An `if` whose branches all end in the same statements.
+branches_sharing_code = "deny"
+# `else { if .. }` that collapses into `else if`.
+collapsible_else_if = "deny"
+# A chain of `<`/`>` that a `match` on `Ordering` would say in one place.
+comparison_chain = "deny"
+# An `else` divergence written as `let x = if .. else { return }` instead of
+# `let .. else`.
+manual_let_else = "deny"
+# `match bool { true => .., false => .. }`.
+match_bool = "deny"
+# A wildcard arm matching an enum with a single variant.
+match_wildcard_for_single_variants = "deny"
+# `if let` that a `==` would say more directly.
+equatable_if_let = "deny"
+# `panic!` and nothing else in the then-branch of an `if`.
+manual_assert = "deny"
+# `loop { }` with no `break`, which may not be the intent.
+infinite_loop = "deny"
+# An iterator that may never end.
+maybe_infinite_iter = "deny"
+# `while` whose condition compares floats.
+while_float = "deny"
+# Consecutive `if`s calling the same function.
+same_functions_in_if_condition = "deny"
+# A bool expression whose terminals can be eliminated.
+overly_complex_bool_expr = "deny"
+# `&` / `|` on bools where `&&` / `||` short-circuit.
+needless_bitwise_bool = "deny"
+# Bitwise operands written in decimal, where hex was clearly meant.
+decimal_bitwise_operands = "deny"
+# `^` where exponentiation was meant.
+suspicious_xor_used_as_pow = "deny"
+# A binary expression grouped in a way that looks like a typo.
+suspicious_operation_groupings = "deny"
+# Shifts mixed with masks without saying which binds first.
+precedence_bits = "deny"
+# A bit mask that reads better as the method call for it.
+verbose_bit_mask = "deny"
+# A comparison involving an upcast that is always true or always false.
+invalid_upcast_comparisons = "deny"
+# `Duration`/`Instant` subtraction that can underflow unchecked.
+unchecked_time_subtraction = "deny"
+# Any `%` at all: the arithmetic in this port is deliberate, so a new one
+# has to be lookable-up.
+modulo_arithmetic = "deny"
+# `#[cfg(not(test))]`, code the tests never see.
+cfg_not_test = "deny"
+
+# -- panics, incomplete code and process exits -------------------------------
+# `todo!()` left in the tree.
+todo = "deny"
+# `unimplemented!()` left in the tree.
+unimplemented = "deny"
+# `std::process::exit` outside `main`, which skips every destructor.
+exit = "deny"
+# `mem::forget` on a `Drop` type.
+mem_forget = "deny"
+# `dbg!` left in the tree.
+dbg_macro = "deny"
+# A `From` impl that panics or unwraps instead of falling over to `TryFrom`.
+fallible_impl_from = "deny"
+# `#[ignore]` with no reason.
+ignore_without_reason = "deny"
+
+# -- functions and signatures ------------------------------------------------
+# `too_many_lines` and `cognitive_complexity` fire 20 and 3 times at clippy's
+# defaults (longest function 241 lines, worst score 34); clippy.toml raises the
+# two thresholds to 250 and 35, which is what lets them be on at all.
+too_many_lines = "deny"
+cognitive_complexity = "deny"
+# More than `max-fn-params-bools` bool parameters (clippy.toml keeps 3).
+fn_params_excessive_bools = "deny"
+# A `&T` argument where `T` is small enough to pass by value.
+trivially_copy_pass_by_ref = "deny"
+# A large type taken by value.
+large_types_passed_by_value = "deny"
+# A future large enough to risk blowing the stack.
+large_futures = "deny"
+# A function that reserves a lot of stack.
+large_stack_frames = "deny"
+# A large array allocated on the stack.
+large_stack_arrays = "deny"
+# `async fn` with no `await` in it.
+unused_async = "deny"
+# An `async fn` in a trait impl with no `await` in it.
+unused_async_trait_impl = "deny"
+# A function that only ever returns `Ok` or `Some`.
+unnecessary_wraps = "deny"
+# A `Box` returned where the value would do.
+unnecessary_box_returns = "deny"
+# `self` used only to call the method again.
+self_only_used_in_recursion = "deny"
+# An `&Option<T>` parameter where `Option<&T>` says it better.
+ref_option = "deny"
+# `&Option<&T>` where `Option<&T>` would do.
+ref_option_ref = "deny"
+# Two methods on the same type with the same name.
+same_name_method = "deny"
+# A trait impl that renames the parameter the trait declared.
+renamed_function_params = "deny"
+# `HashSet::contains` followed by `insert`, which `insert` already answers.
+set_contains_or_insert = "deny"
+# An unsafe `pub fn` that carries no `# Safety` section at all.
+unnecessary_safety_doc = "deny"
+
+# -- types, impls and bounds -------------------------------------------------
+# A `HashMap`/`HashSet` literal that does not say what hasher it wants.
+implicit_hasher = "deny"
+# The same trait named twice in one generic's bounds.
+trait_duplication_in_bounds = "deny"
+# The same type named twice in one generic's bounds instead of with `+`.
+type_repetition_in_bounds = "deny"
+# A type parameter in a different order in the impl than in the type.
+mismatching_type_param_order = "deny"
+# `Clone` written out on a type that is `Copy`.
+expl_impl_clone_on_copy = "deny"
+# `Iterator` implemented on a `Copy` type, which cannot be iterated twice.
+copy_iterator = "deny"
+# Several `impl Type` blocks that could be one.
+multiple_inherent_impl = "deny"
+# An `iter`/`iter_mut` that does not return an `Iterator`.
+iter_not_returning_iterator = "deny"
+# `IntoIterator for &Type` with no inherent `iter`.
+into_iter_without_iter = "deny"
+# An inherent `iter` with no matching `IntoIterator for &Type`.
+iter_without_into_iter = "deny"
+# An empty `Drop` impl.
+empty_drop = "deny"
+# `Drop` types derived `Deserialize` while exposing unsafe methods.
+unsafe_derive_deserialize = "deny"
+# A union with no `#[repr]`.
+default_union_representation = "deny"
+# A trailing zero-sized array on a struct with no `#[repr(C)]`.
+trailing_empty_array = "deny"
+# An enum with no variants.
+empty_enums = "deny"
+# `struct S {}` where `struct S;` says it.
+empty_structs_with_brackets = "deny"
+# `enum E { V() }` where `V` says it.
+empty_enum_variants_with_brackets = "deny"
+# A `pub(crate)`-style scoped visibility on a field.
+field_scoped_visibility_modifiers = "deny"
+# A struct whose fields are only partly public.
+partial_pub_fields = "deny"
+# A `pub` field whose name starts with `_`.
+pub_underscore_fields = "deny"
+# `pub(in <loc>)` written with `in`.
+pub_without_shorthand = "deny"
+# An exported type named `Error` that implements `Error`.
+error_impl_error = "deny"
+# A lazy static that `std::sync::LazyLock` replaces.
+non_std_lazy_statics = "deny"
+# A `Mutex` around something an atomic would hold.
+mutex_atomic = "deny"
+# `Rc<Mutex<T>>`, which is almost never what was meant.
+rc_mutex = "deny"
+# Shared ownership of a buffer type instead of a slice.
+rc_buffer = "deny"
+# A `Send` struct with a field that is not safe to send.
+non_send_fields_in_send_ty = "deny"
+# A public future that is not `Send`.
+future_not_send = "deny"
+# A reference to a type with no values.
+uninhabited_references = "deny"
+
+# -- borrows, references and pointers ----------------------------------------
+# `&mut &mut T`.
+mut_mut = "deny"
+# `ref` bound to something that is already a reference.
+ref_binding_to_reference = "deny"
+# `Some(ref value)` where `Some(value)` binds the same.
+ref_patterns = "deny"
+# `as` used to add or drop constness on a raw pointer.
+ptr_cast_constness = "deny"
+# A pointer offset written as a literal.
+ptr_offset_by_literal = "deny"
+# `from_raw_parts` given the same length and capacity.
+same_length_and_capacity = "deny"
+# A `&dyn Any` coercion that dereferences instead.
+coerce_container_to_any = "deny"
+# A `deref()`/`deref_mut()` call outside a method chain.
+explicit_deref_methods = "deny"
+# `&Path`/`&OsStr` printed with `Debug` instead of `.display()`.
+unnecessary_debug_formatting = "deny"
+# A pointer formatted with `{:?}`/`{:p}` where the address is not the point.
+pointer_format = "deny"
+# A `volatile` read or write on a composite type.
+volatile_composites = "deny"
+# `to_ne_bytes`, whose answer depends on the host.
+host_endian_bytes = "deny"
+
+# -- strings, literals and formatting ----------------------------------------
+# A Unicode literal not in NFC normal form.
+unicode_not_nfc = "deny"
+# An identifier written in a script outside the allowed set.
+disallowed_script_idents = "deny"
+# `format!` over every element and then collecting the strings.
+format_collect = "deny"
+# `x = x + ".."` on a `String` instead of `push_str`.
+string_add_assign = "deny"
+# `to_string()` on a `&&T`, which copies twice.
+inefficient_to_string = "deny"
+# `String::new()` where `""` would do.
+manual_string_new = "deny"
+# A raw string with more `#` than it needs.
+needless_raw_string_hashes = "deny"
+# A raw string that does not need to be raw.
+needless_raw_strings = "deny"
+# A literal with formatting arguments in it (`{}`) that was not formatted.
+literal_string_with_formatting_args = "deny"
+# A whole-number float literal that cannot be represented exactly.
+lossy_float_literal = "deny"
+# Digit groups larger than four digits.
+large_digit_groups = "deny"
+# A hardcoded localhost address.
+ip_constant = "deny"
+# `&str` in a return type that has to be `&'static str`.
+unnecessary_literal_bound = "deny"
+# `Debug`-based formatting where `Display` is what was meant.
+use_debug = "deny"
+
+# -- collections and iterators -----------------------------------------------
+# A collection that is written but never read.
+collection_is_never_read = "deny"
+# `drain(..)` used to clear a container.
+clear_with_drain = "deny"
+# `.cloned()` on an iterator of `&T` where `T: Copy`.
+cloned_instead_of_copied = "deny"
+# `.filter_map(..).next()` where one method call says it.
+filter_map_next = "deny"
+# `.flat_map` on `Option` where `filter_map` is the shape of it.
+flat_map_option = "deny"
+# Filtering `Result`s for `Ok` where `flatten` does it.
+iter_filter_is_ok = "deny"
+# Filtering `Option`s for `Some` where `flatten` does it.
+iter_filter_is_some = "deny"
+# `.drain(..)` where `.into_iter()` would do.
+iter_with_drain = "deny"
+# Iterating an empty array.
+iter_on_empty_collections = "deny"
+# Iterating a one-element array.
+iter_on_single_items = "deny"
+# Iterating a `HashMap`/`HashSet`, whose order is not defined.
+iter_over_hash_type = "deny"
+# `for x in y.into_iter()` where `for x in y` says it.
+explicit_into_iter_loop = "deny"
+# `.peekable()` whose `peek` is never called.
+unused_peekable = "deny"
+# `.for_each(..)` where a `for` loop reads better.
+needless_for_each = "deny"
+# `LinkedList`, which a `Vec`/`VecDeque` beats nearly always.
+linkedlist = "deny"
+# `with_capacity(0)`, which is `new()`.
+with_capacity_zero = "deny"
+# A map whose value type is zero-sized, i.e. a set.
+zero_sized_map_values = "deny"
+# `sort()` where `sort_unstable()` is equivalent.
+stable_sort_primitive = "deny"
+# `String::from("..")` or a regex that a plain `str` method answers.
+trivial_regex = "deny"
+# `<slice>.filter(|&x| x == y).count()` to count one byte value.
+naive_bytecount = "deny"
+# `.chars().any(|c| c == x)` on a literal, which `contains` answers.
+string_lit_chars_any = "deny"
+# `.split("x")` with a one-character `str` where `'x'` would do.
+single_char_pattern = "deny"
+# Splitting a trimmed string on a hardcoded `"\n"`.
+str_split_at_newline = "deny"
+# Rounding a float literal that is already whole.
+unused_rounding = "deny"
+# `.map(f)` as the whole body of a function taking an `Option`.
+single_option_map = "deny"
+# `as_ref().cloned()` on an `Option`, which `.clone()` says.
+option_as_ref_cloned = "deny"
+# `Option<Option<T>>`.
+option_option = "deny"
+
+# -- indexing, slicing and arithmetic ----------------------------------------
+# Indexing a slice at a fixed position instead of destructuring it.
+index_refutable_slice = "deny"
+# `x..=(y - 1)`, which `x..y` says.
+range_minus_one = "deny"
+# Floating-point arithmetic whose precision is not the one asked for.
+imprecise_flops = "deny"
+# A float operation written in a slower way than the obvious one.
+suboptimal_flops = "deny"
+# `==` against a float constant instead of against an epsilon.
+float_cmp_const = "deny"
+# `ilog2` written out by hand.
+manual_ilog2 = "deny"
+# `is_power_of_two` written out by hand.
+manual_is_power_of_two = "deny"
+# `midpoint` written out by hand, in a way that can overflow.
+manual_midpoint = "deny"
+# Subtracting one `Instant` from another to get an elapsed duration.
+manual_instant_elapsed = "deny"
+# `.map(f).unwrap_or_default()` where `is_some_and`/`is_ok_and` says it.
+manual_is_variant_and = "deny"
+# `NonZero` where the plain integer is used and checked by hand.
+non_zero_suggestions = "deny"
+
+# -- error handling ----------------------------------------------------------
+# `.get(i).unwrap()` where `[i]` would do.
+get_unwrap = "deny"
+# A `?` that hides the error instead of returning it.
+try_err = "deny"
+# Iterating and then asking `is_some()`/`is_none()` instead of `any`/`contains`.
+search_is_some = "deny"
+
+# -- items, imports and modules ----------------------------------------------
+# `use Enum::*`.
+enum_glob_use = "deny"
+# `#[macro_use]`, which a `use` replaces.
+macro_use_imports = "deny"
+# `use foo::{self}`, which `use foo` says.
+unnecessary_self_imports = "deny"
+# Using an item whose name starts with `_`, i.e. one marked as not for use.
+used_underscore_items = "deny"
+# `#[inline(always)]`, which is almost never the right hint.
+inline_always = "deny"
+# `#[no_mangle]` on a `fn` with no ABI, so it keeps the unstable Rust one.
+no_mangle_with_rust_abi = "deny"
+# A `macro_rules!` invoked with the wrong kind of braces.
+nonstandard_macro_braces = "deny"
+# A feature named for the absence of something (`no-foo`).
+negative_feature_names = "deny"
+# A feature whose name repeats the crate name.
+redundant_feature_names = "deny"
+# A `*` version requirement in a dependency.
+wildcard_dependencies = "deny"
+# A large file pulled into the documentation.
+large_include_file = "deny"
+
+# -- patterns and structs ----------------------------------------------------
+# `_` where `()` is the pattern that matches.
+ignored_unit_patterns = "deny"
+# A struct field bound to `_` where `..` covers it.
+unneeded_field_pattern = "deny"
+# A struct match that binds every field and still has a `..`.
+rest_pat_in_fully_bound_structs = "deny"
+# Struct literal fields in a different order from the declaration.
+inconsistent_struct_constructor = "deny"
+# A struct built from a base that could be written directly.
+unnecessary_struct_initialization = "deny"
+# A trailing comma before a closing delimiter.
+unnecessary_trailing_comma = "deny"
+# A semicolon after an expression that returns `()`.
+unnecessary_semicolon = "deny"
+
+# -- documentation ----------------------------------------------------------
+# An intra-doc link that does not resolve.
+doc_broken_link = "deny"
+# A `[link]` in a doc comment wrapped in quotes, so it is not a link at all.
+doc_link_with_quotes = "deny"
+# Code back-to-back with a link, which needs the backticks to say where one ends.
+doc_link_code = "deny"
+# A doc comment using double spaces for line breaks instead of a backslash.
+doc_comment_double_space_linebreaks = "deny"
+# A file pulled into the documentation outside `cfg(doc)`.
+doc_include_without_cfg = "deny"
+
+# -- statements -------------------------------------------------------------
+# A block whose last expression needs a semicolon inside it.
+semicolon_inside_block = "deny"
+
+# -- measured, and deliberately NOT enabled ----------------------------------
+# Every lint below fires on the tree today, so it is left out rather than
+# silenced at the site. The number is the count `cargo clippy --workspace
+# --all-targets` reports for it; the gate is meant to stay red-free, so a lint
+# only comes back in once its count is zero.
+#
+#   unwrap_used 940        expect_used 106       as_conversions 720
+#   arithmetic_side_effects 694                 str_to_string 625
+#   indexing_slicing 1014  shadow_unrelated 304  absolute_paths 831
+#   cast_possible_truncation 120                redundant_closure_for_method_calls 357
+#   missing_docs_in_private_items 525           semicolon_if_nothing_returned 379
+#   ref_as_ptr 1 (crates/mars-ffi/tests/ffi_smoke.rs:90)
+#   unsafe_code 104        unsafe_op_in_unsafe_fn (E0133, 10)
+#   unsafe_attr_outside_unsafe 134              undocumented_unsafe_blocks 11
+#   missing_docs 104       missing_errors_doc 54  missing_panics_doc 48
+#   unused_results 700     unused_crate_dependencies 137
+#   unreachable_pub 18     elided_lifetimes_in_paths 14
+#   keyword_idents_2024 16 trivial_casts / trivial_numeric_casts 6
+#   let_underscore_drop 103                     dead_code_pub_in_binary 179
+#   linker_info (escalates the linker's own chatter: on macOS the zstd-sys
+#     objects are built for a newer macOS than the test binaries link
+#     against, so `-D linker-info` fails `cargo build` outright)
+#   redundant_imports 20   unused_qualifications 31
+#
+# `clippy::pedantic` (1767) and `clippy::nursery` (1408) are not enabled as
+# groups either; the lints of theirs that do measure zero are listed above one
+# by one.
+
+# -- filesystem and I/O ------------------------------------------------------
+# `FileType::is_file`, which answers a question that is not the one asked.
+filetype_is_file = "deny"
+# Reading a file byte by byte instead of `read_to_end`/`read_to_string`.
+verbose_file_reads = "deny"
+# Reading into a `Vec` of length zero.
+read_zero_byte_vec = "deny"
+# `PathBuf::push` with a filesystem root, which overwrites the whole path.
+path_buf_push_overwrite = "deny"
+# `PathBuf::new()` followed immediately by `push`.
+pathbuf_init_then_push = "deny"
+
+# -- tests -------------------------------------------------------------------
+# A test named with a `test_` prefix it does not need.
+redundant_test_prefix = "deny"
+# A `debug_assert!` whose argument mutates, so the check vanishes in release.
+debug_assert_with_mut_call = "deny"
+
+# -- misc --------------------------------------------------------------------
+# `Rc`/`Arc` cloned implicitly by calling a method on the dereferenced value.
+implicit_clone = "deny"
+# A read and a write of the same variable whose order is not defined.
+mixed_read_write_in_expression = "deny"
+# `.collect::<Vec<String>>().join("")` on an iterator.
+unnecessary_join = "deny"
+# More single-character bindings than `single-char-binding-names-threshold`.
+many_single_char_names = "deny"
+# `else` on an `if` whose then-branch always returns.
+redundant_else = "deny"

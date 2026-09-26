@@ -22,3 +22,6 @@ mars-buffer = { workspace = true }
 tempfile = { workspace = true }
 # Used by `tests/ffi_smoke.rs` to inflate the (always compressed) .xlog records.
 flate2 = { workspace = true }
+
+[lints]
+workspace = true

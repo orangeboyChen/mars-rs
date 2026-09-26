@@ -3,7 +3,7 @@ package io.github.orangeboychen.marsrs.stn
 import java.util.Arrays
 
 /**
- * 网络任务统计信息类
+ * The network task statistics info class
  *
  * What `StnLogic.ICallBack.reportTaskProfile` hands the app is the JSON of one
  * of these; the fields are the C++ project's, `@JvmField` so that Java reads
@@ -81,37 +81,33 @@ class TaskProfile {
         @JvmField
         var disconnErrCode: Long = 0
 
-        override fun toString(): String {
-            return "ConnectProfile{" +
-                "startTime=" + startTime +
-                ", dnsTime=" + dnsTime +
-                ", dnsEndTime=" + dnsEndTime +
-                ", connTime=" + connTime +
-                ", connErrCode=" + connErrCode +
-                ", tryIPCount=" + tryIPCount +
-                ", ip='" + ip + '\'' +
-                ", port=" + port +
-                ", host='" + host + '\'' +
-                ", ipType=" + ipType +
-                ", disconnTime=" + disconnTime +
-                ", disconnErrType=" + disconnErrType +
-                ", disconnErrCode=" + disconnErrCode +
-                '}'
-        }
-    }
-
-    override fun toString(): String {
-        return "TaskProfile{" +
-            "taskId=" + taskId +
-            ", cmdId=" + cmdId +
-            ", cgi='" + cgi + '\'' +
-            ", startTaskTime=" + startTaskTime +
-            ", endTaskTime=" + endTaskTime +
-            ", dyntimeStatus=" + dyntimeStatus +
-            ", errCode=" + errCode +
-            ", errType=" + errType +
-            ", channelSelect=" + channelSelect +
-            ", historyNetLinkers=" + Arrays.toString(historyNetLinkers) +
+        override fun toString(): String = "ConnectProfile{" +
+            "startTime=" + startTime +
+            ", dnsTime=" + dnsTime +
+            ", dnsEndTime=" + dnsEndTime +
+            ", connTime=" + connTime +
+            ", connErrCode=" + connErrCode +
+            ", tryIPCount=" + tryIPCount +
+            ", ip='" + ip + '\'' +
+            ", port=" + port +
+            ", host='" + host + '\'' +
+            ", ipType=" + ipType +
+            ", disconnTime=" + disconnTime +
+            ", disconnErrType=" + disconnErrType +
+            ", disconnErrCode=" + disconnErrCode +
             '}'
     }
+
+    override fun toString(): String = "TaskProfile{" +
+        "taskId=" + taskId +
+        ", cmdId=" + cmdId +
+        ", cgi='" + cgi + '\'' +
+        ", startTaskTime=" + startTaskTime +
+        ", endTaskTime=" + endTaskTime +
+        ", dyntimeStatus=" + dyntimeStatus +
+        ", errCode=" + errCode +
+        ", errType=" + errType +
+        ", channelSelect=" + channelSelect +
+        ", historyNetLinkers=" + Arrays.toString(historyNetLinkers) +
+        '}'
 }

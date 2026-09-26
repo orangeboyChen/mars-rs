@@ -1,0 +1,26 @@
+# ktlint reads this file for the Kotlin of the Android packaging (android/);
+# nothing else in the repository does, so the section below is the only one
+# here. Editors read it too, so the style a developer types in is the one the
+# gate checks.
+#
+# `android_studio` and not ktlint's own `ktlint_official`: this Kotlin was
+# written in Android Studio, and the two styles disagree about how a signature
+# that does not fit on one line is broken up, and about a trail of chained
+# calls. Both are defensible; this one is the one the sources are already in.
+#
+# No rule is switched off. A finding is either fixed in the source or it fails
+# the job — there is no suppression comment and no `disabled` in this file,
+# which is what makes the gate worth having.
+
+root = true
+
+[*.{kt,kts}]
+ktlint_code_style = android_studio
+# Android Studio's own line, and the one this Kotlin keeps to.
+max_line_length = 120
+indent_size = 4
+indent_style = space
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+charset = utf-8

@@ -1,0 +1,87 @@
+# detekt configuration — the static-analysis half of the Kotlin gate.
+#
+# This is an *override* file, not a copy of detekt's own defaults: the job runs
+# detekt with `--build-upon-default-config`, so every rule detekt ships is on
+# unless a line below turns it off, and a new detekt release brings its new
+# rules with it. What is below is either a number the default sets too low for
+# this port, or a rule the port cannot answer without changing what it does.
+#
+# `build.maxIssues: 0` is the gate: one finding fails the job. The versions of
+# the tool are pinned in lint.yml, and the reasons below are the point of the
+# file — a rule taken out without one is a rule nobody remembers to revisit.
+
+build:
+  maxIssues: 0
+
+complexity:
+  # 30 signatures over the default six: the JNI callbacks (`req2Buf`,
+  # `onTaskEnd`, `buf2Resp` …) take what the C++ project's Java gives them.
+  # 12 is the longest signature in the tree.
+  LongParameterList:
+    functionThreshold: 12
+    constructorThreshold: 12
+  # `getNetType`, `guessNetSpeed`, `searchIntentByClass`: a `when` over the
+  # network subtypes the C++ names is not simpler than the C++ is.
+  ComplexCondition:
+    threshold: 8
+  # `net_core`, `longlink_task_manager`, `shortlink_task_manager`.
+  CyclomaticComplexMethod:
+    threshold: 25
+  # `getStatisticsNetType`, which nests as deeply as the C++ does.
+  NestedBlockDepth:
+    threshold: 10
+  # `StnLogic` holds the whole STN callback surface in one object, which is how
+  # `StnLogic.java` is written; `NetStatusUtil` is the other large one.
+  TooManyFunctions:
+    thresholdInFiles: 60
+    thresholdInClasses: 60
+    thresholdInInterfaces: 20
+    thresholdInObjects: 40
+    thresholdInEnums: 20
+
+empty-blocks:
+  # `onTaskEnd`, `onPush`, `reportCrash` …: a callback whose body is the app's
+  # to write, as it is in the C++. An empty one that is not an override would
+  # still fail.
+  EmptyFunctionBlock:
+    ignoreOverridden: true
+
+exceptions:
+  # `catch (e: Exception)` in 50 places is what the C++'s Java writes.
+  # Narrowing it would change what the port survives, not how it reads.
+  TooGenericExceptionCaught:
+    active: false
+  # 43 `e.printStackTrace()` calls: the C++'s own error reporting. Sending them
+  # to the app's logger instead would hand the app output it did not ask for.
+  PrintStackTrace:
+    active: false
+  # An empty `catch` where the C++ swallows too — `isConnected`'s, `isWap`'s.
+  SwallowedException:
+    active: false
+
+performance:
+  # `*args` into a vararg: `Log.kt` forwards the array the JNI hands it.
+  SpreadOperator:
+    active: false
+
+style:
+  # `getNetworkSignalStrength(isWifi)` answers 0 and ignores its argument
+  # because `com.tencent.mars.comm.NetworkSignalUtil` answers 0 and ignores
+  # its argument; the function is here because an app may call it.
+  FunctionOnlyReturningConstant:
+    active: false
+  LoopWithTooManyJumpStatements:
+    maxJumpCount: 3
+  # `getNetType`, which answers from every branch of a `when` over the subtypes
+  # the C++ names instead of assigning once at the end.
+  ReturnCount:
+    max: 13
+  # `channelID`, `isWifi`, `context`: parameters a JNI callback signature
+  # carries whether or not this implementation reads them.
+  UnusedParameter:
+    active: false
+  # `getLoadLibraries` is `external` — `mars-jni` is its body — and
+  # `reportConnectStatus` is called back by name from `mars-jni`, so neither has
+  # a caller Kotlin can see.
+  UnusedPrivateMember:
+    active: false

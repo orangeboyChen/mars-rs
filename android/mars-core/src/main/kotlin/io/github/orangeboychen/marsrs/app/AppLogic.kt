@@ -1,7 +1,7 @@
 package io.github.orangeboychen.marsrs.app
 
 /**
- * APP的属性类
+ * The class of the app's attributes
  *
  * The four statics `mars-jni` calls (`getAppFilePath`, `getAccountInfo`,
  * `getClientVersion`, `getDeviceType`) and the two classes it reads the answers
@@ -13,50 +13,53 @@ object AppLogic {
     const val TAG: String = "mars.AppLogic"
 
     /**
-     * 帐号信息类
+     * The account info class
      */
     class AccountInfo(
-        /** 帐号 */
+        /** The account number */
         @JvmField var uin: Long = 0,
-        /** 用户名 */
+        /** The user name */
         @JvmField var userName: String = ""
     )
 
     /**
-     * 终端设备信息类
+     * The terminal device info class
      */
     class DeviceInfo(
-        /** 设备名称 */
+        /** The device name */
         @JvmField var devicename: String,
-        /** 设备类型 */
+        /** The device type */
         @JvmField var devicetype: String
     )
 
     /**
-     * 关于APP信息的回调接口
+     * The callback interface of the app's information
      */
     interface ICallBack {
         /**
-         * STN 会将配置文件进行存储，如连网IPPort策略、心跳策略等，此类信息将会被存储在客户端上层指定的目录下
-         * @return APP目录
+         * STN stores its configuration files — which IP and port it connects to, how often it beats
+         * a heart and so on — and the directory it stores them under is the one the app names.
+         * @return the app directory
          */
         fun getAppFilePath(): String?
 
         /**
-         * STN 会根据客户端的登陆状态进行网络连接策略的动态调整，当用户非登陆态时，网络会将连接的频率降低
-         * 所以需要获取用户的帐号信息，判断用户是否已登录
-         * @return 用户帐号信息
+         * STN adjusts how it connects to the login state of the client, and while the user is not
+         * logged in it connects less often — so it asks for the account to tell whether the user is
+         * logged in.
+         * @return the user's account info
          */
         fun getAccountInfo(): AccountInfo?
 
         /**
-         * 客户端版本号能够帮助 STN 清晰区分存储的网络策略配置文件。
-         * @return 客户端版本号
+         * The client version is what lets STN tell the network strategy files it stored apart.
+         * @return the client version
          */
         fun getClientVersion(): Int
 
         /**
-         * 客户端通过获取设备类型，加入到不同的上报统计回调中，供客户端进行数据分析
+         * The device type is what puts the client's reports into one bucket or another, which is
+         * what it analyses its data by.
          */
         fun getDeviceType(): DeviceInfo?
     }
@@ -64,7 +67,7 @@ object AppLogic {
     private var callBack: ICallBack? = null
 
     /**
-     * 设置mars回调接口实例，mars回调上层时会调用该实例的方法
+     * Sets the instance mars calls back on: what mars asks the app, it asks of this one.
      */
     @JvmStatic
     fun setCallBack(callback: ICallBack?) {
@@ -72,7 +75,7 @@ object AppLogic {
     }
 
     /**
-     * mars回调获取APP目录
+     * The mars callback that gets the app directory
      */
     @JvmStatic
     fun getAppFilePath(): String? {
@@ -90,7 +93,7 @@ object AppLogic {
     }
 
     /**
-     * mars回调获取用户帐号信息
+     * The mars callback that gets the user's account info
      */
     @JvmStatic
     private fun getAccountInfo(): AccountInfo? {
@@ -108,7 +111,7 @@ object AppLogic {
     }
 
     /**
-     * mars回调获取客户端版本号
+     * The mars callback that gets the client version
      */
     @JvmStatic
     private fun getClientVersion(): Int {
@@ -126,7 +129,7 @@ object AppLogic {
     }
 
     /**
-     * mars回调获取终端设备信息
+     * The mars callback that gets the terminal device info
      */
     @JvmStatic
     private fun getDeviceType(): DeviceInfo? {

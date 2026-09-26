@@ -14,12 +14,31 @@ object NetworkSignalUtil {
 
     const val TAG: String = "MicroMsg.NetworkSignalUtil"
 
-    private var strength: Long = 10000
+    /** What `strength` is before the first `onSignalStrengthsChanged`. */
+    private const val DEFAULT_STRENGTH = 10000L
+
+    /** The buckets `WifiManager.calculateSignalLevel` is asked to divide into. */
+    private const val WIFI_LEVEL_STEPS = 10
+
+    /** A level of `WIFI_LEVEL_STEPS` is a full signal, so one step is this much. */
+    private const val WIFI_PERCENT_PER_LEVEL = 10
+    private const val CDMA_DBM_OFFSET = 113
+    private const val CDMA_DBM_DIVISOR = 2
+
+    /** What `getGsmSignalStrength` answers when the GSM signal is unknown. */
+    private const val GSM_UNKNOWN_SIGNAL = 99
+    private const val FULL_PERCENT = 100L
+    private const val FULL_PERCENT_AS_FLOAT = 100f
+
+    /** `getGsmSignalStrength` counts the GSM signal in 31 steps. */
+    private const val GSM_LEVELS_AS_FLOAT = 31f
+
+    private var strength: Long = DEFAULT_STRENGTH
     private var context: Context? = null
 
     @JvmStatic
     @Suppress("DEPRECATION")
-    fun InitNetworkSignalUtil(ncontext: Context?) {
+    fun initNetworkSignalUtil(ncontext: Context?) {
         context = ncontext
         val mgr = ncontext?.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
         mgr?.listen(
@@ -44,14 +63,15 @@ object NetworkSignalUtil {
     @JvmStatic
     fun getWifiSignalStrength(): Long {
         val wifiManager = context?.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+
         @Suppress("DEPRECATION")
         val info = wifiManager?.connectionInfo
         if (info != null && info.bssid != null) {
             // calculateSignalLevel param 2 must < 46, otherwise divide by 0 exception will happen
-            var sig = WifiManager.calculateSignalLevel(info.rssi, 10)
-            sig = if (sig > 10) 10 else sig
+            var sig = WifiManager.calculateSignalLevel(info.rssi, WIFI_LEVEL_STEPS)
+            sig = if (sig > WIFI_LEVEL_STEPS) WIFI_LEVEL_STEPS else sig
             sig = if (sig < 0) 0 else sig
-            return sig.toLong() * 10
+            return sig.toLong() * WIFI_PERCENT_PER_LEVEL
         }
         return 0
     }
@@ -61,13 +81,13 @@ object NetworkSignalUtil {
         var nSig: Int = if (sig.isGsm) {
             sig.gsmSignalStrength
         } else {
-            (sig.cdmaDbm + 113) / 2
+            (sig.cdmaDbm + CDMA_DBM_OFFSET) / CDMA_DBM_DIVISOR
         }
-        if (sig.isGsm && nSig == 99) {
+        if (sig.isGsm && nSig == GSM_UNKNOWN_SIGNAL) {
             strength = 0
         } else {
-            strength = (nSig * (100f / 31f)).toLong()
-            strength = if (strength > 100) 100 else strength
+            strength = (nSig * (FULL_PERCENT_AS_FLOAT / GSM_LEVELS_AS_FLOAT)).toLong()
+            strength = if (strength > FULL_PERCENT) FULL_PERCENT else strength
             strength = if (strength < 0) 0 else strength
         }
     }

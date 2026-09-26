@@ -27,13 +27,12 @@ use crate::tickcount::gettickcount;
 
 /// `MessageQueue::MessageQueue_t`.
 pub type MessageQueueId = u64;
-/// `MessageQueue::KInvalidQueueID`.
-#[allow(non_upper_case_globals)]
-pub const KInvalidQueueID: MessageQueueId = 0;
+/// `MessageQueue::KInvalidQueueID`, spelled the way Rust spells a constant.
+pub const INVALID_QUEUE_ID: MessageQueueId = 0;
 
-/// The queue messages are posted to when no queue is named.
-#[allow(non_upper_case_globals)]
-pub const KDefQueueID: MessageQueueId = 1;
+/// `MessageQueue::KDefQueueID` — the queue messages are posted to when no
+/// queue is named.
+pub const DEFAULT_QUEUE_ID: MessageQueueId = 1;
 
 /// `MessageQueue::MessageHandler_t`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -61,10 +60,9 @@ pub struct MessagePost {
 }
 
 /// `MessageQueue::KNullPost` — what a failed post returns.
-#[allow(non_upper_case_globals)]
-pub const KNullPost: MessagePost = MessagePost {
+pub const NULL_POST: MessagePost = MessagePost {
     reg: MessageHandler {
-        queue: KInvalidQueueID,
+        queue: INVALID_QUEUE_ID,
         seq: 0,
     },
     seq: 0,
@@ -238,10 +236,10 @@ impl Queue {
 }
 
 static QUEUES: Mutex<Option<HashMap<MessageQueueId, Arc<Queue>>>> = Mutex::new(None);
-static NEXT_QUEUE_ID: Mutex<MessageQueueId> = Mutex::new(KDefQueueID + 1);
+static NEXT_QUEUE_ID: Mutex<MessageQueueId> = Mutex::new(DEFAULT_QUEUE_ID + 1);
 
 thread_local! {
-    static CURRENT_QUEUE: std::cell::Cell<MessageQueueId> = const { std::cell::Cell::new(KDefQueueID) };
+    static CURRENT_QUEUE: std::cell::Cell<MessageQueueId> = const { std::cell::Cell::new(DEFAULT_QUEUE_ID) };
 }
 
 fn queues() -> &'static Mutex<Option<HashMap<MessageQueueId, Arc<Queue>>>> {
@@ -259,7 +257,7 @@ fn registry(
 ) -> &mut HashMap<MessageQueueId, Arc<Queue>> {
     guard.get_or_insert_with(|| {
         let mut map = HashMap::new();
-        map.insert(KDefQueueID, Arc::new(Queue::new()));
+        map.insert(DEFAULT_QUEUE_ID, Arc::new(Queue::new()));
         map
     })
 }
@@ -281,7 +279,7 @@ pub fn set_current_thread_message_queue(id: MessageQueueId) {
 
 /// `MessageQueue::GetDefMessageQueue()`.
 pub fn get_def_message_queue() -> MessageQueueId {
-    KDefQueueID
+    DEFAULT_QUEUE_ID
 }
 
 /// Creates a new queue and returns its id.
@@ -361,10 +359,10 @@ pub fn post_message(
     timing: MessageTiming,
 ) -> MessagePost {
     let Some(queue) = queue(handler.queue) else {
-        return KNullPost;
+        return NULL_POST;
     };
     if handler.seq != 0 && !queue.lock().handlers.contains_key(&handler.seq) {
-        return KNullPost;
+        return NULL_POST;
     }
     let (due, period) = first_due(&timing);
     let mut state = queue.lock();

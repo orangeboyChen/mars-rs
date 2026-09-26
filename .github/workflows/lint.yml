@@ -1,0 +1,103 @@
+name: Lint
+
+# The Swift and the Kotlin gates. The Rust one lives in rust.yml: `rustfmt`,
+# `clippy` with `-D warnings`, and the lints of `[workspace.lints]`.
+#
+# Each of the three jobs fails on the first finding. `swiftlint lint --strict`
+# turns its warnings into errors, ktlint exits non-zero on any violation, and
+# `detekt.yml` sets `build.maxIssues: 0`. None of them is run with a
+# `--format`/`--auto-correct` flag, because a gate that rewrites what it checks
+# is not a gate.
+#
+# The versions are pinned and the tools are fetched as release artefacts rather
+# than installed by a package manager: Homebrew has no `swiftlint@0.65.1`, and a
+# new SwiftLint release brings new rules with it.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SWIFTLINT_VERSION: '0.65.1'
+  KTLINT_VERSION: '1.8.0'
+  DETEKT_VERSION: '1.23.8'
+
+jobs:
+  swiftlint:
+    name: swiftlint (Swift)
+    # The macos image is where the Swift of this package is written for, and the
+    # artefact bundle's macos binary is the one for it; the linux binaries need a
+    # Swift runtime the ubuntu image does not carry.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A Swift 6 toolchain is what lints the sources, and it changes nothing
+      # about what is shipped: `scripts/build_xcframework.sh` compiles no Swift
+      # at all (it runs cargo and then `xcodebuild -create-xcframework`), and
+      # Package.swift stays at swift-tools-version 5.9 so that a Swift 5 project
+      # can still depend on the package. Raising `swift-tools-version` is what
+      # would put the floor at Xcode 16 — not the toolchain doing the linting.
+      - name: Swift version
+        run: swift --version
+      # The tools are run out of the workspace rather than installed into
+      # /usr/local/bin, which the runner account cannot write to on ubuntu.
+      - name: Install SwiftLint ${{ env.SWIFTLINT_VERSION }}
+        run: |
+          set -euo pipefail
+          curl -sSfL -o swiftlint.zip \
+            "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/SwiftLintBinary.artifactbundle.zip"
+          unzip -q swiftlint.zip
+          mv SwiftLintBinary.artifactbundle/macos/swiftlint ./swiftlint
+          chmod +x ./swiftlint
+          ./swiftlint version
+      # `.swiftlint.yml` says what is linted (`Sources`) and which opt-in rules
+      # run on top of the defaults; `--strict` is what fails the job.
+      - run: ./swiftlint lint --strict
+
+  ktlint:
+    name: ktlint (Kotlin)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install ktlint ${{ env.KTLINT_VERSION }}
+        run: |
+          set -euo pipefail
+          curl -sSfL -o ktlint \
+            "https://github.com/pinterest/ktlint/releases/download/${KTLINT_VERSION}/ktlint"
+          chmod +x ktlint
+          ./ktlint --version
+      # `.editorconfig` is the whole configuration: the `android_studio` code
+      # style, the 120-column line and the end-of-file rules.
+      - run: ./ktlint --relative 'android/**/*.kt' 'android/**/*.kts'
+
+  detekt:
+    name: detekt (Kotlin)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install detekt ${{ env.DETEKT_VERSION }}
+        run: |
+          set -euo pipefail
+          curl -sSfL -o detekt-cli-all.jar \
+            "https://github.com/detekt/detekt/releases/download/v${DETEKT_VERSION}/detekt-cli-${DETEKT_VERSION}-all.jar"
+      # `--build-upon-default-config`: detekt.yml names only what differs from
+      # detekt's own defaults, and its `build.maxIssues: 0` is what fails the job.
+      - run: |
+          java -jar detekt-cli-all.jar \
+            --input android/mars-core/src/main/kotlin,android/mars-xlog/src/main/kotlin \
+            --config detekt.yml \
+            --build-upon-default-config

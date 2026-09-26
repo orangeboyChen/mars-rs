@@ -9,13 +9,12 @@ import android.content.IntentFilter
 import android.os.Build
 import android.os.Process
 import android.os.SystemClock
-
 import io.github.orangeboychen.marsrs.xlog.Log
-
 import java.util.TreeSet
 
 /**
- * 定时器工具类，mars会在网络组件stn中使用定时器管理任务队列、连接间隔等
+ * The timer the network component `stn` drives its task queue and its reconnect
+ * interval with.
  *
  * One [external] is here and it is the only one of the class: [onAlarm], the
  * `Java_io_github_orangeboychen_marsrs_comm_Alarm_onAlarm` symbol `mars-jni`
@@ -57,7 +56,9 @@ class Alarm : BroadcastReceiver() {
                     Log.i(
                         TAG,
                         "onReceive find alarm id:%d, pid:%d, delta miss time:%d",
-                        id, pid, SystemClock.elapsedRealtime() - next.waittime
+                        id,
+                        pid,
+                        SystemClock.elapsedRealtime() - next.waittime
                     )
                     iterator.remove()
                     hit = true
@@ -65,7 +66,13 @@ class Alarm : BroadcastReceiver() {
                 }
             }
             if (!hit) {
-                Log.e(TAG, "onReceive not found id:%d, pid:%d, alarm_waiting_set.size:%d", id, pid, alarmWaitingSet.size)
+                Log.e(
+                    TAG,
+                    "onReceive not found id:%d, pid:%d, alarm_waiting_set.size:%d",
+                    id,
+                    pid,
+                    alarmWaitingSet.size
+                )
             }
             hit
         }
@@ -177,7 +184,7 @@ class Alarm : BroadcastReceiver() {
             intent.putExtra(KEXTRA_ID, id)
             intent.putExtra(KEXTRA_PID, Process.myPid())
 
-            val flags = if (Build.VERSION.SDK_INT < 23) {
+            val flags = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
                 PendingIntent.FLAG_CANCEL_CURRENT
             } else {
                 PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -185,7 +192,7 @@ class Alarm : BroadcastReceiver() {
             val pendingIntent = PendingIntent.getBroadcast(context, id.toInt(), intent, flags)
 
             @Suppress("DEPRECATION")
-            if (Build.VERSION.SDK_INT < 19) { // KITKAT
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
                 am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, time, pendingIntent)
             } else {
                 am.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP, time, pendingIntent)

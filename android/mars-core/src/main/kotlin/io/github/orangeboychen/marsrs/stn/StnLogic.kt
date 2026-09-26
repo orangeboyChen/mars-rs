@@ -1,4 +1,4 @@
-/**
+/*
  *  The Kotlin face of STN: every `external` is one
  *  `Java_io_github_orangeboychen_marsrs_stn_StnLogic_*` symbol of `mars-jni`,
  *  and the private members below are the ones it calls back — the port of
@@ -15,10 +15,14 @@
  *  class, so every one is `@JvmStatic` — including the private ones JNI calls
  *  back, which is what the C++'s own Java declares too.
  */
+// The constants below carry the name the C++ project's Java gives them, spelled
+// the way Kotlin spells a constant: `K_PING_CHECK` there is `K_PING_CHECK` here.
+// The JNI reaches a constant by the number it carries and not by its name, so
+// nothing on the Rust side had to change with them.
+
 package io.github.orangeboychen.marsrs.stn
 
 import io.github.orangeboychen.marsrs.Mars
-
 import java.io.ByteArrayOutputStream
 import java.util.ArrayList
 
@@ -33,10 +37,10 @@ object StnLogic {
     class Task {
 
         @JvmField
-        var taskID: Int = 0      // unique task identify
+        var taskID: Int = 0 // unique task identify
 
         @JvmField
-        var channelSelect: Int = 0   // short,long or both
+        var channelSelect: Int = 0 // short,long or both
 
         @JvmField
         var cmdID: Int = 0
@@ -45,7 +49,7 @@ object StnLogic {
         var cgi: String? = null
 
         @JvmField
-        var shortLinkHostList: ArrayList<String>? = null    // host or ip
+        var shortLinkHostList: ArrayList<String>? = null // host or ip
 
         @JvmField
         var sendOnly: Boolean = false
@@ -60,25 +64,25 @@ object StnLogic {
         var limitFrequency: Boolean = false
 
         @JvmField
-        var channelStrategy: Int = 0     // normal or fast
+        var channelStrategy: Int = 0 // normal or fast
 
         @JvmField
         var networkStatusSensitive: Boolean = false
 
         @JvmField
-        var priority: Int = 0    // @see priority
+        var priority: Int = 0 // @see priority
 
         @JvmField
         var retryCount: Int = -1
 
         @JvmField
-        var serverProcessCost: Int = 0   // 该TASK等待SVR处理的最长时间,也即预计的SVR处理耗时
+        var serverProcessCost: Int = 0 // the longest this TASK waits for the SVR: the time it is expected to take
 
         @JvmField
-        var totalTimeout: Int = 0        // total timeout, in ms
+        var totalTimeout: Int = 0 // total timeout, in ms
 
         @JvmField
-        var userContext: Any? = null     // user context
+        var userContext: Any? = null // user context
 
         @JvmField
         var reportArg: String? = null
@@ -146,29 +150,29 @@ object StnLogic {
             const val ETASK_PRIORITY_LOWEST: Int = 5
 
             // channel selective
-            const val EShort: Int = 0x1
-            const val ELong: Int = 0x2
-            const val EBoth: Int = 0x3
+            const val E_SHORT: Int = 0x1
+            const val E_LONG: Int = 0x2
+            const val E_BOTH: Int = 0x3
 
             // protocol type
-            const val ETransportProtocolTCP: Int = 1
-            const val ETransportProtocolQUIC: Int = 2
+            const val E_TRANSPORT_PROTOCOL_TCP: Int = 1
+            const val E_TRANSPORT_PROTOCOL_QUIC: Int = 2
         }
     }
 
     const val INVALID_TASK_ID: Int = -1
 
     // STN callback errType
-    const val ectOK: Int = 0
-    const val ectFalse: Int = 1
-    const val ectDial: Int = 2
-    const val ectDns: Int = 3
-    const val ectSocket: Int = 4
-    const val ectHttp: Int = 5
-    const val ectNetMsgXP: Int = 6
-    const val ectEnDecode: Int = 7
-    const val ectServer: Int = 8
-    const val ectLocal: Int = 9
+    const val ECT_OK: Int = 0
+    const val ECT_FALSE: Int = 1
+    const val ECT_DIAL: Int = 2
+    const val ECT_DNS: Int = 3
+    const val ECT_SOCKET: Int = 4
+    const val ECT_HTTP: Int = 5
+    const val ECT_NET_MSG_XP: Int = 6
+    const val ECT_EN_DECODE: Int = 7
+    const val ECT_SERVER: Int = 8
+    const val ECT_LOCAL: Int = 9
 
     // STN callback errCode
     const val FIRSTPKGTIMEOUT: Int = -500
@@ -201,30 +205,22 @@ object StnLogic {
     const val SERVER_DOWN: Int = 5
 
     // longlink identify check
-    @JvmField
-    var ECHECK_NOW: Int = 0
+    const val ECHECK_NOW: Int = 0
 
-    @JvmField
-    var ECHECK_NEXT: Int = 1
+    const val ECHECK_NEXT: Int = 1
 
-    @JvmField
-    var ECHECK_NEVER: Int = 2
+    const val ECHECK_NEVER: Int = 2
 
     // buf2Resp fail handle type
-    @JvmField
-    var RESP_FAIL_HANDLE_NORMAL: Int = 0
+    const val RESP_FAIL_HANDLE_NORMAL: Int = 0
 
-    @JvmField
-    var RESP_FAIL_HANDLE_DEFAULT: Int = -1
+    const val RESP_FAIL_HANDLE_DEFAULT: Int = -1
 
-    @JvmField
-    var RESP_FAIL_HANDLE_SESSION_TIMEOUT: Int = -13
+    const val RESP_FAIL_HANDLE_SESSION_TIMEOUT: Int = -13
 
-    @JvmField
-    var RESP_FAIL_HANDLE_TASK_END: Int = -14
+    const val RESP_FAIL_HANDLE_TASK_END: Int = -14
 
-    @JvmField
-    var TASK_END_SUCCESS: Int = 0
+    const val TASK_END_SUCCESS: Int = 0
 
     /** What `onTaskEnd` is handed — the port fills the nine fields it has. */
     class CgiProfile {
@@ -259,33 +255,34 @@ object StnLogic {
         var channelType: Int = 0
 
         @JvmField
-        var protocolType: Int = 0    // 协议类型
+        var protocolType: Int = 0 // the protocol type
     }
 
     /**
      * Created by caoshaokun on 16/2/1.
      *
-     * APP使用信令通道必须实现该接口 — the port asks the app the fifteen
-     * questions below.
+     * An app that uses the signalling channel has to implement this interface — the port asks the
+     * app the fifteen questions below.
      */
     interface ICallBack {
         /**
-         * SDK要求上层做认证操作(可能新发起一个AUTH CGI)
+         * The SDK asks the app to authenticate, which may start an AUTH CGI of its own
          */
         fun makesureAuthed(host: String?): Boolean
 
         /**
-         * SDK要求上层做域名解析.上层可以实现传统DNS解析,或者自己实现的域名/IP映射
+         * The SDK asks the app to resolve a host name: the app may answer with ordinary DNS, or
+         * with a host-to-IP mapping of its own
          */
         fun onNewDns(host: String?): Array<String>?
 
         /**
-         * 收到SVR PUSH下来的消息
+         * A message the SVR pushed down has come in
          */
         fun onPush(cmdid: Int, taskid: Int, data: ByteArray?)
 
         /**
-         * SDK要求上层对TASK组包
+         * The SDK asks the app to package a TASK
          */
         fun req2Buf(
             taskID: Int,
@@ -298,7 +295,7 @@ object StnLogic {
         ): Boolean
 
         /**
-         * SDK要求上层对TASK解包
+         * The SDK asks the app to unpack a TASK
          */
         fun buf2Resp(
             taskID: Int,
@@ -310,25 +307,27 @@ object StnLogic {
         ): Int
 
         /**
-         * 任务结束回调
+         * The callback of a task that ended
          */
         fun onTaskEnd(taskID: Int, userContext: Any?, errType: Int, errCode: Int, profile: CgiProfile?): Int
 
         /**
-         * 流量统计
+         * The traffic statistics
          */
         fun trafficData(send: Int, recv: Int)
 
         /**
-         * 连接状态通知
-         * @param status 综合状态，即长连+短连的状态
-         * @param longlinkstatus 仅长连的状态
+         * A notice of the connection state
+         * @param status the state of both channels together, the long link and the short link
+         * @param longlinkstatus the state of the long link alone
          */
         fun reportConnectInfo(status: Int, longlinkstatus: Int)
 
         /**
-         * SDK要求上层生成长链接数据校验包,在长链接连接上之后使用,用于验证SVR身份
-         * @return ECHECK_NOW(需要校验), ECHECK_NEVER(不校验), ECHECK_NEXT(下一次再询问)
+         * The SDK asks the app for the buffer the long link is checked with, which goes out once
+         * the long link is up and is what proves who the SVR is
+         * @return ECHECK_NOW (to check), ECHECK_NEVER (not to check), ECHECK_NEXT (to be asked
+         *     again the next time)
          */
         fun getLongLinkIdentifyCheckBuffer(
             identifyReqBuf: ByteArrayOutputStream?,
@@ -337,16 +336,16 @@ object StnLogic {
         ): Int
 
         /**
-         * SDK要求上层解连接校验回包.
+         * The SDK asks the app to parse the answer to the connection check
          */
         fun onLongLinkIdentifyResp(buffer: ByteArray?, hashCodeBuffer: ByteArray?): Boolean
 
-        /** 请求做sync */
+        /** Asks for a sync */
         fun requestDoSync()
 
         fun requestNetCheckShortLinkHosts(): Array<String>?
 
-        /** 是否登录 */
+        /** Whether the user is logged in */
         fun isLogoned(): Boolean
 
         fun reportTaskProfile(taskString: String?)
@@ -354,28 +353,29 @@ object StnLogic {
 
     private var callBack: ICallBack? = null
 
-    /** 初始化网络层回调实例 App实现NetworkCallBack接口 */
+    /** Sets the instance the network layer calls back on — the app implements NetworkCallBack */
     @JvmStatic
     fun setCallBack(callback: ICallBack?) {
         callBack = callback
     }
 
-    /**
-     * DEBUG IP 说明
-     * setLonglinkSvrAddr,setShortlinkSvrAddr,setDebugIP 均可用于设置DEBUG IP
-     * setLonglinkSvrAddr: 设置长链接的DEBUG IP;
-     * setShortlinkSvrAddr: 设置短连接的DEBUG IP;
-     * setDebugIP: 设置对应HOST(不区分长短链)的DEBUG IP;
+    /*
+     * About the DEBUG IP
+     * setLonglinkSvrAddr, setShortlinkSvrAddr and setDebugIP all set a DEBUG IP:
+     * setLonglinkSvrAddr: sets the DEBUG IP of the long link;
+     * setShortlinkSvrAddr: sets the DEBUG IP of the short link;
+     * setDebugIP: sets the DEBUG IP of a HOST, long link or short link alike;
      *
-     * 优先级:
-     * setDebugIP 为最高优先级
-     * 同一个接口, 以最后设置的值为准
+     * Precedence:
+     * setDebugIP has the highest precedence
+     * of one and the same setter, the value set last is the one that counts
      */
 
     /**
-     * @param host      长链接域名
-     * @param ports     长链接端口列表
-     * @param debugIP   长链接调试IP.如果有值,则忽略 host设置, 并使用该IP.
+     * @param host      the host name of the long link
+     * @param ports     the ports of the long link
+     * @param debugIP   the DEBUG IP of the long link: if it is set, `host` is ignored and this IP
+     *                  is the one used
      */
     @JvmStatic
     external fun setLonglinkSvrAddr(host: String?, ports: IntArray?, debugIP: String?)
@@ -386,8 +386,9 @@ object StnLogic {
     }
 
     /**
-     * @param port      短链接(HTTP)端口
-     * @param debugIP   短链接调试IP.如果有值,则所有TASK走短链接时,使用该IP代替TASK中的HOST
+     * @param port      the port of the short link (HTTP)
+     * @param debugIP   the DEBUG IP of the short link: if it is set, a TASK that goes over the
+     *                  short link uses this IP in place of the HOST the TASK names
      */
     @JvmStatic
     external fun setShortlinkSvrAddr(port: Int, debugIP: String?)
@@ -398,9 +399,9 @@ object StnLogic {
     }
 
     /**
-     * 设置DEBUG IP
-     * @param host  要设置的域名
-     * @param ip    该域名对应的IP
+     * Sets a DEBUG IP
+     * @param host  the host name to set it for
+     * @param ip    the IP of that host name
      */
     @JvmStatic
     external fun setDebugIP(host: String?, ip: String?)
@@ -417,78 +418,78 @@ object StnLogic {
     @JvmStatic
     external fun hasTask(taskID: Int): Boolean
 
-    /** 重做所有长短连任务. 注意这个接口会重连长链接. */
+    /** Redoes every long-link and short-link task. Note that this one reconnects the long link. */
     @JvmStatic
     external fun redoTask()
 
-    /** 停止并清除所有未完成任务. */
+    /** Stops and clears every task that has not finished. */
     @JvmStatic
     external fun clearTask()
 
-    /** 重新排序任务队列 — 与 C++ 的 `touchTasks` 相同，端口有而 C++ 的 Java 类没有声明。 */
+    /** Reorders the task queue — the `touchTasks` of the C++, which the port has and its Java does not declare. */
     @JvmStatic
     external fun touchTasks()
 
-    /** 停止并清除所有未完成任务并重新初始化 */
+    /** Stops and clears every task that has not finished, and initializes everything again. */
     @JvmStatic
     external fun reset()
 
-    /** 停止并清除所有未完成任务并重新初始化, 重新设置encoder version */
+    /** Stops and clears every task that has not finished, re-initializes and sets the encoder version anew. */
     @JvmStatic
     external fun resetAndInitEncoderVersion(packerEncoderVersion: Int, packerEncoderName: String?)
 
     /**
-     * 设置备份IP,用于long/short svr均不可用的场景下
-     * @param host  域名
-     * @param ips   域名对应的IP列表
+     * Sets the backup IPs, for when neither the long nor the short svr answers
+     * @param host  the host name
+     * @param ips   the IPs of that host name
      */
     @JvmStatic
     external fun setBackupIPs(host: String?, ips: Array<String>?)
 
-    /** 检测长链接状态.如果没有连接上,则会尝试重连. */
+    /** Checks the state of the long link: if it is not connected, a reconnect is attempted. */
     @JvmStatic
     external fun makesureLongLinkConnected()
 
     // signalling
 
     /**
-     * 信令保活
-     * @param period 信令保活间隔,默认5S
-     * @param keepTime 信令保活时间,默认20S
+     * Keeps the signalling alive
+     * @param period how often it is kept alive, 5s by default
+     * @param keepTime how long it is kept alive, 20s by default
      */
     @JvmStatic
     external fun setSignallingStrategy(period: Long, keepTime: Long)
 
-    /** 发送一个信令保活包(如果有必要) */
+    /** Sends a signalling keep-alive package, if one is needed */
     @JvmStatic
     external fun keepSignalling()
 
-    /** 停止信令保活 */
+    /** Stops keeping the signalling alive */
     @JvmStatic
     external fun stopSignalling()
 
-    /** 设置客户端版本 放入长连私有协议头部 */
+    /** Sets the client version, which goes into the header of the long link's private protocol */
     @JvmStatic
     external fun setClientVersion(clientVersion: Int)
 
-    /** 获取底层已加载模块 */
+    /** Gets the modules the native side has loaded */
     @JvmStatic
     private external fun getLoadLibraries(): ArrayList<String>?
 
     @JvmStatic
     external fun genTaskID(): Int
 
-    /** 一个随机的 seq, 与 C++ 的 `unsigned short` 相同 — 端口有而 C++ 的 Java 类没有声明。 */
+    /** A random seq, the same as the C++'s `unsigned short` — the port has it, its Java does not. */
     @JvmStatic
     external fun genSequenceId(): Int
 
-    /** 触发一次 noop — 端口有而 C++ 的 Java 类没有声明。 */
+    /** Triggers one noop — which the port declares and the C++'s Java class does not. */
     @JvmStatic
     external fun trigNooping()
 
     /**
-     * 要求上层进行AUTH操作.
-     * 如果一个TASK要求AUTH状态而当前没有AUTH态,组件就会回调此方法
+     * Asks the app to authenticate. If a TASK asks for the AUTH state and there is none right now,
+     * this is the method the component calls back.
      */
     @JvmStatic
     private fun makesureAuthed(host: String?): Boolean {
@@ -506,10 +507,10 @@ object StnLogic {
     }
 
     /**
-     * 长连host设置到网络层 网络层向上层请求host dns结果
-     * 短连task中设置host  网络层向上层请求host dns结果
-     * @param host  域名
-     * @return 空：底层实现解析
+     * The host the long link is set up with, and the host a short-link task names: the network
+     * layer asks the app for what DNS makes of a host.
+     * @param host  the host name
+     * @return empty: the layer below resolves it itself
      */
     @JvmStatic
     private fun onNewDns(host: String?): Array<String>? {
@@ -527,9 +528,9 @@ object StnLogic {
     }
 
     /**
-     * 收到server push消息
-     * @param cmdid     PUSH的CMDID,这个应该是APP跟SVR约定的值
-     * @param data      PUSH下来的数据
+     * A message the server pushed has come in
+     * @param cmdid     the CMDID of the PUSH, which is what the app and the SVR agreed on
+     * @param data      the data that was pushed down
      */
     @JvmStatic
     private fun onPush(channelID: String?, cmdid: Int, taskid: Int, data: ByteArray?) {
@@ -546,7 +547,7 @@ object StnLogic {
     }
 
     /**
-     * 网络层获取上层发送的数据内容
+     * The network layer takes the body the app sends
      */
     @JvmStatic
     private fun req2Buf(
@@ -572,7 +573,7 @@ object StnLogic {
     }
 
     /**
-     * 网络层将收到的信令回包交给上层解析
+     * The network layer hands the answer it received to the app to parse
      */
     @JvmStatic
     private fun buf2Resp(
@@ -597,16 +598,10 @@ object StnLogic {
     }
 
     /**
-     * 信令回包网络层处理完毕回调上层
+     * The network layer is done with the answer and calls the app back
      */
     @JvmStatic
-    private fun onTaskEnd(
-        taskID: Int,
-        userContext: Any?,
-        errType: Int,
-        errCode: Int,
-        profile: CgiProfile?
-    ): Int {
+    private fun onTaskEnd(taskID: Int, userContext: Any?, errType: Int, errCode: Int, profile: CgiProfile?): Int {
         return try {
             val imp = callBack
             if (imp == null) {
@@ -620,7 +615,7 @@ object StnLogic {
         }
     }
 
-    /** 上报信令消耗的流量 */
+    /** Reports the traffic the signalling used */
     @JvmStatic
     private fun trafficData(send: Int, recv: Int) {
         try {
@@ -636,7 +631,7 @@ object StnLogic {
     }
 
     /**
-     * 网络层向上层反馈网络连接状态
+     * The network layer tells the app what state the network connection is in
      */
     @JvmStatic
     private fun reportConnectStatus(status: Int, longlinkstatus: Int) {
@@ -653,8 +648,8 @@ object StnLogic {
     }
 
     /**
-     * 长连信令校验
-     * @return  ECHECK_NOW = 0, ECHECK_NEXT = 1, ECHECK_NEVER = 2
+     * The long link's signalling check
+     * @return ECHECK_NOW = 0, ECHECK_NEXT = 1, ECHECK_NEVER = 2
      */
     @JvmStatic
     private fun getLongLinkIdentifyCheckBuffer(
@@ -677,14 +672,10 @@ object StnLogic {
     }
 
     /**
-     * 长连信令校验回包
+     * The answer to the long link's signalling check
      */
     @JvmStatic
-    private fun onLongLinkIdentifyResp(
-        channelID: String?,
-        respBuf: ByteArray?,
-        reqBufHash: ByteArray?
-    ): Boolean {
+    private fun onLongLinkIdentifyResp(channelID: String?, respBuf: ByteArray?, reqBufHash: ByteArray?): Boolean {
         return try {
             val imp = callBack
             if (imp == null) {
@@ -743,7 +734,7 @@ object StnLogic {
     }
 
     /**
-     * Task运行完成时，STN将Task的运行时状态及统计数据返回给上层
+     * When a Task is done, STN hands the app how it ran and what it counted
      */
     @JvmStatic
     private fun reportTaskProfile(taskString: String?) {

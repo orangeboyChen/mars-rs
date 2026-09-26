@@ -96,13 +96,13 @@ pub struct MarsXLogConfig {
 ///
 /// @return [`MARS_XLOG_OK`] on success, otherwise a negative
 /// `MARS_XLOG_ERR_*` code.
-// The pointer is null-checked (and otherwise only read through the audited
-// `cstr` helpers), so this symbol is total and stays a *safe* `extern "C" fn`
-// exactly as the C header declares it; clippy's "mark it unsafe" advice would
-// push the burden onto every C/C++ caller without buying any safety.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+///
+/// # Safety
+///
+/// `config` must be null, or point to an initialised `MarsXLogConfig` that stays alive for the
+/// duration of the call; every `char*` in it must be null or a NUL-terminated string.
 #[no_mangle]
-pub extern "C" fn mars_xlog_open(config: *const MarsXLogConfig) -> c_int {
+pub unsafe extern "C" fn mars_xlog_open(config: *const MarsXLogConfig) -> c_int {
     guard(MARS_XLOG_ERR_PANIC, || {
         // SAFETY: `config` may be null (checked inside `ptr_to_ref`); otherwise
         // the caller guarantees a valid, aligned, initialised `MarsXLogConfig`
@@ -202,10 +202,13 @@ unsafe fn to_xlog_config(cfg: &MarsXLogConfig) -> Result<XLogConfig, c_int> {
 /// UTF-8 become an empty string. The record is dropped when `level` is outside
 /// `MarsLevelVerbose..=MarsLevelFatal` (that is what C++ `kLevelNone` means) or
 /// below the level set by [`mars_xlog_set_level`].
-// See `mars_xlog_open`: every pointer argument is null-checked before use.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+///
+/// # Safety
+///
+/// `tag`, `filename`, `func_name` and `message` must each be null, or a NUL-terminated C string
+/// that stays alive for the duration of the call.
 #[no_mangle]
-pub extern "C" fn mars_xlog_write(
+pub unsafe extern "C" fn mars_xlog_write(
     level: c_int,
     tag: *const c_char,
     filename: *const c_char,
@@ -313,8 +316,13 @@ pub extern "C" fn mars_xlog_set_max_alive_duration(seconds: c_longlong) {
 /// @return the number of bytes written excluding the terminating NUL, or
 /// [`MARS_XLOG_ERR_NULL_OUT`], [`MARS_XLOG_ERR_NO_SPACE`] (including `len == 0`)
 /// or [`MARS_XLOG_ERR_NO_PATH`].
+///
+/// # Safety
+///
+/// `out` must be null, or point to at least `len` writable bytes that stay alive for the duration
+/// of the call.
 #[no_mangle]
-pub extern "C" fn mars_xlog_current_log_path(out: *mut c_char, len: c_uint) -> c_int {
+pub unsafe extern "C" fn mars_xlog_current_log_path(out: *mut c_char, len: c_uint) -> c_int {
     guard(MARS_XLOG_ERR_PANIC, || {
         if out.is_null() {
             return MARS_XLOG_ERR_NULL_OUT;
@@ -432,9 +440,13 @@ fn path_to_bytes(path: &Path) -> Vec<u8> {
 /// Returns the instance handle, or `0` when `config` is null / invalid or the
 /// appender cannot be opened. A level outside `0..=5` is accepted: the C++
 /// casts it, so `MARS_LEVEL_NONE` (6) is "an instance that logs nothing".
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+///
+/// # Safety
+///
+/// `config` must be null, or point to an initialised `MarsXLogConfig` that stays alive for the
+/// duration of the call; every `char*` in it must be null or a NUL-terminated string.
 #[no_mangle]
-pub extern "C" fn mars_xlog_new_instance(
+pub unsafe extern "C" fn mars_xlog_new_instance(
     config: *const MarsXLogConfig,
     level: c_int,
 ) -> c_longlong {
@@ -445,9 +457,8 @@ pub extern "C" fn mars_xlog_new_instance(
         };
         // SAFETY: `cfg` is the caller's valid config, as above. A config the
         // appender cannot use has no instance, which is what `0` means.
-        let rust_config = match unsafe { to_xlog_config(cfg) } {
-            Ok(config) => config,
-            Err(_) => return 0,
+        let Ok(rust_config) = (unsafe { to_xlog_config(cfg) }) else {
+            return 0;
         };
         // `NewXloggerInstance(_config, (TLogLevel)_level)`: the level is cast,
         // never checked — `MARS_LEVEL_NONE` (6) is the level a caller starts an
@@ -460,9 +471,13 @@ pub extern "C" fn mars_xlog_new_instance(
 }
 
 /// The handle registered for `name_prefix`, or `0` when there is none.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+///
+/// # Safety
+///
+/// `name_prefix` must be null, or a NUL-terminated C string that stays alive for the duration of
+/// the call.
 #[no_mangle]
-pub extern "C" fn mars_xlog_get_instance(name_prefix: *const c_char) -> c_longlong {
+pub unsafe extern "C" fn mars_xlog_get_instance(name_prefix: *const c_char) -> c_longlong {
     guard(0, || {
         // SAFETY: null is reported as an empty string by the helper.
         let prefix = unsafe { cstr::ptr_to_str_or_empty(name_prefix) };
@@ -471,9 +486,13 @@ pub extern "C" fn mars_xlog_get_instance(name_prefix: *const c_char) -> c_longlo
 }
 
 /// Releases the instance registered for `name_prefix` and closes its appender.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+///
+/// # Safety
+///
+/// `name_prefix` must be null, or a NUL-terminated C string that stays alive for the duration of
+/// the call.
 #[no_mangle]
-pub extern "C" fn mars_xlog_release_instance(name_prefix: *const c_char) {
+pub unsafe extern "C" fn mars_xlog_release_instance(name_prefix: *const c_char) {
     let _ = guard(0, || {
         // SAFETY: null is reported as an empty string by the helper.
         let prefix = unsafe { cstr::ptr_to_str_or_empty(name_prefix) };
@@ -487,9 +506,13 @@ pub extern "C" fn mars_xlog_release_instance(name_prefix: *const c_char) {
 /// The instance's own level decides: a record below it is dropped, and an
 /// unknown non-zero handle writes nothing. For `0` that level is the one
 /// [`mars_xlog_set_level`] set, the same one [`mars_xlog_write`] asks.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+///
+/// # Safety
+///
+/// `tag`, `filename`, `func_name` and `message` must each be null, or a NUL-terminated C string
+/// that stays alive for the duration of the call.
 #[no_mangle]
-pub extern "C" fn mars_xlog_write_instance(
+pub unsafe extern "C" fn mars_xlog_write_instance(
     instance: c_longlong,
     level: c_int,
     tag: *const c_char,
@@ -656,9 +679,13 @@ pub extern "C" fn mars_xlog_set_max_alive_duration_instance(
 
 /// The cache directory of an instance; see [`mars_xlog_current_log_path`] for
 /// the buffer contract (`0` when there is none).
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+///
+/// # Safety
+///
+/// `out` must be null, or point to at least `len` writable bytes that stay alive for the duration
+/// of the call.
 #[no_mangle]
-pub extern "C" fn mars_xlog_current_log_cache_path(out: *mut c_uchar, len: c_uint) -> c_int {
+pub unsafe extern "C" fn mars_xlog_current_log_cache_path(out: *mut c_uchar, len: c_uint) -> c_int {
     guard(MARS_XLOG_ERR_PANIC, || {
         if out.is_null() {
             return MARS_XLOG_ERR_NULL_OUT;
@@ -684,9 +711,13 @@ pub extern "C" fn mars_xlog_current_log_cache_path(out: *mut c_uchar, len: c_uin
 /// @return the `TFileIOAction` the recovery ended in — one of
 /// `kActionNone` (0) … `kActionRemoveFailed` (7) — or a negative
 /// `MARS_XLOG_ERR_*` code when `config` is unusable.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+///
+/// # Safety
+///
+/// `config` must be null, or point to an initialised `MarsXLogConfig` that stays alive for the
+/// duration of the call; every `char*` in it must be null or a NUL-terminated string.
 #[no_mangle]
-pub extern "C" fn mars_xlog_oneshot_flush(config: *const MarsXLogConfig) -> c_int {
+pub unsafe extern "C" fn mars_xlog_oneshot_flush(config: *const MarsXLogConfig) -> c_int {
     guard(MARS_XLOG_ERR_PANIC, || {
         // SAFETY: null-checked inside `ptr_to_ref`.
         let Some(cfg) = (unsafe { cstr::ptr_to_ref(config) }) else {
@@ -711,9 +742,14 @@ pub extern "C" fn mars_xlog_oneshot_flush(config: *const MarsXLogConfig) -> c_in
 ///
 /// `prefix` and `log_dir` may be null (an empty `log_dir` yields no name at
 /// all). See [`mars_xlog_current_log_path`] for the `out` contract.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+///
+/// # Safety
+///
+/// `prefix` and `log_dir` must each be null or a NUL-terminated C string, and `out` must be null
+/// or point to at least `len` writable bytes; all of them stay alive for the duration of the
+/// call.
 #[no_mangle]
-pub extern "C" fn mars_xlog_make_logfile_name(
+pub unsafe extern "C" fn mars_xlog_make_logfile_name(
     timespan: c_int,
     prefix: *const c_char,
     log_dir: *const c_char,
@@ -741,9 +777,14 @@ pub extern "C" fn mars_xlog_make_logfile_name(
 ///
 /// Same protocol as [`mars_xlog_make_logfile_name`]: walk `index` from `0`
 /// until it answers [`MARS_XLOG_ERR_NO_PATH`].
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+///
+/// # Safety
+///
+/// `prefix` and `log_dir` must each be null or a NUL-terminated C string, and `out` must be null
+/// or point to at least `len` writable bytes; all of them stay alive for the duration of the
+/// call.
 #[no_mangle]
-pub extern "C" fn mars_xlog_getfilepath_from_timespan(
+pub unsafe extern "C" fn mars_xlog_getfilepath_from_timespan(
     timespan: c_int,
     prefix: *const c_char,
     log_dir: *const c_char,

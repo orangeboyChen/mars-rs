@@ -91,7 +91,7 @@ pub(crate) fn dump_to_logdir(bytes: &[u8], logdir: &Path) -> String {
         now.day()
     ));
     if let Err(err) = fs::create_dir_all(&day_dir) {
-        eprintln!("[mars-appender] xlogger_dump: {day_dir:?}: {err}");
+        eprintln!("[mars-appender] xlogger_dump: {}: {err}", day_dir.display());
         return String::new();
     }
 
@@ -106,7 +106,7 @@ pub(crate) fn dump_to_logdir(bytes: &[u8], logdir: &Path) -> String {
         bytes.len()
     ));
     if let Err(err) = fs::write(&path, bytes) {
-        eprintln!("[mars-appender] xlogger_dump: {path:?}: {err}");
+        eprintln!("[mars-appender] xlogger_dump: {}: {err}", path.display());
         return String::new();
     }
 
