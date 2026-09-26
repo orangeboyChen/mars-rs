@@ -7,6 +7,7 @@
 //! fields of a record come from [`crate::state`], and all pointer handling from
 //! [`crate::cstr`].
 
+use std::borrow::Cow;
 use std::ffi::{c_char, c_int, c_longlong, c_uchar, c_uint, c_ulonglong};
 use std::path::Path;
 
@@ -408,11 +409,15 @@ fn to_filter_level(level: c_int) -> LogLevel {
 
 /// Empty strings become `None` so the formatter omits the `[tag]` /
 /// `[file:line, func]` fields, matching the C++ behaviour for a null `char*`.
-fn opt_string(value: &str) -> Option<String> {
+///
+/// The non-empty case borrows: the C++ `XLoggerInfo` holds the caller's
+/// `const char*` as-is, and copying it into a `String` was one allocation per
+/// field per record.
+fn opt_string(value: &str) -> Option<Cow<'_, str>> {
     if value.is_empty() {
         None
     } else {
-        Some(value.to_string())
+        Some(Cow::Borrowed(value))
     }
 }
 
@@ -542,9 +547,12 @@ pub unsafe extern "C" fn mars_xlog_write_instance(
         };
         let info = XLoggerInfo {
             level,
-            tag: Some(tag.to_owned()),
-            filename: Some(filename.to_owned()),
-            func_name: Some(func_name.to_owned()),
+            // Borrowed, like the C++ `const char*` fields: one `String` per
+            // field per record was three allocations a `.xlog` write never
+            // needed.
+            tag: opt_string(tag),
+            filename: opt_string(filename),
+            func_name: opt_string(func_name),
             line,
             // -1 makes the category fill these in from the OS.
             pid: -1,

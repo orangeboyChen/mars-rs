@@ -9,12 +9,14 @@
 use jni::objects::{
     JByteArray, JClass, JIntArray, JObject, JObjectArray, JString, JValue, JValueOwned,
 };
+use jni::strings::JavaStr;
 use jni::sys::{jboolean, jint, jlong, jobject, JNI_VERSION_1_6};
 use jni::{JNIEnv, JavaVM};
 
 use mars_appender::{AppenderMode, CompressMode, LogLevel, XLogConfig, XLoggerInfo};
 use mars_stn::{CgiProfile, Task};
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
@@ -109,6 +111,46 @@ fn long_field(env: &mut JNIEnv<'_>, obj: &JObject<'_>, name: &str) -> i64 {
         env.get_field(obj, name, "J")
             .and_then(|value| value.j())
             .unwrap_or(0)
+    })
+}
+
+/// The `java.lang.String` behind `value`, or `None` when it is null.
+///
+/// A handle to *borrow* the characters from (see [`borrowed_str`]), not a copy:
+/// `Java2C_Xlog.cc` hands the appender the `char*` of a `ScopedJstring`, and a
+/// `String` per field per record was three allocations it never makes.
+fn java_string_handle<'local>(value: &JObject<'local>) -> Option<JString<'local>> {
+    if value.is_null() {
+        return None;
+    }
+    // `JObject` is a borrowed handle: re-wrap the same raw reference without
+    // taking ownership of the local ref.
+    Some(unsafe { JString::from_raw(value.as_raw()) })
+}
+
+/// The characters of a borrowed `JavaStr`, or `""` when it is absent.
+///
+/// Valid UTF-8 comes back borrowed (Java's modified UTF-8 only differs for
+/// supplementary characters, and those are converted lossily, exactly like the
+/// old `to_string_lossy().into_owned()` did).
+fn borrowed_str<'a>(java_str: Option<&'a JavaStr<'a, 'a, 'a>>) -> Cow<'a, str> {
+    java_str.map_or(Cow::Borrowed(""), |java_str| java_str.to_string_lossy())
+}
+
+/// [`java_string_handle`] for a `java.lang.String` *field* of `obj`.
+fn string_field_handle<'local>(
+    env: &mut JNIEnv<'local>,
+    obj: &JObject<'_>,
+    name: &str,
+) -> Option<JString<'local>> {
+    guard(|| {
+        let Ok(field) = env.get_field(obj, name, "Ljava/lang/String;") else {
+            return None;
+        };
+        let Ok(object) = field.l() else {
+            return None;
+        };
+        java_string_handle(&object)
     })
 }
 
@@ -282,17 +324,37 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logWrite<'l
             log_write_impl(None, &log);
             return;
         }
+        let level = level_from_java(int_field(&mut env, &info, "level"));
+        let line = int_field(&mut env, &info, "line");
+        // -1 makes the category fill these in from the OS; Java passes real
+        // values, which the port keeps.
+        let pid = long_field(&mut env, &info, "pid");
+        let tid = long_field(&mut env, &info, "tid");
+        let maintid = long_field(&mut env, &info, "maintid");
+
+        // The three strings are borrowed from the JVM instead of copied into
+        // `String`s: a `JavaStr` keeps the characters alive for as long as the
+        // record needs them, which is this call.
+        let tag = string_field_handle(&mut env, &info, "tag");
+        let filename = string_field_handle(&mut env, &info, "filename");
+        let funcname = string_field_handle(&mut env, &info, "funcname");
+        let tag = tag.as_ref().and_then(|value| env.get_string(value).ok());
+        let filename = filename
+            .as_ref()
+            .and_then(|value| env.get_string(value).ok());
+        let funcname = funcname
+            .as_ref()
+            .and_then(|value| env.get_string(value).ok());
+
         let info = XLoggerInfo {
-            level: level_from_java(int_field(&mut env, &info, "level")),
-            tag: Some(string_field(&mut env, &info, "tag")),
-            filename: Some(string_field(&mut env, &info, "filename")),
-            func_name: Some(string_field(&mut env, &info, "funcname")),
-            line: int_field(&mut env, &info, "line"),
-            // -1 makes the category fill these in from the OS; Java passes real
-            // values, which the port keeps.
-            pid: long_field(&mut env, &info, "pid"),
-            tid: long_field(&mut env, &info, "tid"),
-            maintid: long_field(&mut env, &info, "maintid"),
+            level,
+            tag: Some(borrowed_str(tag.as_ref())),
+            filename: Some(borrowed_str(filename.as_ref())),
+            func_name: Some(borrowed_str(funcname.as_ref())),
+            line,
+            pid,
+            tid,
+            maintid,
             timeval: now_timeval(),
         };
         log_write_impl(Some(info), &log);
@@ -320,11 +382,24 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logWrite2<'
             .get_string(&log)
             .map(|value| value.to_string_lossy().into_owned())
             .unwrap_or_default();
+        // Borrowed from the JVM, like `logWrite` does: three `String`s per
+        // record was three allocations `Java2C_Xlog.cc` never makes.
+        let tag = java_string_handle(&tag);
+        let filename = java_string_handle(&filename);
+        let funcname = java_string_handle(&funcname);
+        let tag = tag.as_ref().and_then(|value| env.get_string(value).ok());
+        let filename = filename
+            .as_ref()
+            .and_then(|value| env.get_string(value).ok());
+        let funcname = funcname
+            .as_ref()
+            .and_then(|value| env.get_string(value).ok());
+
         let info = XLoggerInfo {
             level: level_from_java(level),
-            tag: Some(java_string(&mut env, &tag)),
-            filename: Some(java_string(&mut env, &filename)),
-            func_name: Some(java_string(&mut env, &funcname)),
+            tag: Some(borrowed_str(tag.as_ref())),
+            filename: Some(borrowed_str(filename.as_ref())),
+            func_name: Some(borrowed_str(funcname.as_ref())),
             line,
             pid: pid as i64,
             tid,

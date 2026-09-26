@@ -6,6 +6,7 @@
 //! `cachedir_` (a `std::string` where the empty string means "not set") becomes
 //! an `Option<PathBuf>` and `cache_days_` becomes an unsigned value.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -112,18 +113,25 @@ impl Default for XLogConfig {
 
 /// `mars::comm::XLoggerInfo`.
 ///
-/// Optional strings are `None` where the C++ uses a possibly-`NULL`
-/// `const char*`.
+/// The C++ struct holds `const char*` for `tag` / `filename` / `func_name`:
+/// pointers into the caller's memory, never copies. The port borrows them the
+/// same way, because `__Log2File` runs once per record and three `String`s per
+/// record — one per field, on the FFI and JNI boundaries — was three
+/// allocations the C++ never makes. A caller that owns its strings is not
+/// pushed out: `Some(s.into())` moves a `String` in without a copy, and
+/// `Some("literal".into())` borrows.
+///
+/// `None` is where the C++ uses a possibly-`NULL` `const char*`.
 #[derive(Debug, Clone)]
-pub struct XLoggerInfo {
+pub struct XLoggerInfo<'a> {
     /// `level`
     pub level: LogLevel,
     /// `tag`
-    pub tag: Option<String>,
+    pub tag: Option<Cow<'a, str>>,
     /// `filename`
-    pub filename: Option<String>,
+    pub filename: Option<Cow<'a, str>>,
     /// `func_name`
-    pub func_name: Option<String>,
+    pub func_name: Option<Cow<'a, str>>,
     /// `line`
     pub line: i32,
     /// `pid`
@@ -136,7 +144,7 @@ pub struct XLoggerInfo {
     pub timeval: (i64, i64),
 }
 
-impl Default for XLoggerInfo {
+impl Default for XLoggerInfo<'_> {
     /// The C++ `XLOGGER_INFO_INITIALIZER` (all zero / `NULL`, level verbose).
     fn default() -> Self {
         Self {

@@ -1385,7 +1385,7 @@ mod tests {
         dir.join(format!("{prefix}.xlog"))
     }
 
-    fn info(level: LogLevel) -> XLoggerInfo {
+    fn info(level: LogLevel) -> XLoggerInfo<'static> {
         XLoggerInfo {
             level,
             pid: std::process::id() as i64,
@@ -1664,7 +1664,7 @@ mod tests {
             // allocate either — including the trim of `__FUNCTION__`, which
             // the port used to do into a fresh `String`.
             let mut console_info = info(LogLevel::Info);
-            console_info.func_name = Some("void Foo::bar(int)".to_owned());
+            console_info.func_name = Some("void Foo::bar(int)".into());
             appender.set_console_log(true);
             appender.write(Some(&console_info), "console warm up");
             crate::test_alloc::watch();

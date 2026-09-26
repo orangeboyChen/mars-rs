@@ -348,9 +348,9 @@ mod tests {
         assert!(log_write_impl(None, "no info"));
         let info = XLoggerInfo {
             level: LogLevel::Info,
-            tag: Some("Net".to_owned()),
-            filename: Some("main.rs".to_owned()),
-            func_name: Some("run".to_owned()),
+            tag: Some("Net".into()),
+            filename: Some("main.rs".into()),
+            func_name: Some("run".into()),
             line: 42,
             pid: -1,
             tid: -1,
