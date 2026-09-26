@@ -1,27 +1,26 @@
 //! The task intercept, through the public api.
 //!
-//! An answer the app gave for a task comes back while it is fresh, is forgotten
-//! the moment it is asked for and found to be more than a minute old, and a
-//! second answer for the same task replaces the first.
+//! An answer the app gave for a task is kept, but it is never handed back — the
+//! C++ copies it out and then answers `false` — and it is forgotten the moment
+//! it is asked for and found to be more than a minute old. A second answer for
+//! the same task replaces the first.
 
 use mars_stn::task_intercept::{TaskIntercept, TaskInterceptInfo, INTERCEPT_TIMEOUT};
 
 #[test]
-fn an_answer_comes_back_while_it_is_fresh() {
+fn an_answer_is_not_handed_back_even_while_it_is_fresh() {
     let mut intercept = TaskIntercept::new();
     intercept.add_intercept_task_at(1_000, "task", b"the answer".to_vec());
     assert_eq!(intercept.len(), 1);
     assert!(!intercept.is_empty());
 
-    assert_eq!(
-        intercept.intercept_task_info_at(1_000, "task"),
-        Some(b"the answer".to_vec())
-    );
-    // ... and right up to the minute
+    // the C++ copies the answer out and then answers `false`
+    assert_eq!(intercept.intercept_task_info_at(1_000, "task"), None);
     assert_eq!(
         intercept.intercept_task_info_at(1_000 + INTERCEPT_TIMEOUT, "task"),
-        Some(b"the answer".to_vec())
+        None
     );
+    assert_eq!(intercept.len(), 1, "but it is still being kept");
 }
 
 #[test]
@@ -60,7 +59,8 @@ fn a_second_answer_for_the_same_task_replaces_the_first() {
     assert_eq!(intercept.len(), 1);
     assert_eq!(
         intercept.intercept_task_info_at(1_000, "task"),
-        Some(b"the second".to_vec())
+        None,
+        "the second is what is kept, but nothing is handed out of it"
     );
 
     intercept.clear();
@@ -71,10 +71,7 @@ fn a_second_answer_for_the_same_task_replaces_the_first() {
 fn the_methods_that_take_no_reading_ask_the_clock_themselves() {
     let mut intercept = TaskIntercept::default();
     intercept.add_intercept_task("task", b"the answer".to_vec());
-    assert_eq!(
-        intercept.intercept_task_info("task"),
-        Some(b"the answer".to_vec())
-    );
+    assert_eq!(intercept.intercept_task_info("task"), None);
     assert_eq!(intercept.intercept_task_info("other"), None);
     assert!(format!("{intercept:?}").contains("TaskIntercept"));
 

@@ -929,8 +929,9 @@ impl ShortLinkTaskManager {
                 continue;
             }
 
-            // a cgi that was answered already is answered again from what was
-            // kept, without going out at all
+            // a cgi that was answered already: the C++ asks here too, and
+            // what it asks answers `false` whatever it has, so nothing comes
+            // of it and the task goes out like any other
             if let Some(answer) = self.intercept.intercept_task_info_at(now, &task.cgi) {
                 let len = answer.len();
                 let (err_code, handle) = self.decode(&task, &answer);
@@ -1899,27 +1900,24 @@ mod tests {
     }
 
     #[test]
-    fn a_cgi_that_was_answered_already_is_answered_again_without_going_out() {
+    fn a_cgi_that_was_answered_already_goes_out_again() {
         let mut manager = ShortLinkTaskManager::new();
         let started = runs(&mut manager);
         let ended = endings(&mut manager);
         manager
             .intercept()
             .add_intercept_task_at(100_000, "/cgi-bin/7", b"kept".to_vec());
-        manager.set_buf2resp(|_task, body| {
-            assert_eq!(body, b"kept");
-            (0, TaskFailHandleType::Normal)
-        });
         let mut answered = task(7);
         answered.retry_count = 0;
         manager.start_task_at(100_000, answered, prepare());
 
-        assert!(started.lock().unwrap().is_empty(), "it never went out");
-        assert!(manager.is_empty(), "and it is over");
         assert_eq!(
-            *ended.lock().unwrap(),
-            vec![(ErrCmdType::EnDecode, 0, TaskFailHandleType::Normal, 7)]
+            started.lock().unwrap().len(),
+            1,
+            "it went out like any other"
         );
+        assert_eq!(manager.len(), 1, "and it is still out");
+        assert!(ended.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -2129,7 +2127,7 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_the_app_keeps_is_one_the_queue_hands_out_again() {
+    fn an_answer_the_app_keeps_is_not_one_the_queue_hands_out_again() {
         let mut manager = ShortLinkTaskManager::new();
         runs(&mut manager);
         endings(&mut manager);
@@ -2137,12 +2135,13 @@ mod tests {
         manager.start_task_at(100_000, task(7), prepare());
         manager.on_response_at(100_500, RunId(7), answered(b"hello"));
 
-        assert_eq!(manager.intercept().len(), 1);
+        assert_eq!(manager.intercept().len(), 1, "it was kept");
         assert_eq!(
             manager
                 .intercept()
                 .intercept_task_info_at(100_600, "/cgi-bin/7"),
-            Some(b"hello".to_vec())
+            None,
+            "and the C++ answers `false` even while it is still good"
         );
     }
 

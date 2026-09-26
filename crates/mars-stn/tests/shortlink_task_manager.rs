@@ -491,7 +491,7 @@ fn a_task_the_app_cannot_write_is_failed_at_once() {
 }
 
 #[test]
-fn a_cgi_that_was_answered_already_is_answered_again_without_going_out() {
+fn a_cgi_that_was_answered_already_goes_out_again() {
     let mut app = App::new();
     app.manager
         .intercept()
@@ -500,12 +500,13 @@ fn a_cgi_that_was_answered_already_is_answered_again_without_going_out() {
     task.retry_count = 0;
     app.start_task(task);
 
-    assert!(app.sent().is_empty(), "it never went out");
-    assert!(app.manager.is_empty(), "and it is over");
     assert_eq!(
-        app.ended(),
-        vec![(ErrCmdType::EnDecode, 0, TaskFailHandleType::Normal, 7)]
+        app.sent().len(),
+        1,
+        "the C++ answers `false` out of what it kept, so it went out"
     );
+    assert!(app.manager.has_task(7), "and it is still out");
+    assert!(app.ended().is_empty());
 }
 
 #[test]
@@ -669,7 +670,8 @@ fn an_answer_the_app_said_to_keep_is_kept() {
         app.manager
             .intercept()
             .intercept_task_info_at(START + 500, "/cgi-bin/7"),
-        Some(b"kept".to_vec())
+        None,
+        "and it is never handed back: the C++ answers `false` while it copies"
     );
     let _: &mut TaskIntercept = app.manager.intercept();
 }
