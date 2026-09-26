@@ -10,12 +10,15 @@ name: Release
 #
 # Trigger it by hand (Actions -> Release -> Run workflow):
 #
-#   * version: the version, typed out — "1.2.3", "v1.2.3-alpha1", "0.2.0-beta2"
-#   * bump + prerelease: "the next patch, as alpha 2", which is what the
-#     sequence v1.2.4-alpha1 -> v1.2.4-alpha2 -> v1.2.4 is made of
+#   * version: the version, typed out — "1.2.3", "v1.2.3-alpha.1", "0.2.0-beta.2"
+#   * bump + prerelease: "the next patch, as the second alpha", which is what
+#     the sequence v1.2.4-alpha.1 -> v1.2.4-alpha.2 -> v1.2.4 is made of
 #
-# The tag is the version with a "v" in front: v1.2.3, v1.2.3-alpha1,
-# v1.2.3-beta2. Anything with a suffix is published as a GitHub pre-release.
+# The tag is the version with a "v" in front: v1.2.3, v1.2.3-alpha.1,
+# v1.2.3-beta.2. Anything with a suffix is published as a GitHub pre-release.
+# The number is separated from the channel by a dot, the way semver separates
+# two identifiers: `beta.10` counts past `beta.9`, whereas the identifier
+# `beta10` is compared letter by letter and so sorts *before* `beta2`.
 #
 # workflow_dispatch only: the tag is created by this workflow itself, so
 # pushing one never re-triggers a run.
@@ -30,7 +33,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version, e.g. 1.2.3, v1.2.3-alpha1, 0.2.0-beta2 (overrides the bump)'
+        description: 'Version, e.g. 1.2.3, v1.2.3-alpha.1, 0.2.0-beta.2 (overrides the bump)'
         required: false
       bump:
         description: 'Semver bump of the latest tag, when no version is typed'
@@ -51,7 +54,7 @@ on:
           - alpha
           - beta
       prerelease:
-        description: 'Number of the pre-release: alpha2, beta3 … (empty = the next one)'
+        description: 'Number of the pre-release: alpha.2, beta.3 … (empty = the next one)'
         required: false
 
 permissions:
@@ -145,7 +148,7 @@ jobs:
 
             if [ "${INPUT_CHANNEL:-stable}" = stable ]; then
               # a pre-release that is out already is promoted to its version:
-              # v1.2.4-alpha2 -> v1.2.4, and no bump is applied
+              # v1.2.4-alpha.2 -> v1.2.4, and no bump is applied
               if [ -n "$PRE_BASE" ]; then
                 VERSION="$PRE_BASE"
               else
@@ -157,18 +160,18 @@ jobs:
               else
                 VERSION="$(bump_of "$LAST_STABLE")"
               fi
-              # alpha1, alpha2 …: what was typed, else one past the last one of
-              # this channel, else the first
+              # alpha.1, alpha.2 …: what was typed, else one past the last one
+              # of this channel, else the first
               if [ -n "${INPUT_PRERELEASE:-}" ]; then
                 NUMBER="$INPUT_PRERELEASE"
               else
                 case "$LAST_PRE" in
-                  *-${INPUT_CHANNEL}[0-9]) NUMBER=$((${LAST_PRE##*-${INPUT_CHANNEL}} + 1)) ;;
-                  *)                       NUMBER=1 ;;
+                  *-${INPUT_CHANNEL}.[0-9]*) NUMBER=$((${LAST_PRE##*-${INPUT_CHANNEL}.} + 1)) ;;
+                  *)                         NUMBER=1 ;;
                 esac
                 case "$NUMBER" in '' | *[!0-9]*) NUMBER=1 ;; esac
               fi
-              VERSION="$VERSION-$INPUT_CHANNEL$NUMBER"
+              VERSION="$VERSION-$INPUT_CHANNEL.$NUMBER"
             fi
           fi
 
@@ -177,8 +180,8 @@ jobs:
             *)   PRERELEASE=false ;;
           esac
           if ! printf '%s' "$VERSION" \
-              | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)[0-9]*)?$'; then
-            echo "::error::'$VERSION' is not X.Y.Z or X.Y.Z-{alpha,beta}N"
+              | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$'; then
+            echo "::error::'$VERSION' is not X.Y.Z or X.Y.Z-{alpha,beta}[.N]"
             exit 1
           fi
 

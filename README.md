@@ -101,7 +101,7 @@ Two differences are known and accepted:
 
 Every release ships a package per platform; `.github/workflows/release.yml`
 builds them when it is run by hand (Actions → Release → Run workflow) with a
-version, or with a bump and a channel — `v1.2.3-alpha1`, `v1.2.3-beta2`,
+version, or with a bump and a channel — `v1.2.3-alpha.1`, `v1.2.3-beta.2`,
 `v1.2.3`. Anything with a suffix is published as a GitHub pre-release.
 
 ### SwiftPM
