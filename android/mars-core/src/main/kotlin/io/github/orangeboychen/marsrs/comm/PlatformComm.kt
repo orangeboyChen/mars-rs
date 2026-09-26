@@ -1,3 +1,8 @@
+// The constants below carry the name the C++ project's Java gives them, spelled
+// the way Kotlin spells a constant: `K_PING_CHECK` there is `K_PING_CHECK` here.
+// The JNI reaches a constant by the number it carries and not by its name, so
+// nothing on the Rust side had to change with them.
+
 package io.github.orangeboychen.marsrs.comm
 
 // `PlatformComm$C2Java` — the nine static methods `mars-jni` calls when it
@@ -14,13 +19,13 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkInfo
 import android.net.Proxy
+import android.net.wifi.WifiInfo as AndroidWifiInfo
 import android.net.wifi.WifiManager
 import android.os.Handler
 import android.telephony.TelephonyManager
-import android.net.wifi.WifiInfo as AndroidWifiInfo
 
 /**
- * mars获取
+ * What mars gets
  *
  * The [C2Java] nested object is the class `mars-jni` looks up; the three info
  * classes are what three of its answers come back as, and their fields are
@@ -36,10 +41,10 @@ object PlatformComm {
     @JvmField
     var handler: Handler? = null
 
-    const val ENoNet: Int = -1
-    const val EWifi: Int = 1
-    const val EMobile: Int = 2
-    const val EOtherNet: Int = 3
+    const val E_NO_NET: Int = -1
+    const val E_WIFI: Int = 1
+    const val E_MOBILE: Int = 2
+    const val E_OTHER_NET: Int = 3
 
     const val NETTYPE_NOT_WIFI: Int = 0
     const val NETTYPE_WIFI: Int = 1
@@ -50,7 +55,7 @@ object PlatformComm {
     const val NETTYPE_UNKNOWN: Int = 6
     const val NETTYPE_NON: Int = -1
 
-    /** WiFi信息类 */
+    /** The WiFi info class */
     class WifiInfo {
         @JvmField
         var ssid: String? = null
@@ -59,7 +64,7 @@ object PlatformComm {
         var bssid: String? = null
     }
 
-    /** 手机卡信息类 */
+    /** The SIM card info class */
     class SIMInfo {
         @JvmField
         var ispCode: String? = null
@@ -68,7 +73,7 @@ object PlatformComm {
         var ispName: String? = null
     }
 
-    /** 接入点信息 */
+    /** The access point info */
     class APNInfo {
         @JvmField
         var netType: Int = 0
@@ -80,48 +85,50 @@ object PlatformComm {
         var extraInfo: String? = null
     }
 
-    /** 平台回调的初始化：C2Java 的九个方法都要从这里的 context 取它们问的东西。 */
+    /** How the platform callbacks are initialized: the nine methods of C2Java all take what they
+     * ask about from the context that is kept here. */
     @JvmStatic
     fun init(ncontext: Context?, nhandler: Handler?) {
         context = ncontext
         handler = nhandler
 
-        NetworkSignalUtil.InitNetworkSignalUtil(ncontext)
+        NetworkSignalUtil.initNetworkSignalUtil(ncontext)
     }
 
     object C2Java {
 
         /**
-         * mars回调获取网络类型
+         * The mars callback that gets the network type
          * @return WiFi/Mobile/NoNet
          */
         @JvmStatic
         fun getNetInfo(): Int {
             val conMan = context?.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-                ?: return ENoNet
+                ?: return E_NO_NET
 
             @Suppress("DEPRECATION")
-            val netInfo = conMan.activeNetworkInfo ?: return ENoNet
+            val netInfo = conMan.activeNetworkInfo ?: return E_NO_NET
 
             return try {
                 when (netInfo.type) {
-                    ConnectivityManager.TYPE_WIFI -> EWifi
+                    ConnectivityManager.TYPE_WIFI -> E_WIFI
+
                     ConnectivityManager.TYPE_MOBILE,
                     ConnectivityManager.TYPE_MOBILE_DUN,
                     ConnectivityManager.TYPE_MOBILE_HIPRI,
                     ConnectivityManager.TYPE_MOBILE_MMS,
-                    ConnectivityManager.TYPE_MOBILE_SUPL -> EMobile
+                    ConnectivityManager.TYPE_MOBILE_SUPL -> E_MOBILE
 
-                    else -> EOtherNet
+                    else -> E_OTHER_NET
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
-                EOtherNet
+                E_OTHER_NET
             }
         }
 
         /**
-         * mars回调获取Http代理信息
+         * The mars callback that gets the HTTP proxy info
          */
         @JvmStatic
         @Suppress("DEPRECATION")
@@ -177,7 +184,7 @@ object PlatformComm {
             }
         }
 
-        /** 获取当前WiFi的具体信息 */
+        /** Gets the details of the current WiFi */
         @JvmStatic
         fun getCurWifiInfo(): WifiInfo? {
             return try {
@@ -207,7 +214,7 @@ object PlatformComm {
             }
         }
 
-        /** 获取当前手机卡信息 */
+        /** Gets the current SIM card info */
         @JvmStatic
         fun getCurSIMInfo(): SIMInfo? {
             return try {
@@ -228,13 +235,14 @@ object PlatformComm {
             }
         }
 
-        /** 获取接入点信息 */
+        /** Gets the access point info */
         @JvmStatic
         fun getAPNInfo(): APNInfo? {
             return try {
                 val ctx = context ?: return null
                 val manager = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
                     ?: return null
+
                 @Suppress("DEPRECATION")
                 val netInfo: NetworkInfo = manager.activeNetworkInfo ?: return null
 
@@ -267,7 +275,7 @@ object PlatformComm {
         }
 
         /**
-         * mars回调获取网络信号强度
+         * The mars callback that gets the network signal strength
          */
         @JvmStatic
         fun getSignal(isWifi: Boolean): Long {
@@ -281,7 +289,7 @@ object PlatformComm {
             }
         }
 
-        /** mars回调查看终端网络是否已连接状态 */
+        /** The mars callback that asks whether the terminal's network is connected */
         @JvmStatic
         fun isNetworkConnected(): Boolean {
             val ctx = context ?: return false

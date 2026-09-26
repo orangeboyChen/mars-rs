@@ -9,3 +9,6 @@ description = "Core byte-buffer primitives ported from mars/comm (AutoBuffer, Pt
 
 [dependencies]
 chrono = { workspace = true }
+
+[lints]
+workspace = true

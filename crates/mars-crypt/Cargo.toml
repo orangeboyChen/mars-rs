@@ -10,3 +10,6 @@ description = "On-disk xlog framing + TEA/ECDH crypto ported from mars/xlog/cryp
 [dependencies]
 mars-core = { workspace = true }
 k256 = { workspace = true, features = ["ecdh"] }
+
+[lints]
+workspace = true

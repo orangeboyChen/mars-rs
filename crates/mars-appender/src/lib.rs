@@ -366,13 +366,12 @@ pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
         return FileIoAction::Unnecessary;
     }
 
-    let mut appender = match Appender::oneshot(
+    let Ok(mut appender) = Appender::oneshot(
         config,
         MAX_FILE_SIZE.load(Ordering::Relaxed),
         MAX_ALIVE_TIME.load(Ordering::Relaxed) as i64,
-    ) {
-        Ok(appender) => appender,
-        Err(_) => return FileIoAction::OpenFailed,
+    ) else {
+        return FileIoAction::OpenFailed;
     };
 
     let action = appender.treat_mapping_as_file_and_flush();

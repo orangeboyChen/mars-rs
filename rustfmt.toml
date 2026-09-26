@@ -1,0 +1,12 @@
+# rustfmt configuration for the Rust face of the port.
+#
+# Every value here restates what the sources are already formatted with: CI runs
+# `cargo fmt --all -- --check`, so this file pins the style rather than changing
+# it, and adding a setting that disagrees with the tree would turn the whole
+# workspace into one diff.
+edition = "2021"
+newline_style = "Unix"
+max_width = 100
+use_small_heuristics = "Default"
+tab_spaces = 4
+hard_tabs = false

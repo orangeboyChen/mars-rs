@@ -2,7 +2,6 @@ package io.github.orangeboychen.marsrs
 
 import android.content.Context
 import android.os.Handler
-
 import io.github.orangeboychen.marsrs.comm.PlatformComm
 
 /**
@@ -33,8 +32,8 @@ object Mars {
     private var hasInitialized = false
 
     /**
-     * 初始化平台回调，必须在 onCreate 之前调用：C2Java 的每一个方法都从
-     * [PlatformComm.init] 留下的 context 里取它要问的东西。
+     * Initializes the platform callbacks, and has to be called before `onCreate`: every method of
+     * C2Java takes what it asks about from the context that [PlatformComm.init] leaves behind.
      */
     @JvmStatic
     fun init(context: Context, handler: Handler) {
@@ -43,7 +42,8 @@ object Mars {
     }
 
     /**
-     * APP 启动时调用：首次启动必须先 [init]，之后每一次都走 [BaseEvent.onCreate]。
+     * Called when the app starts: the first startup has to go through [init] first, and every one
+     * after it goes through [BaseEvent.onCreate].
      */
     @JvmStatic
     fun onCreate(isFirstStartup: Boolean) {
@@ -52,14 +52,14 @@ object Mars {
         } else if (!isFirstStartup) {
             BaseEvent.onCreate()
         } else {
-            throw IllegalStateException(
+            error(
                 "Mars.init must be executed before Mars.onCreate when the app starts for the first time."
             )
         }
     }
 
     /**
-     *  APP 退出时销毁组件
+     * Destroys the components when the app exits
      */
     @JvmStatic
     fun onDestroy() {

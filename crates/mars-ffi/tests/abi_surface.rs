@@ -40,13 +40,12 @@ fn tempdir(tag: &str) -> std::path::PathBuf {
 
 /// A config whose `CString`s live as long as the borrow the pointers came from.
 ///
-/// The fields are only held so that the pointers in `raw` stay valid; nothing
-/// reads them.
-#[allow(dead_code)]
+/// The strings are only held so that the pointers in `raw` stay valid: nothing
+/// reads them, which is what the underscore in their names says.
 struct ConfigBundle {
-    log_dir: CString,
-    prefix: CString,
-    pub_key: CString,
+    _log_dir: CString,
+    _prefix: CString,
+    _pub_key: CString,
     raw: MarsXLogConfig,
 }
 
@@ -65,9 +64,9 @@ fn make_config(dir: &std::path::Path, mode: c_int, compress: c_int) -> ConfigBun
         cache_days: 0,
     };
     ConfigBundle {
-        log_dir,
-        prefix,
-        pub_key,
+        _log_dir: log_dir,
+        _prefix: prefix,
+        _pub_key: pub_key,
         raw,
     }
 }
@@ -75,7 +74,10 @@ fn make_config(dir: &std::path::Path, mode: c_int, compress: c_int) -> ConfigBun
 #[test]
 fn open_rejects_a_bad_config_before_touching_the_disk() {
     let _guard = serial();
-    assert_eq!(mars_xlog_open(std::ptr::null()), MARS_XLOG_ERR_NULL_CONFIG);
+    assert_eq!(
+        unsafe { mars_xlog_open(std::ptr::null()) },
+        MARS_XLOG_ERR_NULL_CONFIG
+    );
 
     let dir = tempdir("bad");
     for (mode, compress, expected) in [
@@ -83,13 +85,16 @@ fn open_rejects_a_bad_config_before_touching_the_disk() {
         (0, 9, MARS_XLOG_ERR_BAD_COMPRESS),
     ] {
         let config = make_config(&dir, mode, compress);
-        assert_eq!(mars_xlog_open(&config.raw), expected);
+        assert_eq!(unsafe { mars_xlog_open(&config.raw) }, expected);
     }
 
     let empty = CString::new("").unwrap();
     let mut config = make_config(&dir, 0, 0);
     config.raw.log_dir = empty.as_ptr();
-    assert_eq!(mars_xlog_open(&config.raw), MARS_XLOG_ERR_EMPTY_LOG_DIR);
+    assert_eq!(
+        unsafe { mars_xlog_open(&config.raw) },
+        MARS_XLOG_ERR_EMPTY_LOG_DIR
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -124,29 +129,36 @@ fn the_whole_abi_runs_over_one_appender() {
     let _guard = serial();
     let dir = tempdir("surface");
     let config = make_config(&dir, 0, 0);
-    assert_eq!(mars_xlog_open(&config.raw), MARS_XLOG_OK);
+    assert_eq!(unsafe { mars_xlog_open(&config.raw) }, MARS_XLOG_OK);
     // a second open is refused, like the C++ singleton
-    assert_eq!(mars_xlog_open(&config.raw), MARS_XLOG_ERR_APPENDER);
+    assert_eq!(
+        unsafe { mars_xlog_open(&config.raw) },
+        MARS_XLOG_ERR_APPENDER
+    );
 
     let tag = CString::new("Net").unwrap();
     let message = CString::new("hello").unwrap();
     // null pieces are allowed
-    mars_xlog_write(
-        2,
-        tag.as_ptr(),
-        std::ptr::null(),
-        std::ptr::null(),
-        0,
-        message.as_ptr(),
-    );
-    mars_xlog_write(
-        2,
-        std::ptr::null(),
-        std::ptr::null(),
-        std::ptr::null(),
-        0,
-        message.as_ptr(),
-    );
+    unsafe {
+        mars_xlog_write(
+            2,
+            tag.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            message.as_ptr(),
+        );
+    }
+    unsafe {
+        mars_xlog_write(
+            2,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            message.as_ptr(),
+        );
+    }
 
     // the exact level is asserted in the (single-threaded) JNI tests: another
     // test file can close the singleton appender under this one
@@ -171,25 +183,27 @@ fn the_whole_abi_runs_over_one_appender() {
     mars_xlog_set_mode(9);
 
     let mut path = vec![0u8; 512];
-    let written =
-        mars_xlog_current_log_path(path.as_mut_ptr() as *mut c_char, path.len() as c_uint);
+    let written = unsafe {
+        mars_xlog_current_log_path(path.as_mut_ptr() as *mut c_char, path.len() as c_uint)
+    };
     assert!(written > 0, "no current log path: {written}");
     assert!(std::str::from_utf8(&path[..written as usize]).is_ok());
     // too small a buffer, and a null buffer
     assert_eq!(
-        mars_xlog_current_log_path(path.as_mut_ptr() as *mut c_char, 0),
+        unsafe { mars_xlog_current_log_path(path.as_mut_ptr() as *mut c_char, 0) },
         MARS_XLOG_ERR_NO_SPACE
     );
     assert_eq!(
-        mars_xlog_current_log_path(std::ptr::null_mut(), 64),
+        unsafe { mars_xlog_current_log_path(std::ptr::null_mut(), 64) },
         MARS_XLOG_ERR_NULL_OUT
     );
 
     let mut cache = vec![0u8; 512];
-    let written = mars_xlog_current_log_cache_path(cache.as_mut_ptr(), cache.len() as c_uint);
+    let written =
+        unsafe { mars_xlog_current_log_cache_path(cache.as_mut_ptr(), cache.len() as c_uint) };
     assert!(written != MARS_XLOG_ERR_NULL_OUT);
     assert_eq!(
-        mars_xlog_current_log_cache_path(std::ptr::null_mut(), 64),
+        unsafe { mars_xlog_current_log_cache_path(std::ptr::null_mut(), 64) },
         MARS_XLOG_ERR_NULL_OUT
     );
 
@@ -201,7 +215,9 @@ fn the_whole_abi_runs_over_one_appender() {
     // closed: there is no current file any more
     let mut path = vec![0u8; 512];
     assert_eq!(
-        mars_xlog_current_log_path(path.as_mut_ptr() as *mut c_char, path.len() as c_uint),
+        unsafe {
+            mars_xlog_current_log_path(path.as_mut_ptr() as *mut c_char, path.len() as c_uint)
+        },
         MARS_XLOG_ERR_NO_PATH
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -212,42 +228,46 @@ fn instances_are_created_addressed_and_released() {
     let _guard = serial();
     let dir = tempdir("instances");
     let config = make_config(&dir, 1, 1);
-    let handle = mars_xlog_new_instance(&config.raw, 2);
+    let handle = unsafe { mars_xlog_new_instance(&config.raw, 2) };
     assert!(handle > 0);
     let prefix = CString::new("Mars").unwrap();
-    assert_eq!(mars_xlog_get_instance(prefix.as_ptr()), handle);
-    assert_eq!(mars_xlog_get_instance(std::ptr::null()), 0);
+    assert_eq!(unsafe { mars_xlog_get_instance(prefix.as_ptr()) }, handle);
+    assert_eq!(unsafe { mars_xlog_get_instance(std::ptr::null()) }, 0);
 
     let tag = CString::new("Net").unwrap();
     let file = CString::new("net.cc").unwrap();
     let func = CString::new("Send").unwrap();
     let message = CString::new("through an instance").unwrap();
-    mars_xlog_write_instance(
-        handle,
-        2,
-        tag.as_ptr(),
-        file.as_ptr(),
-        func.as_ptr(),
-        7,
-        message.as_ptr(),
-    );
+    unsafe {
+        mars_xlog_write_instance(
+            handle,
+            2,
+            tag.as_ptr(),
+            file.as_ptr(),
+            func.as_ptr(),
+            7,
+            message.as_ptr(),
+        );
+    }
     mars_xlog_set_level_instance(handle, 3);
     assert_eq!(mars_xlog_get_level(handle), 3);
     mars_xlog_set_mode_instance(handle, 0);
     mars_xlog_flush_instance(handle, 1);
-    mars_xlog_release_instance(prefix.as_ptr());
-    assert_eq!(mars_xlog_get_instance(prefix.as_ptr()), 0);
+    unsafe {
+        mars_xlog_release_instance(prefix.as_ptr());
+    }
+    assert_eq!(unsafe { mars_xlog_get_instance(prefix.as_ptr()) }, 0);
 
     // a null config has no instance
-    assert_eq!(mars_xlog_new_instance(std::ptr::null(), 2), 0);
+    assert_eq!(unsafe { mars_xlog_new_instance(std::ptr::null(), 2) }, 0);
     // an empty log dir is refused
     let empty = CString::new("").unwrap();
     let mut broken = make_config(&dir, 0, 0);
     broken.raw.log_dir = empty.as_ptr();
-    assert_eq!(mars_xlog_new_instance(&broken.raw, 2), 0);
+    assert_eq!(unsafe { mars_xlog_new_instance(&broken.raw, 2) }, 0);
     // and so is a bad mode
     let broken_mode = make_config(&dir, 9, 0);
-    assert_eq!(mars_xlog_new_instance(&broken_mode.raw, 2), 0);
+    assert_eq!(unsafe { mars_xlog_new_instance(&broken_mode.raw, 2) }, 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -255,23 +275,27 @@ fn instances_are_created_addressed_and_released() {
 fn the_void_symbols_survive_a_closed_appender() {
     let _guard = serial();
     // nothing is open: every void symbol has to be a no-op instead of a crash
-    mars_xlog_write(
-        2,
-        std::ptr::null(),
-        std::ptr::null(),
-        std::ptr::null(),
-        0,
-        std::ptr::null(),
-    );
-    mars_xlog_write_instance(
-        0,
-        2,
-        std::ptr::null(),
-        std::ptr::null(),
-        std::ptr::null(),
-        0,
-        std::ptr::null(),
-    );
+    unsafe {
+        mars_xlog_write(
+            2,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+        );
+    }
+    unsafe {
+        mars_xlog_write_instance(
+            0,
+            2,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+        );
+    }
     mars_xlog_flush();
     mars_xlog_flush_sync();
     mars_xlog_flush_instance(0, 1);
@@ -283,7 +307,9 @@ fn the_void_symbols_survive_a_closed_appender() {
     mars_xlog_set_max_alive_duration(0);
     mars_xlog_set_mode(0);
     mars_xlog_set_mode_instance(0, 0);
-    mars_xlog_release_instance(std::ptr::null());
+    unsafe {
+        mars_xlog_release_instance(std::ptr::null());
+    }
     // the void symbols added for the rest of the C++ surface
     mars_xlog_flush_all(1);
     mars_xlog_set_console_log_instance(0, 0);
@@ -322,7 +348,7 @@ fn an_instance_can_be_opened_at_the_level_that_logs_nothing() {
     let _guard = serial();
     let dir = tempdir("level-none");
     let config = make_config(&dir, 1, 0);
-    let handle = mars_xlog_new_instance(&config.raw, 6);
+    let handle = unsafe { mars_xlog_new_instance(&config.raw, 6) };
     assert_ne!(handle, 0, "LEVEL_NONE collapsed onto the default logger");
     assert_eq!(mars_xlog_get_level(handle), 6);
     assert_eq!(mars_xlog_is_enabled_for(handle, 5), 0);
@@ -335,7 +361,9 @@ fn an_instance_can_be_opened_at_the_level_that_logs_nothing() {
     mars_xlog_flush_all(1);
 
     let prefix = CString::new("Mars").unwrap();
-    mars_xlog_release_instance(prefix.as_ptr());
+    unsafe {
+        mars_xlog_release_instance(prefix.as_ptr());
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -353,19 +381,21 @@ fn the_recovery_and_discovery_symbols_answer() {
 
     // A null config is an error, not a crash.
     assert_eq!(
-        mars_xlog_oneshot_flush(std::ptr::null()),
+        unsafe { mars_xlog_oneshot_flush(std::ptr::null()) },
         MARS_XLOG_ERR_NULL_CONFIG
     );
 
     // The name of today's log file, whether or not it exists.
-    let written = mars_xlog_make_logfile_name(
-        0,
-        prefix.as_ptr(),
-        log_dir.as_ptr(),
-        0,
-        out.as_mut_ptr() as *mut c_char,
-        out.len() as c_uint,
-    );
+    let written = unsafe {
+        mars_xlog_make_logfile_name(
+            0,
+            prefix.as_ptr(),
+            log_dir.as_ptr(),
+            0,
+            out.as_mut_ptr() as *mut c_char,
+            out.len() as c_uint,
+        )
+    };
     assert!(written > 0, "no log file name: {written}");
     let name = std::str::from_utf8(&out[..written as usize])
         .unwrap()
@@ -374,19 +404,36 @@ fn the_recovery_and_discovery_symbols_answer() {
     assert!(name.contains("Mars_"), "{name}");
     // One name today, so index 1 is past the end of the list.
     assert_eq!(
-        mars_xlog_make_logfile_name(
-            0,
-            prefix.as_ptr(),
-            log_dir.as_ptr(),
-            1,
-            out.as_mut_ptr() as *mut c_char,
-            out.len() as c_uint,
-        ),
+        unsafe {
+            mars_xlog_make_logfile_name(
+                0,
+                prefix.as_ptr(),
+                log_dir.as_ptr(),
+                1,
+                out.as_mut_ptr() as *mut c_char,
+                out.len() as c_uint,
+            )
+        },
         MARS_XLOG_ERR_NO_PATH
     );
 
     // The file does not exist yet, so the timespan lookup finds nothing…
     assert_eq!(
+        unsafe {
+            mars_xlog_getfilepath_from_timespan(
+                0,
+                prefix.as_ptr(),
+                log_dir.as_ptr(),
+                0,
+                out.as_mut_ptr() as *mut c_char,
+                out.len() as c_uint,
+            )
+        },
+        MARS_XLOG_ERR_NO_PATH
+    );
+    // …and once it does, it is listed.
+    std::fs::write(std::path::Path::new(&name), b"x").unwrap();
+    let found = unsafe {
         mars_xlog_getfilepath_from_timespan(
             0,
             prefix.as_ptr(),
@@ -394,19 +441,8 @@ fn the_recovery_and_discovery_symbols_answer() {
             0,
             out.as_mut_ptr() as *mut c_char,
             out.len() as c_uint,
-        ),
-        MARS_XLOG_ERR_NO_PATH
-    );
-    // …and once it does, it is listed.
-    std::fs::write(std::path::Path::new(&name), b"x").unwrap();
-    let found = mars_xlog_getfilepath_from_timespan(
-        0,
-        prefix.as_ptr(),
-        log_dir.as_ptr(),
-        0,
-        out.as_mut_ptr() as *mut c_char,
-        out.len() as c_uint,
-    );
+        )
+    };
     assert_eq!(
         std::str::from_utf8(&out[..found as usize]).unwrap(),
         name,
@@ -415,19 +451,21 @@ fn the_recovery_and_discovery_symbols_answer() {
 
     // A too-small buffer is an error, not a truncation.
     assert_eq!(
-        mars_xlog_make_logfile_name(
-            0,
-            prefix.as_ptr(),
-            log_dir.as_ptr(),
-            0,
-            out.as_mut_ptr() as *mut c_char,
-            4,
-        ),
+        unsafe {
+            mars_xlog_make_logfile_name(
+                0,
+                prefix.as_ptr(),
+                log_dir.as_ptr(),
+                0,
+                out.as_mut_ptr() as *mut c_char,
+                4,
+            )
+        },
         MARS_XLOG_ERR_NO_SPACE
     );
 
     // Recovery over a directory no appender owns: an action, never an error.
-    let action = mars_xlog_oneshot_flush(&config.raw);
+    let action = unsafe { mars_xlog_oneshot_flush(&config.raw) };
     assert!(
         (0..=7).contains(&action),
         "unexpected TFileIOAction {action}"

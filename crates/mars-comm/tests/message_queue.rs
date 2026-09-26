@@ -14,7 +14,7 @@ use mars_comm::message_queue::{
     create_message_queue, destroy_message_queue, found_message, get_def_message_queue,
     install_async_handler, install_message_handler, install_message_handler as install,
     pending_message_count, post_message, post_message_at_first, singleton_message, wait_message,
-    KNullPost, Message, MessageHandler, MessageTiming, MessageTitle, RunLoop,
+    Message, MessageHandler, MessageTiming, MessageTitle, RunLoop, NULL_POST,
 };
 
 #[test]
@@ -311,7 +311,7 @@ fn post_to_an_unknown_handler_is_a_null_post() {
             Message::new(MessageTitle(1), "nowhere"),
             MessageTiming::Immediate
         ),
-        KNullPost
+        NULL_POST
     );
     destroy_message_queue(queue);
 }

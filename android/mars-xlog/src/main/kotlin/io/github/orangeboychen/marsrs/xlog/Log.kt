@@ -33,23 +33,90 @@ object Log {
     var toastSupportContext: Context? = null
 
     interface LogImp {
-        fun logV(logInstancePtr: Long, tag: String, filename: String, funcname: String, linuxTid: Int, pid: Int, tid: Long, maintid: Long, log: String)
+        fun logV(
+            logInstancePtr: Long,
+            tag: String,
+            filename: String,
+            funcname: String,
+            linuxTid: Int,
+            pid: Int,
+            tid: Long,
+            maintid: Long,
+            log: String
+        )
 
-        fun logI(logInstancePtr: Long, tag: String, filename: String, funcname: String, linuxTid: Int, pid: Int, tid: Long, maintid: Long, log: String)
+        fun logI(
+            logInstancePtr: Long,
+            tag: String,
+            filename: String,
+            funcname: String,
+            linuxTid: Int,
+            pid: Int,
+            tid: Long,
+            maintid: Long,
+            log: String
+        )
 
-        fun logD(logInstancePtr: Long, tag: String, filename: String, funcname: String, linuxTid: Int, pid: Int, tid: Long, maintid: Long, log: String)
+        fun logD(
+            logInstancePtr: Long,
+            tag: String,
+            filename: String,
+            funcname: String,
+            linuxTid: Int,
+            pid: Int,
+            tid: Long,
+            maintid: Long,
+            log: String
+        )
 
-        fun logW(logInstancePtr: Long, tag: String, filename: String, funcname: String, linuxTid: Int, pid: Int, tid: Long, maintid: Long, log: String)
+        fun logW(
+            logInstancePtr: Long,
+            tag: String,
+            filename: String,
+            funcname: String,
+            linuxTid: Int,
+            pid: Int,
+            tid: Long,
+            maintid: Long,
+            log: String
+        )
 
-        fun logE(logInstancePtr: Long, tag: String, filename: String, funcname: String, linuxTid: Int, pid: Int, tid: Long, maintid: Long, log: String)
+        fun logE(
+            logInstancePtr: Long,
+            tag: String,
+            filename: String,
+            funcname: String,
+            linuxTid: Int,
+            pid: Int,
+            tid: Long,
+            maintid: Long,
+            log: String
+        )
 
-        fun logF(logInstancePtr: Long, tag: String, filename: String, funcname: String, linuxTid: Int, pid: Int, tid: Long, maintid: Long, log: String)
+        fun logF(
+            logInstancePtr: Long,
+            tag: String,
+            filename: String,
+            funcname: String,
+            linuxTid: Int,
+            pid: Int,
+            tid: Long,
+            maintid: Long,
+            log: String
+        )
 
         fun getLogLevel(logInstancePtr: Long): Int
 
         fun setAppenderMode(logInstancePtr: Long, mode: Int)
 
-        fun openLogInstance(level: Int, mode: Int, cacheDir: String, logDir: String, nameprefix: String, cacheDays: Int): Long
+        fun openLogInstance(
+            level: Int,
+            mode: Int,
+            cacheDir: String,
+            logDir: String,
+            nameprefix: String,
+            cacheDays: Int
+        ): Long
 
         fun getXlogInstance(nameprefix: String): Long
 
@@ -71,37 +138,97 @@ object Log {
     private val debugLog: LogImp = object : LogImp {
         private val handler = Handler(Looper.getMainLooper())
 
-        override fun logV(logInstancePtr: Long, tag: String, filename: String, funcname: String, line: Int, pid: Int, tid: Long, maintid: Long, log: String) {
+        override fun logV(
+            logInstancePtr: Long,
+            tag: String,
+            filename: String,
+            funcname: String,
+            line: Int,
+            pid: Int,
+            tid: Long,
+            maintid: Long,
+            log: String
+        ) {
             if (level <= LEVEL_VERBOSE) {
                 android.util.Log.v(tag, log)
             }
         }
 
-        override fun logI(logInstancePtr: Long, tag: String, filename: String, funcname: String, line: Int, pid: Int, tid: Long, maintid: Long, log: String) {
+        override fun logI(
+            logInstancePtr: Long,
+            tag: String,
+            filename: String,
+            funcname: String,
+            line: Int,
+            pid: Int,
+            tid: Long,
+            maintid: Long,
+            log: String
+        ) {
             if (level <= LEVEL_INFO) {
                 android.util.Log.i(tag, log)
             }
         }
 
-        override fun logD(logInstancePtr: Long, tag: String, filename: String, funcname: String, line: Int, pid: Int, tid: Long, maintid: Long, log: String) {
+        override fun logD(
+            logInstancePtr: Long,
+            tag: String,
+            filename: String,
+            funcname: String,
+            line: Int,
+            pid: Int,
+            tid: Long,
+            maintid: Long,
+            log: String
+        ) {
             if (level <= LEVEL_DEBUG) {
                 android.util.Log.d(tag, log)
             }
         }
 
-        override fun logW(logInstancePtr: Long, tag: String, filename: String, funcname: String, line: Int, pid: Int, tid: Long, maintid: Long, log: String) {
+        override fun logW(
+            logInstancePtr: Long,
+            tag: String,
+            filename: String,
+            funcname: String,
+            line: Int,
+            pid: Int,
+            tid: Long,
+            maintid: Long,
+            log: String
+        ) {
             if (level <= LEVEL_WARNING) {
                 android.util.Log.w(tag, log)
             }
         }
 
-        override fun logE(logInstancePtr: Long, tag: String, filename: String, funcname: String, line: Int, pid: Int, tid: Long, maintid: Long, log: String) {
+        override fun logE(
+            logInstancePtr: Long,
+            tag: String,
+            filename: String,
+            funcname: String,
+            line: Int,
+            pid: Int,
+            tid: Long,
+            maintid: Long,
+            log: String
+        ) {
             if (level <= LEVEL_ERROR) {
                 android.util.Log.e(tag, log)
             }
         }
 
-        override fun logF(logInstancePtr: Long, tag: String, filename: String, funcname: String, line: Int, pid: Int, tid: Long, maintid: Long, log: String) {
+        override fun logF(
+            logInstancePtr: Long,
+            tag: String,
+            filename: String,
+            funcname: String,
+            line: Int,
+            pid: Int,
+            tid: Long,
+            maintid: Long,
+            log: String
+        ) {
             if (level > LEVEL_FATAL) {
                 return
             }
@@ -115,13 +242,28 @@ object Log {
 
         override fun setAppenderMode(logInstancePtr: Long, mode: Int) {}
 
-        override fun openLogInstance(level: Int, mode: Int, cacheDir: String, logDir: String, nameprefix: String, cacheDays: Int): Long = 0
+        override fun openLogInstance(
+            level: Int,
+            mode: Int,
+            cacheDir: String,
+            logDir: String,
+            nameprefix: String,
+            cacheDays: Int
+        ): Long = 0
 
         override fun getXlogInstance(nameprefix: String): Long = 0
 
         override fun releaseXlogInstance(nameprefix: String) {}
 
-        override fun appenderOpen(level: Int, mode: Int, cacheDir: String, logDir: String, nameprefix: String, cacheDays: Int) {}
+        override fun appenderOpen(
+            level: Int,
+            mode: Int,
+            cacheDir: String,
+            logDir: String,
+            nameprefix: String,
+            cacheDays: Int
+        ) {
+        }
 
         override fun appenderClose() {}
 
@@ -220,7 +362,17 @@ object Log {
         val imp = logImp
         if (imp != null && imp.getLogLevel(0L) <= LEVEL_FATAL) {
             val log = if (obj.isEmpty()) format else String.format(format, *obj)
-            imp.logF(0L, tag, "", "", 0, Process.myPid(), Thread.currentThread().id, Looper.getMainLooper().thread.id, log)
+            imp.logF(
+                0L,
+                tag,
+                "",
+                "",
+                0,
+                Process.myPid(),
+                Thread.currentThread().id,
+                Looper.getMainLooper().thread.id,
+                log
+            )
         }
     }
 
@@ -229,7 +381,17 @@ object Log {
         val imp = logImp
         if (imp != null && imp.getLogLevel(0L) <= LEVEL_ERROR) {
             val log = (if (obj.isEmpty()) format else String.format(format, *obj)) ?: ""
-            imp.logE(0L, tag, "", "", 0, Process.myPid(), Thread.currentThread().id, Looper.getMainLooper().thread.id, log)
+            imp.logE(
+                0L,
+                tag,
+                "",
+                "",
+                0,
+                Process.myPid(),
+                Thread.currentThread().id,
+                Looper.getMainLooper().thread.id,
+                log
+            )
         }
     }
 
@@ -238,7 +400,17 @@ object Log {
         val imp = logImp
         if (imp != null && imp.getLogLevel(0L) <= LEVEL_WARNING) {
             val log = (if (obj.isEmpty()) format else String.format(format, *obj)) ?: ""
-            imp.logW(0L, tag, "", "", 0, Process.myPid(), Thread.currentThread().id, Looper.getMainLooper().thread.id, log)
+            imp.logW(
+                0L,
+                tag,
+                "",
+                "",
+                0,
+                Process.myPid(),
+                Thread.currentThread().id,
+                Looper.getMainLooper().thread.id,
+                log
+            )
         }
     }
 
@@ -247,7 +419,17 @@ object Log {
         val imp = logImp
         if (imp != null && imp.getLogLevel(0L) <= LEVEL_INFO) {
             val log = (if (obj.isEmpty()) format else String.format(format, *obj)) ?: ""
-            imp.logI(0L, tag, "", "", 0, Process.myPid(), Thread.currentThread().id, Looper.getMainLooper().thread.id, log)
+            imp.logI(
+                0L,
+                tag,
+                "",
+                "",
+                0,
+                Process.myPid(),
+                Thread.currentThread().id,
+                Looper.getMainLooper().thread.id,
+                log
+            )
         }
     }
 
@@ -256,7 +438,17 @@ object Log {
         val imp = logImp
         if (imp != null && imp.getLogLevel(0L) <= LEVEL_DEBUG) {
             val log = (if (obj.isEmpty()) format else String.format(format, *obj)) ?: ""
-            imp.logD(0L, tag, "", "", 0, Process.myPid(), Thread.currentThread().id, Looper.getMainLooper().thread.id, log)
+            imp.logD(
+                0L,
+                tag,
+                "",
+                "",
+                0,
+                Process.myPid(),
+                Thread.currentThread().id,
+                Looper.getMainLooper().thread.id,
+                log
+            )
         }
     }
 
@@ -265,7 +457,17 @@ object Log {
         val imp = logImp
         if (imp != null && imp.getLogLevel(0L) <= LEVEL_VERBOSE) {
             val log = (if (obj.isEmpty()) format else String.format(format, *obj)) ?: ""
-            imp.logV(0L, tag, "", "", 0, Process.myPid(), Thread.currentThread().id, Looper.getMainLooper().thread.id, log)
+            imp.logV(
+                0L,
+                tag,
+                "",
+                "",
+                0,
+                Process.myPid(),
+                Thread.currentThread().id,
+                Looper.getMainLooper().thread.id,
+                log
+            )
         }
     }
 
@@ -275,7 +477,17 @@ object Log {
         if (imp != null && imp.getLogLevel(0L) <= LEVEL_ERROR) {
             var log = (if (obj.isEmpty()) format else String.format(format, *obj)) ?: ""
             log += "  " + android.util.Log.getStackTraceString(tr)
-            imp.logE(0L, tag, "", "", 0, Process.myPid(), Thread.currentThread().id, Looper.getMainLooper().thread.id, log)
+            imp.logE(
+                0L,
+                tag,
+                "",
+                "",
+                0,
+                Process.myPid(),
+                Thread.currentThread().id,
+                Looper.getMainLooper().thread.id,
+                log
+            )
         }
     }
 
@@ -307,8 +519,7 @@ object Log {
     }
 
     @JvmStatic
-    fun getLogInstance(prefix: String): LogInstance? =
-        synchronized(sLogInstanceMap) { sLogInstanceMap[prefix] }
+    fun getLogInstance(prefix: String): LogInstance? = synchronized(sLogInstanceMap) { sLogInstanceMap[prefix] }
 
     class LogInstance internal constructor(
         level: Int,
@@ -333,7 +544,17 @@ object Log {
             val imp = logImp
             if (imp != null && getLogLevel() <= LEVEL_FATAL && mLogInstancePtr != 0L) {
                 val log = if (obj.isEmpty()) format else String.format(format, *obj)
-                imp.logF(mLogInstancePtr, tag, "", "", Process.myTid(), Process.myPid(), Thread.currentThread().id, Looper.getMainLooper().thread.id, log)
+                imp.logF(
+                    mLogInstancePtr,
+                    tag,
+                    "",
+                    "",
+                    Process.myTid(),
+                    Process.myPid(),
+                    Thread.currentThread().id,
+                    Looper.getMainLooper().thread.id,
+                    log
+                )
             }
         }
 
@@ -341,7 +562,17 @@ object Log {
             val imp = logImp
             if (imp != null && getLogLevel() <= LEVEL_ERROR && mLogInstancePtr != 0L) {
                 val log = (if (obj.isEmpty()) format else String.format(format, *obj)) ?: ""
-                imp.logE(mLogInstancePtr, tag, "", "", Process.myTid(), Process.myPid(), Thread.currentThread().id, Looper.getMainLooper().thread.id, log)
+                imp.logE(
+                    mLogInstancePtr,
+                    tag,
+                    "",
+                    "",
+                    Process.myTid(),
+                    Process.myPid(),
+                    Thread.currentThread().id,
+                    Looper.getMainLooper().thread.id,
+                    log
+                )
             }
         }
 
@@ -349,7 +580,17 @@ object Log {
             val imp = logImp
             if (imp != null && getLogLevel() <= LEVEL_WARNING && mLogInstancePtr != 0L) {
                 val log = (if (obj.isEmpty()) format else String.format(format, *obj)) ?: ""
-                imp.logW(mLogInstancePtr, tag, "", "", Process.myTid(), Process.myPid(), Thread.currentThread().id, Looper.getMainLooper().thread.id, log)
+                imp.logW(
+                    mLogInstancePtr,
+                    tag,
+                    "",
+                    "",
+                    Process.myTid(),
+                    Process.myPid(),
+                    Thread.currentThread().id,
+                    Looper.getMainLooper().thread.id,
+                    log
+                )
             }
         }
 
@@ -357,7 +598,17 @@ object Log {
             val imp = logImp
             if (imp != null && getLogLevel() <= LEVEL_INFO && mLogInstancePtr != 0L) {
                 val log = (if (obj.isEmpty()) format else String.format(format, *obj)) ?: ""
-                imp.logI(mLogInstancePtr, tag, "", "", Process.myTid(), Process.myPid(), Thread.currentThread().id, Looper.getMainLooper().thread.id, log)
+                imp.logI(
+                    mLogInstancePtr,
+                    tag,
+                    "",
+                    "",
+                    Process.myTid(),
+                    Process.myPid(),
+                    Thread.currentThread().id,
+                    Looper.getMainLooper().thread.id,
+                    log
+                )
             }
         }
 
@@ -365,7 +616,17 @@ object Log {
             val imp = logImp
             if (imp != null && getLogLevel() <= LEVEL_DEBUG && mLogInstancePtr != 0L) {
                 val log = (if (obj.isEmpty()) format else String.format(format, *obj)) ?: ""
-                imp.logD(mLogInstancePtr, tag, "", "", Process.myTid(), Process.myPid(), Thread.currentThread().id, Looper.getMainLooper().thread.id, log)
+                imp.logD(
+                    mLogInstancePtr,
+                    tag,
+                    "",
+                    "",
+                    Process.myTid(),
+                    Process.myPid(),
+                    Thread.currentThread().id,
+                    Looper.getMainLooper().thread.id,
+                    log
+                )
             }
         }
 
@@ -373,7 +634,17 @@ object Log {
             val imp = logImp
             if (imp != null && getLogLevel() <= LEVEL_VERBOSE && mLogInstancePtr != 0L) {
                 val log = (if (obj.isEmpty()) format else String.format(format, *obj)) ?: ""
-                imp.logV(mLogInstancePtr, tag, "", "", Process.myTid(), Process.myPid(), Thread.currentThread().id, Looper.getMainLooper().thread.id, log)
+                imp.logV(
+                    mLogInstancePtr,
+                    tag,
+                    "",
+                    "",
+                    Process.myTid(),
+                    Process.myPid(),
+                    Thread.currentThread().id,
+                    Looper.getMainLooper().thread.id,
+                    log
+                )
             }
         }
 
@@ -382,7 +653,17 @@ object Log {
             if (imp != null && getLogLevel() <= LEVEL_ERROR && mLogInstancePtr != 0L) {
                 var log = (if (obj.isEmpty()) format else String.format(format, *obj)) ?: ""
                 log += "  " + android.util.Log.getStackTraceString(tr)
-                imp.logE(mLogInstancePtr, tag, "", "", Process.myTid(), Process.myPid(), Thread.currentThread().id, Looper.getMainLooper().thread.id, log)
+                imp.logE(
+                    mLogInstancePtr,
+                    tag,
+                    "",
+                    "",
+                    Process.myTid(),
+                    Process.myPid(),
+                    Thread.currentThread().id,
+                    Looper.getMainLooper().thread.id,
+                    log
+                )
             }
         }
 

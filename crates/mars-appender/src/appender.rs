@@ -121,6 +121,10 @@ impl Region {
 /// `unsafe` because the caller must guarantee the file is not truncated or
 /// mutated behind the mapping. That is exactly what the appender guarantees —
 /// the cache file is only ever written through this mapping until `close()`.
+///
+/// The crate denies `unsafe_code` outright, so this is the one place that says
+/// otherwise: the mapping cannot be made without `unsafe`, and the invariant
+/// `memmap2` needs is argued below rather than assumed.
 #[allow(unsafe_code)]
 fn map_region(file: &File) -> std::io::Result<memmap2::MmapMut> {
     // SAFETY: the invariant memmap2 needs is that nobody truncates or resizes
@@ -156,15 +160,14 @@ fn clear_cache_file(path: &Path) {
 /// Opens (creating if needed) and maps the cache file; falls back to a heap
 /// region on any error. Returns `(region, use_mmap)`.
 fn open_region(path: &Path) -> (Region, bool) {
-    let mut file = match OpenOptions::new()
+    let Ok(mut file) = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .open(path)
-    {
-        Ok(file) => file,
-        Err(_) => return (Region::heap(), false),
+    else {
+        return (Region::heap(), false);
     };
 
     // `ftruncate` records a size without reserving blocks; the first store
@@ -978,9 +981,8 @@ impl Appender {
 
         // Read the whole cache file into a heap region.
         let mut data = vec![0u8; BUFFER_BLOCK_LENGTH];
-        let mut file = match File::open(&mmap_path) {
-            Ok(file) => file,
-            Err(_) => return FileIoAction::OpenFailed,
+        let Ok(mut file) = File::open(&mmap_path) else {
+            return FileIoAction::OpenFailed;
         };
         if file.read_exact(&mut data).is_err() {
             return FileIoAction::ReadFailed;

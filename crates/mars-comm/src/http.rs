@@ -57,11 +57,13 @@ pub const CHUNK_TAIL: &str = CRLF;
 pub const CHUNK_EOF: &str = "0\r\n\r\n";
 
 /// `THttpVersion`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Version {
     /// `kVersion_0_9`
     V0_9,
-    /// `kVersion_1_0` — what a [`RequestLine`] and a [`StatusLine`] start with.
+    /// `kVersion_1_0` — what a [`RequestLine`] and a [`StatusLine`] start with,
+    /// and what `Default` gives.
+    #[default]
     V1_0,
     /// `kVersion_1_1`
     V1_1,
@@ -92,21 +94,14 @@ impl Version {
     }
 }
 
-impl Default for Version {
-    /// `kVersion_1_0` — what a [`RequestLine`] and a [`StatusLine`] start with.
-    #[allow(clippy::derivable_impls)]
-    fn default() -> Self {
-        Self::V1_0
-    }
-}
-
 /// `RequestLine::THttpMethod`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Method {
     /// `kUnknown` — what matches none of the strings, and what a request line
     /// therefore cannot be made of.
     Unknown,
-    /// `kGet` — what a [`RequestLine`] starts with.
+    /// `kGet` — what a [`RequestLine`] starts with, and what `Default` gives.
+    #[default]
     Get,
     /// `kPost` — what the short link sends.
     Post,
@@ -158,30 +153,15 @@ impl Method {
     }
 }
 
-impl Default for Method {
-    /// `kGet` — what a [`RequestLine`] starts with.
-    #[allow(clippy::derivable_impls)]
-    fn default() -> Self {
-        Self::Get
-    }
-}
-
 /// `TCsMode` — whether what is being written or read is a request or an answer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CsMode {
     /// `kRequest`
     Request,
     /// `kRespond` — what a [`Parser`] starts with, which is the C++'s
-    /// constructor's `csmode_(kRespond)`.
+    /// constructor's `csmode_(kRespond)`, and what `Default` gives.
+    #[default]
     Respond,
-}
-
-impl Default for CsMode {
-    /// `kRespond` — what a [`Parser`] starts with.
-    #[allow(clippy::derivable_impls)]
-    fn default() -> Self {
-        Self::Respond
-    }
 }
 
 /// `RequestLine` — the first line of a request.

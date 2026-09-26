@@ -10,7 +10,7 @@ import android.net.wifi.WifiManager
 import android.util.Log
 
 /**
- * 基础事件通知类 — every `external` here is one
+ * The base event notification class — every `external` here is one
  * `Java_io_github_orangeboychen_marsrs_BaseEvent_*` symbol of `mars-jni`, so
  * every one of them is `@JvmStatic`: a native that is not a static of this
  * class is not the symbol JNI looks up.
@@ -43,7 +43,8 @@ object BaseEvent {
     external fun onInitConfigBeforeOnCreate(packerEncoderVersion: Int)
 
     /**
-     * 网络切换监听，客户端通过注册该广播通知mars stn网络切换
+     * Listens for a network change: the client registers this broadcast to tell mars STN that the
+     * network changed.
      */
     class ConnectionReceiver : BroadcastReceiver() {
 
@@ -89,6 +90,7 @@ object BaseEvent {
             val last = lastActiveNetworkInfo
             if (isWifi) {
                 val wifiManager = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+
                 @Suppress("DEPRECATION")
                 val wi = wifiManager?.connectionInfo
                 val lastWifi = lastWifiInfo

@@ -1,3 +1,8 @@
+// The constants below carry the name the C++ project's Java gives them, spelled
+// the way Kotlin spells a constant: `K_PING_CHECK` there is `K_PING_CHECK` here.
+// The JNI reaches a constant by the number it carries and not by its name, so
+// nothing on the Rust side had to change with them.
+
 package io.github.orangeboychen.marsrs.xlog
 
 /**
@@ -29,25 +34,40 @@ class Xlog : Log.LogImp {
     /** `XLoggerInfo`: what [logWrite] reads out of its argument. */
     class XLoggerInfo {
         @JvmField var level: Int = 0
+
         @JvmField var tag: String? = null
+
         @JvmField var filename: String? = null
+
         @JvmField var funcname: String? = null
+
         @JvmField var line: Int = 0
+
         @JvmField var pid: Long = 0
+
         @JvmField var tid: Long = 0
+
         @JvmField var maintid: Long = 0
     }
 
     /** `XLogConfig` — the fields `config_from_java` reads by name. */
     class XLogConfig {
         @JvmField var level: Int = LEVEL_INFO
-        @JvmField var mode: Int = AppednerModeAsync
+
+        @JvmField var mode: Int = APPENDER_MODE_ASYNC
+
         @JvmField var logdir: String? = null
+
         @JvmField var nameprefix: String? = null
+
         @JvmField var pubkey: String = ""
+
         @JvmField var compressmode: Int = ZLIB_MODE
+
         @JvmField var compresslevel: Int = 0
+
         @JvmField var cachedir: String? = null
+
         @JvmField var cachedays: Int = 0
     }
 
@@ -71,8 +91,8 @@ class Xlog : Log.LogImp {
         const val COMPRESS_LEVEL8 = 8
         const val COMPRESS_LEVEL9 = 9
 
-        const val AppednerModeAsync = 0
-        const val AppednerModeSync = 1
+        const val APPENDER_MODE_ASYNC = 0
+        const val APPENDER_MODE_SYNC = 1
 
         const val ZLIB_MODE = 0
         const val ZSTD_MODE = 1
@@ -159,29 +179,29 @@ class Xlog : Log.LogImp {
         private fun decryptTag(tag: String): String = tag
     }
 
-    override external fun getLogLevel(logInstancePtr: Long): Int
+    external override fun getLogLevel(logInstancePtr: Long): Int
 
     /** The port exports this one; the C++ project's Java did not declare it. */
     external fun setLogLevel(logInstancePtr: Long, level: Int)
 
-    override external fun setAppenderMode(logInstancePtr: Long, mode: Int)
+    external override fun setAppenderMode(logInstancePtr: Long, mode: Int)
 
-    override external fun getXlogInstance(nameprefix: String): Long
+    external override fun getXlogInstance(nameprefix: String): Long
 
-    override external fun releaseXlogInstance(nameprefix: String)
+    external override fun releaseXlogInstance(nameprefix: String)
 
     external fun newXlogInstance(logConfig: XLogConfig): Long
 
     /** Whether the console prints the log too. */
-    override external fun setConsoleLogOpen(logInstancePtr: Long, isOpen: Boolean)
+    external override fun setConsoleLogOpen(logInstancePtr: Long, isOpen: Boolean)
 
-    override external fun appenderClose()
+    external override fun appenderClose()
 
-    override external fun appenderFlush(logInstancePtr: Long, isSync: Boolean)
+    external override fun appenderFlush(logInstancePtr: Long, isSync: Boolean)
 
-    override external fun setMaxFileSize(logInstancePtr: Long, size: Long)
+    external override fun setMaxFileSize(logInstancePtr: Long, size: Long)
 
-    override external fun setMaxAliveTime(logInstancePtr: Long, seconds: Long)
+    external override fun setMaxAliveTime(logInstancePtr: Long, seconds: Long)
 
     // #################### Log.LogImp ####################
     //

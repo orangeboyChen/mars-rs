@@ -96,7 +96,7 @@ fn open_sync(dir: &Path) {
     fs::create_dir_all(dir).unwrap();
     let cfg = Config::new(dir, 1, 0);
     assert_eq!(
-        mars_xlog_open(cfg.as_ptr()),
+        unsafe { mars_xlog_open(cfg.as_ptr()) },
         MARS_XLOG_OK,
         "mars_xlog_open failed"
     );
@@ -109,14 +109,16 @@ fn write(level: c_int, tag: &str, message: &str) {
     let file = CString::new("ffi_smoke.rs").unwrap();
     let func = CString::new("write").unwrap();
     let message = CString::new(message).unwrap();
-    mars_xlog_write(
-        level,
-        tag.as_ptr(),
-        file.as_ptr(),
-        func.as_ptr(),
-        42,
-        message.as_ptr(),
-    );
+    unsafe {
+        mars_xlog_write(
+            level,
+            tag.as_ptr(),
+            file.as_ptr(),
+            func.as_ptr(),
+            42,
+            message.as_ptr(),
+        );
+    }
 }
 
 /// The `.xlog` file the appender produced in `dir` (the exact day-stamped name
@@ -239,7 +241,8 @@ fn current_log_path_is_reported() {
     mars_xlog_flush_sync();
 
     let mut buf = [0u8; 512];
-    let n = mars_xlog_current_log_path(buf.as_mut_ptr() as *mut c_char, buf.len() as c_uint);
+    let n =
+        unsafe { mars_xlog_current_log_path(buf.as_mut_ptr() as *mut c_char, buf.len() as c_uint) };
     assert!(n > 0, "mars_xlog_current_log_path failed: {n}");
     let len = n as usize;
     assert_eq!(buf[len], 0, "path must be NUL terminated");
@@ -268,16 +271,18 @@ fn current_log_path_is_reported() {
     // Too small a buffer is an error, not a truncation.
     let mut tiny = [0u8; 4];
     assert_eq!(
-        mars_xlog_current_log_path(tiny.as_mut_ptr() as *mut c_char, tiny.len() as c_uint),
+        unsafe {
+            mars_xlog_current_log_path(tiny.as_mut_ptr() as *mut c_char, tiny.len() as c_uint)
+        },
         MARS_XLOG_ERR_NO_SPACE
     );
     assert_eq!(
-        mars_xlog_current_log_path(tiny.as_mut_ptr() as *mut c_char, 0),
+        unsafe { mars_xlog_current_log_path(tiny.as_mut_ptr() as *mut c_char, 0) },
         MARS_XLOG_ERR_NO_SPACE,
         "len == 0 must be rejected"
     );
     assert_eq!(
-        mars_xlog_current_log_path(std::ptr::null_mut(), 64),
+        unsafe { mars_xlog_current_log_path(std::ptr::null_mut(), 64) },
         MARS_XLOG_ERR_NULL_OUT,
         "a null out pointer must be rejected"
     );
@@ -291,15 +296,17 @@ fn write_instance(level: c_int, tag: &str, message: &str) {
     let file = CString::new("ffi_smoke.rs").unwrap();
     let func = CString::new("write_instance").unwrap();
     let message = CString::new(message).unwrap();
-    mars_ffi::abi::mars_xlog_write_instance(
-        0,
-        level,
-        tag.as_ptr(),
-        file.as_ptr(),
-        func.as_ptr(),
-        42,
-        message.as_ptr(),
-    );
+    unsafe {
+        mars_ffi::abi::mars_xlog_write_instance(
+            0,
+            level,
+            tag.as_ptr(),
+            file.as_ptr(),
+            func.as_ptr(),
+            42,
+            message.as_ptr(),
+        );
+    }
 }
 
 #[test]
@@ -377,7 +384,10 @@ fn null_pointers_are_never_dereferenced() {
     let dir = tempfile::tempdir().unwrap();
 
     // No config at all.
-    assert_eq!(mars_xlog_open(std::ptr::null()), MARS_XLOG_ERR_NULL_CONFIG);
+    assert_eq!(
+        unsafe { mars_xlog_open(std::ptr::null()) },
+        MARS_XLOG_ERR_NULL_CONFIG
+    );
 
     // Every string null: log_dir is mandatory, so this is rejected.
     let cfg = MarsXLogConfig {
@@ -390,38 +400,42 @@ fn null_pointers_are_never_dereferenced() {
         cache_dir: std::ptr::null(),
         cache_days: 0,
     };
-    assert_eq!(mars_xlog_open(&cfg), MARS_XLOG_ERR_EMPTY_LOG_DIR);
+    assert_eq!(unsafe { mars_xlog_open(&cfg) }, MARS_XLOG_ERR_EMPTY_LOG_DIR);
 
     // Bad enum values.
     let good = Config::new(dir.path(), 1, 0);
     let mut cfg = good.raw;
     cfg.mode = 7;
-    assert_eq!(mars_xlog_open(&cfg), MARS_XLOG_ERR_BAD_MODE);
+    assert_eq!(unsafe { mars_xlog_open(&cfg) }, MARS_XLOG_ERR_BAD_MODE);
     cfg.mode = 1;
     cfg.compress_mode = 9;
-    assert_eq!(mars_xlog_open(&cfg), MARS_XLOG_ERR_BAD_COMPRESS);
+    assert_eq!(unsafe { mars_xlog_open(&cfg) }, MARS_XLOG_ERR_BAD_COMPRESS);
     // ...and the same object keeps working once it is valid again.
     cfg.compress_mode = 0;
-    assert_eq!(mars_xlog_open(&cfg), MARS_XLOG_OK);
+    assert_eq!(unsafe { mars_xlog_open(&cfg) }, MARS_XLOG_OK);
     mars_xlog_set_level(0);
 
     // A write with every pointer null (level 6 == kLevelNone is also dropped).
-    mars_xlog_write(
-        6,
-        std::ptr::null(),
-        std::ptr::null(),
-        std::ptr::null(),
-        0,
-        std::ptr::null(),
-    );
-    mars_xlog_write(
-        2,
-        std::ptr::null(),
-        std::ptr::null(),
-        std::ptr::null(),
-        0,
-        std::ptr::null(),
-    );
+    unsafe {
+        mars_xlog_write(
+            6,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+        );
+    }
+    unsafe {
+        mars_xlog_write(
+            2,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+        );
+    }
     mars_xlog_flush_sync();
 
     // The setters must tolerate being called with junk too.
@@ -447,7 +461,8 @@ fn no_path_before_open() {
     let _close = CloseOnDrop;
     mars_xlog_close();
     let mut buf = [0u8; 256];
-    let n = mars_xlog_current_log_path(buf.as_mut_ptr() as *mut c_char, buf.len() as c_uint);
+    let n =
+        unsafe { mars_xlog_current_log_path(buf.as_mut_ptr() as *mut c_char, buf.len() as c_uint) };
     assert_eq!(n, MARS_XLOG_ERR_NO_PATH, "unexpected code {n}");
 }
 
@@ -460,7 +475,7 @@ fn async_mode_also_writes() {
     // appender's own `create_dir_all`.
     fs::create_dir_all(dir.path()).unwrap();
     let cfg = Config::new(dir.path(), 0, 0); // Async + Zlib
-    assert_eq!(mars_xlog_open(cfg.as_ptr()), MARS_XLOG_OK);
+    assert_eq!(unsafe { mars_xlog_open(cfg.as_ptr()) }, MARS_XLOG_OK);
     mars_xlog_set_level(0);
     write(3, "smoke", "async-mode-record");
 
@@ -489,7 +504,7 @@ fn zstd_mode_is_accepted() {
     let _close = CloseOnDrop;
     let dir = tempfile::tempdir().unwrap();
     let cfg = Config::new(dir.path(), 1, 1); // Sync + Zstd
-    assert_eq!(mars_xlog_open(cfg.as_ptr()), MARS_XLOG_OK);
+    assert_eq!(unsafe { mars_xlog_open(cfg.as_ptr()) }, MARS_XLOG_OK);
     mars_xlog_set_level(0);
     write(2, "smoke", "zstd-mode-record");
     mars_xlog_flush_sync();
@@ -524,7 +539,7 @@ fn appender_error_is_reported_not_panicked() {
         cache_dir: std::ptr::null(),
         cache_days: 0,
     };
-    let rc = mars_xlog_open(&cfg);
+    let rc = unsafe { mars_xlog_open(&cfg) };
     // An empty prefix reaches the appender untouched, so this either opens or
     // is refused — what must not happen is "both", which is what the old
     // `OK || ERR_APPENDER` assertion accepted.
@@ -535,9 +550,11 @@ fn appender_error_is_reported_not_panicked() {
 #[test]
 fn c_types_line_up_with_the_header() {
     // The signatures the C header promises; if any of these stops compiling the
-    // ABI drifted away from `include/mars_xlog.h`.
-    let _f: extern "C" fn(*const MarsXLogConfig) -> c_int = mars_xlog_open;
-    let _f: extern "C" fn(
+    // ABI drifted away from `include/mars_xlog.h`. `unsafe` is the Rust side
+    // only — a pointer the caller owns is what makes a symbol unsafe to call
+    // from Rust, and the C header has no way to say so.
+    let _f: unsafe extern "C" fn(*const MarsXLogConfig) -> c_int = mars_xlog_open;
+    let _f: unsafe extern "C" fn(
         c_int,
         *const c_char,
         *const c_char,
@@ -552,5 +569,5 @@ fn c_types_line_up_with_the_header() {
     let _f: extern "C" fn(c_int) = mars_xlog_set_console_log;
     let _f: extern "C" fn(c_ulonglong) = mars_xlog_set_max_file_size;
     let _f: extern "C" fn(c_longlong) = mars_xlog_set_max_alive_duration;
-    let _f: extern "C" fn(*mut c_char, c_uint) -> c_int = mars_xlog_current_log_path;
+    let _f: unsafe extern "C" fn(*mut c_char, c_uint) -> c_int = mars_xlog_current_log_path;
 }

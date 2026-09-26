@@ -13,7 +13,6 @@ import android.provider.Settings
 import android.telephony.PhoneStateListener
 import android.telephony.SignalStrength
 import android.telephony.TelephonyManager
-
 import io.github.orangeboychen.marsrs.xlog.Log
 
 /**
@@ -24,6 +23,25 @@ import io.github.orangeboychen.marsrs.xlog.Log
 object NetStatusUtil {
 
     private const val TAG = "MicroMsg.NetStatusUtil"
+
+    /** `getSimOperator` answers an MCC+MNC, which is 5 or 6 digits long. */
+    private const val IMSI_MIN_LENGTH = 5
+    private const val IMSI_MAX_LENGTH = 6
+
+    /** The longest operator name `getISPName` hands back. */
+    private const val MAX_ISP_NAME_LENGTH = 100
+
+    /** The speeds `guessNetSpeed` answers with, in bytes per second. */
+    private const val KILOBYTE = 1024
+    private const val GPRS_BYTES_PER_SECOND = 4 * KILOBYTE
+    private const val EDGE_BYTES_PER_SECOND = 8 * KILOBYTE
+    private const val DEFAULT_BYTES_PER_SECOND = 100 * KILOBYTE
+
+    /** What `getProxyInfo` falls back on when the VM names no `http.proxyPort`. */
+    private const val DEFAULT_PROXY_PORT = 80
+
+    /** The scale `getNetType` gives a subtype it does not name. */
+    private const val SUBTYPE_SCALE = 1000
 
     const val NON_NETWORK: Int = -1
     const val WIFI: Int = 0
@@ -40,6 +58,7 @@ object NetStatusUtil {
 
     /** No specific network policy, use system default. */
     const val POLICY_NONE: Int = 0x0
+
     /** Reject network usage on metered networks when application in background. */
     const val POLICY_REJECT_METERED_BACKGROUND: Int = 0x1
 
@@ -55,6 +74,7 @@ object NetStatusUtil {
         try {
             val connectivityManager =
                 context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+
             @Suppress("DEPRECATION")
             val activeNetInfo = connectivityManager?.activeNetworkInfo
             Log.i(TAG, activeNetInfo.toString())
@@ -66,12 +86,13 @@ object NetStatusUtil {
     @JvmStatic
     fun isConnected(context: Context): Boolean {
         val conMan = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+
         @Suppress("DEPRECATION")
         val activeNetInfo = conMan?.activeNetworkInfo
         var connect = false
         try {
             connect = activeNetInfo?.isConnected == true
-        } catch (e: Exception) {
+        } catch (ignored: Exception) {
         }
         return connect
     }
@@ -97,16 +118,15 @@ object NetStatusUtil {
     }
 
     @JvmStatic
-    fun getNetWorkType(context: Context): Int {
-        return try {
-            val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            @Suppress("DEPRECATION")
-            val netInfo = manager?.activeNetworkInfo
-            if (netInfo != null) netInfo.type else NON_NETWORK
-        } catch (e: Exception) {
-            e.printStackTrace()
-            NON_NETWORK
-        }
+    fun getNetWorkType(context: Context): Int = try {
+        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+
+        @Suppress("DEPRECATION")
+        val netInfo = manager?.activeNetworkInfo
+        if (netInfo != null) netInfo.type else NON_NETWORK
+    } catch (e: Exception) {
+        e.printStackTrace()
+        NON_NETWORK
     }
 
     @JvmStatic
@@ -149,19 +169,20 @@ object NetStatusUtil {
         }
 
         val simOperator = tel.simOperator
-        if (simOperator == null || simOperator.length < 5) { // IMSI
+        if (simOperator == null || simOperator.length < IMSI_MIN_LENGTH) { // IMSI
             return NO_SIM_OPERATOR
         }
         /*
          * http://developer.android.com/reference/android/telephony/TelephonyManager.html#getSimOperator()
          * public String getSimOperator ()
-         * Returns the MCC+MNC (mobile country code + mobile network code) of the provider of the SIM. 5 or 6 decimal digits.
+         * Returns the MCC+MNC (mobile country code + mobile network code) of the provider of the SIM. 5 or 6
+decimal digits.
          */
         val mccMnc = StringBuilder()
         return try {
             var len = simOperator.length
-            if (len > 6) {
-                len = 6
+            if (len > IMSI_MAX_LENGTH) {
+                len = IMSI_MAX_LENGTH
             }
             for (i in 0 until len) {
                 if (!Character.isDigit(simOperator[i])) {
@@ -187,7 +208,7 @@ object NetStatusUtil {
             return ""
         }
 
-        val maxLength = 100 // ???
+        val maxLength = MAX_ISP_NAME_LENGTH
 
         val name = tel.simOperatorName ?: ""
         return if (name.length <= maxLength) name else name.substring(0, maxLength)
@@ -197,15 +218,17 @@ object NetStatusUtil {
     fun guessNetSpeed(context: Context): Int {
         return try {
             val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+
             @Suppress("DEPRECATION")
             val netInfo = manager?.activeNetworkInfo
             if (netInfo?.type == ConnectivityManager.TYPE_WIFI) {
-                return 100 * 1024
+                return DEFAULT_BYTES_PER_SECOND
             }
 
             when (netInfo?.subtype) {
-                TelephonyManager.NETWORK_TYPE_GPRS -> 4 * 1024
-                TelephonyManager.NETWORK_TYPE_EDGE -> 8 * 1024
+                TelephonyManager.NETWORK_TYPE_GPRS -> GPRS_BYTES_PER_SECOND
+
+                TelephonyManager.NETWORK_TYPE_EDGE -> EDGE_BYTES_PER_SECOND
 
                 TelephonyManager.NETWORK_TYPE_UMTS,
                 TelephonyManager.NETWORK_TYPE_CDMA,
@@ -219,33 +242,33 @@ object NetStatusUtil {
                 TelephonyManager.NETWORK_TYPE_EVDO_B,
                 TelephonyManager.NETWORK_TYPE_LTE,
                 TelephonyManager.NETWORK_TYPE_EHRPD,
-                TelephonyManager.NETWORK_TYPE_HSPAP -> 100 * 1024
+                TelephonyManager.NETWORK_TYPE_HSPAP -> DEFAULT_BYTES_PER_SECOND
 
-                else -> 100 * 1024
+                else -> DEFAULT_BYTES_PER_SECOND
             }
         } catch (e: Exception) {
             e.printStackTrace()
-            100 * 1024
+            DEFAULT_BYTES_PER_SECOND
         }
     }
 
     @JvmStatic
-    fun isMobile(context: Context): Boolean {
-        return try {
-            val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            @Suppress("DEPRECATION")
-            val netInfo = manager?.activeNetworkInfo
-            netInfo?.type != ConnectivityManager.TYPE_WIFI
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        }
+    fun isMobile(context: Context): Boolean = try {
+        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+
+        @Suppress("DEPRECATION")
+        val netInfo = manager?.activeNetworkInfo
+        netInfo?.type != ConnectivityManager.TYPE_WIFI
+    } catch (e: Exception) {
+        e.printStackTrace()
+        false
     }
 
     @JvmStatic
     fun is2G(context: Context): Boolean {
         return try {
             val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+
             @Suppress("DEPRECATION")
             val netInfo = manager?.activeNetworkInfo
             if (netInfo?.type == ConnectivityManager.TYPE_WIFI) {
@@ -264,12 +287,14 @@ object NetStatusUtil {
     fun is4G(context: Context): Boolean {
         return try {
             val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+
             @Suppress("DEPRECATION")
             val netInfo = manager?.activeNetworkInfo
             if (netInfo?.type == ConnectivityManager.TYPE_WIFI) {
                 return false
             }
-            // TODO:may be 5G in the future
+            // LTE is the fastest subtype the C++ project names; a faster one
+            // would be answered here as well.
             netInfo != null && netInfo.subtype >= TelephonyManager.NETWORK_TYPE_LTE
         } catch (e: Exception) {
             e.printStackTrace()
@@ -281,13 +306,13 @@ object NetStatusUtil {
     fun isWap(context: Context): Boolean = isWap(getNetType(context))
 
     @JvmStatic
-    fun isWap(type: Int): Boolean =
-        type == UNIWAP || type == CMWAP || type == CTWAP || type == WAP_3G
+    fun isWap(type: Int): Boolean = type == UNIWAP || type == CMWAP || type == CTWAP || type == WAP_3G
 
     @JvmStatic
     fun is3G(context: Context): Boolean {
         return try {
             val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+
             @Suppress("DEPRECATION")
             val netInfo = manager?.activeNetworkInfo
             if (netInfo?.type == ConnectivityManager.TYPE_WIFI) {
@@ -312,6 +337,7 @@ object NetStatusUtil {
     fun getWifiInfo(context: Context): WifiInfo? {
         return try {
             val conMan = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+
             @Suppress("DEPRECATION")
             val netInfo = conMan?.activeNetworkInfo
             if (netInfo == null || ConnectivityManager.TYPE_WIFI != netInfo.type) {
@@ -329,36 +355,19 @@ object NetStatusUtil {
     private fun searchIntentByClass(context: Context, className: String): Intent? {
         return try {
             val pmPack = context.packageManager
+
             @Suppress("DEPRECATION")
             val packinfos = pmPack.getInstalledPackages(0)
             if (packinfos != null && packinfos.size > 0) {
                 for (i in packinfos.indices) {
-                    try {
-                        val mainIntent = Intent()
-                        mainIntent.setPackage(packinfos[i].packageName)
-                        val sampleActivityInfos = pmPack.queryIntentActivities(mainIntent, 0)
-                        val activityCount = sampleActivityInfos?.size ?: 0
-                        if (activityCount > 0) {
-                            try {
-                                for (j in 0 until activityCount) {
-                                    val activityInfo: ActivityInfo = sampleActivityInfos!![j].activityInfo
-                                    val activityName = activityInfo.name
-
-                                    if (activityName.contains(className)) {
-                                        val mIntent = Intent("/")
-                                        val comp = ComponentName(activityInfo.packageName, activityInfo.name)
-                                        mIntent.component = comp
-                                        mIntent.action = "android.intent.action.VIEW"
-                                        context.startActivity(mIntent)
-                                        return mIntent
-                                    }
-                                }
-                            } catch (eee: Exception) {
-                                eee.printStackTrace()
-                            }
-                        }
+                    val found = try {
+                        intentOfActivityIn(context, pmPack, packinfos[i].packageName, className)
                     } catch (ee: Exception) {
                         ee.printStackTrace()
+                        null
+                    }
+                    if (found != null) {
+                        return found
                     }
                 }
             }
@@ -367,6 +376,34 @@ object NetStatusUtil {
             e.printStackTrace()
             null
         }
+    }
+
+    /**
+     * The `VIEW` intent of the first activity of `packageName` whose class name
+     * contains `className`, started on the way out; `null` when there is none.
+     */
+    private fun intentOfActivityIn(
+        context: Context,
+        pmPack: PackageManager,
+        packageName: String,
+        className: String
+    ): Intent? {
+        val mainIntent = Intent()
+        mainIntent.setPackage(packageName)
+        val sampleActivityInfos = pmPack.queryIntentActivities(mainIntent, 0)
+        val activityCount = sampleActivityInfos?.size ?: 0
+        for (j in 0 until activityCount) {
+            val activityInfo: ActivityInfo = sampleActivityInfos!![j].activityInfo
+            if (!activityInfo.name.contains(className)) {
+                continue
+            }
+            val mIntent = Intent("/")
+            mIntent.component = ComponentName(activityInfo.packageName, activityInfo.name)
+            mIntent.action = "android.intent.action.VIEW"
+            context.startActivity(mIntent)
+            return mIntent
+        }
+        return null
     }
 
     @JvmStatic
@@ -442,7 +479,7 @@ object NetStatusUtil {
 
     @JvmStatic
     fun getBackgroundLimitType(context: Context): Int {
-        if (android.os.Build.VERSION.SDK_INT >= 14) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.ICE_CREAM_SANDWICH) {
             try {
                 val activityManagerNative = Class.forName("android.app.ActivityManagerNative")
                 val am = activityManagerNative.getMethod("getDefault").invoke(activityManagerNative)
@@ -494,7 +531,7 @@ object NetStatusUtil {
             }
             val vmHost = System.getProperty("http.proxyHost")
             val vmPort = System.getProperty("http.proxyPort")
-            var ivmPort = 80
+            var ivmPort = DEFAULT_PROXY_PORT
             if (vmPort != null && vmPort.isNotEmpty()) {
                 ivmPort = Integer.parseInt(vmPort)
             }
@@ -599,7 +636,7 @@ object NetStatusUtil {
             if (subType == TelephonyManager.NETWORK_TYPE_UNKNOWN) {
                 return UNKNOW_TYPE
             }
-            subType * 1000 // NOTE HERE ~~~
+            subType * SUBTYPE_SCALE // NOTE HERE ~~~
         } catch (e: Exception) {
             e.printStackTrace()
             UNKNOW_TYPE

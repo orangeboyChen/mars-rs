@@ -171,13 +171,15 @@ pub fn space_info(path: &Path) -> Option<(u64, u64, u64)> {
     {
         use std::os::windows::ffi::OsStrExt;
 
-        #[allow(non_snake_case)]
+        // The names are spelled the way Rust spells them; the signature is the
+        // one `GetDiskFreeSpaceExW` has, and a parameter's name is not part of
+        // it.
         extern "system" {
             fn GetDiskFreeSpaceExW(
-                lpDirectoryName: *const u16,
-                lpFreeBytesAvailableToCaller: *mut u64,
-                lpTotalNumberOfBytes: *mut u64,
-                lpTotalNumberOfFreeBytes: *mut u64,
+                directory_name: *const u16,
+                free_bytes_available_to_caller: *mut u64,
+                total_number_of_bytes: *mut u64,
+                total_number_of_free_bytes: *mut u64,
             ) -> i32;
         }
 

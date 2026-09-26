@@ -300,7 +300,6 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logWrite<'l
 }
 
 /// `Xlog.logWrite2` — writes through a specific instance.
-#[allow(clippy::too_many_arguments)]
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logWrite2<'local>(
     mut env: JNIEnv<'local>,

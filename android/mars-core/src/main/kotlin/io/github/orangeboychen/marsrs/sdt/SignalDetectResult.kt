@@ -3,7 +3,7 @@ package io.github.orangeboychen.marsrs.sdt
 import java.util.Arrays
 
 /**
- * 信令探测结果信息类
+ * The signal detection result info class
  *
  * What [SdtLogic.ICallBack.reportSignalDetectResults] hands the app is the JSON
  * of one of these; nothing here is read by `mars-jni`, so the fields are
@@ -60,30 +60,26 @@ class SignalDetectResult {
         @JvmField
         var dnsIP2: String? = null
 
-        override fun toString(): String {
-            return "ResultDetail{" +
-                "detectType=" + detectType +
-                ", errorCode=" + errorCode +
-                ", networkType=" + networkType +
-                ", detectIP='" + detectIP + '\'' +
-                ", connTime=" + connTime +
-                ", port=" + port +
-                ", rtt=" + rtt +
-                ", rttStr='" + rttStr + '\'' +
-                ", httpStatusCode=" + httpStatusCode +
-                ", pingCheckCount=" + pingCheckCount +
-                ", pingLossRate='" + pingLossRate + '\'' +
-                ", dnsDomain='" + dnsDomain + '\'' +
-                ", localDns='" + localDns + '\'' +
-                ", dnsIP1='" + dnsIP1 + '\'' +
-                ", dnsIP2='" + dnsIP2 + '\'' +
-                '}'
-        }
-    }
-
-    override fun toString(): String {
-        return "SignalDetectResult{" +
-            "details=" + Arrays.toString(details) +
+        override fun toString(): String = "ResultDetail{" +
+            "detectType=" + detectType +
+            ", errorCode=" + errorCode +
+            ", networkType=" + networkType +
+            ", detectIP='" + detectIP + '\'' +
+            ", connTime=" + connTime +
+            ", port=" + port +
+            ", rtt=" + rtt +
+            ", rttStr='" + rttStr + '\'' +
+            ", httpStatusCode=" + httpStatusCode +
+            ", pingCheckCount=" + pingCheckCount +
+            ", pingLossRate='" + pingLossRate + '\'' +
+            ", dnsDomain='" + dnsDomain + '\'' +
+            ", localDns='" + localDns + '\'' +
+            ", dnsIP1='" + dnsIP1 + '\'' +
+            ", dnsIP2='" + dnsIP2 + '\'' +
             '}'
     }
+
+    override fun toString(): String = "SignalDetectResult{" +
+        "details=" + Arrays.toString(details) +
+        '}'
 }

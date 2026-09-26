@@ -222,8 +222,9 @@ pub type ShouldIntercept = dyn FnMut(i32) -> bool + Send;
 pub type NetInfo = dyn FnMut() -> NetworkKind + Send;
 
 /// `StnManager::GenSequenceId()` — the sequence id of the request, which the
-/// C++ draws again for every try: `client_sequence_id 在buf2resp这里生成,防止重
-/// 试sequence_id一样`, a retry is not taken for the request it is a retry of.
+/// C++ draws again for every try: `client_sequence_id is generated here in
+/// buf2resp, so that a retry does not get the same sequence_id`, a retry is not
+/// taken for the request it is a retry of.
 pub type GenSequenceId = dyn FnMut() -> u16 + Send;
 
 /// `ShortLinkTaskManager`.

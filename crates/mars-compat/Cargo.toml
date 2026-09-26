@@ -21,3 +21,6 @@ serde_json = { workspace = true }
 [[bin]]
 name = "xlog-compat"
 path = "src/main.rs"
+
+[lints]
+workspace = true

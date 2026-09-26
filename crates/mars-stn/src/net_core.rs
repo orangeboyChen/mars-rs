@@ -1089,7 +1089,6 @@ impl NetCore {
     /// a queue's `fun_callback_` cannot hand out a `&mut` to the core that
     /// installed it, so both of them go through the shared hooks and the
     /// shared zombie queue.
-    #[allow(clippy::too_many_arguments)]
     pub fn call_back_at(
         &mut self,
         now: u64,
@@ -1688,7 +1687,6 @@ fn anti_avalanche_check(
 /// `__CallBack(...)` as a free function, which is what lets the queues' own
 /// `fun_callback_` and the net core's methods do the same thing: the hooks and
 /// the zombie queue are shared, and nothing else is touched.
-#[allow(clippy::too_many_arguments)]
 fn call_back(
     hooks: &Arc<Mutex<Hooks>>,
     zombie: &Arc<Mutex<ZombieTaskManager>>,

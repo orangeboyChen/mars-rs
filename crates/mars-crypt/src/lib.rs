@@ -113,7 +113,7 @@ const TEA_DELTA: u32 = 0x9e37_79b9;
 /// Encrypts the two `u32` halves of one 8-byte block in place. Note this is
 /// *only* ever called with bytes decoded little-endian; Mars never decrypts on
 /// device, so there is no `__TeaDecrypt` counterpart in the C++ source.
-fn tea_encrypt(v: &mut [u32; 2], k: &[u32; 4]) {
+fn tea_encrypt(v: &mut [u32; 2], k: [u32; 4]) {
     let (mut v0, mut v1) = (v[0], v[1]);
     let (k0, k1, k2, k3) = (k[0], k[1], k[2], k[3]);
     let mut sum: u32 = 0;
@@ -454,7 +454,7 @@ impl LogCrypt {
         for i in 0..blocks {
             let block = &log_data[i * TEA_BLOCK_LEN..(i + 1) * TEA_BLOCK_LEN];
             let mut v = [le::read_u32(block, 0), le::read_u32(block, 4)];
-            tea_encrypt(&mut v, &self.tea_key_);
+            tea_encrypt(&mut v, self.tea_key_);
             out.extend_from_slice(&v[0].to_le_bytes());
             out.extend_from_slice(&v[1].to_le_bytes());
         }
@@ -482,7 +482,7 @@ impl LogCrypt {
 
         for block in data.as_chunks_mut::<TEA_BLOCK_LEN>().0 {
             let mut v = [le::read_u32(block, 0), le::read_u32(block, 4)];
-            tea_encrypt(&mut v, &self.tea_key_);
+            tea_encrypt(&mut v, self.tea_key_);
             block[..4].copy_from_slice(&v[0].to_le_bytes());
             block[4..].copy_from_slice(&v[1].to_le_bytes());
         }
@@ -799,7 +799,7 @@ mod tests {
         assert_ne!(out, payload);
         for (i, block) in payload.as_chunks::<TEA_BLOCK_LEN>().0.iter().enumerate() {
             let mut expected = [le::read_u32(block, 0), le::read_u32(block, 4)];
-            tea_encrypt(&mut expected, &crypt.tea_key_);
+            tea_encrypt(&mut expected, crypt.tea_key_);
             let got = &out[i * TEA_BLOCK_LEN..(i + 1) * TEA_BLOCK_LEN];
             assert_eq!(le::read_u32(got, 0), expected[0]);
             assert_eq!(le::read_u32(got, 4), expected[1]);
@@ -859,20 +859,17 @@ mod tests {
         // Produced by compiling the C++ `__TeaEncrypt` from
         // mars/xlog/crypt/log_crypt.cc with gcc.
         let mut v = [0u32, 0u32];
-        tea_encrypt(&mut v, &[0, 0, 0, 0]);
+        tea_encrypt(&mut v, [0, 0, 0, 0]);
         assert_eq!(v, [0xa889_f798, 0x182d_8083]);
 
         let mut v = [0x0123_4567u32, 0x89ab_cdef];
-        tea_encrypt(
-            &mut v,
-            &[0x0011_2233, 0x4455_6677, 0x8899_aabb, 0xccdd_eeff],
-        );
+        tea_encrypt(&mut v, [0x0011_2233, 0x4455_6677, 0x8899_aabb, 0xccdd_eeff]);
         assert_eq!(v, [0x7cf6_c003, 0x2c4a_f316]);
     }
 
     #[test]
     fn tea_encrypt_round_trips_with_reference_decrypt() {
-        fn tea_decrypt(v: &mut [u32; 2], k: &[u32; 4]) {
+        fn tea_decrypt(v: &mut [u32; 2], k: [u32; 4]) {
             let (mut v0, mut v1) = (v[0], v[1]);
             let (k0, k1, k2, k3) = (k[0], k[1], k[2], k[3]);
             let mut sum = TEA_DELTA.wrapping_mul(TEA_ROUNDS);
@@ -896,9 +893,9 @@ mod tests {
         let key = [0xdead_beef, 0x1234_5678, 0x9abc_def0, 0x0fed_cba9];
         let mut v = [0x1122_3344u32, 0x5566_7788];
         let plain = v;
-        tea_encrypt(&mut v, &key);
+        tea_encrypt(&mut v, key);
         assert_ne!(v, plain);
-        tea_decrypt(&mut v, &key);
+        tea_decrypt(&mut v, key);
         assert_eq!(v, plain);
     }
 

@@ -1,0 +1,188 @@
+# SwiftLint configuration for the Swift face of the port.
+#
+# `Sources/` is all the Swift there is: `MarsRSXlog` is the Swift over the C ABI
+# of `mars-ffi`, and `MarsRS` is the umbrella over it. The rest of the port is
+# Rust, and Package.swift is a manifest the release workflow rewrites, so
+# neither is linted here.
+#
+# CI runs `swiftlint lint --strict`, which turns every warning into an error:
+# a finding fails the job. That is the point of having the gate at all.
+#
+# Swift 6: the sources are compiled in Swift 5 language mode (Package.swift
+# declares no `swiftLanguageModes`, so the default is the mode of the
+# consumer's toolchain), but they are linted with a Swift 6 toolchain, which is
+# what the job below uses.
+#
+# The opt-in list below is every opt-in rule of SwiftLint 0.65.1 the sources
+# already satisfy, which is what makes it the strictest rule set available with
+# nothing switched off: `swiftlint rules` names the opt-in rules, and
+# `swiftlint lint --strict --enable-all-rules` shows which of them the sources
+# fail. Two groups are absent from the list, and neither is a rule silenced:
+#
+#   1. rules about frameworks this package does not use - UIKit and AppKit
+#      outlets, SwiftUI state, Interface Builder, XCTest, Quick and Nimble, and
+#      the `#imageLiteral` / `#colorLiteral` ones. They cannot fire on a C ABI
+#      wrapper, and naming them here would only be noise.
+#   2. eight rules the sources cannot satisfy without changing what they are,
+#      each listed with what satisfying it would take. None of them is a
+#      finding waiting to be suppressed: they are rules the port does not opt
+#      into, and they stay exactly as SwiftLint ships them:
+#
+#      - `contrasted_opening_brace` would put every `{` on a line of its own,
+#        which is Allman rather than the style Swift is written in.
+#      - `type_contents_order` would order the members of `MarsXlog` by kind;
+#        they are ordered as the symbols are ordered in `mars_xlog.h`.
+#      - `sorted_enum_cases` would sort `MarsXlogLevel` alphabetically and hide
+#        the `kLevel*` order its raw values are.
+#      - `explicit_type_interface` would spell out the type of every local and
+#        of every closure parameter, most of which the compiler infers.
+#      - `one_declaration_per_file` and `file_name` want one type per file;
+#        `Xlog.swift` is `mars_xlog.h`, which declares all of them.
+#      - `function_default_parameter_at_end` would move `message` of `write`
+#        above the arguments that have defaults, away from the argument order of
+#        `mars_xlog_write`.
+#      - `discouraged_none_name` objects to `MarsXlogLevel.none`, which is the
+#        C ABI's `kLevelNone` under the name Swift spells it with.
+#
+#   and five more opt-in rules (`capture_variable`, `explicit_self`,
+#   `typesafe_array_init`, `unused_declaration`, `unused_import`) run only under
+#   `swiftlint analyze`, which needs a compiled package: this one's binary
+#   target is a prebuilt XCFramework, so there is nothing for the runner to
+#   compile. They are left out rather than listed where they would never run.
+#
+# Everything else - the rules SwiftLint turns on by default and every opt-in
+# rule in the list - runs with no exemption: no rule that is on has an
+# `excluded` key, and there is no `// swiftlint:disable` in the sources.
+
+included:
+  - Sources
+
+opt_in_rules:
+  - anonymous_argument_in_multiline_closure
+  - array_init
+  - async_without_await
+  - attributes
+  - closure_body_length
+  - closure_end_indentation
+  - closure_spacing
+  - collection_alignment
+  - comma_inheritance
+  - conditional_returns_on_newline
+  - contains_over_filter_count
+  - contains_over_filter_is_empty
+  - contains_over_first_not_nil
+  - contains_over_range_nil_comparison
+  - convenience_type
+  - direct_return
+  - discarded_notification_center_observer
+  - discouraged_assert
+  - discouraged_default_parameter
+  - discouraged_optional_boolean
+  - discouraged_optional_collection
+  - empty_collection_literal
+  - empty_count
+  - empty_string
+  - enum_case_associated_values_count
+  - expiring_todo
+  - explicit_acl
+  - explicit_enum_raw_value
+  - explicit_init
+  - explicit_top_level_acl
+  - extension_access_modifier
+  - fallthrough
+  - fatal_error_message
+  - file_header
+  - file_name_no_space
+  - file_types_order
+  - first_where
+  - flatmap_over_map_reduce
+  - force_unwrapping
+  - identical_operands
+  - implicit_return
+  - implicitly_unwrapped_optional
+  - incompatible_concurrency_annotation
+  - indentation_width
+  - joined_default_parameter
+  - last_where
+  - legacy_multiple
+  - let_var_whitespace
+  - literal_expression_end_indentation
+  - local_doc_comment
+  - lower_acl_than_parent
+  - missing_docs
+  - modifier_order
+  - multiline_arguments
+  - multiline_arguments_brackets
+  - multiline_call_arguments
+  - multiline_function_chains
+  - multiline_literal_brackets
+  - multiline_parameters
+  - multiline_parameters_brackets
+  - no_empty_block
+  - no_extension_access_modifier
+  - no_grouping_extension
+  - no_magic_numbers
+  - non_overridable_class_declaration
+  - nslocalizedstring_key
+  - nslocalizedstring_require_bundle
+  - number_separator
+  - operator_usage_whitespace
+  - optional_enum_case_matching
+  - overridden_super_call
+  - override_in_extension
+  - pattern_matching_keywords
+  - period_spacing
+  - prefer_condition_list
+  - prefer_key_path
+  - prefer_self_in_static_references
+  - prefer_self_type_over_type_of_self
+  - prefer_zero_over_explicit_init
+  - prefixed_toplevel_constant
+  - prohibited_super_call
+  - raw_value_for_camel_cased_codable_enum
+  - reduce_into
+  - redundant_final
+  - redundant_nil_coalescing
+  - redundant_self
+  - redundant_type_annotation
+  - required_deinit
+  - required_enum_case
+  - return_value_from_void_function
+  - self_binding
+  - shorthand_argument
+  - shorthand_optional_binding
+  - sorted_first_last
+  - sorted_imports
+  - static_operator
+  - strict_fileprivate
+  - superfluous_else
+  - switch_case_on_newline
+  - toggle_bool
+  - trailing_closure
+  - unavailable_function
+  - unhandled_throwing_task
+  - unneeded_escaping
+  - unneeded_parentheses_in_closure_argument
+  - unneeded_throws_rethrows
+  - unowned_variable_capture
+  - untyped_error_in_catch
+  - unused_parameter
+  - variable_shadowing
+  - vertical_parameter_alignment_on_call
+  - vertical_whitespace_between_cases
+  - vertical_whitespace_closing_braces
+  - vertical_whitespace_opening_braces
+  - weak_delegate
+  - yoda_condition
+
+# SwiftLint's own default is a 120-column warning; `--strict` is what turns it
+# into an error, so 120 is the line the sources are held to.
+line_length:
+  warning: 120
+  error: 121
+
+# One type per file is the rule the sources already keep; 279 lines is what the
+# largest of them is.
+file_length:
+  warning: 400
+  error: 1000
