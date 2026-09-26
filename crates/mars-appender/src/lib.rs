@@ -17,6 +17,15 @@
 //! so every public function here is callable from any thread and needs no
 //! `unsafe`.
 //!
+//! The `Mutex` there guards the *slot*, not the appender: a write takes an
+//! [`std::sync::Arc`] clone out of it and lets the guard go before it formats
+//! or writes, which is what the C++ does — `xlogger_appender` reads
+//! `sg_default_appender` without touching `sg_mutex`. Holding it across the
+//! write turned `N` logging threads into one; the clone cannot dangle, because
+//! a concurrent [`appender_close`] drops the slot's own reference and the
+//! writer's keeps the appender (already closed, so the write is a no-op) alive.
+//! The C++ deletes the appender under a concurrent write instead.
+//!
 //! ```no_run
 //! use mars_appender::{appender_close, appender_flush_sync, appender_open, appender_write, XLogConfig};
 //!
@@ -56,7 +65,7 @@ mod sys;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 pub use category::{
     flush, flush_all, get_level, get_xlogger_instance, is_enabled_for, new_xlogger_instance,
@@ -76,7 +85,10 @@ pub use sys::{available_space, main_thread_id, space_info, thread_id};
 use appender::Appender;
 
 /// `static XloggerAppender* sg_default_appender` (plus `sg_release_guard`).
-static APPENDER: OnceLock<Mutex<Option<Appender>>> = OnceLock::new();
+///
+/// The `Mutex` is the slot's, not the appender's: [`current`] hands out an
+/// [`Arc`] clone so a write does not hold it.
+static APPENDER: OnceLock<Mutex<Option<Arc<Appender>>>> = OnceLock::new();
 /// `static uint64_t sg_max_byte_size`.
 static MAX_FILE_SIZE: AtomicU64 = AtomicU64::new(0);
 /// `static long sg_max_alive_time` (0 = "not set": the appender keeps its
@@ -85,8 +97,18 @@ static MAX_ALIVE_TIME: AtomicU64 = AtomicU64::new(0);
 /// `static bool sg_default_console_log_open`.
 static CONSOLE_LOG_OPEN: AtomicBool = AtomicBool::new(false);
 
-fn slot() -> &'static Mutex<Option<Appender>> {
+fn slot() -> &'static Mutex<Option<Arc<Appender>>> {
     APPENDER.get_or_init(|| Mutex::new(None))
+}
+
+/// The open appender, if any, as an [`Arc`] clone — so that the caller can do
+/// what it wants with it without holding the slot's lock, which is what the
+/// C++'s unlocked `sg_default_appender` read amounts to.
+fn current() -> Option<Arc<Appender>> {
+    slot()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
 }
 
 /// `XloggerAppender::NewInstance` — one appender per `XloggerCategory`, as in
@@ -99,7 +121,7 @@ pub type AppenderId = u64;
 
 struct Instances {
     next: AppenderId,
-    map: HashMap<AppenderId, Appender>,
+    map: HashMap<AppenderId, Arc<Appender>>,
 }
 
 fn instances() -> &'static Mutex<Instances> {
@@ -115,6 +137,12 @@ fn lock_instances() -> MutexGuard<'static, Instances> {
     instances()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// One instance, as an [`Arc`] clone: the same reason [`current`] hands out a
+/// clone instead of a reference.
+fn instance(id: AppenderId) -> Option<Arc<Appender>> {
+    lock_instances().map.get(&id).cloned()
 }
 
 /// Opens an appender that is *not* the process-wide default.
@@ -148,13 +176,13 @@ pub fn appender_open_instance(config: XLogConfig) -> Result<AppenderId, Appender
     let mut instances = lock_instances();
     let id = instances.next;
     instances.next += 1;
-    instances.map.insert(id, appender);
+    instances.map.insert(id, Arc::new(appender));
     Ok(id)
 }
 
 /// Closes and drops the instance; unknown ids are ignored.
 pub fn appender_close_instance(id: AppenderId) {
-    if let Some(mut appender) = lock_instances().map.remove(&id) {
+    if let Some(appender) = lock_instances().map.remove(&id) {
         appender.close();
     }
 }
@@ -162,19 +190,18 @@ pub fn appender_close_instance(id: AppenderId) {
 /// Writes through a specific instance. `false` when the id is unknown or the
 /// appender is closed.
 pub fn appender_write_instance(id: AppenderId, info: Option<&XLoggerInfo>, logbody: &str) -> bool {
-    match lock_instances().map.get(&id) {
-        Some(appender) => {
-            let closed = appender.is_closed();
-            appender.write(info, logbody);
-            !closed
-        }
-        None => false,
-    }
+    // Like [`current`]: take a clone and write outside the table's lock.
+    let Some(appender) = instance(id) else {
+        return false;
+    };
+    let closed = appender.is_closed();
+    appender.write(info, logbody);
+    !closed
 }
 
 /// Drains a specific instance.
 pub fn appender_flush_instance(id: AppenderId, sync: bool) {
-    if let Some(appender) = lock_instances().map.get_mut(&id) {
+    if let Some(appender) = instance(id) {
         if sync {
             appender.flush_sync();
         } else {
@@ -185,41 +212,38 @@ pub fn appender_flush_instance(id: AppenderId, sync: bool) {
 
 /// Sets the mode of a specific instance.
 pub fn appender_set_mode_instance(id: AppenderId, mode: AppenderMode) {
-    if let Some(appender) = lock_instances().map.get_mut(&id) {
+    if let Some(appender) = instance(id) {
         let _ = appender.set_mode(mode);
     }
 }
 
 /// Sets console logging for a specific instance.
 pub fn appender_set_console_log_instance(id: AppenderId, open: bool) {
-    if let Some(appender) = lock_instances().map.get_mut(&id) {
+    if let Some(appender) = instance(id) {
         appender.set_console_log(open);
     }
 }
 
 /// Sets the split size for a specific instance.
 pub fn appender_set_max_file_size_instance(id: AppenderId, bytes: u64) {
-    if let Some(appender) = lock_instances().map.get_mut(&id) {
+    if let Some(appender) = instance(id) {
         appender.set_max_file_size(bytes);
     }
 }
 
 /// Sets the expiry for a specific instance (values below one day are ignored).
 pub fn appender_set_max_alive_duration_instance(id: AppenderId, secs: u64) {
-    if let Some(appender) = lock_instances().map.get_mut(&id) {
+    if let Some(appender) = instance(id) {
         appender.set_max_alive_duration(secs);
     }
 }
 
 /// The log directory of a specific instance; `None` for an unknown id.
 pub fn appender_get_current_log_path_instance(id: AppenderId) -> Option<PathBuf> {
-    lock_instances()
-        .map
-        .get(&id)
-        .and_then(Appender::current_log_path)
+    instance(id).and_then(|appender| appender.current_log_path())
 }
 
-fn lock_slot() -> MutexGuard<'static, Option<Appender>> {
+fn lock_slot() -> MutexGuard<'static, Option<Arc<Appender>>> {
     slot()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -255,7 +279,7 @@ pub fn appender_open(config: XLogConfig) -> Result<(), AppenderError> {
         MAX_ALIVE_TIME.load(Ordering::Relaxed) as i64,
     )?;
     appender.set_console_log(CONSOLE_LOG_OPEN.load(Ordering::Relaxed));
-    *slot = Some(appender);
+    *slot = Some(Arc::new(appender));
     Ok(())
 }
 
@@ -263,17 +287,22 @@ pub fn appender_open(config: XLogConfig) -> Result<(), AppenderError> {
 ///
 /// A no-op when no appender is open.
 pub fn appender_flush() {
-    if let Some(appender) = lock_slot().as_ref() {
+    if let Some(appender) = current() {
         appender.flush();
     }
 }
 
 /// `mars::xlog::appender_flush_sync` — drains the cache on the calling thread.
 ///
-/// A no-op when no appender is open or when the mode is
-/// [`AppenderMode::Sync`] (sync writes never sit in the cache).
+/// Also hands the log file's own buffer to the OS, in both modes: the C++
+/// leaves the last few KiB in the `FILE*` here, so a reader in another process
+/// could not see them yet.
+///
+/// A no-op when no appender is open or when it is already closed; in
+/// [`AppenderMode::Sync`] there is no cache to drain, but the file buffer is
+/// flushed all the same.
 pub fn appender_flush_sync() {
-    if let Some(appender) = lock_slot().as_ref() {
+    if let Some(appender) = current() {
         appender.flush_sync();
     }
 }
@@ -283,16 +312,18 @@ pub fn appender_flush_sync() {
 /// Writes the closing banner, drains whatever is left in the cache, stops the
 /// writer thread and drops the appender. Safe to call when nothing is open.
 pub fn appender_close() {
-    let mut slot = lock_slot();
-    if let Some(mut appender) = slot.take() {
-        appender.close();
-    }
+    // Taken out of the slot first, so the close does not run under the slot's
+    // lock: a write that is already under way keeps its own Arc and finds the
+    // appender closed instead of finding it gone.
+    let Some(appender) = lock_slot().take() else {
+        return;
+    };
+    appender.close();
 }
 
 /// `mars::xlog::appender_setmode`.
 pub fn appender_set_mode(mode: AppenderMode) {
-    let mut slot = lock_slot();
-    if let Some(appender) = slot.as_mut() {
+    if let Some(appender) = current() {
         let _ = appender.set_mode(mode);
     }
 }
@@ -303,7 +334,7 @@ pub fn appender_set_mode(mode: AppenderMode) {
 /// picks the setting up.
 pub fn appender_set_console_log(open: bool) {
     CONSOLE_LOG_OPEN.store(open, Ordering::Relaxed);
-    if let Some(appender) = lock_slot().as_ref() {
+    if let Some(appender) = current() {
         appender.set_console_log(open);
     }
 }
@@ -313,7 +344,7 @@ pub fn appender_set_console_log(open: bool) {
 /// Remembered for the next [`appender_open`] as well.
 pub fn appender_set_max_file_size(bytes: u64) {
     MAX_FILE_SIZE.store(bytes, Ordering::Relaxed);
-    if let Some(appender) = lock_slot().as_ref() {
+    if let Some(appender) = current() {
         appender.set_max_file_size(bytes);
     }
 }
@@ -324,7 +355,7 @@ pub fn appender_set_max_file_size(bytes: u64) {
 /// default is 10 days.
 pub fn appender_set_max_alive_duration(secs: u64) {
     MAX_ALIVE_TIME.store(secs, Ordering::Relaxed);
-    if let Some(appender) = lock_slot().as_ref() {
+    if let Some(appender) = current() {
         appender.set_max_alive_duration(secs);
     }
 }
@@ -333,16 +364,14 @@ pub fn appender_set_max_alive_duration(secs: u64) {
 ///
 /// `None` when no appender is open.
 pub fn appender_get_current_log_path() -> Option<PathBuf> {
-    lock_slot().as_ref().and_then(Appender::current_log_path)
+    current().and_then(|appender| appender.current_log_path())
 }
 
 /// `mars::xlog::appender_get_current_log_cache_path` — the cache directory.
 ///
 /// `None` when no appender is open or when no `cachedir` is configured.
 pub fn appender_get_current_log_cache_path() -> Option<PathBuf> {
-    lock_slot()
-        .as_ref()
-        .and_then(Appender::current_log_cache_path)
+    current().and_then(|appender| appender.current_log_cache_path())
 }
 
 /// `mars::xlog::appender_oneshot_flush`.
@@ -366,7 +395,7 @@ pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
         return FileIoAction::Unnecessary;
     }
 
-    let Ok(mut appender) = Appender::oneshot(
+    let Ok(appender) = Appender::oneshot(
         config,
         MAX_FILE_SIZE.load(Ordering::Relaxed),
         MAX_ALIVE_TIME.load(Ordering::Relaxed) as i64,
@@ -382,16 +411,20 @@ pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
 /// `mars::xlog::xlogger_appender` / `XloggerAppender::Write`.
 ///
 /// Returns `false` when no appender is open (or it is already closed).
+///
+/// In [`AppenderMode::Sync`] the record is written to the appender's file
+/// buffer before this returns — the C++'s `fwrite` does the same, so a record
+/// is not necessarily on disk until [`appender_flush_sync`] runs, the file
+/// fills up, or the appender is closed.
 pub fn appender_write(info: Option<&XLoggerInfo>, logbody: &str) -> bool {
-    let slot = lock_slot();
-    match slot.as_ref() {
-        Some(appender) => {
-            let closed = appender.is_closed();
-            appender.write(info, logbody);
-            !closed
-        }
-        None => false,
-    }
+    // A clone, so the slot's lock is not held while the record is written: N
+    // logging threads then run in parallel instead of queueing on the slot.
+    let Some(appender) = current() else {
+        return false;
+    };
+    let closed = appender.is_closed();
+    appender.write(info, logbody);
+    !closed
 }
 
 /// `mars::xlog::xlogger_dump` — the dump that also leaves a file behind.
@@ -405,11 +438,8 @@ pub fn appender_write(info: Option<&XLoggerInfo>, logbody: &str) -> bool {
 /// The `YYYYMMDD` directory is the same one [`appender_open`]'s expiry sweeps,
 /// so a dump is kept no longer than the logs around it.
 pub fn xlogger_dump(bytes: &[u8]) -> String {
-    match lock_slot().as_ref() {
-        Some(appender) => match appender.current_log_path() {
-            Some(logdir) => dump::dump_to_logdir(bytes, &logdir),
-            None => String::new(),
-        },
+    match current().and_then(|appender| appender.current_log_path()) {
+        Some(logdir) => dump::dump_to_logdir(bytes, &logdir),
         None => String::new(),
     }
 }
@@ -421,7 +451,8 @@ pub fn xlogger_dump(bytes: &[u8]) -> String {
 pub fn appender_make_logfile_name(timespan: i64, prefix: &str, logdir: &Path) -> Vec<PathBuf> {
     // When an appender is open for exactly this directory its own lookup is
     // used, which (like the C++) also reports the matching cache-dir files.
-    if let Some(appender) = lock_slot().as_ref().and_then(|a| a.for_logdir(logdir)) {
+    let appender = current();
+    if let Some(appender) = appender.as_deref().and_then(|a| a.for_logdir(logdir)) {
         return appender.make_logfile_name(timespan, prefix);
     }
     if logdir.as_os_str().is_empty() {
@@ -448,7 +479,8 @@ pub fn appender_getfilepath_from_timespan(
     prefix: &str,
     logdir: &Path,
 ) -> Vec<PathBuf> {
-    if let Some(appender) = lock_slot().as_ref().and_then(|a| a.for_logdir(logdir)) {
+    let appender = current();
+    if let Some(appender) = appender.as_deref().and_then(|a| a.for_logdir(logdir)) {
         return appender.getfilepath_from_timespan(timespan, prefix);
     }
     if logdir.as_os_str().is_empty() {
