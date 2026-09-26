@@ -261,21 +261,17 @@ impl LogBuffer {
         let last_remain_len = self.remain_nocrypt_len;
         let crypt_start = before_len - last_remain_len;
 
-        let mut encrypted = Vec::with_capacity(write_len + last_remain_len + TEA_BLOCK_ROOM);
-        self.crypt.crypt_async_log(
-            &region[crypt_start..before_len + write_len],
-            &mut encrypted,
-            &mut self.remain_nocrypt_len,
-        );
-
-        // `buff_.Write(out_buffer.data(), out_buffer.size(), before_len)`
-        region[crypt_start..crypt_start + encrypted.len()].copy_from_slice(&encrypted);
-
-        let new_len = crypt_start + encrypted.len();
-        self.length = new_len;
+        // `out_buffer` in the C++ is a second copy of the span that is then
+        // written back over it; TEA is a block cipher, so the span is
+        // encrypted where it lies instead. That is one allocation and two
+        // copies fewer per record, and byte for byte the same answer.
+        self.remain_nocrypt_len = self
+            .crypt
+            .crypt_async_log_in_place(&mut region[crypt_start..before_len + write_len]);
+        self.length = before_len + write_len;
 
         // `UpdateLogLen(buff_.Ptr(), out_buffer.size() - last_remain_len)`
-        LogCrypt::update_log_len(region, (encrypted.len() - last_remain_len) as u32);
+        LogCrypt::update_log_len(region, write_len as u32);
 
         true
     }
@@ -367,9 +363,6 @@ impl LogBuffer {
         self.remain_nocrypt_len = 0;
     }
 }
-
-/// Slack for the temporary encryption buffer in [`LogBuffer::write`].
-const TEA_BLOCK_ROOM: usize = mars_crypt::TEA_BLOCK_LEN;
 
 #[cfg(test)]
 mod tests {
@@ -721,6 +714,47 @@ mod tests {
         assert_eq!(buf.len(), HEADER_LEN + 8);
         assert_eq!(LogCrypt::get_log_len(&region), 8);
         assert_ne!(&region[HEADER_LEN..HEADER_LEN + 8], &b"12345678"[..]);
+    }
+
+    /// The C++ encrypts into a second buffer and copies the result back over
+    /// the span it came from. [`LogCrypt::crypt_async_log_in_place`] encrypts
+    /// the span itself, so this is the test that the two are the same bytes —
+    /// including the remainder that the next chunk has to rewind over.
+    #[test]
+    fn encrypting_in_place_is_byte_identical_to_the_copy_path() {
+        let crypt = LogCrypt::new(Some(TEST_PUBKEY));
+        assert!(crypt.is_crypt());
+
+        for len in [0usize, 1, 7, 8, 9, 16, 23] {
+            let data: Vec<u8> = (0..len)
+                .map(|i| (i as u8).wrapping_mul(37).wrapping_add(1))
+                .collect();
+
+            let mut copied = Vec::new();
+            let mut remain_copy = 0;
+            crypt.crypt_async_log(&data, &mut copied, &mut remain_copy);
+
+            let mut in_place = data.clone();
+            let remain_in_place = crypt.crypt_async_log_in_place(&mut in_place);
+
+            assert_eq!(copied, in_place, "len {len}");
+            assert_eq!(remain_copy, remain_in_place, "len {len}");
+            // The trailing bytes never survive a round trip as ciphertext:
+            // they are the ones the next write re-encrypts.
+            assert_eq!(in_place.len() - remain_in_place, len - len % 8);
+            if remain_in_place > 0 {
+                assert_eq!(
+                    &in_place[len - remain_in_place..],
+                    &data[len - remain_in_place..]
+                );
+            }
+        }
+
+        // No TEA key: the payload is the payload, and nothing is left over.
+        let plain = LogCrypt::new(None);
+        let mut in_place = b"unencrypted".to_vec();
+        assert_eq!(plain.crypt_async_log_in_place(&mut in_place), 0);
+        assert_eq!(in_place, b"unencrypted");
     }
 
     #[test]

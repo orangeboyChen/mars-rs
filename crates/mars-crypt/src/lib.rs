@@ -463,6 +463,33 @@ impl LogCrypt {
         out.extend_from_slice(&log_data[tail..]);
     }
 
+    /// `LogCrypt::CryptAsyncLog()` without a second buffer.
+    ///
+    /// TEA is a block cipher over 8 bytes at a time, so the blocks can be
+    /// encrypted where they already are: `data` becomes the ciphertext, and the
+    /// trailing `data.len() % 8` bytes are left in the clear for the next
+    /// chunk exactly as [`LogCrypt::crypt_async_log`] leaves them. The C++
+    /// cannot do this — it encrypts into an `AutoBuffer` and copies back —
+    /// and the copy plus the allocation it needs are the whole extra cost of
+    /// the async write path.
+    ///
+    /// Returns `remain_nocrypt_len`, which is `0` when there is no TEA key.
+    pub fn crypt_async_log_in_place(&self, data: &mut [u8]) -> usize {
+        let remain_nocrypt_len = data.len() % TEA_BLOCK_LEN;
+        if !self.is_crypt_ {
+            return 0;
+        }
+
+        for block in data.as_chunks_mut::<TEA_BLOCK_LEN>().0 {
+            let mut v = [le::read_u32(block, 0), le::read_u32(block, 4)];
+            tea_encrypt(&mut v, &self.tea_key_);
+            block[..4].copy_from_slice(&v[0].to_le_bytes());
+            block[4..].copy_from_slice(&v[1].to_le_bytes());
+        }
+
+        remain_nocrypt_len
+    }
+
     /// `LogCrypt::Fix()`.
     ///
     /// Validates the magic byte, returns the recorded payload length and

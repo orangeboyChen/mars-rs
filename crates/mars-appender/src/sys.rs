@@ -41,6 +41,13 @@ pub fn thread_id() -> i64 {
     })
 }
 
+/// The OS thread id with no caching, so it is safe to call from inside the
+/// allocator: one syscall (or one libsystem call) and no thread-local state.
+#[cfg(test)]
+pub(crate) fn raw_thread_id() -> i64 {
+    os_thread_id()
+}
+
 /// The raw OS query behind [`thread_id`].
 fn os_thread_id() -> i64 {
     #[cfg(any(target_os = "linux", target_os = "android"))]
