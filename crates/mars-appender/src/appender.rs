@@ -230,6 +230,13 @@ fn mark_info() -> String {
     )
 }
 
+/// Which directory `__OpenLogFile` opens: the configured log directory, or the
+/// cache directory `__Log2File` falls back to when it cannot be written.
+enum OpenDir {
+    Log,
+    Cache,
+}
+
 /// The whole mutable state of one appender (`XloggerAppender`'s members).
 struct AppenderInner {
     config: XLogConfig,
@@ -237,6 +244,11 @@ struct AppenderInner {
     region: Region,
     /// `log_buff_` — state only in this workspace; the region is passed in.
     buff: LogBuffer,
+    /// The `AutoBuffer` every `WriteSync` / `WriteTips2File` used to allocate
+    /// for itself. Kept here and taken per record instead: it is grown once
+    /// and then reused for the lifetime of the appender, so the hot path
+    /// allocates nothing.
+    scratch: AutoBuffer,
     /// `logfile_`
     log_file: Option<File>,
     /// `openfiletime_`
@@ -348,12 +360,17 @@ impl AppenderInner {
             record.len()
         };
 
-        let mut tmp_buff = AutoBuffer::new();
+        // Taken out of `self` rather than allocated: the buffer is returned
+        // (with its capacity) once the record is on its way to the file.
+        let mut tmp_buff = std::mem::take(&mut self.scratch);
+        tmp_buff.reset();
         if !self.buff.write_sync(&temp[..len], &mut tmp_buff) {
+            self.scratch = tmp_buff;
             return;
         }
 
         self.log2file(tmp_buff.as_slice(), false);
+        self.scratch = tmp_buff;
     }
 
     /// `XloggerAppender::__WriteAsync`.
@@ -395,9 +412,11 @@ impl AppenderInner {
 
     /// `XloggerAppender::WriteTips2File`.
     fn write_tips2file(&mut self, tips: &str) {
-        let mut tmp_buff = AutoBuffer::new();
+        let mut tmp_buff = std::mem::take(&mut self.scratch);
+        tmp_buff.reset();
         self.buff.write_sync(tips.as_bytes(), &mut tmp_buff);
         self.log2file(tmp_buff.as_slice(), false);
+        self.scratch = tmp_buff;
     }
 
     /// `XloggerAppender::__WriteTips2Console`.
@@ -419,12 +438,12 @@ impl AppenderInner {
             return false;
         }
 
-        let logdir = self.config.logdir.clone();
-        let prefix = self.config.nameprefix.clone();
-        let max_file_size = self.max_file_size;
-
-        let Some(cachedir) = self.config.cachedir.clone() else {
-            if self.open_log_file(&logdir) {
+        // The paths are built from `self` where they are used instead of being
+        // cloned up front: __Log2File runs once per record, and three
+        // `PathBuf`/`String` clones per record were three allocations the C++
+        // never makes — it passes `const char*` around.
+        if self.config.cachedir.is_none() {
+            if self.open_log_file(OpenDir::Log) {
                 let written = self.write_file_record(data);
                 if !self.is_sync() {
                     self.close_log_file();
@@ -432,21 +451,13 @@ impl AppenderInner {
                 return written;
             }
             return false;
-        };
+        }
 
         let tv = now_secs();
-        let cache_path = make_log_file_name(
-            tv,
-            &cachedir,
-            &logdir,
-            &prefix,
-            LOG_EXT,
-            max_file_size,
-            Some(&cachedir),
-        );
+        let cache_path = self.cache_file_path(tv);
         let cache_logs = self.cache_logs();
 
-        if (cache_logs || cache_path.exists()) && self.open_log_file(&cachedir) {
+        if (cache_logs || cache_path.exists()) && self.open_log_file(OpenDir::Cache) {
             let written = self.write_file_record(data);
             if !self.is_sync() {
                 self.close_log_file();
@@ -456,15 +467,7 @@ impl AppenderInner {
                 return written;
             }
 
-            let log_path = make_log_file_name(
-                tv,
-                &logdir,
-                &logdir,
-                &prefix,
-                LOG_EXT,
-                max_file_size,
-                Some(&cachedir),
-            );
+            let log_path = self.log_file_path(tv);
             if append_file(&cache_path, &log_path) {
                 if self.is_sync() {
                     self.close_log_file();
@@ -475,7 +478,7 @@ impl AppenderInner {
         }
 
         let mut write_success = false;
-        let open_success = self.open_log_file(&logdir);
+        let open_success = self.open_log_file(OpenDir::Log);
         if open_success {
             write_success = self.write_file_record(data);
             if !self.is_sync() {
@@ -487,7 +490,7 @@ impl AppenderInner {
             if open_success && self.is_sync() {
                 self.close_log_file();
             }
-            if self.open_log_file(&cachedir) {
+            if self.open_log_file(OpenDir::Cache) {
                 write_success = self.write_file_record(data);
                 if !self.is_sync() {
                     self.close_log_file();
@@ -495,6 +498,34 @@ impl AppenderInner {
             }
         }
         write_success
+    }
+
+    /// The log file for `tv`, in the configured log directory.
+    fn log_file_path(&self, tv: i64) -> PathBuf {
+        make_log_file_name(
+            tv,
+            &self.config.logdir,
+            &self.config.logdir,
+            &self.config.nameprefix,
+            LOG_EXT,
+            self.max_file_size,
+            self.config.cachedir.as_deref(),
+        )
+    }
+
+    /// The log file for `tv`, in the cache directory `__Log2File` falls back to
+    /// when the log directory cannot be written.
+    fn cache_file_path(&self, tv: i64) -> PathBuf {
+        let cachedir = self.config.cachedir.as_deref().unwrap_or(Path::new(""));
+        make_log_file_name(
+            tv,
+            cachedir,
+            &self.config.logdir,
+            &self.config.nameprefix,
+            LOG_EXT,
+            self.max_file_size,
+            Some(cachedir),
+        )
     }
 
     /// `XloggerAppender::__CacheLogs`.
@@ -507,16 +538,7 @@ impl AppenderInner {
         }
 
         let tv = now_secs();
-        let log_path = make_log_file_name(
-            tv,
-            &self.config.logdir,
-            &self.config.logdir,
-            &self.config.nameprefix,
-            LOG_EXT,
-            self.max_file_size,
-            Some(cachedir),
-        );
-        if log_path.exists() {
+        if self.log_file_path(tv).exists() {
             return false;
         }
 
@@ -530,7 +552,12 @@ impl AppenderInner {
     }
 
     /// `XloggerAppender::__OpenLogFile`.
-    fn open_log_file(&mut self, dir: &Path) -> bool {
+    ///
+    /// The directory is named rather than passed, so the caller does not have
+    /// to clone it out of `self` before it can hand `self` over mutably:
+    /// `__Log2File` runs per record, and the clone was one of the allocations
+    /// that made the port slower than the C++ it mirrors.
+    fn open_log_file(&mut self, dir: OpenDir) -> bool {
         if self.config.logdir.as_os_str().is_empty() {
             return false;
         }
@@ -545,15 +572,10 @@ impl AppenderInner {
         }
 
         self.open_file_time = now_time;
-        let logfilepath = make_log_file_name(
-            now_time,
-            dir,
-            &self.config.logdir,
-            &self.config.nameprefix,
-            LOG_EXT,
-            self.max_file_size,
-            self.config.cachedir.as_deref(),
-        );
+        let logfilepath = match dir {
+            OpenDir::Log => self.log_file_path(now_time),
+            OpenDir::Cache => self.cache_file_path(now_time),
+        };
 
         if now_time < self.last_time {
             // The clock jumped backwards: keep using the previous file.
@@ -766,6 +788,7 @@ impl Appender {
             config,
             region,
             buff,
+            scratch: AutoBuffer::new(),
             log_file: None,
             open_file_time: 0,
             last_time: 0,
@@ -915,6 +938,7 @@ impl Appender {
         let inner = AppenderInner {
             config: config.clone(),
             region: Region::heap(),
+            scratch: AutoBuffer::new(),
             buff: LogBuffer::new(
                 true,
                 Some(config.pub_key.as_str()),
@@ -1601,6 +1625,60 @@ mod tests {
             appender.current_log_cache_path().as_deref(),
             Some(cache.as_path())
         );
+    }
+
+    /// What a record costs the allocator.
+    ///
+    /// The C++ formats into stack arrays (`char temp[16*1024]`,
+    /// `char temp_time[64]`, the `snprintf` buffer) and reuses its
+    /// `AutoBuffer`s, so one record costs it no allocation at all. The port
+    /// used to spend five or six: two `String`s in the formatter, an
+    /// `AutoBuffer` per `WriteSync`, a `Vec` per `LogBuffer::Write`, and the
+    /// `PathBuf`/`String` clones `Log2File` made before it knew it needed
+    /// them. This pins the port at the C++'s zero: once the first record has
+    /// grown every buffer, writing must not touch the allocator — a logger is
+    /// a thing that has to keep working when the allocator is what is
+    /// struggling.
+    #[test]
+    fn a_record_costs_no_allocation_once_the_appender_is_warm() {
+        let _guard = crate::test_lock::serial();
+        for mode in [AppenderMode::Sync, AppenderMode::Async] {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut appender = Appender::open(config(tmp.path(), mode), 0, 0).unwrap();
+            let record_info = info(LogLevel::Info);
+
+            // Warm-up: opens the file and grows the buffers a real logger
+            // grows in its first record.
+            appender.write(Some(&record_info), "warm up");
+
+            crate::test_alloc::watch();
+            for _ in 0..16 {
+                appender.write(Some(&record_info), "a record, long enough to be a record");
+            }
+            let count = crate::test_alloc::stop();
+
+            // And the console path: `ConsoleLog.cc` also formats into a stack
+            // array (`char strFuncName[128]`, then `printf`), so it must not
+            // allocate either — including the trim of `__FUNCTION__`, which
+            // the port used to do into a fresh `String`.
+            let mut console_info = info(LogLevel::Info);
+            console_info.func_name = Some("void Foo::bar(int)".to_owned());
+            appender.set_console_log(true);
+            appender.write(Some(&console_info), "console warm up");
+            crate::test_alloc::watch();
+            for _ in 0..3 {
+                appender.write(Some(&console_info), "and to the console");
+            }
+            appender.set_console_log(false);
+            let console_count = crate::test_alloc::stop();
+
+            appender.close();
+            assert_eq!(count, 0, "{mode:?}: 16 records allocated {count} times");
+            assert_eq!(
+                console_count, 0,
+                "{mode:?}: 3 console records allocated {console_count} times"
+            );
+        }
     }
 
     #[test]

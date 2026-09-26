@@ -474,6 +474,68 @@ pub(crate) mod test_lock {
     }
 }
 
+/// Counts the allocations of one thread, so a test can assert what the write
+/// path costs.
+///
+/// Only the thread named in [`test_alloc::watch`] is counted: the other tests
+/// of this binary run in parallel, and so does the async writer thread, and
+/// neither may land in another test's count. The id comes from
+/// [`crate::sys::raw_thread_id`] — a syscall, no thread-local of its own —
+/// because an allocator that touched one could recurse into itself.
+#[cfg(test)]
+pub(crate) mod test_alloc {
+    // An allocator is `unsafe` by construction; the rest of the crate is
+    // `#![deny(unsafe_code)]` and stays that way.
+    #![allow(unsafe_code)]
+
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+
+    /// The thread being counted, or `0` for "nobody".
+    static WATCHED: AtomicI64 = AtomicI64::new(0);
+    /// How many allocations that thread has made since the last reset.
+    static COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    pub(crate) struct Counter;
+
+    /// Counts the allocations of the calling thread from here on.
+    pub(crate) fn watch() {
+        WATCHED.store(crate::sys::raw_thread_id(), Ordering::SeqCst);
+        COUNT.store(0, Ordering::SeqCst);
+    }
+
+    /// Stops counting and answers what was counted since [`watch`].
+    pub(crate) fn stop() -> usize {
+        WATCHED.store(0, Ordering::SeqCst);
+        COUNT.load(Ordering::SeqCst)
+    }
+
+    unsafe impl GlobalAlloc for Counter {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            counted(|| unsafe { System.alloc(layout) })
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            counted(|| unsafe { System.realloc(ptr, layout, new_size) })
+        }
+    }
+
+    fn counted<T>(alloc: impl FnOnce() -> T) -> T {
+        if WATCHED.load(Ordering::SeqCst) == crate::sys::raw_thread_id() {
+            COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+        alloc()
+    }
+}
+
+#[cfg(test)]
+#[global_allocator]
+static COUNTER: test_alloc::Counter = test_alloc::Counter;
+
 #[cfg(test)]
 mod tests {
     use super::*;
