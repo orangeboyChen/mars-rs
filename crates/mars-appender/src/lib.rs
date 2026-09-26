@@ -30,14 +30,14 @@
 //!
 //! # Not ported (out of the contract's scope)
 //!
-//! * `xlogger_interface.cc`'s `XloggerCategory` map
-//!   (`NewXloggerInstance` / `GetXloggerInstance` / `SetLevel` ...): the
-//!   contract exposes a single process-wide appender, so there is no
-//!   per-prefix instance table and no level filter here.
-//! * `XloggerAppender::Dump` / `xlogger_memory_dump` (hex dumps of binary
-//!   blobs) and the `g_log_write_callback` hook.
+//! * `appender.cc`'s `g_log_write_callback` hook, the per-record mirror a host
+//!   process can install.
 //! * On a write error the C++ appends a record through `log_buff_`; the port
 //!   does the same but reports the failure on the console only.
+//!
+//! Everything else has a counterpart: the per-prefix instance table lives in
+//! [`category`], and the hex dump of a binary blob in [`xlogger_memory_dump`]
+//! (and its file-writing sibling [`xlogger_dump`]).
 
 // Only `appender::map_region` uses `unsafe` (memmap2 requires it); see the
 // SAFETY comment there. Everything else is safe Rust.
@@ -71,7 +71,7 @@ pub use formater::log_formater;
 /// Re-exported so callers (and the FFI layer) do not have to depend on
 /// `mars-buffer` just to build a [`XLogConfig`].
 pub use mars_buffer::CompressMode;
-pub use sys::{available_space, main_thread_id, thread_id};
+pub use sys::{available_space, main_thread_id, space_info, thread_id};
 
 use appender::Appender;
 
@@ -120,8 +120,15 @@ fn lock_instances() -> MutexGuard<'static, Instances> {
 /// Opens an appender that is *not* the process-wide default.
 ///
 /// Every instance gets its own log directory, prefix, key, mode and cache
-/// file, like the C++ `XloggerAppender::NewInstance`. Returns `None` when the
-/// directory is empty or cannot be created.
+/// file, like the C++ `XloggerAppender::NewInstance`. Like the C++, an
+/// instance is **not** given the process-wide settings: `NewInstance(_config,
+/// 0)` builds it with no split size, and `appender_set_console_log` /
+/// `appender_set_max_file_size` / `appender_set_max_alive_duration` are the
+/// default appender's, so an instance keeps its own 10 day expiry and starts
+/// with console logging off. Use the `*_instance` functions below to change
+/// that.
+///
+/// Returns `None` when the directory is empty or cannot be created.
 ///
 /// # Errors
 ///
@@ -134,12 +141,9 @@ pub fn appender_open_instance(config: XLogConfig) -> Result<AppenderId, Appender
         ));
     }
 
-    let appender = Appender::open(
-        config,
-        MAX_FILE_SIZE.load(Ordering::Relaxed),
-        MAX_ALIVE_TIME.load(Ordering::Relaxed) as i64,
-    )?;
-    appender.set_console_log(CONSOLE_LOG_OPEN.load(Ordering::Relaxed));
+    // `XloggerAppender::NewInstance(_config, 0)`: an instance starts from its
+    // config alone, not from what the process-wide setters were last given.
+    let appender = Appender::open(config, 0, 0)?;
 
     let mut instances = lock_instances();
     let id = instances.next;
@@ -388,6 +392,26 @@ pub fn appender_write(info: Option<&XLoggerInfo>, logbody: &str) -> bool {
             !closed
         }
         None => false,
+    }
+}
+
+/// `mars::xlog::xlogger_dump` — the dump that also leaves a file behind.
+///
+/// The blob is written to `<logdir>/<YYYYMMDD>/<YYYYMMDDHHMMSS>_<len>.dump`
+/// and the returned report is what the C++ hands back to the caller:
+/// `"\n dump file to <path> :\n"` plus up to 32 lines of 16 bytes. Empty when
+/// no appender is open (`sg_release_guard`) or the file cannot be written, as
+/// in the C++.
+///
+/// The `YYYYMMDD` directory is the same one [`appender_open`]'s expiry sweeps,
+/// so a dump is kept no longer than the logs around it.
+pub fn xlogger_dump(bytes: &[u8]) -> String {
+    match lock_slot().as_ref() {
+        Some(appender) => match appender.current_log_path() {
+            Some(logdir) => dump::dump_to_logdir(bytes, &logdir),
+            None => String::new(),
+        },
+        None => String::new(),
     }
 }
 

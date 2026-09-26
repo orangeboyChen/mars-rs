@@ -252,3 +252,34 @@ fn oneshot_flush_drains_a_foreign_cache_file() {
     assert!(text.contains("recovered from the cache file"), "{text}");
     assert!(text.contains("begin of mmap from other process"), "{text}");
 }
+
+/// `xlogger_dump`: the dump that leaves a file in the log directory behind, so
+/// the blob is still there after the process is gone.
+#[test]
+fn dump_writes_a_file_and_reports_it() {
+    let _guard = singleton();
+    let tmp = tempfile::tempdir().unwrap();
+    appender_open(config(tmp.path(), AppenderMode::Sync)).unwrap();
+
+    let report = mars_appender::xlogger_dump(b"payload of the dump");
+    assert!(report.contains(".dump :\n"), "{report}");
+
+    let path = report
+        .split(" dump file to ")
+        .nth(1)
+        .unwrap()
+        .split(" :\n")
+        .next()
+        .unwrap();
+    let path = PathBuf::from(path);
+    assert!(
+        path.starts_with(tmp.path()),
+        "the dump left the log directory: {path:?}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"payload of the dump");
+
+    appender_close();
+
+    // No appender: the C++ `sg_release_guard` case, an empty report.
+    assert_eq!(mars_appender::xlogger_dump(b"nowhere to go"), "");
+}

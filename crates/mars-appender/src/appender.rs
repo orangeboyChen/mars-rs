@@ -14,8 +14,9 @@
 //!   C++, which means a long-lived sync-mode file never splits. The port also
 //!   closes the current file as soon as a write pushes it past the limit, so
 //!   both modes split (see [`AppenderInner::write_file_record`]).
-//! * `boost::filesystem::space()` (free disk space) has no `std`
-//!   counterpart, so the 1 GiB threshold in `__CacheLogs` is not applied.
+//! * `boost::filesystem::space()` is [`crate::sys::available_space`]
+//!   (`statvfs` / `GetDiskFreeSpaceExW`), so the 1 GiB threshold and the two
+//!   `space info` records of `__CacheLogs` / `Open` are applied.
 //! * `LogBuffer` in this workspace is state-only, so the mmap (or the heap
 //!   fallback when mmap fails) lives in [`Region`] and is handed to the buffer
 //!   on every call.
@@ -815,14 +816,9 @@ impl Appender {
             appender.write_tips2file(&format!("~~~~~ end of mmap ~~~~~{mark}\n"));
         }
 
-        let stamp = format_local_timestamp(now_secs());
-        let (build_date, build_time) = match stamp.split_once(' ') {
-            Some((date, rest)) => (
-                date.to_owned(),
-                rest.split(' ').nth(1).unwrap_or("00:00:00").to_owned(),
-            ),
-            None => (stamp.clone(), "00:00:00".to_owned()),
-        };
+        // `__DATE__` / `__TIME__` of the C++ banner: which build produced this
+        // log file, not what time it is now.
+        let (build_date, build_time) = crate::file_util::build_stamp();
         appender.write(
             None,
             &format!("^^^^^^^^^^{build_date}^^^{build_time}^^^^^^^^^^^{mark}"),
@@ -831,6 +827,19 @@ impl Appender {
             None,
             &format!("get mmap time: {}", start.elapsed().as_millis()),
         );
+        // `MARS_URL` / `MARS_PATH` / `MARS_REVISION` / `MARS_BUILD_TIME` /
+        // `MARS_BUILD_JOB` — the build identity the C++ splices in from its
+        // build system. `build.rs` captures everything but the URL, which is
+        // the crate's own `repository`.
+        for line in [
+            format!("MARS_URL: {}", env!("CARGO_PKG_REPOSITORY")),
+            format!("MARS_PATH: {}", env!("MARS_XLOG_SOURCE_PATH")),
+            format!("MARS_REVISION: {}", env!("MARS_XLOG_REVISION")),
+            format!("MARS_BUILD_TIME: {build_date} {build_time}"),
+            format!("MARS_BUILD_JOB: {}", env!("MARS_XLOG_BUILD_JOB")),
+        ] {
+            appender.write(None, &line);
+        }
         // NOTE: the temporary `MutexGuard`s of inline `appender.lock()` calls
         // live until the end of the statement, so they must never be created in
         // the argument list of another `Appender` method (std::sync::Mutex is
@@ -843,6 +852,33 @@ impl Appender {
             )
         };
         appender.write(None, &mode_line);
+
+        // `cache dir space info` / `log dir space info` — `Open` writes both,
+        // the cache one only when a cache dir is configured. The C++ asks
+        // `boost::filesystem::space()`, which throws when the query fails; the
+        // port leaves the record out instead of failing the open.
+        let (logdir, cachedir) = {
+            let guard = appender.lock();
+            (guard.config.logdir.clone(), guard.config.cachedir.clone())
+        };
+        if let Some(cachedir) = cachedir {
+            if let Some((capacity, free, available)) = crate::sys::space_info(&cachedir) {
+                appender.write(
+                    None,
+                    &format!(
+                        "cache dir space info, capacity:{capacity} free:{free} available:{available}"
+                    ),
+                );
+            }
+        }
+        if let Some((capacity, free, available)) = crate::sys::space_info(&logdir) {
+            appender.write(
+                None,
+                &format!(
+                    "log dir space info, capacity:{capacity} free:{free} available:{available}"
+                ),
+            );
+        }
 
         Ok(appender)
     }
@@ -1043,14 +1079,9 @@ impl Appender {
             clear_cache_file(&path);
         }
         let mark = mark_info();
-        let stamp = format_local_timestamp(now_secs());
-        let (build_date, build_time) = match stamp.split_once(' ') {
-            Some((date, rest)) => (
-                date.to_owned(),
-                rest.split(' ').nth(1).unwrap_or("00:00:00").to_owned(),
-            ),
-            None => (stamp.clone(), "00:00:00".to_owned()),
-        };
+        // `__DATE__` / `__TIME__` again: the twin of the open banner, so the
+        // same build stamp brackets the file.
+        let (build_date, build_time) = crate::file_util::build_stamp();
         self.write(
             None,
             &format!("$$$$$$$$$${build_date}$$${build_time}$$$$$$$$$${mark}\n"),

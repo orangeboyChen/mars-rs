@@ -73,6 +73,17 @@ typedef enum {
 #define MARS_XLOG_ERR_NO_PATH (-8)       /* no current log file is open           */
 #define MARS_XLOG_ERR_PANIC (-99)        /* a Rust panic was caught at the boundary */
 
+/* --- `mars_xlog_oneshot_flush` result: mars::xlog::TFileIOAction --------- */
+
+#define MARS_XLOG_ACTION_NONE 0
+#define MARS_XLOG_ACTION_SUCCESS 1
+#define MARS_XLOG_ACTION_UNNECESSARY 2  /* there was nothing to flush        */
+#define MARS_XLOG_ACTION_OPEN_FAILED 3
+#define MARS_XLOG_ACTION_READ_FAILED 4
+#define MARS_XLOG_ACTION_WRITE_FAILED 5
+#define MARS_XLOG_ACTION_CLOSE_FAILED 6
+#define MARS_XLOG_ACTION_REMOVE_FAILED 7
+
 /* --- config ------------------------------------------------------------- */
 
 /**
@@ -191,6 +202,59 @@ void mars_xlog_set_mode_instance(long long instance, int mode);
 
 /* Drains an instance; sync != 0 waits for the write to complete. */
 void mars_xlog_flush_instance(long long instance, int sync);
+
+/* FlushAll: drains the process-wide appender *and* every instance. */
+void mars_xlog_flush_all(int sync);
+
+/* SetConsoleLogOpen for an instance (0 = the default logger). */
+void mars_xlog_set_console_log_instance(long long instance, int open);
+
+/* SetMaxFileSize for an instance; 0 means "do not split". */
+void mars_xlog_set_max_file_size_instance(long long instance, unsigned long long bytes);
+
+/* SetMaxAliveTime for an instance; negative clamps to 0. */
+void mars_xlog_set_max_alive_duration_instance(long long instance, long long seconds);
+
+/**
+ * Replaces `mars::xlog::appender_oneshot_flush()`: drains an `<prefix>.mmap3`
+ * another process left behind, without opening an appender. It refuses to run
+ * for a directory an appender of this process already owns, and then answers
+ * MARS_XLOG_ACTION_UNNECESSARY.
+ *
+ * @return one of the MARS_XLOG_ACTION_* values (0..7), or a negative
+ *         MARS_XLOG_ERR_* code when `config` is unusable.
+ */
+int mars_xlog_oneshot_flush(const MarsXLogConfig* config);
+
+/**
+ * Replaces `mars::xlog::appender_make_logfile_name()`: the log file *name* for
+ * the day `timespan` days ago (0 = today), whether or not it exists yet.
+ *
+ * The C++ fills a `std::vector`; a C caller walks the same list with `index`,
+ * starting at 0 and stopping at MARS_XLOG_ERR_NO_PATH. `prefix` and `log_dir`
+ * may be NULL (an empty `log_dir` yields no name at all).
+ *
+ * @return the number of bytes written excluding the terminating NUL, or a
+ *         negative MARS_XLOG_ERR_* code.
+ */
+int mars_xlog_make_logfile_name(int timespan,
+                                const char* prefix,
+                                const char* log_dir,
+                                unsigned int index,
+                                char* out,
+                                unsigned int len);
+
+/**
+ * Replaces `mars::xlog::appender_getfilepath_from_timespan()`: the log files
+ * that *exist* for the day `timespan` days ago. Same `index` protocol as
+ * mars_xlog_make_logfile_name.
+ */
+int mars_xlog_getfilepath_from_timespan(int timespan,
+                                        const char* prefix,
+                                        const char* log_dir,
+                                        unsigned int index,
+                                        char* out,
+                                        unsigned int len);
 
 /* The cache directory, or a negative MARS_XLOG_ERR_* code. */
 int mars_xlog_current_log_cache_path(char* out, unsigned int len);

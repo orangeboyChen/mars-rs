@@ -24,6 +24,72 @@ use crate::config::{LogLevel, XLoggerInfo};
 /// the C++ reads out of bounds.
 pub(crate) const LEVEL_STRINGS: [&str; 7] = ["V", "D", "I", "W", "E", "F", "N"];
 
+/// `char strFuncName[128]` in `ConsoleLog.cc` / `formater.cc`, minus the
+/// terminating `NUL`.
+const MAX_FUNCTION_NAME: usize = 127;
+
+/// `mars::comm::ExtractFunctionName` (`loginfo_extract.c`).
+///
+/// Trims a compiler signature down to the bare name: the part after the last
+/// `' '` (the return type, `void Foo::bar(int)` → `bar`) or after a `"::"`, up
+/// to the `'('` of the parameter list — or up to a `':'` / `']'`, which is how
+/// the Objective-C `-[Class method]` form ends. The result is capped at 127
+/// bytes, like the 128-byte buffer the C++ copies into.
+///
+/// When nothing can be trimmed (or the trimmed name would be a single byte) the
+/// whole signature is kept, again capped: the C++ `strncpy`s the original into
+/// the same buffer.
+pub(crate) fn extract_function_name(func: Option<&str>) -> String {
+    let Some(func) = func else {
+        // `NULL == _func` returns without touching the buffer: an empty name.
+        return String::new();
+    };
+
+    let bytes = func.as_bytes();
+    let mut start = 0usize;
+    let mut end: Option<usize> = None;
+    let mut pos = 0usize;
+    while pos < bytes.len() {
+        if end.is_none() && bytes[pos] == b' ' {
+            pos += 1;
+            start = pos;
+            continue;
+        }
+        if bytes[pos] == b':' && bytes.get(pos + 1) == Some(&b':') {
+            pos += 2;
+            start = pos;
+            continue;
+        }
+        if bytes[pos] == b'(' {
+            end = Some(pos);
+        } else if bytes[pos] == b':' || bytes[pos] == b']' {
+            end = Some(pos);
+            break;
+        }
+        pos += 1;
+    }
+
+    match end {
+        // `start + 1 >= end`: a one-byte name is not a name, so the C++ keeps
+        // the whole signature.
+        Some(end) if start + 1 < end => {
+            let len = (end - start).min(MAX_FUNCTION_NAME);
+            String::from_utf8_lossy(&bytes[start..start + len]).into_owned()
+        }
+        _ => cap(func),
+    }
+}
+
+/// The C++'s `strncpy(_func_ret, _func, _len)`: at most 127 bytes, never in the
+/// middle of a UTF-8 sequence.
+fn cap(func: &str) -> String {
+    let mut len = func.len().min(MAX_FUNCTION_NAME);
+    while len > 0 && !func.is_char_boundary(len) {
+        len -= 1;
+    }
+    func[..len].to_owned()
+}
+
 /// `mars::comm::ExtractFileName` — the part of `_path` after the last
 /// `/` or `\`.
 pub(crate) fn extract_file_name(path: Option<&str>) -> &str {
@@ -107,7 +173,16 @@ pub fn log_formater(info: Option<&XLoggerInfo>, logbody: Option<&str>, out: &mut
             String::new()
         };
         let filename = extract_file_name(info.filename.as_deref());
-        let func_name = info.func_name.as_deref().unwrap_or("");
+        // `#if _WIN32` in `formater.cc`: only there is the name trimmed into a
+        // `char[128]` first. Everywhere else the C++ hands `strFuncName` the
+        // caller's `__FUNCTION__` unchanged.
+        let trimmed;
+        let func_name = if cfg!(windows) {
+            trimmed = extract_function_name(info.func_name.as_deref());
+            trimmed.as_str()
+        } else {
+            info.func_name.as_deref().unwrap_or("")
+        };
         let tag = info.tag.as_deref().unwrap_or("");
         // C++: `_logbody ? levelStrings[_info->level] : levelStrings[kLevelFatal]`
         let level = if logbody.is_some() {
@@ -348,5 +423,40 @@ mod tests {
         assert_eq!(extract_file_name(Some("a/b/c.cc")), "c.cc");
         assert_eq!(extract_file_name(Some("c:\\tmp\\d.cc")), "d.cc");
         assert_eq!(extract_file_name(Some("plain.cc")), "plain.cc");
+    }
+
+    /// The shapes `ExtractFunctionName` was written for: a C++ signature, a
+    /// namespaced one, and the Objective-C `-[Class method]` form.
+    #[test]
+    fn extract_function_name_trims_a_signature() {
+        assert_eq!(extract_function_name(None), "");
+        assert_eq!(extract_function_name(Some("main")), "main");
+        assert_eq!(
+            extract_function_name(Some("void Foo::bar(int)")),
+            "bar",
+            "the return type and the namespace are dropped"
+        );
+        assert_eq!(
+            extract_function_name(Some("-[Foo bar]")),
+            "bar",
+            "an ObjC selector loses its class"
+        );
+        // Not trimmed: a name of one byte is not a name, so the C++ keeps the
+        // whole signature.
+        assert_eq!(extract_function_name(Some("f(")), "f(");
+    }
+
+    #[test]
+    fn extract_function_name_is_capped_at_the_cpp_buffer() {
+        let long = format!("void {}::long_name(int)", "N".repeat(200));
+        let name = extract_function_name(Some(&long));
+        assert_eq!(name, "long_name");
+
+        // Nothing to trim, so the whole signature is copied — and cut off at
+        // the 127 bytes of `char strFuncName[128]`, never mid-character.
+        let untrimmed = "ü".repeat(100);
+        let capped = extract_function_name(Some(&untrimmed));
+        assert_eq!(capped.len(), 126, "127 bytes leaves a `ü` whole");
+        assert!(untrimmed.starts_with(&capped));
     }
 }
