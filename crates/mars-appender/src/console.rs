@@ -44,9 +44,9 @@ mod tests {
     fn console_log_does_not_panic() {
         let info = XLoggerInfo {
             level: LogLevel::Warn,
-            tag: Some("tag".to_owned()),
-            filename: Some("/a/b/c.cc".to_owned()),
-            func_name: Some("fn".to_owned()),
+            tag: Some("tag".into()),
+            filename: Some("/a/b/c.cc".into()),
+            func_name: Some("fn".into()),
             line: 7,
             ..Default::default()
         };
@@ -59,9 +59,9 @@ mod tests {
         // `kLevelNone` is one past the C++ `levelStrings[]`.
         let info = XLoggerInfo {
             level: LogLevel::None,
-            tag: Some("tag".to_owned()),
-            filename: Some("/a/b/c.cc".to_owned()),
-            func_name: Some("fn".to_owned()),
+            tag: Some("tag".into()),
+            filename: Some("/a/b/c.cc".into()),
+            func_name: Some("fn".into()),
             line: 7,
             ..Default::default()
         };

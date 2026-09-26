@@ -298,12 +298,12 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn info(level: LogLevel) -> XLoggerInfo {
+    fn info(level: LogLevel) -> XLoggerInfo<'static> {
         XLoggerInfo {
             level,
-            tag: Some("tag".to_owned()),
-            filename: Some("/tmp/src/hello.cc".to_owned()),
-            func_name: Some("main".to_owned()),
+            tag: Some("tag".into()),
+            filename: Some("/tmp/src/hello.cc".into()),
+            func_name: Some("main".into()),
             line: 42,
             pid: 100,
             tid: 200,

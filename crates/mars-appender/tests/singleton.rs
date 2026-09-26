@@ -34,11 +34,11 @@ fn config(dir: &Path, mode: AppenderMode) -> XLogConfig {
     }
 }
 
-fn info(level: LogLevel) -> XLoggerInfo {
+fn info(level: LogLevel) -> XLoggerInfo<'static> {
     XLoggerInfo {
         level,
-        tag: Some("test".to_owned()),
-        filename: Some("singleton.rs".to_owned()),
+        tag: Some("test".into()),
+        filename: Some("singleton.rs".into()),
         ..Default::default()
     }
 }

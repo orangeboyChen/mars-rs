@@ -3,6 +3,7 @@
 //! a function pointer of its expected signature, so a signature drift fails
 //! the build instead of the FFI crate downstream.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use mars_appender::{
@@ -64,6 +65,20 @@ fn struct_and_enum_shapes_match_the_contract() {
     };
     assert_eq!(info.level, LogLevel::Fatal);
     assert_eq!(info.timeval, (0, 0));
+
+    // The three string fields are `Cow`, like the `const char*` they port:
+    // borrowed for a caller that already has the bytes (the FFI / JNI
+    // boundary), owned for one that built them.
+    let owned = String::from("owned");
+    let info = XLoggerInfo {
+        tag: Some(Cow::Borrowed("borrowed")),
+        filename: Some(Cow::Owned(owned.clone())),
+        func_name: None,
+        ..XLoggerInfo::default()
+    };
+    assert_eq!(info.tag.as_deref(), Some("borrowed"));
+    assert_eq!(info.filename.as_deref(), Some("owned"));
+    assert_eq!(info.func_name.as_deref(), None);
 
     // `AppenderError(pub String)` + `Display` + `Error`.
     let err = AppenderError("boom".to_owned());
