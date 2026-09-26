@@ -101,7 +101,7 @@ Two differences are known and accepted:
 
 Every release ships a package per platform; `.github/workflows/release.yml`
 builds them when it is run by hand (Actions → Release → Run workflow) with a
-version, or with a bump and a channel — `v1.2.3-alpha1`, `v1.2.3-beta2`,
+version, or with a bump and a channel — `v1.2.3-alpha.1`, `v1.2.3-beta.2`,
 `v1.2.3`. Anything with a suffix is published as a GitHub pre-release.
 
 ### SwiftPM
@@ -137,8 +137,8 @@ as `mars-core` and `mars-xlog`:
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen:mars-rs:v0.1.0")       // the whole port
-implementation("io.github.orangeboychen:mars-rs-xlog:v0.1.0")  // xlog alone
+implementation("io.github.orangeboychen:mars-rs:0.1.0")       // the whole port
+implementation("io.github.orangeboychen:mars-rs-xlog:0.1.0")  // xlog alone
 ```
 
 | AAR | artifact | what is in it |

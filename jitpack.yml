@@ -1,12 +1,12 @@
 # https://docs.jitpack.io — the two Android AARs of mars-rs on JitPack
 #
-#   implementation 'io.github.orangeboychen:mars-rs:v0.1.0'        // the whole port
-#   implementation 'io.github.orangeboychen:mars-rs-xlog:v0.1.0'   // xlog alone
+#   implementation 'io.github.orangeboychen:mars-rs:0.1.0'        // the whole port
+#   implementation 'io.github.orangeboychen:mars-rs-xlog:0.1.0'   // xlog alone
 #
 # and, in the spelling JitPack always answers for:
 #
-#   implementation 'com.github.orangeboyChen.mars-rs:mars-rs:v0.1.0'
-#   implementation 'com.github.orangeboyChen.mars-rs:mars-rs-xlog:v0.1.0'
+#   implementation 'com.github.orangeboyChen.mars-rs:mars-rs:0.1.0'
+#   implementation 'com.github.orangeboyChen.mars-rs:mars-rs-xlog:0.1.0'
 #
 # The pair is the one the C++ project publishes as `mars-core` and `mars-xlog`:
 # `android/mars-core` carries the whole Kotlin face of the port with
