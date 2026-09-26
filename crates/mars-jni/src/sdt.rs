@@ -1,4 +1,4 @@
-//! `io.github.marsrs.sdt.SdtLogic` — the network diagnosis.
+//! `io.github.orangeboychen.marsrs.sdt.SdtLogic` — the network diagnosis.
 //!
 //! `com/tencent/mars/sdt/SdtLogic.java` declares two `native` methods,
 //! `setHttpNetcheckCGI` and `getLoadLibraries`, and the C++

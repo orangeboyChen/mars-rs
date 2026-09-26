@@ -1,4 +1,4 @@
-//! `io.github.marsrs.comm.Alarm` — the timer bookkeeping behind
+//! `io.github.orangeboychen.marsrs.comm.Alarm` — the timer bookkeeping behind
 //! `com/tencent/mars/comm/Alarm.java`.
 //!
 //! `Alarm.java` is a `BroadcastReceiver`: `start(id, after, context)` asks

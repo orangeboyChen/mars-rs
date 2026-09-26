@@ -1,1 +1,9 @@
 /target
+
+# the Android project: what the release workflow unpacks and what Gradle writes
+android/*/libs/
+android/.gradle/
+android/build/
+android/*/build/
+android/local.properties
+/dist

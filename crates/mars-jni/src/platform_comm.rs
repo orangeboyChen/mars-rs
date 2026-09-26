@@ -1,4 +1,4 @@
-//! `io.github.marsrs.comm.PlatformComm$C2Java` — what the platform is, as
+//! `io.github.orangeboychen.marsrs.comm.PlatformComm$C2Java` — what the platform is, as
 //! `com/tencent/mars/comm/PlatformComm.java` answers it.
 //!
 //! `PlatformComm.java` declares no `native` method: `C2Java` is the set of

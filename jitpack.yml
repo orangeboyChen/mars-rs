@@ -1,0 +1,44 @@
+# https://docs.jitpack.io — the two Android AARs of mars-rs on JitPack
+#
+#   implementation 'io.github.orangeboychen:mars-rs:v0.1.0'        // the whole port
+#   implementation 'io.github.orangeboychen:mars-rs-xlog:v0.1.0'   // xlog alone
+#
+# and, in the spelling JitPack always answers for:
+#
+#   implementation 'com.github.orangeboyChen.mars-rs:mars-rs:v0.1.0'
+#   implementation 'com.github.orangeboyChen.mars-rs:mars-rs-xlog:v0.1.0'
+#
+# The pair is the one the C++ project publishes as `mars-core` and `mars-xlog`:
+# `android/mars-core` carries the whole Kotlin face of the port with
+# `libmarsxlog.so`, `android/mars-xlog` the logging half with the same library.
+#
+# JitPack has an Android SDK but neither an NDK nor a Rust toolchain, so the
+# native libraries that .github/workflows/release.yml built are downloaded from
+# the release of the same tag before the AARs are assembled — the trick
+# orangeboyChen/mars plays as well.
+
+jdk:
+  - openjdk17
+
+before_install:
+  - 'echo "VERSION=$VERSION GIT_DESCRIBE=$GIT_DESCRIBE"'
+  - |
+    for V in "$VERSION" "v$VERSION" "$GIT_DESCRIBE" "$(git describe --tags --abbrev=0 2>/dev/null)"; do
+      [ -n "$V" ] || continue
+      echo "trying the release assets of $V"
+      if curl -sSfL -o mars-android-native.zip \
+          "https://github.com/orangeboyChen/mars-rs/releases/download/$V/mars-android-native.zip"; then
+        echo "downloaded mars-android-native.zip of $V"
+        break
+      fi
+    done
+  - test -s mars-android-native.zip || { echo "could not download mars-android-native.zip"; exit 1; }
+  # <abi>/libmarsxlog.so, which is what jniLibs.srcDirs("libs") reads in both
+  # modules: the same .so, two sets of Kotlin classes over it
+  - unzip -q -o mars-android-native.zip -d android/mars-core/libs
+  - unzip -q -o mars-android-native.zip -d android/mars-xlog/libs
+  - find android/*/libs -name '*.so' | sort
+
+install:
+  - cd android && ./gradlew --no-daemon -PpublishedVersion="$VERSION"
+    :mars-core:publishToMavenLocal :mars-xlog:publishToMavenLocal

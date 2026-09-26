@@ -1,4 +1,4 @@
-//! `io.github.marsrs.stn.StnLogic` — what the `native` methods of
+//! `io.github.orangeboychen.marsrs.stn.StnLogic` — what the `native` methods of
 //! `com/tencent/mars/stn/StnLogic.java` reach.
 //!
 //! The C++ (`mars/stn/jni/com_tencent_mars_stn_StnLogic_Java2C.cc`) forwards

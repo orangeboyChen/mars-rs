@@ -1,4 +1,4 @@
-//! `io.github.marsrs.BaseEvent` — the seven `native` methods of
+//! `io.github.orangeboychen.marsrs.BaseEvent` — the seven `native` methods of
 //! `com/tencent/mars/BaseEvent.java`, and the `mars/baseevent` behind them.
 //!
 //! `BaseEvent.java` is how the app tells Mars what happened to it: it was
