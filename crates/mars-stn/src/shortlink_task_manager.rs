@@ -991,9 +991,14 @@ impl ShortLinkTaskManager {
                 read_write_timeout: read_write,
                 sent_count,
             };
-            if let Some(run) = self.start_run(&task, &request) {
-                self.tasks[i].running = Some(run);
-            }
+            // `if (!first->running_id) { first = next; continue; }` — a run
+            // that never began is not one the queue counts as out, and the
+            // tasks behind it are not given the timeouts of a busier queue
+            let Some(run) = self.start_run(&task, &request) else {
+                i += 1;
+                continue;
+            };
+            self.tasks[i].running = Some(run);
             sent_count += 1;
             i += 1;
         }
@@ -1714,6 +1719,43 @@ mod tests {
         manager.run_loop_at(102_000);
         assert_eq!(*written.lock().unwrap(), vec![1, 2]);
         assert_eq!(manager.tasks()[0].task.client_sequence_id, 2);
+    }
+
+    /// `++sent_count` — a run the host did not start is not one that is out:
+    /// the C++ leaves the task where it is *before* the count, so the tasks
+    /// behind it are not given the timeouts of a queue with one more run on it.
+    #[test]
+    fn a_run_that_never_began_is_not_one_the_queue_counts() {
+        let mut manager = ShortLinkTaskManager::new();
+        let counts: Arc<Mutex<Vec<(u32, i32)>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&counts);
+        manager.set_start_run(move |task, request| {
+            recorder
+                .lock()
+                .unwrap()
+                .push((task.taskid, request.sent_count));
+            // the first task's run never begins
+            if task.taskid == 7 {
+                None
+            } else {
+                Some(RunId(u64::from(task.taskid)))
+            }
+        });
+
+        manager.start_task_at(100_000, task(7), prepare());
+        manager.start_task_at(100_000, task(8), prepare());
+
+        // the second pass asks for the first task's run again, and the second
+        // task's is the first run that is out — so it is given the timeouts of
+        // an empty queue and not of one that has already sent one
+        assert_eq!(*counts.lock().unwrap(), vec![(7, 0), (7, 0), (8, 0)]);
+        assert!(
+            manager
+                .tasks()
+                .iter()
+                .any(|profile| profile.task.taskid == 7),
+            "a task whose run never began stays where it is"
+        );
     }
 
     #[test]
