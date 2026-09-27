@@ -1,9 +1,10 @@
 {
-  "include": [".vitepress/config.ts"],
+  "include": [".vitepress/config.ts", ".vitepress/theme/index.ts"],
   "compilerOptions": {
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "lib": ["ESNext", "DOM"],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,

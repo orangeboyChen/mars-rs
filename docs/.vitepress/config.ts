@@ -174,6 +174,46 @@ export default defineConfig({
   themeConfig: {
     lastUpdated: {},
   },
+  // One string of the markdown pipeline is English too, and it is the one with
+  // the heading in it: every heading carries a link whose `aria-label` reads
+  // `Permalink to "..."`. VitePress writes that label itself and hands no key to
+  // it, but it spreads `markdown.anchor` over its own anchor options last, so
+  // this generator is the one that runs: it writes the same link the theme
+  // writes — same class, same `#slug`, same zero-width space in it — over the
+  // heading's own inline tokens, with the locale's words around the title.
+  // `state.env` is the page being rendered, and `localeIndex` on it is which
+  // locale that page belongs to.
+  markdown: {
+    anchor: {
+      permalink: (slug, _options, state, index) => {
+        const inline = state.tokens[index + 1]
+        const children = inline.children ?? []
+        inline.children = children
+
+        const link = new state.Token('link_open', 'a', 1)
+        link.attrs = [
+          ['class', 'header-anchor'],
+          ['href', `#${slug}`],
+          [
+            'aria-label',
+            state.env.localeIndex === 'zh'
+              ? `“${inline.content}” 的永久链接`
+              : `Permalink to "${inline.content}"`,
+          ],
+        ]
+
+        const symbol = new state.Token('html_inline', '', 0)
+        symbol.content = '&ZeroWidthSpace;'
+
+        children.push(
+          Object.assign(new state.Token('text', '', 0), { content: ' ' }),
+          link,
+          symbol,
+          new state.Token('link_close', 'a', -1),
+        )
+      },
+    },
+  },
   locales: {
     root: {
       label: 'English',
