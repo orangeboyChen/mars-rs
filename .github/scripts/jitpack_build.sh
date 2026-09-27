@@ -9,8 +9,8 @@
 # Environment:
 #   TAG                    the tag the release was published as
 #   JITPACK_GROUP          the group the AARs are published under
-#   JITPACK_ARTIFACT       mars-rs
-#   JITPACK_ARTIFACT_XLOG  mars-rs-xlog
+#   JITPACK_ARTIFACT       marsrs
+#   JITPACK_ARTIFACT_XLOG  marsrs-xlog
 
 set -euo pipefail
 

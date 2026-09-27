@@ -15,7 +15,7 @@
 # rest on `ubuntu-latest` — and uploads what it wrote with the release.
 #
 # It builds no Android library: `scripts/build_android.sh` does, and the AAR and
-# the Kotlin Multiplatform module share that one `libmarsxlog.so`.
+# the Kotlin Multiplatform module share that one `libmarsrsxlog.so`.
 
 set -euo pipefail
 

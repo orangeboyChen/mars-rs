@@ -79,7 +79,7 @@ swiftlint lint --strict
 # detekt.yml configures on top of detekt's own defaults.
 ktlint --relative 'android/**/*.kt' 'android/**/*.kts'
 java -jar detekt-cli-1.23.8-all.jar \
-  --input android/mars-core/src/main/kotlin,android/mars-xlog/src/main/kotlin \
+  --input android/marsrs/src/main/kotlin,android/marsrs-xlog/src/main/kotlin \
   --config detekt.yml --build-upon-default-config
 ```
 
@@ -372,24 +372,24 @@ reaches them.
 
 ### Android (JitPack)
 
-Two AARs over the same `libmarsxlog.so` — the pair the C++ project publishes
-as `mars-core` and `mars-xlog`:
+Two AARs over the same `libmarsrsxlog.so` — the pair the crates on crates.io
+are, and the pair the C++ project publishes as `mars-core` and `mars-xlog`:
 
 ```kotlin
 // settings.gradle.kts
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen:mars-rs:0.1.0")       // the whole port
-implementation("io.github.orangeboychen:mars-rs-xlog:0.1.0")  // xlog alone
+implementation("io.github.orangeboychen:marsrs:0.1.0")       // the whole port
+implementation("io.github.orangeboychen:marsrs-xlog:0.1.0")  // xlog alone
 ```
 
 | AAR | artifact | what is in it |
 |---|---|---|
-| `mars-core.aar` | `mars-rs` | every Kotlin class whose natives `marsrs-jni` exports — `xlog`, `stn`, `sdt`, `app`, `comm` and `BaseEvent`/`Mars` — plus `libmarsxlog.so` for `arm64-v8a`, `armeabi-v7a` and `x86_64` |
-| `mars-xlog.aar` | `mars-rs-xlog` | `xlog.Xlog` — with `XlogConfig`, `LogLevel`, `AppenderMode` and `CompressMode` — and the `xlog.Log` facade over it, plus the same `libmarsxlog.so` |
+| `marsrs.aar` | `marsrs` | every Kotlin class whose natives `marsrs-jni` exports — `xlog`, `stn`, `sdt`, `app`, `comm` and `BaseEvent`/`Mars` — plus `libmarsrsxlog.so` for `arm64-v8a`, `armeabi-v7a` and `x86_64` |
+| `marsrs-xlog.aar` | `marsrs-xlog` | `xlog.Xlog` — with `XlogConfig`, `LogLevel`, `AppenderMode` and `CompressMode` — and the `xlog.Log` facade over it, plus the same `libmarsrsxlog.so` |
 
-Take `mars-rs` when you want STN or SDT, `mars-rs-xlog` when the app only logs;
+Take `marsrs` when you want STN or SDT, `marsrs-xlog` when the app only logs;
 both carry the whole library, because there is one `.so` and it is not split.
 The Kotlin and Java package is `io.github.orangeboychen.marsrs`, the package
 whose natives `marsrs-jni` exports, so the two are renamed together. The AAR's face
@@ -417,16 +417,16 @@ maven {
 }
 
 // build.gradle.kts of the shared module
-implementation("io.github.orangeboychen:mars-rs-kmp:0.1.0")       // the whole port
-implementation("io.github.orangeboychen:mars-rs-xlog-kmp:0.1.0")  // xlog alone
+implementation("io.github.orangeboychen:marsrs-kmp:0.1.0")       // the whole port
+implementation("io.github.orangeboychen:marsrs-xlog-kmp:0.1.0")  // xlog alone
 ```
 
 | artifact | what is in it |
 |---|---|
-| `mars-rs-kmp` | `mars-rs-xlog-kmp`, re-exported — the pair `mars-rs`/`mars-rs-xlog` are on Android and `MarsRS`/`MarsRSXlog` are in Swift. Its own declarations are six `typealias`es under `io.github.orangeboychen.marsrs`, one per name below: `mars-ffi` is an xlog C ABI today, so the whole port and its logging half are the same module. Taking this coordinate is what lets STN and SDT arrive without a rename. |
-| `mars-rs-xlog-kmp` | `Xlog`, `XlogConfig`, `LogLevel` and the `Log` facade, over the JNI bridge on Android and over the C ABI of `mars-ffi` everywhere else |
+| `marsrs-kmp` | `marsrs-xlog-kmp`, re-exported — the pair `marsrs`/`marsrs-xlog` are on Android and `MarsRS`/`MarsRSXlog` are in Swift. Its own declarations are six `typealias`es under `io.github.orangeboychen.marsrs`, one per name below: `mars-ffi` is an xlog C ABI today, so the whole port and its logging half are the same module. Taking this coordinate is what lets STN and SDT arrive without a rename. |
+| `marsrs-xlog-kmp` | `Xlog`, `XlogConfig`, `LogLevel` and the `Log` facade, over the JNI bridge on Android and over the C ABI of `mars-ffi` everywhere else |
 
-Fourteen targets: Android — the AAR carries `libmarsxlog.so` for `arm64-v8a`,
+Fourteen targets: Android — the AAR carries `libmarsrsxlog.so` for `arm64-v8a`,
 `armeabi-v7a` and `x86_64` — plus `iosArm64`, `iosX64`, `iosSimulatorArm64`,
 `macosX64`, `macosArm64`, `watchosArm64`, `watchosDeviceArm64`,
 `watchosSimulatorArm64`, `tvosArm64`, `tvosSimulatorArm64`, `linuxX64`,
@@ -524,13 +524,13 @@ when `OHOS_SDK_HOME` is not set.
 
 ```bash
 scripts/build_xcframework.sh 0.1.0 dist   # MarsRSXlog.xcframework.zip, MarsRSNet.xcframework.zip
-scripts/build_android.sh dist/native      # <abi>/libmarsxlog.so
+scripts/build_android.sh dist/native      # <abi>/libmarsrsxlog.so
 # the .so of dist/native has to be under android/<module>/libs first
-(cd android && ./gradlew :mars-core:assembleRelease :mars-xlog:assembleRelease)
+(cd android && ./gradlew :marsrs:assembleRelease :marsrs-xlog:assembleRelease)
 # <kotlin-target>/libmars_ffi.a into kmp/native, plus dist/native's .so into
 # kmp/native/android — on macOS for the Apple ones, on Linux for the rest
 scripts/build_kmp_native.sh kmp/native
-(cd kmp && ./gradlew :mars-core:publishToMavenLocal :mars-xlog:publishToMavenLocal)
+(cd kmp && ./gradlew :marsrs:publishToMavenLocal :marsrs-xlog:publishToMavenLocal)
 ```
 
 `kmp` is a Gradle build of its own and not two modules of `android`, because the

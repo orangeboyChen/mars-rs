@@ -9,7 +9,7 @@
 // this project chooses, so the two cannot share one build.
 //
 // Nothing is compiled from Rust here either: see the comment at the top of
-// mars-xlog/build.gradle.kts.
+// marsrs-xlog/build.gradle.kts.
 
 pluginManagement {
     repositories {
@@ -27,11 +27,12 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "mars-rs-kmp"
+rootProject.name = "marsrs-kmp"
 
-// The pair the C++ project publishes as `mars-core` and `mars-xlog`, and the
-// pair `Package.swift` exposes as `MarsRS` and `MarsRSXlog`: `mars-core` is the
-// whole port — today xlog, because that is all `mars-ffi` exports — and
-// `mars-xlog` is the logging half, the module that does the work.
-include(":mars-core")
-include(":mars-xlog")
+// The pair the crates on crates.io are, the pair the C++ project publishes as
+// `mars-core` and `mars-xlog`, and the pair `Package.swift` exposes as `MarsRS`
+// and `MarsRSXlog`: `marsrs` is the whole port — today xlog, because that is all
+// `mars-ffi` exports — and `marsrs-xlog` is the logging half, the module that
+// does the work.
+include(":marsrs")
+include(":marsrs-xlog")

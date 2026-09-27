@@ -253,7 +253,7 @@ jobs:
             export "CARGO_TARGET_${upper}_LINKER=$clang"
             cargo build --release -p marsrs-ffi --target "$target"
             cargo build --release -p marsrs-jni --target "$target"
-            ls -l "target/$target/release/libmarsxlog.so"
+            ls -l "target/$target/release/libmarsrsxlog.so"
           done
 
   # HarmonyOS. The three OHOS targets are tier 2 with host tools, so a std ships

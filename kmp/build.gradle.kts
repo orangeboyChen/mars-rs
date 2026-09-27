@@ -1,11 +1,11 @@
 // Top-level build file of the Kotlin Multiplatform packaging of mars-rs.
 //
-// Two modules over the same native library: `mars-xlog` is the Kotlin face of
+// Two modules over the same native library: `marsrs-xlog` is the Kotlin face of
 // the xlog half of the port — the same API on every platform, over the JNI
 // bridge on Android and over the C ABI of `mars-ffi` everywhere else — and
-// `mars-core` is the whole port over it, the pair the C++ project publishes as
-// `mars-core` and `mars-xlog` and the pair `Package.swift` exposes as `MarsRS`
-// and `MarsRSXlog`.
+// `marsrs` is the whole port over it: the pair the crates on crates.io are, the
+// pair the C++ project publishes as `mars-core` and `mars-xlog`, and the pair
+// `Package.swift` exposes as `MarsRS` and `MarsRSXlog`.
 
 plugins {
     // Declared here and applied in the module, so that the version of each
@@ -17,7 +17,7 @@ plugins {
     // Kotlin Multiplatform module cannot do without. 8.13 is the newest version
     // of the line that still leaves `kotlin` to Kotlin — and with it
     // `com.android.library`, and with *that* the `jniLibs` of an AAR, which is
-    // where `libmarsxlog.so` has to end up for an app to load it.
+    // where `libmarsrsxlog.so` has to end up for an app to load it.
     id("com.android.library") version "8.13.2" apply false
     // 2.2 and not 2.3: Kotlin 2.3 marks `androidTarget` — the only way to have
     // an Android target under this plugin — as an error, on the grounds that it

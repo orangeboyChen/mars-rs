@@ -27,7 +27,7 @@ use marsrs_stn::{App, StnLogic, Task};
 
 /// `getLoadLibraries` — what the C++ lists: the modules the process loaded,
 /// which in this port is this one library.
-pub const LOAD_LIBRARIES: &[&str] = &["marsxlog"];
+pub const LOAD_LIBRARIES: &[&str] = &["marsrsxlog"];
 
 /// `Task::kReservedTaskIDStart` of `mars/stn/stn.h`: the ids from here up are
 /// taken by the noop, the long-link identify check and the signalling keeper, so
@@ -695,6 +695,6 @@ mod tests {
 
     #[test]
     fn get_load_libraries_lists_this_library() {
-        assert_eq!(get_load_libraries_impl(), vec!["marsxlog".to_owned()]);
+        assert_eq!(get_load_libraries_impl(), vec!["marsrsxlog".to_owned()]);
     }
 }

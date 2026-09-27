@@ -2,10 +2,11 @@
 //! the xlog appender, the STN task pipeline and the SDT network diagnosis.
 //!
 //! The C++ project publishes two artifacts, `mars-core` (everything) and
-//! `mars-xlog` (the logger alone), and this port publishes the same pair:
-//! this crate is `mars-core`, and [`marsrs-xlog`](https://crates.io/crates/marsrs-xlog)
-//! is `mars-xlog`. An app that only logs takes that one and carries none of
-//! STN's or SDT's bytes; this one re-exports it as [`xlog`].
+//! `mars-xlog` (the logger alone), and this port publishes the same pair
+//! under names of its own: this crate is the whole port, and
+//! [`marsrs-xlog`](https://crates.io/crates/marsrs-xlog) is the logger alone.
+//! An app that only logs takes that one and carries none of STN's or SDT's
+//! bytes; this one re-exports it as [`xlog`].
 //!
 //! | module          | what it is                                          | C++                    |
 //! |-----------------|-----------------------------------------------------|------------------------|

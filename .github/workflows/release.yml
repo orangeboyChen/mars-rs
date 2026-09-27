@@ -4,17 +4,19 @@ name: Release
 #
 #   * MarsRSXlog.xcframework.zip   -> the xlog binary target of Package.swift
 #   * MarsRSNet.xcframework.zip    -> the net one (the diagnosis and the tasks)
-#   * mars-core.aar              -> JitPack: io.github.orangeboyChen:mars-rs
-#   * mars-xlog.aar              -> JitPack: io.github.orangeboyChen:mars-rs-xlog
-#   * marsrs-android-native.zip    -> the .so files, for a consumer's own AAR
+#   * marsrs.aar                 -> JitPack: io.github.orangeboychen:marsrs
+#   * marsrs-xlog.aar            -> JitPack: io.github.orangeboychen:marsrs-xlog
+#   * marsrs-android-native.zip  -> the .so files, for a consumer's own AAR
 #   * marsrs-<version>-<host>.tar.gz / .zip -> the C ABI for Linux/macOS/Windows
-#   * marsrs-kmp-native.zip    -> the archives the Kotlin module is built out of
-#   * marsrs-kmp-maven.zip     -> the Kotlin module itself, as a maven repository
+#   * marsrs-kmp-native.zip  -> the archives the Kotlin module is built out of
+#   * marsrs-kmp-maven.zip   -> the Kotlin module itself, as a maven repository
 #   * crates.io: `marsrs` and `marsrs-xlog`, at the version of the tag
 #
-# The archives this port packages itself are `marsrs-*`, the way the crates are;
-# the two AARs keep the C++ project's names, `mars-core` and `mars-xlog`, because
-# an app that takes the port in place of it changes the group and not the file.
+# Everything this port packages itself is `marsrs`, the way the crates are: the
+# two AARs, the archives a consumer downloads and the coordinates they are
+# published under. `mars-core` and `mars-xlog` are the C++ project's pair, and
+# nothing of this port's own borrows either — least of all `core`, which here is
+# the name of a crate no package is published under.
 #
 # The steps that outgrew a `run:` block are `.github/scripts/`: no one runs them
 # by hand, and they are of a piece with the workflows that call them. `scripts/`
@@ -105,32 +107,31 @@ env:
   # Every archive of this port's own — the natives the two Android AARs and the
   # Kotlin module are assembled from, and the C ABI a host links — takes the
   # crates' spelling, because a zip is a file a consumer downloads and not a
-  # name a compiler reads. The two AARs below do not: they are the names the C++
-  # project publishes them under, and taking the port in place of it is a change
-  # of the group, not of the file.
+  # name a compiler reads. The two AARs below take it too: what an app writes is
+  # a coordinate, and it is `marsrs` on JitPack as it is on crates.io.
   NATIVE_ZIP: marsrs-android-native.zip
   # The Kotlin Multiplatform pair: the archives the module is built out of, and
   # the maven repository it is published as. `marsrs-kmp-native.zip` is what
   # `scripts/build_kmp_native.sh` writes for every Kotlin target plus the .so
-  # files of the JNI bridge; `marsrs-kmp-maven.zip` is the repository itself, for
-  # a consumer who would rather not authenticate to GitHub Packages.
+  # files of the JNI bridge; `marsrs-kmp-maven.zip` is the repository itself,
+  # for a consumer who would rather not authenticate to GitHub Packages.
   KMP_NATIVE_ZIP: marsrs-kmp-native.zip
   KMP_MAVEN_ZIP: marsrs-kmp-maven.zip
-  # the whole port, and xlog alone: the pair the C++ project publishes as
-  # `mars-core` and `mars-xlog`
-  CORE_AAR: mars-core.aar
-  XLOG_AAR: mars-xlog.aar
+  # the whole port, and xlog alone: the pair the crates on crates.io are, and
+  # the pair the C++ project publishes as `mars-core` and `mars-xlog`
+  MARSRS_AAR: marsrs.aar
+  MARSRS_XLOG_AAR: marsrs-xlog.aar
   # What JitPack publishes the two AARs as; see jitpack.yml. JitPack serves a
   # repository under com.github.<owner>.<repo> whatever the pom's group is, so
   # the build is asked for under both spellings.
   JITPACK_GROUP: io.github.orangeboychen
-  JITPACK_ARTIFACT: mars-rs
-  JITPACK_ARTIFACT_XLOG: mars-rs-xlog
+  JITPACK_ARTIFACT: marsrs
+  JITPACK_ARTIFACT_XLOG: marsrs-xlog
   # The Kotlin Multiplatform pair, published to GitHub Packages under the same
   # group: the whole port and xlog alone, the same two.
   KMP_GROUP: io.github.orangeboychen
-  KMP_ARTIFACT: mars-rs-kmp
-  KMP_ARTIFACT_XLOG: mars-rs-xlog-kmp
+  KMP_ARTIFACT: marsrs-kmp
+  KMP_ARTIFACT_XLOG: marsrs-xlog-kmp
   NDK_VERSION: 27.1.12297006
   ANDROID_HOME: /usr/local/lib/android/sdk
   ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
@@ -214,15 +215,15 @@ jobs:
           cd dist/native
           zip -q -r "$GITHUB_WORKSPACE/dist/$NATIVE_ZIP" .
           cd "$GITHUB_WORKSPACE"
-          # the same .so in both modules: mars-core wraps all of it, mars-xlog
+          # the same .so in both modules: marsrs wraps all of it, marsrs-xlog
           # only the logging half
-          for MODULE in mars-core mars-xlog; do
+          for MODULE in marsrs marsrs-xlog; do
             mkdir -p "android/$MODULE/libs"
             cp -r dist/native/. "android/$MODULE/libs/"
           done
-          (cd android && ./gradlew --no-daemon :mars-core:assembleRelease :mars-xlog:assembleRelease)
-          cp android/mars-core/build/outputs/aar/mars-core-release.aar "dist/$CORE_AAR"
-          cp android/mars-xlog/build/outputs/aar/mars-xlog-release.aar "dist/$XLOG_AAR"
+          (cd android && ./gradlew --no-daemon :marsrs:assembleRelease :marsrs-xlog:assembleRelease)
+          cp android/marsrs/build/outputs/aar/marsrs-release.aar "dist/$MARSRS_AAR"
+          cp android/marsrs-xlog/build/outputs/aar/marsrs-xlog-release.aar "dist/$MARSRS_XLOG_AAR"
       - uses: actions/upload-artifact@v7
         with:
           name: release-android
@@ -232,8 +233,8 @@ jobs:
           # something the release can be given
           path: |
             dist/${{ env.NATIVE_ZIP }}
-            dist/${{ env.CORE_AAR }}
-            dist/${{ env.XLOG_AAR }}
+            dist/${{ env.MARSRS_AAR }}
+            dist/${{ env.MARSRS_XLOG_AAR }}
 
   host:
     needs: version
@@ -385,14 +386,14 @@ jobs:
         # can execute: `linuxX64`. It is the only check the Linux linker flags of
         # `mars_ffi.def` ever get, and the Windows ones get none — there is no
         # runner that can execute a mingw binary here.
-        run: (cd kmp && ./gradlew --no-daemon :mars-xlog:linuxX64Test)
+        run: (cd kmp && ./gradlew --no-daemon :marsrs-xlog:linuxX64Test)
 
-  # The Kotlin Multiplatform release: `mars-rs-kmp` and `mars-rs-xlog-kmp` as a
+  # The Kotlin Multiplatform release: `marsrs-kmp` and `marsrs-xlog-kmp` as a
   # maven repository, on GitHub Packages and, as a zip, on the release.
   #
   # One job on macOS and not one per target, because a Kotlin Multiplatform
   # publication is one artifact per target of one module: the module metadata of
-  # `mars-rs-xlog-kmp` names all fourteen of them, so a publication that left
+  # `marsrs-xlog-kmp` names all fourteen of them, so a publication that left
   # one out is a publication Gradle cannot resolve for the platform it forgot.
   # macOS is where all fourteen can be built, and it is the only place an Apple
   # one can.
@@ -449,7 +450,7 @@ jobs:
         # instead of a failed release. It builds and runs the test of the host's
         # own target: macosArm64 here, the one Kotlin/Native target this runner
         # can execute.
-        run: (cd kmp && ./gradlew --no-daemon :mars-xlog:macosArm64Test)
+        run: (cd kmp && ./gradlew --no-daemon :marsrs-xlog:macosArm64Test)
       - name: Publish to GitHub Packages
         if: needs.version.outputs.is_new == 'true'
         env:
@@ -457,14 +458,14 @@ jobs:
         run: |
           (cd kmp && ./gradlew --no-daemon -PpublishedVersion="${{ needs.version.outputs.version }}" \
             -PmavenUser="$GITHUB_ACTOR" -PmavenPassword="$GITHUB_TOKEN" \
-            :mars-core:publishAllPublicationsToGitHubPackagesRepository \
-            :mars-xlog:publishAllPublicationsToGitHubPackagesRepository)
+            :marsrs:publishAllPublicationsToGitHubPackagesRepository \
+            :marsrs-xlog:publishAllPublicationsToGitHubPackagesRepository)
       - name: Publish to the local repository
         # GitHub Packages is immutable — a version it has cannot be overwritten
         # — so a tag that exists already is only ever republished as the zip.
         run: |
           (cd kmp && ./gradlew --no-daemon -PpublishedVersion="${{ needs.version.outputs.version }}" \
-            :mars-core:publishToMavenLocal :mars-xlog:publishToMavenLocal)
+            :marsrs:publishToMavenLocal :marsrs-xlog:publishToMavenLocal)
       - name: Package the maven repository
         # Zipped from the root of the repository and not from the group's
         # directory: a consumer points `maven { url = uri("<dir>") }` at
@@ -666,7 +667,7 @@ jobs:
   #
   # `marsrs-ffi`, `marsrs-jni` and `marsrs-compat` are the three that stay off
   # it, each with `publish = false` and a note saying why: what their callers
-  # need is a `libmars_ffi.a`, a `libmarsxlog.so` and a CLI, and none of those
+  # need is a `libmars_ffi.a`, a `libmarsrsxlog.so` and a CLI, and none of those
   # is in what `cargo publish` packs.
   crates:
     name: crates.io
