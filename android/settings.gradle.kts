@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "mars-rs-android"
+rootProject.name = "marsrs-android"
 
-include(":mars-core")
-include(":mars-xlog")
+include(":marsrs")
+include(":marsrs-xlog")

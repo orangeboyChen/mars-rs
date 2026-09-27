@@ -56,10 +56,10 @@ public enum XlogError: Error, CustomStringConvertible {
     public var description: String {
         switch self {
         case .emptyLogDirectory:
-            return "mars-xlog opened no appender without a log directory"
+            return "marsrs-xlog opened no appender without a log directory"
 
         case .emptyNamePrefix:
-            return "mars-xlog opened no appender without a name prefix"
+            return "marsrs-xlog opened no appender without a name prefix"
 
         case .invalidCompressionLevel:
             return "compressionLevel must be in 0...9 for zlib, 0...22 for zstd"

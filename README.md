@@ -24,12 +24,12 @@ cargo add marsrs-xlog     # xlog alone — the logger and nothing else
 
 ```kotlin
 // build.gradle.kts — settings.gradle.kts: maven { url = uri("https://jitpack.io") }
-implementation("io.github.orangeboychen:mars-rs-xlog:0.1.0")  // xlog alone
+implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")   // xlog alone
 ```
 
 ```kotlin
 // build.gradle.kts of a Kotlin Multiplatform shared module
-implementation("io.github.orangeboychen:mars-rs-xlog-kmp:0.1.0")
+implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")
 ```
 
 Every release ships a package per platform — a C ABI archive and a HarmonyOS

@@ -89,7 +89,7 @@ fn guard<R: Default>(f: impl FnOnce() -> R) -> R {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(value) => value,
         Err(_) => {
-            let _ = writeln!(std::io::stderr(), "marsxlog: JNI call panicked");
+            let _ = writeln!(std::io::stderr(), "marsrsxlog: JNI call panicked");
             R::default()
         }
     }

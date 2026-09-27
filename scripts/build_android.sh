@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Builds `libmarsxlog.so` (crate `marsrs-jni`) for every Android ABI the release
-# ships, and lays them out as <output-dir>/<abi>/libmarsxlog.so — the shape of
-# marsrs-android-native.zip and of android/mars-xlog/libs/, which is what the AAR
+# Builds `libmarsrsxlog.so` (crate `marsrs-jni`) for every Android ABI the release
+# ships, and lays them out as <output-dir>/<abi>/libmarsrsxlog.so — the shape of
+# marsrs-android-native.zip and of android/marsrs-xlog/libs/, which is what the AAR
 # is assembled from.
 #
 #   scripts/build_android.sh [output-dir]
@@ -63,7 +63,7 @@ for entry in "${abis[@]}"; do
     cargo build --release -p marsrs-jni --target "$target"
 
     mkdir -p "$out/$abi"
-    cp "target/$target/release/libmarsxlog.so" "$out/$abi/libmarsxlog.so"
+    cp "target/$target/release/libmarsrsxlog.so" "$out/$abi/libmarsrsxlog.so"
 done
 
 find "$out" -name '*.so' | sort

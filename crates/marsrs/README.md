@@ -28,7 +28,8 @@ appender_close();
 | `comm`   | the utilities the other two are written over       | `mars/comm` |
 | `bytes`  | `AutoBuffer` and `PtrBuffer`                       | `comm/autobuffer.h` |
 
-This is the `mars-core` of the pair the C++ project publishes. The other one is
+This is the whole port: what the C++ project calls `mars-core`, under the name
+this port gives every artifact of its own. The other one is
 [`marsrs-xlog`](https://crates.io/crates/marsrs-xlog), the logger on its own:
 take that one if all you do is log, and you carry none of STN's or SDT's bytes.
 

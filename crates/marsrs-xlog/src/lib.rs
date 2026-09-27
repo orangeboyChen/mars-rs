@@ -3,9 +3,10 @@
 //! [`marsrs`](https://crates.io/crates/marsrs).
 //!
 //! The C++ project publishes two artifacts: `mars-core`, which is everything,
-//! and `mars-xlog`, which is the logger and nothing else. This crate is the
-//! second one. An app that only logs takes this and gets no bytes of STN or
-//! SDT; an app that wants the whole port takes [`marsrs`](https://crates.io/crates/marsrs)
+//! and `mars-xlog`, which is the logger and nothing else. This port publishes
+//! the same pair under names of its own, and this crate is the second of
+//! them. An app that only logs takes this and gets no bytes of STN or SDT; an
+//! app that wants the whole port takes [`marsrs`](https://crates.io/crates/marsrs)
 //! instead, which re-exports this crate as its `xlog` module.
 //!
 //! | what                       | where                                                |
