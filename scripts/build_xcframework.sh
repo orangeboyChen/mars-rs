@@ -128,6 +128,16 @@ for slice in "${slices[@]}"; do
     done
 done
 
+# The local symbols of an archive are for the linker that built it, not for the
+# one that links it into an app: `strip -x` keeps every `mars_xlog_*` and drops
+# everything else, which is 31 % of the archive (21.1 MB -> 14.5 MB for
+# `aarch64-apple-ios`) and of the zip a consumer downloads, and it does not
+# change one byte of what the app ends up linking. Cargo's own `strip` cannot do
+# it: that one is a flag for the linker, and a `staticlib` is never linked.
+for target in "${targets[@]}"; do
+    strip -x -S "$root/target/$target/release/libmars_ffi.a"
+done
+
 rm -rf "$root/target/xcframework-build" "$out"
 mkdir -p "$out" "$header_dir"
 

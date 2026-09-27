@@ -593,3 +593,18 @@ unnecessary_join = "deny"
 many_single_char_names = "deny"
 # `else` on an `if` whose then-branch always returns.
 redundant_else = "deny"
+
+# -- what ships -------------------------------------------------------------
+# One codegen unit for the release profile. Measured on `aarch64-apple-ios`:
+# an app that links `mars-ffi` carries 25 KB less `__TEXT` (1,032,606 ->
+# 1,007,176 bytes) and the archive is 3 % smaller (21.1 MB -> 20.5 MB, and
+# 14.5 MB -> 13.9 MB once it is stripped).
+#
+# `-C lto=thin` was measured as well and loses for a library that ships as a
+# `staticlib`: rustc never links a static library, so there is no whole-program
+# view for LTO to optimize and what the flag really does is leave bitcode in
+# every object — 24.3 MB instead of 21.1 MB, 17.6 MB instead of 14.5 MB
+# stripped, for the same 25 KB in the app. One codegen unit reaches that 25 KB
+# at compile time; it costs build time, not bytes.
+[profile.release]
+codegen-units = 1
