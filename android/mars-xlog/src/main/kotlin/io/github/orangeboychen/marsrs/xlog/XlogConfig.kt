@@ -1,14 +1,14 @@
 package io.github.orangeboychen.marsrs.xlog
 
 /**
- * What [Xlog.open] and [Xlog.openInstance] open an appender with: the
- * Kotlin face of the `Xlog.XLogConfig` whose fields `mars-jni` reads by name.
+ * What an [Xlog] is opened with: the Kotlin face of the `Xlog.XLogConfig`
+ * whose fields `mars-jni` reads by name.
  *
  * Every property has the default the C++ project's own `XLogConfig` carries,
  * so the only one an app has to give is [logDir]:
  *
  * ```kotlin
- * Xlog.open(
+ * val xlog = Xlog(
  *     XlogConfig(
  *         logDir = File(context.filesDir, "xlog/log").path,
  *         cacheDir = File(context.filesDir, "xlog/cache").path,

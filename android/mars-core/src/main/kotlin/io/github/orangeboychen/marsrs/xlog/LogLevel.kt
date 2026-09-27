@@ -1,5 +1,5 @@
-// The levels, the modes and the config of the Kotlin API — what `Xlog.open`,
-// `Xlog.i` and `XlogInstance` are written in. Nothing here is a native, and
+// The levels, the modes and the config of the Kotlin API — what `Xlog(...)` and
+// `xlog.i(tag, message)` are written in. Nothing here is a native, and
 // nothing here is reached by JNI: the numbers these carry are handed to `Xlog`,
 // whose statics are the symbols `mars-jni` exports, and that class is the only
 // door to the `.so`.

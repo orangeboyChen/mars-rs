@@ -12,7 +12,8 @@
 //! | `newXlogInstance`         | [`mars_appender::new_xlogger_instance`]  |
 //! | `getXlogInstance`         | [`mars_appender::get_xlogger_instance`]  |
 //! | `releaseXlogInstance`     | [`mars_appender::release_xlogger_instance`] |
-//! | `logWrite` / `logWrite2`  | [`mars_appender::xlogger_write`]         |
+//! | `logWrite`               | [`mars_appender::xlogger_write`]         |
+//! | `write`                  | [`mars_appender::is_enabled_for`] + `xlogger_write` |
 //! | `getLogLevel`/`setLogLevel` | [`mars_appender::get_level`] / `set_level` |
 //! | `setAppenderMode`         | [`mars_appender::set_appender_mode`]     |
 //! | `setConsoleLogOpen`       | [`mars_appender::set_console_log_open`]  |
@@ -33,11 +34,14 @@
 
 use jni::sys::{jint, jlong};
 
+use std::borrow::Cow;
+
 use mars_appender::{
     category_set_max_alive_duration as set_max_alive_duration,
     category_set_max_file_size as set_max_file_size, flush, get_level, get_xlogger_instance,
-    new_xlogger_instance, release_xlogger_instance, set_appender_mode, set_console_log_open,
-    set_level, xlogger_write, AppenderMode, LogLevel, XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
+    is_enabled_for, new_xlogger_instance, release_xlogger_instance, set_appender_mode,
+    set_console_log_open, set_level, xlogger_write, AppenderMode, LogLevel, XLogConfig,
+    XLoggerInfo, DEFAULT_HANDLE,
 };
 
 /// `gettimeofday(&info.timeval, NULL)` — seconds + microseconds since the
@@ -137,8 +141,35 @@ pub(crate) fn log_write_impl(info: Option<XLoggerInfo>, log: &str) -> bool {
     xlogger_write(DEFAULT_HANDLE, info.as_ref(), Some(log))
 }
 
-/// `Xlog.logWrite2` body.
-pub(crate) fn log_write2_impl(instance: u64, info: XLoggerInfo, log: &str) -> bool {
+/// `Xlog.write` body — the one record, one JNI call write of the Kotlin API.
+///
+/// [`is_enabled_for`] is asked *before* the record is formatted, which is what
+/// gives the level something to say on the process-wide appender: the C++'s
+/// `xlogger_Write` — what handle `0` reaches — has no level filter of its own,
+/// so a record of a level the appender is above reached the file anyway. Asking
+/// from Kotlin, the other way to keep the promise "a record less severe than
+/// the level is dropped", costs a second JNI call (`getLogLevel`) per line.
+///
+/// The pid, the tid and the main tid are `-1`, the "fill these in from the OS"
+/// the C++ project's Java spelled for itself only in part: what its `Log` hands
+/// over is a `Thread.id`, which is not a tid. There is no filename, function or
+/// line to carry either, because Java has no `__FILE__` — the C++ project's
+/// `Log` passes `""` and `0` for them, and always did.
+pub(crate) fn write_impl(instance: u64, level: LogLevel, tag: Cow<'_, str>, log: &str) -> bool {
+    if !is_enabled_for(instance, level) {
+        return false;
+    }
+    let info = XLoggerInfo {
+        level,
+        tag: Some(tag),
+        filename: None,
+        func_name: None,
+        line: 0,
+        pid: -1,
+        tid: -1,
+        maintid: -1,
+        timeval: now_timeval(),
+    };
     xlogger_write(instance, Some(&info), Some(log))
 }
 
@@ -357,14 +388,58 @@ mod tests {
             maintid: -1,
             timeval: now_timeval(),
         };
-        assert!(log_write_impl(Some(info.clone()), "with info"));
-        assert!(log_write2_impl(DEFAULT_HANDLE, info, "through an instance"));
+        assert!(log_write_impl(Some(info), "with info"));
+        assert!(write_impl(
+            DEFAULT_HANDLE,
+            LogLevel::Info,
+            "Net".into(),
+            "one call"
+        ));
         flush_impl(DEFAULT_HANDLE, false);
         flush_impl(DEFAULT_HANDLE, true);
         close_impl();
         // closing twice is harmless, like the C++ appender_close()
         close_impl();
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `write` is the write of the Kotlin API, and the level has to mean
+    /// something there: handle `0` reaches the C++'s `xlogger_Write`, which has
+    /// no filter of its own, so the one `Xlog.i(tag, message)` promises is this.
+    #[test]
+    fn write_drops_a_record_the_level_is_above() {
+        let _guard = singleton();
+        let dir = logdir("write-level");
+        open_appender(config(&dir), LogLevel::Warn);
+
+        assert!(!write_impl(
+            DEFAULT_HANDLE,
+            LogLevel::Info,
+            "Net".into(),
+            "dropped"
+        ));
+        assert!(write_impl(
+            DEFAULT_HANDLE,
+            LogLevel::Warn,
+            "Net".into(),
+            "kept"
+        ));
+        assert!(write_impl(
+            DEFAULT_HANDLE,
+            LogLevel::Error,
+            "Net".into(),
+            "kept"
+        ));
+        // an unknown handle writes nothing, like `xlogger_write`
+        assert!(!write_impl(
+            0xdead_beef,
+            LogLevel::Fatal,
+            "Net".into(),
+            "nowhere"
+        ));
+
+        mars_appender::appender_close();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

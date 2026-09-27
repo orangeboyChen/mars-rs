@@ -45,9 +45,9 @@ use crate::stn::{
 
 use crate::{
     close_impl, flush_impl, get_instance_impl, get_level_impl, guard, level_from_java,
-    log_write2_impl, log_write_impl, new_instance_impl, now_timeval, open_appender,
-    release_instance_impl, set_appender_mode_impl, set_console_log_open_impl, set_level_impl,
-    set_max_alive_time_impl, set_max_file_size_impl,
+    log_write_impl, new_instance_impl, now_timeval, open_appender, release_instance_impl,
+    set_appender_mode_impl, set_console_log_open_impl, set_level_impl, set_max_alive_time_impl,
+    set_max_file_size_impl, write_impl,
 };
 
 /// The VM the library was loaded into.
@@ -361,20 +361,20 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logWrite<'l
     })
 }
 
-/// `Xlog.logWrite2` — writes through a specific instance.
+/// `Xlog.write` — the write of the Kotlin API: one record in one JNI call,
+/// with the level filter in [`crate::write_impl`] and no `XLoggerInfo` for the
+/// caller to fill in.
+///
+/// `Xlog.logWrite` is the write the C++ project's Java spelled, and it is what
+/// the process-wide appender still writes through; `Xlog` writes through this
+/// one now, whichever API asked.
 #[no_mangle]
-pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logWrite2<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_write<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     instance: jlong,
     level: jint,
-    tag: JObject<'local>,
-    filename: JObject<'local>,
-    funcname: JObject<'local>,
-    line: jint,
-    pid: jint,
-    tid: jlong,
-    maintid: jlong,
+    tag: JString<'local>,
     log: JString<'local>,
 ) {
     guard(|| {
@@ -382,31 +382,16 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logWrite2<'
             .get_string(&log)
             .map(|value| value.to_string_lossy().into_owned())
             .unwrap_or_default();
-        // Borrowed from the JVM, like `logWrite` does: three `String`s per
-        // record was three allocations `Java2C_Xlog.cc` never makes.
+        // Borrowed from the JVM, like `logWrite` does: a `String` per record is
+        // an allocation `Java2C_Xlog.cc` never makes.
         let tag = java_string_handle(&tag);
-        let filename = java_string_handle(&filename);
-        let funcname = java_string_handle(&funcname);
         let tag = tag.as_ref().and_then(|value| env.get_string(value).ok());
-        let filename = filename
-            .as_ref()
-            .and_then(|value| env.get_string(value).ok());
-        let funcname = funcname
-            .as_ref()
-            .and_then(|value| env.get_string(value).ok());
-
-        let info = XLoggerInfo {
-            level: level_from_java(level),
-            tag: Some(borrowed_str(tag.as_ref())),
-            filename: Some(borrowed_str(filename.as_ref())),
-            func_name: Some(borrowed_str(funcname.as_ref())),
-            line,
-            pid: pid as i64,
-            tid,
-            maintid,
-            timeval: now_timeval(),
-        };
-        log_write2_impl(instance as u64, info, &log);
+        let _ = write_impl(
+            instance as u64,
+            level_from_java(level),
+            borrowed_str(tag.as_ref()),
+            &log,
+        );
     })
 }
 
