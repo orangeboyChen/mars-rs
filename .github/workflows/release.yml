@@ -2,8 +2,8 @@ name: Release
 
 # One release for every platform:
 #
-#   * MarsRSXlog.xcframework.zip   -> the xlog binary target of Package.swift
-#   * MarsRSNet.xcframework.zip    -> the net one (the diagnosis and the tasks)
+#   * marsrs-xlog.xcframework.zip   -> the xlog binary target of Package.swift
+#   * marsrs-net.xcframework.zip    -> the net one (the diagnosis and the tasks)
 #   * mars-core.aar              -> JitPack: io.github.orangeboyChen:mars-rs
 #   * mars-xlog.aar              -> JitPack: io.github.orangeboyChen:mars-rs-xlog
 #   * mars-android-native.zip    -> the .so files, for a consumer's own AAR
@@ -94,10 +94,15 @@ permissions:
   packages: write
 
 env:
-  XCFRAMEWORK_ZIP: MarsRSXlog.xcframework.zip
+  # The two the Swift package resolves. Lower-case, the way the crates and the
+  # Android coordinates are spelled, because a zip is a file a consumer
+  # downloads and not a name a compiler reads; the products a manifest names —
+  # `MarsRSXlog` and `MarsRSNet`, what an app writes after `import` — are in
+  # Package.swift and do not move with the zip.
+  XCFRAMEWORK_ZIP: marsrs-xlog.xcframework.zip
   # the same slices over the other feature set: `mars_sdt_*` and `mars_stn_*`
   # and no `mars_xlog_*`, so an app that takes both links xlog's once
-  XCFRAMEWORK_NET_ZIP: MarsRSNet.xcframework.zip
+  XCFRAMEWORK_NET_ZIP: marsrs-net.xcframework.zip
   NATIVE_ZIP: mars-android-native.zip
   # The Kotlin Multiplatform pair: the archives the module is built out of, and
   # the maven repository it is published as. `mars-kmp-native.zip` is what
