@@ -154,9 +154,8 @@ jobs:
         target:
           - aarch64-apple-ios
           - aarch64-apple-ios-sim
-          # watchOS is arm64 only: the tier 3 `arm64_32-apple-watchos` and
-          # `x86_64-apple-watchos-sim` ship no std, so rustup cannot install
-          # them and cargo cannot build for them.
+          # An arm64 watch is a watchOS 26 watch, and `aarch64-apple-watchos`
+          # is what builds for one.
           - aarch64-apple-watchos
           - aarch64-apple-watchos-sim
     steps:
@@ -166,6 +165,23 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p mars-ffi --target ${{ matrix.target }}
+
+  # The watchOS device slice of the xcframework is two architectures, and the
+  # older of them is the one a watchOS 10 to 25 app links: `arm64_32` is tier 3,
+  # so no channel ships a std for it and the only way to build for it is out of
+  # a nightly's sources. It is the same Rust the stable jobs above compile, so
+  # what this job is really gating is the tier 3 target itself — a nightly that
+  # stops building it fails here and not in the release.
+  apple-watchos-arm64-32:
+    name: build (arm64_32-apple-watchos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p mars-ffi --target arm64_32-apple-watchos -Z build-std=std,panic_abort
 
   coverage:
     name: coverage

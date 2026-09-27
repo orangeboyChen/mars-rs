@@ -42,16 +42,15 @@ let package = Package(
     name: "mars-rs",
     platforms: [
         .iOS(.v12),
-        // watchOS 10 is the newest watchOS this manifest can name: the
-        // constants of `Platform.watchOS` stop at `.v10` in
+        // watchOS 10, and the framework is 10 on the device too: what a watch
+        // that runs watchOS 10–25 links is the `arm64_32` half of the device
+        // slice — the 32-bit-pointer arm64 of every watch before the arm64
+        // ones. That architecture is a tier 3 target no channel ships a std
+        // for, so `scripts/build_xcframework.sh` builds one out of a nightly's
+        // sources with `-Z build-std`. The arm64 half next to it is the
+        // watchOS 26 one, and `.v10` is as new as `Platform.watchOS` gets in
         // swift-tools-version 5.9, which is where the manifest stays so that a
-        // Swift 5 project can still depend on the package. The framework asks
-        // for more than that in practice — its watchOS device slice is arm64,
-        // and an arm64 watch runs watchOS 26, so `ld64` warns once per object
-        // when an app whose deployment target is lower links it. The link
-        // succeeds; going below the warning needs either `swift-tools-version
-        // 6.2`, which would put the floor at Xcode 26, or a std built for an
-        // older watchOS, which is `-Z build-std` on a nightly.
+        // Swift 5 project can still depend on the package.
         .watchOS(.v10)
     ],
     products: [
@@ -61,8 +60,8 @@ let package = Package(
     ],
     targets: [
         // Prebuilt binary: ios-arm64 + ios-arm64_x86_64-simulator +
-        // watchos-arm64 + watchos-arm64-simulator, each with `mars_xlog.h` and
-        // the module map that names it `MarsRSFFI`.
+        // watchos-arm64_arm64_32 + watchos-arm64-simulator, each with
+        // `mars_xlog.h` and the module map that names it `MarsRSFFI`.
         .binaryTarget(
             name: "MarsRSFFI",
             url: "https://github.com/orangeboyChen/mars-rs/releases/download/v0.1.0-alpha.1/MarsRS.xcframework.zip",

@@ -51,35 +51,51 @@ header_dir="$root/target/xcframework-build/headers"
 # Mac and on an Intel one — is lipo'd into the single library an xcframework
 # takes, because that is the shape `xcodebuild -create-xcframework` wants.
 #
-# watchOS is arm64 and only arm64 here: `arm64_32-apple-watchos` (the
-# 32-bit-pointer arm64 of an older watch) and `x86_64-apple-watchos-sim` are
-# tier 3, so rustup ships no std for either and cargo cannot be pointed at
-# them. What is left is `aarch64-apple-watchos`, whose std is built for
-# watchOS 26 — an arm64 watch is a watchOS 26 watch — so the device slice of
-# the framework asks for watchOS 26 whatever `WATCHOS_DEPLOYMENT_TARGET` says;
-# the simulator slice takes what it is given.
+# watchOS is two device architectures, because a watch is two architectures:
+# `arm64_32` — the 32-bit-pointer arm64 of every watch before the arm64 ones,
+# which is what a watchOS 10–25 app links — and the arm64 of the watches
+# watchOS 26 moved over, which is what `aarch64-apple-watchos` builds. One
+# slice carries both, the way the iOS simulator slice carries arm64 and x86_64.
+#
+# The first of the two is tier 3: no channel ships a std for it, so it is built
+# out of the nightly's own sources with `-Z build-std`. The arm64 one ships a
+# std, and that std is built for watchOS 26, so its half of the slice asks for
+# watchOS 26 whatever `WATCHOS_DEPLOYMENT_TARGET` says. `x86_64-apple-watchos-sim`
+# is tier 3 with no std either, and nothing asks for it: a watchOS simulator is
+# arm64.
 slices=(
     ios-device:aarch64-apple-ios
     ios-simulator:aarch64-apple-ios-sim:x86_64-apple-ios
-    watchos-device:aarch64-apple-watchos
+    watchos-device:arm64_32-apple-watchos:aarch64-apple-watchos
     watchos-simulator:aarch64-apple-watchos-sim
 )
+
+# The tier 3 target, which is the one `rustup target add` has nothing to add
+# for and the one `cargo` needs a nightly and `-Z build-std` for.
+build_std_target=arm64_32-apple-watchos
 
 # The floor `Package.swift` declares for each platform, which is what the
 # slices are built at.
 ios_min=12.0
 watchos_min=10.0
 
-# Every triple of every slice, which is what `rustup target add` is asked for.
+# Every triple of every slice, and then the ones `rustup target add` is asked
+# for: the tier 3 one has no std to add, on any channel.
 targets=()
+std_targets=()
 for slice in "${slices[@]}"; do
     IFS=':' read -r -a slice_targets <<< "${slice#*:}"
     targets+=("${slice_targets[@]}")
+    for target in "${slice_targets[@]}"; do
+        [ "$target" = "$build_std_target" ] || std_targets+=("$target")
+    done
 done
 
 echo "building mars-ffi for ${targets[*]}"
 
-rustup target add "${targets[@]}" > /dev/null
+rustup target add "${std_targets[@]}" > /dev/null
+# `-Z build-std` is nightly, and it compiles std out of its sources.
+rustup toolchain install nightly --profile minimal --component rust-src > /dev/null
 for slice in "${slices[@]}"; do
     IFS=':' read -r -a slice_targets <<< "${slice#*:}"
 
@@ -103,7 +119,12 @@ for slice in "${slices[@]}"; do
     esac
 
     for target in "${slice_targets[@]}"; do
-        cargo build --release -p mars-ffi --target "$target"
+        if [ "$target" = "$build_std_target" ]; then
+            cargo +nightly build --release -p mars-ffi --target "$target" \
+                -Z build-std=std,panic_abort
+        else
+            cargo build --release -p mars-ffi --target "$target"
+        fi
     done
 done
 
@@ -148,7 +169,7 @@ xcodebuild -create-xcframework "${args[@]}" \
 # `-allow-warnings` is not an option of `create-xcframework`, so a name clash
 # would fail above; what is left to check is that every slice is there, named
 # the way a consumer's `xcodebuild` looks for it (ios-arm64,
-# ios-arm64_x86_64-simulator, watchos-arm64, watchos-arm64-simulator).
+# ios-arm64_x86_64-simulator, watchos-arm64_arm64_32, watchos-arm64-simulator).
 ls "$root/target/xcframework-build/$name"
 
 (cd "$root/target/xcframework-build" && zip -q -r "$out/$name.zip" "$name")
