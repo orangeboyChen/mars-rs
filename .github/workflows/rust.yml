@@ -39,8 +39,8 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      # `--all-features`: SDT's C ABI is behind a feature of its own, so a
-      # plain `--workspace` never compiles it.
+      # `--all-features`: the SDT and STN C ABIs are behind features of their
+      # own, so a plain `--workspace` never compiles them.
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
@@ -58,9 +58,12 @@ jobs:
         run: cargo test --workspace --all-targets
       - name: cargo test (release)
         run: cargo test --workspace --release
-      # The SDT C ABI, behind the feature an app that only logs leaves off.
+      # The SDT and STN C ABIs, behind the features an app that only logs
+      # leaves off.
       - name: cargo test (sdt)
         run: cargo test -p mars-ffi --features sdt
+      - name: cargo test (stn)
+        run: cargo test -p mars-ffi --features stn
 
   build:
     name: build (release)

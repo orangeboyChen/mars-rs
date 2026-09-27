@@ -220,7 +220,7 @@ impl Answer {
     /// nobody read is a good one.
     pub fn decoded(&self) -> (i32, TaskFailHandleType) {
         match self {
-            Self::Decoded { handle, err_code } => (*err_code, fail_handle(*handle)),
+            Self::Decoded { handle, err_code } => (*err_code, TaskFailHandleType::of(*handle)),
             _ => (0, TaskFailHandleType::Normal),
         }
     }
@@ -243,102 +243,17 @@ impl Answer {
                 buffer,
                 hash,
                 cmdid,
-            } => identify_buffer(*mode, buffer.clone(), hash.clone(), *cmdid),
+            } => IdentifyBuffer::of(*mode, buffer.clone(), hash.clone(), *cmdid),
             _ => IdentifyBuffer::next(Vec::new()),
         }
     }
 }
 
-/// `kTaskFailHandle*` — the int Java answered `buf2Resp` with, as what STN is
-/// to do about the task. An int that is not one of them is
-/// [`TaskFailHandleType::Normal`], which is what the C++'s `switch` leaves it
-/// at.
-pub fn fail_handle(handle: i32) -> TaskFailHandleType {
-    match handle {
-        -1 => TaskFailHandleType::Default,
-        -12 => TaskFailHandleType::RetryAllTasks,
-        -13 => TaskFailHandleType::SessionTimeout,
-        -14 => TaskFailHandleType::TaskEnd,
-        -15 => TaskFailHandleType::TaskTimeout,
-        -16 => TaskFailHandleType::SlientTaskEnd,
-        _ => TaskFailHandleType::Normal,
-    }
-}
-
-/// `ECHECK_NOW` / `ECHECK_NEXT` / `ECHECK_NEVER` — when the identify buffer
-/// goes out.
-///
-/// The comment above Java's `getLongLinkIdentifyCheckBuffer` reads
-/// `ECHECK_NOW, ECHECK_NEVER, ECHECK_NEXT`, but the C++ switches the int it got
-/// back on its own `kCheckNow, kCheckNext, kCheckNever`, and that is the one it
-/// is: `0` sends it now, `1` asks again on the next connect and anything else
-/// stops asking.
-///
-/// Not ported: the C++ returns before it reads the streams for the two that are
-/// not "now", so a hash it hands over for them is always empty. This one hands
-/// over what Java wrote, because the port's [`IdentifyBuffer`] keeps a hash for
-/// all three and the checker asks for it once the app is ready.
-pub fn identify_buffer(mode: i32, buffer: Vec<u8>, hash: Vec<u8>, cmdid: u32) -> IdentifyBuffer {
-    match mode {
-        0 => IdentifyBuffer::now(buffer, hash, cmdid),
-        1 => IdentifyBuffer::next(hash),
-        _ => IdentifyBuffer::never(hash),
-    }
-}
-
-/// `C2Java_ReportTaskProfile` — the report, as the json the Java side parses.
-///
-/// The C++ writes it field by field into an `XMessage`; the json is the wire
-/// format between the two halves, so the keys and their order are the C++'s.
-/// Like the C++, no string is escaped: a cgi with a quote in it is the app's
-/// own problem.
+/// `C2Java_ReportTaskProfile` — the report, as the json the Java side parses,
+/// which [`mars_stn::task_profile_json`] writes: the keys and their order are
+/// the C++'s, and the C ABI hands the app the same document.
 pub fn task_profile_json(profile: &TaskProfile) -> String {
-    let connections: Vec<String> = profile
-        .history
-        .iter()
-        .map(|transfer| {
-            let connect = &transfer.connect_profile;
-            format!(
-                concat!(
-                    "{{\"startTime\":{},\"dnsTime\":{},\"dnsEndTime\":{},\"connTime\":{},",
-                    "\"connErrCode\":{},\"tryIPCount\":{},\"ip\":\"{}\",\"port\":{},",
-                    "\"host\":\"{}\",\"ipType\":{},\"disconnTime\":{},",
-                    "\"disconnErrType\":{},\"disconnErrCode\":{}}}"
-                ),
-                connect.start_time,
-                connect.dns_time,
-                connect.dns_endtime,
-                connect.conn_time,
-                connect.conn_errcode,
-                connect.tryip_count,
-                connect.ip,
-                connect.port,
-                connect.host,
-                connect.ip_type as i32,
-                connect.disconn_time,
-                connect.disconn_errtype as i32,
-                connect.disconn_errcode,
-            )
-        })
-        .collect();
-
-    format!(
-        concat!(
-            "{{\"taskId\":{},\"cmdId\":{},\"cgi\":\"{}\",\"startTaskTime\":{},",
-            "\"endTaskTime\":{},\"dyntimeStatus\":{},\"errCode\":{},\"errType\":{},",
-            "\"channelSelect\":{},\"historyNetLinkers\":[{}]}}"
-        ),
-        profile.task.taskid,
-        profile.task.cmdid,
-        profile.task.cgi,
-        profile.start_task_time,
-        profile.end_task_time,
-        profile.current_dyntime_status as i32,
-        profile.err_code,
-        profile.err_type as i32,
-        profile.link_type,
-        connections.join(","),
-    )
+    mars_stn::task_profile_json(profile)
 }
 
 /// The app STN talks to, when the app is Java: [`App`] answered by one hook,
@@ -814,7 +729,7 @@ mod tests {
             (-99, TaskFailHandleType::Normal),
         ];
         for (handle, expected) in handles {
-            assert_eq!(fail_handle(handle), expected, "handle {handle}");
+            assert_eq!(TaskFailHandleType::of(handle), expected, "handle {handle}");
         }
     }
 
