@@ -455,11 +455,22 @@ jobs:
           (cd kmp && ./gradlew --no-daemon -PpublishedVersion="${{ needs.version.outputs.version }}" \
             :mars-core:publishToMavenLocal :mars-xlog:publishToMavenLocal)
       - name: Package the maven repository
+        # Zipped from the root of the repository and not from the group's
+        # directory: a consumer points `maven { url = uri("<dir>") }` at
+        # whatever this unpacks to, and Gradle looks for
+        # `io/github/orangeboychen/<artifact>` under it — an archive that starts
+        # at the artifact is a repository of no coordinates at all.
         run: |
           set -euo pipefail
           mkdir -p dist
-          (cd "$HOME/.m2/repository/io/github/orangeboychen" \
-            && zip -q -r "$GITHUB_WORKSPACE/dist/$KMP_MAVEN_ZIP" .)
+          ZIP="$GITHUB_WORKSPACE/dist/$KMP_MAVEN_ZIP"
+          (cd "$HOME/.m2/repository" && zip -q -r "$ZIP" io/github/orangeboychen)
+          # the layout is the whole point of the step, so it is checked here and
+          # not by whoever unpacks the zip a month from now
+          for ARTIFACT in "$KMP_ARTIFACT" "$KMP_ARTIFACT_XLOG"; do
+            unzip -l "$ZIP" | grep -q "io/github/orangeboychen/$ARTIFACT/" \
+              || { echo "::error::$ZIP holds no io/github/orangeboychen/$ARTIFACT"; exit 1; }
+          done
       - name: Package the native archives
         run: (cd kmp/native && zip -q -r "$GITHUB_WORKSPACE/dist/$KMP_NATIVE_ZIP" .)
       - uses: actions/upload-artifact@v4
