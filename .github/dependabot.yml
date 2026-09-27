@@ -2,8 +2,7 @@
 #
 #   cargo          — Cargo.toml and Cargo.lock of the workspace
 #   github-actions — every `uses:` of .github/workflows
-#   gradle         — the Android Gradle Plugin of android/build.gradle.kts and
-#                    the Gradle version of android/gradle/wrapper
+#   gradle         — the Android Gradle Plugin of android/build.gradle.kts
 #
 # A pull request Dependabot raises is a pull request like any other, so it is
 # the gate rust.yml and lint.yml run on a hand-written branch: rustfmt, clippy
@@ -18,9 +17,14 @@
 # by .github/workflows/release.yml for every release — the one place in this
 # repository that knows them, and one Dependabot has no business guessing at.
 #
-# The Gradle wrapper is not listed either, and not because it is left out:
-# `gradle-wrapper.properties` is read as a dependency of its own by the
-# `gradle` entry below, which is what makes gradle-9.8.0 updatable at all.
+# The Gradle wrapper is not here, and not because it is left out: GitHub's own
+# ecosystem table says the `gradle` entry updates what a build script declares,
+# and Gradle itself is declared nowhere but
+# android/gradle/wrapper/gradle-wrapper.properties — a file Dependabot does not
+# read. So the wrapper has an updater of its own,
+# .github/workflows/gradle-wrapper.yml: weekly, a `gradlew wrapper` against the
+# newest Gradle services.gradle.org names, and a pull request, which is what
+# makes the branch it opens go through the gate like any other.
 
 version: 2
 
