@@ -34,7 +34,7 @@ use marsrs_sdt::{Callback, CheckIPPorts, NetCheckType, SdtLogic};
 
 /// What `getLoadLibraries` reports: the C++ lists the modules the process
 /// loaded, which in this port is this one library.
-pub const LOAD_LIBRARIES: &[&str] = &["marsxlog"];
+pub const LOAD_LIBRARIES: &[&str] = &["marsrsxlog"];
 
 /// Keeps the results `SdtLogic` reported, so the host can pick them up — and
 /// hands them to Java as well, which is what a report is for.
@@ -541,6 +541,6 @@ mod tests {
 
     #[test]
     fn the_libraries_the_process_loaded() {
-        assert_eq!(get_load_libraries_impl(), vec!["marsxlog".to_owned()]);
+        assert_eq!(get_load_libraries_impl(), vec!["marsrsxlog".to_owned()]);
     }
 }

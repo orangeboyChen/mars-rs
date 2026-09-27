@@ -102,6 +102,6 @@ jobs:
       # modules are held to.
       - run: |
           java -jar detekt-cli-all.jar \
-            --input android/mars-core/src/main/kotlin,android/mars-xlog/src/main/kotlin,kmp/mars-core/src/commonMain/kotlin,kmp/mars-xlog/src/commonMain/kotlin,kmp/mars-xlog/src/androidMain/kotlin,kmp/mars-xlog/src/nativeMain/kotlin \
+            --input android/marsrs/src/main/kotlin,android/marsrs-xlog/src/main/kotlin,kmp/marsrs/src/commonMain/kotlin,kmp/marsrs-xlog/src/commonMain/kotlin,kmp/marsrs-xlog/src/androidMain/kotlin,kmp/marsrs-xlog/src/nativeMain/kotlin \
             --config detekt.yml \
             --build-upon-default-config

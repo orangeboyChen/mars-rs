@@ -21,7 +21,8 @@ appender_flush_sync();
 appender_close();
 ```
 
-This is the `mars-xlog` of the pair the C++ project publishes. The other one is
+This is the logging half: what the C++ project calls `mars-xlog`, under the name
+this port gives every artifact of its own. The other one is
 [`marsrs`](https://crates.io/crates/marsrs), which is everything — this crate
 plus STN and SDT — and re-exports this one as its `xlog` module.
 

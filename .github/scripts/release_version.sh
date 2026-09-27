@@ -15,7 +15,7 @@
 #   INPUT_BUMP                 major | minor | patch
 #   INPUT_CHANNEL              stable | alpha | beta
 #   INPUT_PRERELEASE           the number of the pre-release, when typed
-#   XCFRAMEWORK_ZIP, XCFRAMEWORK_NET_ZIP, NATIVE_ZIP, CORE_AAR, XLOG_AAR,
+#   XCFRAMEWORK_ZIP, XCFRAMEWORK_NET_ZIP, NATIVE_ZIP, MARSRS_AAR, MARSRS_XLOG_AAR,
 #   KMP_NATIVE_ZIP, KMP_MAVEN_ZIP
 #                              the assets a complete release carries
 #   GH_TOKEN                   what `gh release view` reads
@@ -138,7 +138,7 @@ fi
 # A release that is missing an asset stays repairable, though, so
 # "complete" means every one of them.
 SKIP=false
-ASSETS="$XCFRAMEWORK_ZIP $XCFRAMEWORK_NET_ZIP $NATIVE_ZIP $CORE_AAR $XLOG_AAR"
+ASSETS="$XCFRAMEWORK_ZIP $XCFRAMEWORK_NET_ZIP $NATIVE_ZIP $MARSRS_AAR $MARSRS_XLOG_AAR"
 # the Kotlin Multiplatform pair: the archives the module is built out of, and
 # the maven repository it is published as. Both are one asset whatever the
 # version is, unlike the host archives below.
@@ -147,7 +147,7 @@ ASSETS="$ASSETS $KMP_NATIVE_ZIP $KMP_MAVEN_ZIP"
 # packages it in
 for HOST in x86_64-unknown-linux-gnu:tar.gz aarch64-apple-darwin:tar.gz \
             x86_64-pc-windows-msvc:zip; do
-  ASSETS="$ASSETS mars-rs-$VERSION-${HOST%%:*}.${HOST##*:}"
+  ASSETS="$ASSETS marsrs-$VERSION-${HOST%%:*}.${HOST##*:}"
 done
 if gh release view "$TAG" >/dev/null 2>&1; then
   PUBLISHED=$(gh release view "$TAG" --json assets -q '.assets[].name')
