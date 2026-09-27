@@ -52,7 +52,7 @@ jobs:
     outputs:
       needed: ${{ steps.paths.outputs.needed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The diff is against the base of the pull request, which is behind
           # the tip of the branch it was cut from.
@@ -75,8 +75,8 @@ jobs:
     if: needs.changes.outputs.needed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
