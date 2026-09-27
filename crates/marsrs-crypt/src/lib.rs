@@ -202,8 +202,11 @@ struct KeyPair {
 /// `uECC_make_key` + `uECC_shared_secret`: a fresh client key pair per
 /// process, so two runs never agree on a key.
 fn make_key(svr_pubkey: &[u8]) -> Option<KeyPair> {
-    let mut rng = k256::elliptic_curve::rand_core::OsRng;
-    let client_pri = k256::SecretKey::random(&mut rng);
+    use k256::elliptic_curve::Generate;
+
+    // `rand_core` 0.10 dropped `OsRng`, so the client key is drawn from the
+    // system generator the `Generate` trait reaches for on its own.
+    let client_pri = k256::SecretKey::try_generate().ok()?;
     derive_key(svr_pubkey, &client_pri)
 }
 
@@ -211,7 +214,7 @@ fn make_key(svr_pubkey: &[u8]) -> Option<KeyPair> {
 /// private key *given* instead of generated, which is what lets a
 /// known-answer vector pin the shared secret and the TEA key it becomes.
 fn derive_key(svr_pubkey: &[u8], client_pri: &k256::SecretKey) -> Option<KeyPair> {
-    use k256::elliptic_curve::sec1::ToEncodedPoint;
+    use k256::elliptic_curve::sec1::ToSec1Point;
 
     if svr_pubkey.len() != CLIENT_PUBKEY_LEN {
         return None;
@@ -227,10 +230,10 @@ fn derive_key(svr_pubkey: &[u8], client_pri: &k256::SecretKey) -> Option<KeyPair
 
     let client_pub = client_pri.public_key();
 
-    let encoded = client_pub.to_encoded_point(false);
+    let encoded = client_pub.to_sec1_point(false);
     let point_bytes = encoded.as_bytes();
     let mut client_pubkey = [0u8; CLIENT_PUBKEY_LEN];
-    // `to_encoded_point(false)` yields 0x04 || X || Y.
+    // `to_sec1_point(false)` yields 0x04 || X || Y.
     client_pubkey.copy_from_slice(&point_bytes[1..]);
 
     let shared = k256::elliptic_curve::ecdh::diffie_hellman(
