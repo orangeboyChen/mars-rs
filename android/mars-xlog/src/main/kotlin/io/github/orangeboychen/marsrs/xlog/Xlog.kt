@@ -8,6 +8,8 @@
 
 package io.github.orangeboychen.marsrs.xlog
 
+import java.util.concurrent.ConcurrentHashMap
+
 /**
  * An appender of an app's own — build one when the app starts, then write
  * through it from wherever there is something to say.
@@ -136,6 +138,7 @@ class Xlog : Log.LogImp {
             "mars-jni opened no appender for ${config.namePrefix} in ${config.logDir}"
         }
         handle = opened
+        openHandles[namePrefix] = opened
     }
 
     /**
@@ -154,9 +157,13 @@ class Xlog : Log.LogImp {
     /** What every file of this appender starts with, and what it is known by. */
     val namePrefix: String
 
-    /** Whether this appender is still open: `false` after [close]. */
+    /**
+     * Whether this appender is still open: `false` after [close] — on this
+     * [Xlog] and on every other one of this [namePrefix], which is the same
+     * appender and is closed with this one.
+     */
     val isOpen: Boolean
-        get() = handle != NO_HANDLE
+        get() = handle != NO_HANDLE && handle == openHandles[namePrefix]
 
     /**
      * The level of this appender: a record less severe than this is dropped.
@@ -269,6 +276,10 @@ class Xlog : Log.LogImp {
             return
         }
         releaseXlogInstance(namePrefix)
+        // The appender is the prefix's and not this wrapper's: `mars-jni`
+        // answers an [Xlog] of the same prefix with the same handle, so every
+        // one of them is closed with this one.
+        openHandles.remove(namePrefix, handle)
         handle = NO_HANDLE
     }
 
@@ -383,6 +394,15 @@ class Xlog : Log.LogImp {
 
         /** `marsxlog` — the `crate-name` of `mars-jni`, i.e. the library [write] and the rest live in. */
         private const val LIBRARY = "marsxlog"
+
+        /**
+         * The handle of every appender this process has open, by the prefix it
+         * was opened with: what tells an [Xlog] that the appender it shares
+         * with another [Xlog] of the same [namePrefix] has been closed, which
+         * the handle alone cannot — `mars-jni` answers both with the same one,
+         * so a [close] through either is a [close] of both.
+         */
+        private val openHandles: ConcurrentHashMap<String, Long> = ConcurrentHashMap()
 
         /** The handle of the process-wide appender: what `Log` writes through. */
         private const val PROCESS_WIDE = 0L
