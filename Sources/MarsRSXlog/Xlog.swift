@@ -80,7 +80,7 @@ public final class Xlog {
             LogLevel(rawValue: mars_xlog_get_level(handle)) ?? .verbose
         }
         set {
-            mars_xlog_set_level_instance(handle, newValue.rawValue)
+            withHandle { mars_xlog_set_level_instance($0, newValue.rawValue) }
         }
     }
 
@@ -93,14 +93,14 @@ public final class Xlog {
         }
         set {
             currentMode = newValue
-            mars_xlog_set_mode_instance(handle, newValue.rawValue)
+            withHandle { mars_xlog_set_mode_instance($0, newValue.rawValue) }
         }
     }
 
     /// Whether the console prints the log too — off until an app turns it on.
     public var isConsoleLogEnabled: Bool = false {
         didSet {
-            mars_xlog_set_console_log_instance(handle, isConsoleLogEnabled ? 1 : 0)
+            withHandle { mars_xlog_set_console_log_instance($0, isConsoleLogEnabled ? 1 : 0) }
         }
     }
 
@@ -108,21 +108,24 @@ public final class Xlog {
     /// opened; `0` is "never split".
     public var maxFileSizeBytes: UInt64 = 0 {
         didSet {
-            mars_xlog_set_max_file_size_instance(handle, maxFileSizeBytes)
+            withHandle { mars_xlog_set_max_file_size_instance($0, maxFileSizeBytes) }
         }
     }
 
     /// How many seconds a log file is kept; `0` is the C++'s own ten days.
     public var maxAliveTimeSeconds: Int64 = 0 {
         didSet {
-            mars_xlog_set_max_alive_duration_instance(handle, maxAliveTimeSeconds)
+            withHandle { mars_xlog_set_max_alive_duration_instance($0, maxAliveTimeSeconds) }
         }
     }
 
     /// Whether a record of `level` would be written: what an app asks before it
     /// builds a message that is expensive to build.
     public func isEnabled(for level: LogLevel) -> Bool {
-        mars_xlog_is_enabled_for(handle, level.rawValue) != 0
+        guard isOpen else {
+            return false
+        }
+        return mars_xlog_is_enabled_for(handle, level.rawValue) != 0
     }
 
     /// Writes a record of `level`.
@@ -231,8 +234,18 @@ public final class Xlog {
         guard isOpen else {
             return
         }
-        namePrefix.withCString { prefix in
-            mars_xlog_release_instance(prefix)
+        // A prefix is one appender to the C ABI, so two `Xlog`s of one prefix
+        // hold one handle between them — and releasing takes the prefix and
+        // not the handle, which drops whatever the prefix answers *now*. Once
+        // this object's twin closed the appender and a third one reopened the
+        // prefix, releasing here would close an appender that is not ours.
+        let ownsPrefix = namePrefix.withCString { prefix in
+            mars_xlog_get_instance(prefix) == handle
+        }
+        if ownsPrefix {
+            namePrefix.withCString { prefix in
+                mars_xlog_release_instance(prefix)
+            }
         }
         handle = Self.noHandle
     }
@@ -269,7 +282,8 @@ public final class Xlog {
         guard !config.namePrefix.isEmpty else {
             throw XlogError.emptyNamePrefix
         }
-        guard config.compressionLevel >= 0, config.compressionLevel <= Self.maxCompressionLevel else {
+        let ceiling = Self.maxCompressionLevel(for: config.compression)
+        guard config.compressionLevel >= 0, config.compressionLevel <= ceiling else {
             throw XlogError.invalidCompressionLevel
         }
         guard config.cacheDays >= 0 else {
@@ -320,8 +334,28 @@ public final class Xlog {
     /// The handle the C ABI answers for an appender it did not open.
     private static let noHandle: Int64 = 0
 
-    /// `COMPRESS_LEVEL9`: the hardest the compressors are asked to try.
-    private static let maxCompressionLevel: Int32 = 9
+    /// `COMPRESS_LEVEL9`: the hardest deflate is asked to try.
+    private static let maxZlibCompressionLevel: Int32 = 9
+
+    /// `ZSTD_maxCLevel()`: the hardest zstd is asked to try, and the ceiling
+    /// of the table a level like 19 is read out of.
+    private static let maxZstdCompressionLevel: Int32 = 22
+
+    /// The hardest the compressor of `mode` is asked to try: nine levels is
+    /// all a deflate has, where zstd's table runs to `ZSTD_maxCLevel()`.
+    private static func maxCompressionLevel(for mode: CompressMode) -> Int32 {
+        mode == .zstd ? Self.maxZstdCompressionLevel : Self.maxZlibCompressionLevel
+    }
+
+    /// Runs `body` with this appender's handle, and runs nothing at all once
+    /// [close()] has: handle `0` is the process-wide appender to the C ABI,
+    /// so a call through it would move a logger this object does not own.
+    private func withHandle(_ body: (Int64) -> Void) {
+        guard isOpen else {
+            return
+        }
+        body(handle)
+    }
 
     private static func path(of body: (UnsafeMutablePointer<CChar>, UInt32) -> Int32) -> String? {
         var buffer = [CChar](repeating: 0, count: pathBufferSize)
