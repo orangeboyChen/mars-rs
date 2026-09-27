@@ -255,10 +255,23 @@ version, or with a bump and a channel — `v1.2.3-alpha.1`, `v1.2.3-beta.2`,
 Two products, the pair the Android packages make of `mars-rs` and
 `mars-rs-xlog`: `MarsRS` is the whole port, `MarsRSXlog` is the logging half
 of it, for an app that only logs. Both are Swift over the `MarsRSFFI` binary
-target — the static `MarsRS.xcframework.zip` published with the release — so
-taking the smaller one drops nothing but the promise of STN and SDT. The tag
-and the SPM checksum are written into `Package.swift` by the release workflow
-on a `chore/package-swift-<tag>` branch, proposed as a pull request.
+target, the static xcframework published with the release. What that binary
+holds is xlog: `mars-ffi` is 28 `mars_xlog_*` symbols and nothing else, so
+taking `MarsRSXlog` today costs exactly what `MarsRS` costs, and the difference
+between the two is the promise, not the bytes. That is also how the C++ project
+answers it — orangeboyChen/mars publishes one SPM product, `MarsXlog`, over a
+`MarsXlog.xcframework` built from the xlog subset of its sources, and its
+Android build has an `--xlog-only` mode for the same reason — and it is why the
+artifact is named after xlog here and not after the port: `Stn.swift` and
+`Sdt.swift` land in `MarsRS` with a framework of their own, and an app that only
+logs keeps downloading this one. `scripts/build_xcframework.sh` already builds
+`MarsRSXlog.xcframework.zip` under that name, and it fails if a slice ever
+exports anything of the port's beyond `mars_xlog_*`, so the name stays a checked
+promise; `Package.swift` follows at the release that publishes it, which is also
+when the C module takes the name — a module is what a consumer imports, so it
+cannot be renamed under one. The tag and the SPM checksum are written into
+`Package.swift` by the release workflow on a `chore/package-swift-<tag>` branch,
+proposed as a pull request.
 
 The framework carries four slices — `ios-arm64`, `ios-arm64_x86_64-simulator`,
 `watchos-arm64_arm64_32` and `watchos-arm64-simulator` — so an app target of
@@ -278,7 +291,7 @@ it is packaged — 31 % off the zip a consumer downloads, and nothing off the
 link, because every `mars_xlog_*` is an external symbol and stays.
 
 `Sources/MarsRSXlog/Xlog.swift` is what the port exposes today: `mars-ffi` is
-an xlog C ABI (21 `mars_xlog_*` symbols, nothing else), so xlog is all the Swift
+an xlog C ABI (28 `mars_xlog_*` symbols, nothing else), so xlog is all the Swift
 layer can reach and `MarsRS` re-exports `MarsRSXlog` and nothing more.
 `Stn.swift` and `Sdt.swift` join the umbrella when the C ABI carries them —
 that is why `MarsRS` exists as a module of its own and not just as a name for
@@ -386,7 +399,7 @@ site at a time.
 ### Building the packages
 
 ```bash
-scripts/build_xcframework.sh 0.1.0 dist   # MarsRS.xcframework.zip
+scripts/build_xcframework.sh 0.1.0 dist   # MarsRSXlog.xcframework.zip
 scripts/build_android.sh dist/native      # <abi>/libmarsxlog.so
 # the .so of dist/native has to be under android/<module>/libs first
 (cd android && ./gradlew :mars-core:assembleRelease :mars-xlog:assembleRelease)
