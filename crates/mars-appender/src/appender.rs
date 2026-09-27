@@ -570,13 +570,22 @@ struct AppenderInner {
     /// another process and must never clear it, and for an appender that could
     /// not claim a slot of its own at all.
     cache: Option<CacheSlot>,
-    /// `<dir>/<prefix>.lock`, taken around the operations that move more than
-    /// one file: see `Self::with_dir_lock`. `None` when advisory locking
-    /// excludes nobody in this directory, where those operations run
-    /// unprotected — the way the C++ runs them.
+    /// `<logdir>/<prefix>.lock`, taken around the operations that move more
+    /// than one file: see `Self::with_dir_lock`. `None` when the file cannot be
+    /// opened, in which case those operations run unprotected — the way the
+    /// C++ runs them.
     ///
     /// Held open rather than reopened per section: see [`open_dir_lock`].
     dir_lock: Option<File>,
+    /// Whether `Self::dir_lock` is locked right now — i.e. whether this
+    /// appender is inside a [`Self::with_dir_lock`] section.
+    ///
+    /// `flock` is per open file description, so a section nested in another
+    /// would take the lock it already holds (a no-op) and then release it
+    /// while the section it is nested in is still running. Remembering that it
+    /// is held is what lets one section call another — a `flush_pending` inside
+    /// a locked drain, say — without losing the lock half way through.
+    dir_lock_held: bool,
 }
 
 impl AppenderInner {
@@ -589,7 +598,7 @@ impl AppenderInner {
         self.cache.as_ref().map(|slot| slot.path.clone())
     }
 
-    /// Runs `f` with `<dir>/<prefix>.lock` held.
+    /// Runs `f` with the log's lock held.
     ///
     /// Every operation below moves more than one file of one prefix: a batch
     /// must reach the log file whole, a cache file must be read, appended to
@@ -598,17 +607,22 @@ impl AppenderInner {
     /// (or two copies of this crate in one) writing the same prefix, each of
     /// those is a race that loses or duplicates records.
     ///
-    /// A caller must not already hold the lock: the inner `unlock` would
-    /// release it while the outer section is still running. The locked sections
-    /// call `Self::flush_pending_locked` instead.
+    /// Nesting is allowed, and does what the caller means: the inner section
+    /// runs under the lock the outer one already holds, and only the outer one
+    /// releases it.
     ///
     /// Not holding it is not an error worth failing a write over — a log is
     /// best-effort, and the sections below still run, unprotected, the way the
     /// C++ runs them.
     fn with_dir_lock<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        if self.dir_lock_held {
+            return f(self);
+        }
         let held = self.dir_lock.as_ref().is_some_and(sys::lock_exclusive);
+        self.dir_lock_held = held;
         let out = f(self);
         if held {
+            self.dir_lock_held = false;
             if let Some(file) = self.dir_lock.as_ref() {
                 sys::unlock(file);
             }
@@ -752,12 +766,12 @@ impl AppenderInner {
             // file somebody still holds open.
             let moved = self.with_dir_lock(|me| {
                 // `__AppendFile` reads the file this appender has been writing,
-                // so the buffer has to reach it first — the unlocked half,
-                // because the lock is already held here.
-                if !me.flush_pending_locked() {
+                // so the buffer has to reach it first — `flush_pending`, which
+                // runs under the lock this section is already holding.
+                if !me.flush_pending() {
                     return false;
                 }
-                me.close_log_file_locked();
+                me.close_log_file();
                 if !append_file(&cache_path, &log_path) {
                     return false;
                 }
@@ -953,15 +967,6 @@ impl AppenderInner {
         self.forget_log_file();
     }
 
-    /// [`Self::close_log_file`] for a caller that already holds the directory
-    /// lock: `Self::flush_pending` would wait for the lock this caller holds
-    /// itself, because `flock` is per open file description and a second
-    /// `open()` of the same lock file waits for the first.
-    fn close_log_file_locked(&mut self) {
-        let _ = self.flush_pending_locked();
-        self.forget_log_file();
-    }
-
     fn forget_log_file(&mut self) {
         self.open_file_time = 0;
         self.log_file = None;
@@ -981,7 +986,8 @@ impl AppenderInner {
         self.with_dir_lock(Self::flush_pending_locked)
     }
 
-    /// `Self::flush_pending` with the directory lock already held.
+    /// `Self::flush_pending` with the log's lock held — by this caller's
+    /// section or by one it is nested in.
     fn flush_pending_locked(&mut self) -> bool {
         if self.log_file.is_none() {
             return self.refuse_pending();
@@ -1037,6 +1043,54 @@ impl AppenderInner {
                 // [`Self::pending_refused`].
                 self.refuse_pending()
             }
+        }
+    }
+
+    /// Writes the records of one dead writer's cache file into the log and
+    /// unlinks it.
+    ///
+    /// `data` is the file's bytes, read by
+    /// [`Appender::treat_mapping_as_file_and_flush`], which calls this with the
+    /// log's lock held: the drain, the append and the removal are one step as
+    /// far as every other writer of the log is concerned.
+    fn drain_dead_cache_slot(&mut self, path: &Path, data: Vec<u8>) -> crate::config::FileIoAction {
+        use crate::config::FileIoAction;
+
+        let mut buff = LogBuffer::new(
+            true,
+            Some(self.config.pub_key.as_str()),
+            self.config.compress_mode,
+            self.config.compress_level,
+        );
+        self.region = Region::Heap(data);
+        buff.attach(self.region.as_mut_slice());
+        self.buff = buff;
+
+        let mut buffer = AutoBuffer::new();
+        self.flush_buffer(&mut buffer);
+
+        if buffer.is_empty() {
+            return FileIoAction::Unnecessary;
+        }
+
+        let mark = mark_info();
+        self.write_tips2file("~~~~~ begin of mmap from other process ~~~~~\n");
+        let written = self.log2file(buffer.as_slice(), false);
+        self.write_tips2file(&format!(
+            "~~~~~ end of mmap from other process ~~~~~{mark}\n"
+        ));
+
+        // The cache is the only copy of these records: keep it when the write
+        // failed, so the next recovery can try again instead of losing them.
+        // `flush_pending` is part of the write — bytes this process is still
+        // holding are not "reached a file" yet.
+        if !written || !self.flush_pending() {
+            return FileIoAction::WriteFailed;
+        }
+
+        match fs::remove_file(path) {
+            Ok(()) => FileIoAction::Success,
+            Err(_) => FileIoAction::RemoveFailed,
         }
     }
 
@@ -1234,6 +1288,7 @@ impl Appender {
             use_mmap,
             cache,
             dir_lock,
+            dir_lock_held: false,
         };
 
         let appender = Appender {
@@ -1371,6 +1426,14 @@ impl Appender {
             AppenderError(format!("create log dir {}: {e}", config.logdir.display()))
         })?;
 
+        // The same lock a live writer of this log takes, opened here for the
+        // same reason: what recovery persists goes into a log file another
+        // writer may be appending to at that very moment, and the sections that
+        // move more than one file are the ones that lock is for. Without it a
+        // live writer's multi-write cache-file move and this drain — or this
+        // drain and that writer's I/O-error rollback — interleave.
+        let dir_lock = open_dir_lock(Some(&output_lock_path(config)));
+
         let alive_time = if max_alive_time >= MIN_LOG_ALIVE_TIME {
             max_alive_time
         } else {
@@ -1400,7 +1463,8 @@ impl Appender {
             tx: None,
             use_mmap: false,
             cache: None,
-            dir_lock: None,
+            dir_lock,
+            dir_lock_held: false,
         };
 
         Ok(Appender {
@@ -1420,14 +1484,15 @@ impl Appender {
     /// `XloggerAppender::TreatMappingAsFileAndFlush` of one cache file.
     ///
     /// `path` is a slot a dead writer left behind: [`crate::appender_oneshot_flush`]
-    /// only calls this for one whose lock nobody holds.
+    /// only calls this for one whose lock nobody holds. The slot's lock says
+    /// the file is a dead writer's; the log's own lock, taken here for the
+    /// whole drain, says nobody else is writing to the log while it is appended
+    /// to.
     pub(crate) fn treat_mapping_as_file_and_flush(
         &self,
         path: &Path,
     ) -> crate::config::FileIoAction {
         use crate::config::FileIoAction;
-
-        let config = self.lock().config.clone();
 
         if !path.exists() {
             return FileIoAction::Unnecessary;
@@ -1443,48 +1508,14 @@ impl Appender {
         }
         drop(file);
 
-        {
-            let mut guard = self.lock();
-            let mut buff = LogBuffer::new(
-                true,
-                Some(config.pub_key.as_str()),
-                config.compress_mode,
-                config.compress_level,
-            );
-            guard.region = Region::Heap(data);
-            buff.attach(guard.region.as_mut_slice());
-            guard.buff = buff;
-        }
+        // One guard for the whole drain, write and unlink, and the log's lock
+        // held across it: the records go into a log file another writer may be
+        // appending to, and every step between them — the buffer, the file, the
+        // cache file's removal — has to look like one step to that writer.
+        let mut guard = self.lock();
         // Only now may records be written through it.
         self.shared.flags.log_close.store(false, Ordering::Release);
-
-        let mut buffer = AutoBuffer::new();
-        self.lock().flush_buffer(&mut buffer);
-
-        if buffer.is_empty() {
-            return FileIoAction::Unnecessary;
-        }
-
-        let mark = mark_info();
-        self.write_tips2file("~~~~~ begin of mmap from other process ~~~~~\n");
-        let written = self.lock().log2file(buffer.as_slice(), false);
-        self.write_tips2file(&format!(
-            "~~~~~ end of mmap from other process ~~~~~{mark}\n"
-        ));
-
-        // The cache is the only copy of these records: keep it when the write
-        // failed, so the next recovery can try again instead of losing them.
-        // `flush_pending` is part of the write — bytes this process is still
-        // holding are not "reached a file" yet.
-        let flushed = self.lock().flush_pending();
-        if !written || !flushed {
-            return FileIoAction::WriteFailed;
-        }
-
-        match fs::remove_file(path) {
-            Ok(()) => FileIoAction::Success,
-            Err(_) => FileIoAction::RemoveFailed,
-        }
+        guard.with_dir_lock(|me| me.drain_dead_cache_slot(path, data))
     }
 
     /// `thread_async_.start()` / `SetMode(kAppenderAsync)`.
@@ -2361,6 +2392,74 @@ mod tests {
             output_lock_path(&with_cache),
             "one cache dir and none must not mean two locks"
         );
+    }
+
+    /// Recovery writes into a log file a live writer may be appending to, so it
+    /// has to wait for the same lock: this holds the lock the way a live
+    /// writer's flush section does and watches recovery wait for it, then lets
+    /// it through and checks the records arrived.
+    #[test]
+    fn one_shot_recovery_waits_for_the_log_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("log");
+        let cache = tmp.path().join("cache");
+        let mut cfg = config(&log, AppenderMode::Sync);
+        cfg.cachedir = Some(cache.clone());
+
+        // The log's lock, held here — which is where a live writer is while it
+        // moves a cache file into the log.
+        fs::create_dir_all(&log).unwrap();
+        let lock_path = output_lock_path(&cfg);
+        let held = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .unwrap();
+        assert!(sys::lock_exclusive(&held));
+
+        // A dead writer's slot: one record in it, and a lock nobody holds.
+        fs::create_dir_all(&cache).unwrap();
+        let dead_slot = cache_slot_path(&cache, &cfg.nameprefix, 1);
+        let mut region = vec![0u8; BUFFER_BLOCK_LENGTH];
+        let mut buffer = LogBuffer::new(true, Some(""), CompressMode::Zlib, 6);
+        buffer.attach(&mut region);
+        assert!(buffer.write(&mut region, b"recovered while the log is locked"));
+        fs::write(&dead_slot, &region).unwrap();
+
+        // Recovery runs on another thread: it is the only way to see it wait.
+        let marker = Arc::new(AtomicBool::new(false));
+        let done = Arc::clone(&marker);
+        let recovery = {
+            let cfg = cfg.clone();
+            thread::spawn(move || {
+                let action = crate::appender_oneshot_flush(&cfg);
+                done.store(true, Ordering::Release);
+                action
+            })
+        };
+
+        thread::sleep(Duration::from_millis(200));
+        assert!(
+            !marker.load(Ordering::Acquire),
+            "recovery appended to the log while another writer held its lock"
+        );
+        assert!(dead_slot.exists(), "the slot must not be drained yet");
+
+        // Hand the lock over: recovery may now finish.
+        assert!(sys::unlock(&held));
+        drop(held);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !marker.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        let action = recovery.join().expect("recovery panicked");
+        assert_eq!(action, FileIoAction::Success);
+        assert!(!dead_slot.exists(), "the recovered slot must be gone");
+        let text = decoded_text(&fs::read(today_name(&log)).unwrap());
+        assert!(text.contains("recovered while the log is locked"), "{text}");
     }
 
     /// Two writers of one prefix in one directory: what two processes — or two
