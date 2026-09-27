@@ -2,10 +2,10 @@
 //
 // One API in `commonMain`, and one `actual` of it per platform family:
 //
-//   * `androidMain` — the JNI bridge of `crates/mars-jni`, the same
+//   * `androidMain` — the JNI bridge of `crates/marsrs-jni`, the same
 //     `Java_io_github_orangeboychen_marsrs_xlog_Xlog_*` symbols the AAR in
 //     `../../android/marsrs-xlog` calls.
-//   * `nativeMain`  — the C ABI of `crates/mars-ffi` (`mars_xlog.h`) through
+//   * `nativeMain`  — the C ABI of `crates/marsrs-ffi` (`mars_xlog.h`) through
 //     cinterop, for every Kotlin/Native target: iOS, watchOS, tvOS, macOS,
 //     Linux and Windows.
 //
@@ -16,7 +16,7 @@
 // `native/<kotlin-target>/`; `scripts/build_kmp_native.sh` is what it runs.
 //
 // The archive is copied into the klib by cinterop, so an app that depends on
-// this module links `mars-ffi` without being told where it is — the shape a
+// this module links `marsrs-ffi` without being told where it is — the shape a
 // Kotlin Multiplatform library carries a vendored C library in.
 
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
@@ -37,7 +37,7 @@ val nativeDir: File = rootProject.file("native")
 val androidNativeDir: File = File(nativeDir, "android")
 // The C ABI's header, which is checked in next to the crate: cinterop reads it
 // out of the repository and not out of a copy, so the two cannot drift.
-val headerDir: File = rootProject.file("../crates/mars-ffi/include")
+val headerDir: File = rootProject.file("../crates/marsrs-ffi/include")
 
 // The checked-in cinterop definition, and one copy of it per target in the
 // build directory: everything in it is the same for every target except the two
@@ -74,7 +74,7 @@ kotlin {
     }
 
     // Kotlin/Native: 17. JVM and Android: the JDK the Kotlin compiler emits
-    // for, which is the one `crates/mars-jni` asks for on the other side.
+    // for, which is the one `crates/marsrs-jni` asks for on the other side.
     jvmToolchain(17)
 
     androidTarget {
@@ -102,7 +102,7 @@ kotlin {
     linuxArm64()
     mingwX64()
 
-    // `mars-ffi` through cinterop, once per Kotlin/Native target.
+    // `marsrs-ffi` through cinterop, once per Kotlin/Native target.
     targets.withType<KotlinNativeTarget>().configureEach {
         val kotlinTarget = this
         compilations.getByName("main").cinterops.create("marsFFI") {
@@ -122,7 +122,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        // `mars-jni` is built against NDK 27 / API 24; 21 is the floor the C++
+        // `marsrs-jni` is built against NDK 27 / API 24; 21 is the floor the C++
         // project ships with.
         minSdk = 21
     }

@@ -1,7 +1,9 @@
 package io.github.orangeboychen.marsrs.xlog
 
-import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_current_log_path
+import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_make_logfile_name
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -29,22 +31,35 @@ class XlogTest {
     fun aRecordReachesTheLogFile() {
         // The appender creates the directory itself, the way the C++'s does.
         val dir = "${getenv("TMPDIR")?.toKString() ?: DEFAULT_TEMP_DIR}/marsrs-kmp-${getpid()}"
-        Xlog.open(XlogConfig(logDir = dir, namePrefix = "Mars", level = LogLevel.Verbose))
+        val xlog = Xlog(XlogConfig(logDir = dir, namePrefix = PREFIX, level = LogLevel.VERBOSE))
         try {
-            Xlog.write(LogLevel.Info, "Net", "a record from a Kotlin Multiplatform test")
-            Xlog.flush(sync = true)
+            assertTrue(xlog.isOpen, "no appender is open for $PREFIX in $dir")
+            assertTrue(xlog.isLoggable(LogLevel.INFO), "an appender opened at verbose drops info")
 
-            val path = currentLogPath()
+            xlog.level = LogLevel.WARNING
+            assertEquals(LogLevel.WARNING, xlog.level, "the level set is not the level answered")
+            xlog.level = LogLevel.VERBOSE
+
+            xlog.i("Net", "a record from a Kotlin Multiplatform test")
+            xlog.flush(sync = true)
+
+            val path = logFilePath(dir)
             assertTrue(path.isNotEmpty(), "the appender opened no log file under $dir")
             assertTrue(access(path, F_OK) == 0, "$path does not exist")
         } finally {
-            Xlog.close()
+            xlog.close()
         }
+        assertFalse(xlog.isOpen, "close() left the appender of $PREFIX open")
     }
 
-    private fun currentLogPath(): String = memScoped {
+    /**
+     * The name the C ABI gives today's file of [PREFIX] in `dir`:
+     * `mars_xlog_make_logfile_name`, which is what an app that collects logs
+     * asks rather than guessing at `marsrs_20260927.xlog` itself.
+     */
+    private fun logFilePath(dir: String): String = memScoped {
         val out = allocArray<ByteVar>(PATH_MAX)
-        val written = mars_xlog_current_log_path(out, PATH_MAX.toUInt())
+        val written = mars_xlog_make_logfile_name(TODAY, PREFIX, dir, FIRST_NAME, out, PATH_MAX.toUInt())
         if (written < 0) "" else out.toKString()
     }
 
@@ -52,5 +67,11 @@ class XlogTest {
         const val PATH_MAX = 4096
 
         const val DEFAULT_TEMP_DIR = "/tmp"
+
+        const val PREFIX = "marsrs"
+
+        const val TODAY = 0
+
+        const val FIRST_NAME = 0u
     }
 }

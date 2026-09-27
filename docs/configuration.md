@@ -28,13 +28,16 @@ an appender opened at `info` keeps `warning` and drops `debug`.
 
 | level | Rust | Swift | Android | KMP | C |
 |---|---|---|---|---|---|
-| 0 | `LogLevel::Verbose` | `.verbose` | `LogLevel.VERBOSE` | `LogLevel.Verbose` | `MarsLevelVerbose` |
-| 1 | `LogLevel::Debug` | `.debug` | `LogLevel.DEBUG` | `LogLevel.Debug` | `MarsLevelDebug` |
-| 2 | `LogLevel::Info` | `.info` | `LogLevel.INFO` | `LogLevel.Info` | `MarsLevelInfo` |
-| 3 | `LogLevel::Warn` | `.warning` | `LogLevel.WARNING` | `LogLevel.Warning` | `MarsLevelWarn` |
-| 4 | `LogLevel::Error` | `.error` | `LogLevel.ERROR` | `LogLevel.Error` | `MarsLevelError` |
-| 5 | `LogLevel::Fatal` | `.fatal` | `LogLevel.FATAL` | `LogLevel.Fatal` | `MarsLevelFatal` |
-| 6 | `LogLevel::None` | `.none` | `LogLevel.NONE` | — | `MARS_LEVEL_NONE` |
+| 0 | `LogLevel::Verbose` | `.verbose` | `LogLevel.VERBOSE` | `LogLevel.VERBOSE` | `MarsLevelVerbose` |
+| 1 | `LogLevel::Debug` | `.debug` | `LogLevel.DEBUG` | `LogLevel.DEBUG` | `MarsLevelDebug` |
+| 2 | `LogLevel::Info` | `.info` | `LogLevel.INFO` | `LogLevel.INFO` | `MarsLevelInfo` |
+| 3 | `LogLevel::Warn` | `.warning` | `LogLevel.WARNING` | `LogLevel.WARNING` | `MarsLevelWarn` |
+| 4 | `LogLevel::Error` | `.error` | `LogLevel.ERROR` | `LogLevel.ERROR` | `MarsLevelError` |
+| 5 | `LogLevel::Fatal` | `.fatal` | `LogLevel.FATAL` | `LogLevel.FATAL` | `MarsLevelFatal` |
+| 6 | `LogLevel::None` | `.none` | `LogLevel.NONE` | `LogLevel.NONE` | `MARS_LEVEL_NONE` |
+
+The two Kotlin columns are the same on purpose: `xlog-kmp` and `xlog` publish one
+API, so a shared module that moves between them renames nothing.
 
 `none` writes nothing, not even `fatal` — it is how an appender is quieted
 without being closed.

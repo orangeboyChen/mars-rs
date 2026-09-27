@@ -2,7 +2,7 @@
 //
 // Two modules over the same native library: `marsrs-xlog` is the Kotlin face of
 // the xlog half of the port — the same API on every platform, over the JNI
-// bridge on Android and over the C ABI of `mars-ffi` everywhere else — and
+// bridge on Android and over the C ABI of `marsrs-ffi` everywhere else — and
 // `marsrs` is the whole port over it: the pair the crates on crates.io are, the
 // pair the C++ project publishes as `mars-core` and `mars-xlog`, and the pair
 // `Package.swift` exposes as `MarsRS` and `MarsRSXlog`.

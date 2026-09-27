@@ -96,18 +96,19 @@ xlog.flush(sync = true)  // the records are on disk when this returns
 ```
 
 ```kotlin [Kotlin Multiplatform]
-Xlog.open(
+val xlog = Xlog(
     XlogConfig(
         logDir = logDirectory,
         namePrefix = "marsrs",
-        level = LogLevel.Info,
+        level = LogLevel.INFO,
     )
 )
+xlog.consoleLogEnabled = isDebug
 
-Xlog.write(LogLevel.Info, "startup", "hello from mars")
+xlog.i("startup", "hello from mars")
 
-Xlog.flush(sync = true)  // the records are on disk when this returns
-Xlog.close()
+xlog.flush(sync = true)  // the records are on disk when this returns
+xlog.close()
 ```
 
 ```c [C]

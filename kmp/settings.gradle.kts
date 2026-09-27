@@ -32,7 +32,7 @@ rootProject.name = "marsrs-kmp"
 // The pair the crates on crates.io are, the pair the C++ project publishes as
 // `mars-core` and `mars-xlog`, and the pair `Package.swift` exposes as `MarsRS`
 // and `MarsRSXlog`: `marsrs` is the whole port — today xlog, because that is all
-// `mars-ffi` exports — and `marsrs-xlog` is the logging half, the module that
+// `marsrs-ffi` exports — and `marsrs-xlog` is the logging half, the module that
 // does the work.
 include(":marsrs")
 include(":marsrs-xlog")

@@ -6,7 +6,7 @@ package io.github.orangeboychen.marsrs
  * that depends on `xlog-kmp` writes.
  *
  * Every one of them is xlog's today, and each is a `typealias` rather than a
- * second declaration, because `mars-ffi` is an xlog C ABI: xlog is all a
+ * second declaration, because `marsrs-ffi` is an xlog C ABI: xlog is all a
  * Kotlin/Native target can reach, so `marsrs-kmp` is `xlog-kmp` under
  * another name and no more. When STN and SDT join the C ABI, their Kotlin is
  * declared here beside these — and an app that took `marsrs-kmp` picks it up
@@ -27,5 +27,3 @@ public typealias LogLevel = io.github.orangeboychen.marsrs.xlog.LogLevel
 public typealias AppenderMode = io.github.orangeboychen.marsrs.xlog.AppenderMode
 
 public typealias CompressMode = io.github.orangeboychen.marsrs.xlog.CompressMode
-
-public typealias Log = io.github.orangeboychen.marsrs.xlog.Log

@@ -26,13 +26,16 @@ appender 会留下 `warning`，丢掉 `debug`。
 
 | 级别 | Rust | Swift | Android | KMP | C |
 |---|---|---|---|---|---|
-| 0 | `LogLevel::Verbose` | `.verbose` | `LogLevel.VERBOSE` | `LogLevel.Verbose` | `MarsLevelVerbose` |
-| 1 | `LogLevel::Debug` | `.debug` | `LogLevel.DEBUG` | `LogLevel.Debug` | `MarsLevelDebug` |
-| 2 | `LogLevel::Info` | `.info` | `LogLevel.INFO` | `LogLevel.Info` | `MarsLevelInfo` |
-| 3 | `LogLevel::Warn` | `.warning` | `LogLevel.WARNING` | `LogLevel.Warning` | `MarsLevelWarn` |
-| 4 | `LogLevel::Error` | `.error` | `LogLevel.ERROR` | `LogLevel.Error` | `MarsLevelError` |
-| 5 | `LogLevel::Fatal` | `.fatal` | `LogLevel.FATAL` | `LogLevel.Fatal` | `MarsLevelFatal` |
-| 6 | `LogLevel::None` | `.none` | `LogLevel.NONE` | — | `MARS_LEVEL_NONE` |
+| 0 | `LogLevel::Verbose` | `.verbose` | `LogLevel.VERBOSE` | `LogLevel.VERBOSE` | `MarsLevelVerbose` |
+| 1 | `LogLevel::Debug` | `.debug` | `LogLevel.DEBUG` | `LogLevel.DEBUG` | `MarsLevelDebug` |
+| 2 | `LogLevel::Info` | `.info` | `LogLevel.INFO` | `LogLevel.INFO` | `MarsLevelInfo` |
+| 3 | `LogLevel::Warn` | `.warning` | `LogLevel.WARNING` | `LogLevel.WARNING` | `MarsLevelWarn` |
+| 4 | `LogLevel::Error` | `.error` | `LogLevel.ERROR` | `LogLevel.ERROR` | `MarsLevelError` |
+| 5 | `LogLevel::Fatal` | `.fatal` | `LogLevel.FATAL` | `LogLevel.FATAL` | `MarsLevelFatal` |
+| 6 | `LogLevel::None` | `.none` | `LogLevel.NONE` | `LogLevel.NONE` | `MARS_LEVEL_NONE` |
+
+两个 Kotlin 列是故意写成一样的：`xlog-kmp` 和 `xlog` 发布的是同一个 API，所以在两者
+之间搬动的共享模块什么都不用改。
 
 `none` 什么都不写，连 `fatal` 也不写 —— 这是不关掉 appender 而让它安静下来的办法。
 

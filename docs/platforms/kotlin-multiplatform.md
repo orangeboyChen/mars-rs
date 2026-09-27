@@ -29,53 +29,72 @@ import io.github.orangeboychen.marsrs.xlog.LogLevel
 import io.github.orangeboychen.marsrs.xlog.Xlog
 import io.github.orangeboychen.marsrs.xlog.XlogConfig
 
-Xlog.open(
+val xlog = Xlog(
     XlogConfig(
         logDir = logDirectory,
         namePrefix = "marsrs",
-        level = LogLevel.Info,
-        mode = AppenderMode.Async,
+        level = LogLevel.INFO,
+        mode = AppenderMode.ASYNC,
     )
 )
+xlog.consoleLogEnabled = isDebug
 
-Xlog.write(LogLevel.Info, "startup", "cold start in $elapsedMillis ms")
+xlog.i("startup", "cold start in $elapsedMillis ms")
 
-Xlog.flush(sync = true)   // before the app reads or uploads the files
-Xlog.close()
+xlog.flush(sync = true)   // before the app reads or uploads the files
+xlog.close()
 ```
 
 `logDir` is the one option with no default — the rest are on
 [the configuration page](/configuration).
 
+This is the `Xlog` of [Android](/platforms/android): the same constructor, the
+same members, the same names, so a shared module that moves between `xlog-kmp`
+and `xlog` renames nothing.
+
 ## Writing
 
-`Xlog.write` is one record: a level, a tag and a message, plus the file,
-function and line of the call site when the shared code has them.
+The write is `android.util.Log`'s shape — `v`/`d`/`i`/`w`/`e`/`f`, each of them a
+tag and a message, and `log(level, tag, message)` when the level is not known
+until the call.
 
 ```kotlin
-Xlog.write(LogLevel.Debug, "net", "…")
-Xlog.write(LogLevel.Error, "login", "…")
+xlog.v("net", "…")
+xlog.d("net", "…")
+xlog.i("startup", "…")
+xlog.w("net", "…")
+xlog.e("login", "…")
+xlog.f("login", "…")
 
-Xlog.write(LogLevel.Debug, "net", "…", file = "Net.kt", function = "fetch", line = 42)
+xlog.log(LogLevel.DEBUG, "net", "…")
 ```
 
 A record below the level the appender was opened at is dropped before anything is
-formatted.
-
-## The `Log` facade
-
-`Log` is the C++ project's facade — `Log.d(tag, message)` and friends over one
-appender — for shared code that would rather write it that way:
+formatted. A message that is expensive to build is worth asking about first,
+because a record the level drops still costs the caller the `String`:
 
 ```kotlin
-Log.setLevel(LogLevel.Info)
-Log.v("net", "…")
-Log.d("net", "…")
-Log.i("startup", "…")
-Log.w("net", "…")
-Log.e("login", "…")
-Log.f("login", "…")
+if (xlog.isLoggable(LogLevel.DEBUG)) {
+    xlog.d("net", expensiveDescription())
+}
 ```
+
+## While it is open
+
+| what | how |
+|---|---|
+| move the level | `xlog.level = LogLevel.WARNING` |
+| switch async / sync | `xlog.mode = AppenderMode.SYNC` |
+| mirror records to the console | `xlog.consoleLogEnabled = true` |
+| close a file at a size | `xlog.maxFileSizeBytes = 8 * 1024 * 1024` |
+| drop a file at an age | `xlog.maxAliveTimeSeconds = 10 * 24 * 3600` |
+| is it still open | `xlog.isOpen` |
+| drain the cache | `xlog.flush(sync = true)` |
+
+`close()` drains what is left and closes the appender. Two `Xlog`s of one
+`namePrefix` are one appender, so closing one of them closes what the other
+writes through — give a part of the app whose logs are read apart from the rest a
+prefix of its own.
 
 ## What compiles
 
@@ -91,7 +110,7 @@ links the archive the release published for it.
 ## What is not in it
 
 The surface is the intersection of the two bridges, which is what a `common`
-declaration can only be. The named instances of the C ABI —
-`mars_xlog_new_instance`, `mars_xlog_current_log_path` — and the per-instance
-`Xlog` of Android are not in it; a caller who wants them is a caller of one
-platform, and writes it in that platform's source set.
+declaration can only be. The process-wide appender of the C ABI —
+`mars_xlog_open`, `mars_xlog_close`, `mars_xlog_current_log_path` — is not in it,
+because the JNI bridge exports no equivalent: a caller who wants it is a caller
+of one platform, and writes it in that platform's source set.

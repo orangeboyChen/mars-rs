@@ -3,43 +3,51 @@ package io.github.orangeboychen.marsrs.xlog
 /**
  * `TAppenderMode` of the C++ project (`appender.h`), which the C ABI spells
  * `MarsAppenderMode`. As in [LogLevel], the order is the order of the C enum,
- * so `ordinal` is the number on the wire.
+ * so `ordinal` is the number on the wire, and the entries are the ones the
+ * Android AAR publishes.
  *
- * `Async` is what the C++ opens with: the appender writes from its own thread
- * and [Xlog.flush] is what drains it. `Sync` is what a caller who cannot afford
+ * `ASYNC` is what the C++ opens with: the appender writes from its own thread
+ * and [Xlog.flush] is what drains it. `SYNC` is what a caller who cannot afford
  * to lose the last records of a process opens with.
  */
 public enum class AppenderMode {
-    Async,
-    Sync
+    ASYNC,
+    SYNC
 }
 
 /**
  * `TCompressMode` of the C++ project, `MarsCompressMode` of the C ABI: how a
- * log file is compressed once it is closed. `Zlib` is the default of both, and
- * `Zstd` is what the port added — the C++ project's own `mars-xlog` has no
+ * log file is compressed once it is closed. `ZLIB` is the default of both, and
+ * `ZSTD` is what the port added — the C++ project's own `mars-xlog` has no
  * zstd, so a file written this way is one its reader has to be told about.
  *
  * The order is the order of the C enum, so `ordinal` is the number on the wire.
  */
 public enum class CompressMode {
-    Zlib,
-    Zstd
+    ZLIB,
+    ZSTD
 }
 
 /**
- * `XLogConfig` of the C++ project (`appender.h`) in Kotlin: what [Xlog.open] is
- * handed, instead of the string of positional arguments its Java takes.
+ * `XLogConfig` of the C++ project (`appender.h`) in Kotlin: what an [Xlog] is
+ * built with, instead of the string of positional arguments its Java takes.
+ *
+ * Every property has the default the C++ project's own `XLogConfig` carries, so
+ * the only one an app has to give is [logDir], and a config the appender cannot
+ * honour is refused here and not silently by the bridge: `mars_xlog_open`
+ * answers a config it does not like by opening nothing, and an app that finds
+ * out three days later that it has no logs has no way back.
  *
  * @property logDir the directory the log files are written to. It is created if
  *   it is missing, and it is the one field the C ABI insists on: without it,
  *   `mars_xlog_open` answers `MARS_XLOG_ERR_EMPTY_LOG_DIR` and opens nothing.
- * @property namePrefix the name every log file starts with, as it is in the
- *   C++; `null` writes files the C++'s own default name would give them.
+ * @property namePrefix the name every log file starts with (`marsrs_20260927.xlog`),
+ *   and the name the appender is known by — an app that writes through two of
+ *   them gives them two.
  * @property level the level the appender is opened at: a record below it is
- *   dropped before it is formatted.
+ *   dropped before it is formatted. [Xlog.level] moves it afterwards.
  * @property mode whether the appender writes from its own thread.
- * @property pubKey the ECDH public key a log file is encrypted with; `null`
+ * @property pubKey the ECDH public key a log file is encrypted with; empty
  *   writes it unencrypted, the way an empty key does in the C++.
  * @property compressMode how a closed log file is compressed.
  * @property compressLevel the level of that compression; `0` is what the C++
@@ -51,12 +59,33 @@ public enum class CompressMode {
  */
 public data class XlogConfig(
     public val logDir: String,
-    public val namePrefix: String? = null,
-    public val level: LogLevel = LogLevel.Info,
-    public val mode: AppenderMode = AppenderMode.Async,
-    public val pubKey: String? = null,
-    public val compressMode: CompressMode = CompressMode.Zlib,
-    public val compressLevel: Int = 0,
+    public val namePrefix: String = DEFAULT_NAME_PREFIX,
+    public val level: LogLevel = LogLevel.INFO,
+    public val mode: AppenderMode = AppenderMode.ASYNC,
+    public val pubKey: String = DEFAULT_PUB_KEY,
+    public val compressMode: CompressMode = CompressMode.ZLIB,
+    public val compressLevel: Int = DEFAULT_COMPRESS_LEVEL,
     public val cacheDir: String? = null,
-    public val cacheDays: Int = 0
-)
+    public val cacheDays: Int = NO_CACHE_DAYS
+) {
+    init {
+        require(logDir.isNotBlank()) { "logDir must not be blank: no appender is opened without one" }
+        require(namePrefix.isNotBlank()) { "namePrefix must not be blank: it is what an appender is known by" }
+        require(cacheDays >= 0) { "cacheDays must not be negative, was $cacheDays" }
+        require(compressLevel in DEFAULT_COMPRESS_LEVEL..MAX_COMPRESS_LEVEL) {
+            "compressLevel must be in $DEFAULT_COMPRESS_LEVEL..$MAX_COMPRESS_LEVEL, was $compressLevel"
+        }
+    }
+
+    private companion object {
+        const val DEFAULT_NAME_PREFIX = "xlog"
+
+        const val DEFAULT_PUB_KEY = ""
+
+        const val DEFAULT_COMPRESS_LEVEL = 0
+
+        const val MAX_COMPRESS_LEVEL = 9
+
+        const val NO_CACHE_DAYS = 0
+    }
+}

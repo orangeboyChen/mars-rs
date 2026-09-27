@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
 # Builds the native libraries the Kotlin Multiplatform packaging needs:
-# `mars-ffi` as a static library for every Kotlin/Native target the release
+# `marsrs-ffi` as a static library for every Kotlin/Native target the release
 # ships, laid out as <output-dir>/<kotlin-target>/libmars_ffi.a — the shape
 # `kmp/*/build.gradle.kts` asks for and the shape cinterop embeds into a klib,
-# which is how an app of that target links `mars-ffi` without being told where
+# which is how an app of that target links `marsrs-ffi` without being told where
 # it is.
 #
 #   scripts/build_kmp_native.sh [output-dir]
@@ -74,7 +74,7 @@ for entry in "${targets[@]}"; do
     [ "$build_std" = build-std ] || std_triples+=("$triple")
 done
 
-echo "building mars-ffi for ${triples[*]}"
+echo "building marsrs-ffi for ${triples[*]}"
 
 rustup target add "${std_triples[@]}" > /dev/null
 # `-Z build-std` is nightly, and it compiles std out of its sources.
@@ -128,10 +128,10 @@ for entry in "${targets[@]}"; do
     esac
 
     if [ "$build_std" = build-std ]; then
-        cargo +nightly build --release -p mars-ffi --target "$triple" \
+        cargo +nightly build --release -p marsrs-ffi --target "$triple" \
             -Z build-std=std,panic_abort
     else
-        cargo build --release -p mars-ffi --target "$triple"
+        cargo build --release -p marsrs-ffi --target "$triple"
     fi
 
     lib="$root/target/$triple/release/libmars_ffi.a"
