@@ -1,0 +1,84 @@
+name: Lint (Kotlin)
+
+# The Kotlin gate. The Swift one is lint-swift.yml and the Rust one lives in
+# rust.yml: `rustfmt`, `clippy` with `-D warnings`, and the lints of
+# `[workspace.lints]`.
+#
+# Each of the three gates fails on the first finding. `swiftlint lint --strict`
+# turns its warnings into errors, ktlint exits non-zero on any violation, and
+# `detekt.yml` sets `build.maxIssues: 0`. None of them is run with a
+# `--format`/`--auto-correct` flag, because a gate that rewrites what it checks
+# is not a gate.
+#
+# The versions are pinned and the tools are fetched as release artefacts rather
+# than installed by a package manager, so that a new release of either — and
+# the new rules it brings — is a change made here on purpose.
+#
+# It starts on what it reads: `android/`, the two configuration files the tools
+# are told to use, and itself. A pull request that touches neither is not a
+# Kotlin pull request, whatever else it is.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - android/**
+      - detekt.yml
+      - .editorconfig
+      - .github/workflows/lint-kotlin.yml
+  pull_request:
+    paths:
+      - android/**
+      - detekt.yml
+      - .editorconfig
+      - .github/workflows/lint-kotlin.yml
+  workflow_dispatch:
+
+# A push supersedes the run it interrupts, so the older one is cancelled. A
+# push to main is never cancelled — every commit of it gets its own green or
+# red.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  KTLINT_VERSION: '1.8.0'
+  DETEKT_VERSION: '1.23.8'
+
+jobs:
+  kotlin:
+    name: ktlint + detekt (Kotlin)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      # The two of them are fetched in one step because that is all it is: two
+      # release artefacts, and one JDK to run the second one with.
+      - name: Install ktlint ${{ env.KTLINT_VERSION }} and detekt ${{ env.DETEKT_VERSION }}
+        run: |
+          set -euo pipefail
+          curl -sSfL -o ktlint \
+            "https://github.com/pinterest/ktlint/releases/download/${KTLINT_VERSION}/ktlint"
+          chmod +x ktlint
+          ./ktlint --version
+          curl -sSfL -o detekt-cli-all.jar \
+            "https://github.com/detekt/detekt/releases/download/v${DETEKT_VERSION}/detekt-cli-${DETEKT_VERSION}-all.jar"
+      # `.editorconfig` is the whole of ktlint's configuration: the
+      # `android_studio` code style, the 120-column line and the end-of-file
+      # rules. ktlint exits non-zero on any violation.
+      - run: ./ktlint --relative 'android/**/*.kt' 'android/**/*.kts'
+      # `--build-upon-default-config`: detekt.yml names only what differs from
+      # detekt's own defaults, and its `build.maxIssues: 0` is what fails the
+      # job.
+      - run: |
+          java -jar detekt-cli-all.jar \
+            --input android/mars-core/src/main/kotlin,android/mars-xlog/src/main/kotlin \
+            --config detekt.yml \
+            --build-upon-default-config

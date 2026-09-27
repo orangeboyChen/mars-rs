@@ -65,13 +65,13 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use mars_buffer::LogBuffer;
-use mars_core::{AutoBuffer, PtrBuffer};
+use mars_core::{local_time, AutoBuffer, PtrBuffer};
 
 use crate::config::{AppenderMode, LogLevel, XLogConfig, XLoggerInfo};
 use crate::console::console_log;
 use crate::file_util::{
     append_file, del_timeout_file, format_local_timestamp, make_log_file_name, monotonic_millis,
-    move_old_files, now_secs, same_local_day, LOG_EXT, MMAP_EXT, SECONDS_PER_DAY,
+    move_old_files, now_secs, LOG_EXT, MMAP_EXT, SECONDS_PER_DAY,
 };
 use crate::formater::log_formater;
 use crate::sys;
@@ -104,15 +104,20 @@ const LOG_FLUSH_THRESHOLD: usize = 4 * 1024;
 const PENDING_CAPACITY: usize = 2 * LOG_FLUSH_THRESHOLD;
 /// `gettimeofday`-free recursion guard threshold (`recursion_count > 10`).
 const MAX_RECURSION: u32 = 10;
+/// A local day no log file can be opened on: [`AppenderInner::open_file_day`]
+/// holds it whenever no file is open.
+const NO_DAY: (i32, u32, u32) = (0, 0, 0);
 
 /// Decrements the per-thread recursion counter when it goes out of scope.
 struct RecursionGuard;
 
 impl Drop for RecursionGuard {
     fn drop(&mut self) {
-        let _ = std::panic::catch_unwind(|| {
-            RECURSION_COUNT.with(|cell| cell.set(cell.get().saturating_sub(1)))
-        });
+        // `catch_unwind` is not needed here: nothing in the decrement panics,
+        // and `try_with` is what a thread-local whose destructor may already
+        // have run wants anyway — a panic on the way *out* of a logger is the
+        // one thing this guard exists to prevent.
+        let _ = RECURSION_COUNT.try_with(|cell| cell.set(cell.get().saturating_sub(1)));
     }
 }
 
@@ -550,6 +555,19 @@ struct AppenderInner {
     pending_refused: bool,
     /// `openfiletime_`
     open_file_time: i64,
+    /// The local day [`Self::open_file_time`] falls on — the `filetm.tm_year ==
+    /// tcur.tm_year && ...` of `XloggerAppender::__OpenLogFile`.
+    ///
+    /// Stamped once, when the file is opened, so that the per-record
+    /// roll-over check is one [`local_time`] of *today* — which the record's own
+    /// header has already asked for this second, and which therefore costs no
+    /// `localtime` at all. Comparing two `tv_sec`s the way the C++ does is two
+    /// conversions per record: one for the file's, which never changes, and one
+    /// for now's.
+    ///
+    /// `(0, 0, 0)` is a day no file can be opened on, so it is also what "no
+    /// file is open" looks like.
+    open_file_day: (i32, u32, u32),
     /// `last_time_`
     last_time: i64,
     /// `last_tick_` (monotonic milliseconds)
@@ -879,13 +897,14 @@ impl AppenderInner {
         let now_time = now_secs();
 
         if self.log_file.is_some() {
-            if same_local_day(self.open_file_time, now_time) {
+            if self.open_file_day == local_time(now_time).date {
                 return true;
             }
             self.close_log_file();
         }
 
         self.open_file_time = now_time;
+        self.open_file_day = local_time(now_time).date;
         let logfilepath = match dir {
             OpenDir::Log => self.log_file_path(now_time),
             OpenDir::Cache => self.cache_file_path(now_time),
@@ -969,6 +988,7 @@ impl AppenderInner {
 
     fn forget_log_file(&mut self) {
         self.open_file_time = 0;
+        self.open_file_day = NO_DAY;
         self.log_file = None;
         self.flushed_len = 0;
     }
@@ -1124,6 +1144,7 @@ impl AppenderInner {
         if self.max_file_size > 0 && len > self.max_file_size {
             self.close_log_file();
             self.open_file_time = 0;
+            self.open_file_day = NO_DAY;
             return true;
         }
 
@@ -1279,6 +1300,7 @@ impl Appender {
             flushed_len: 0,
             pending_refused: false,
             open_file_time: 0,
+            open_file_day: NO_DAY,
             last_time: 0,
             last_tick: 0,
             last_file_path: PathBuf::new(),
@@ -1455,6 +1477,7 @@ impl Appender {
             flushed_len: 0,
             pending_refused: false,
             open_file_time: 0,
+            open_file_day: NO_DAY,
             last_time: 0,
             last_tick: 0,
             last_file_path: PathBuf::new(),
@@ -1643,25 +1666,39 @@ impl Appender {
         // tell the difference — except by finding them missing from the file.
         // Sync mode has nothing in the cache to drain, but it may well have
         // records in the buffer, so this happens before the mode is asked.
-        self.lock().flush_pending();
+        //
+        // One lock for the whole flush: taking it five times was five turns
+        // through the same mutex for one flush, and the five were not needed —
+        // nothing in between can be seen by anyone else.
+        let mut guard = self.lock();
+        guard.flush_pending();
 
-        let is_sync = self.lock().config.mode == AppenderMode::Sync;
-        if is_sync {
+        if guard.config.mode == AppenderMode::Sync {
             return;
         }
 
         let mut buffer = AutoBuffer::new();
-        let _n = self.lock().flush_buffer(&mut buffer);
+        let _n = guard.flush_buffer(&mut buffer);
 
         if !buffer.is_empty() {
-            self.lock().log2file(buffer.as_slice(), false);
+            guard.log2file(buffer.as_slice(), false);
         }
         // ... and again for what that drain buffered.
-        self.lock().flush_pending();
+        guard.flush_pending();
     }
 
     /// `XloggerAppender::Close`.
+    ///
+    /// Idempotent: a second `close` — the one [`Appender::drop`] runs on an
+    /// appender [`crate::appender_close`] already closed — does nothing at all.
+    /// Re-running it used to be harmless too, except for the last line: zeroing
+    /// the cache region again would wipe the region of *another* appender that
+    /// has since mapped the same cache file, along with every record in it.
     pub(crate) fn close(&self) {
+        if self.shared.flags.log_close.load(Ordering::Acquire) {
+            return;
+        }
+
         // Mirrors the drain in `open`: without a mapping the file keeps its
         // bytes, so it has to be cleared here too or the next start appends
         // the same records again.
@@ -1704,6 +1741,13 @@ impl Appender {
 
         let mut guard = self.lock();
         guard.tx = None;
+        // The writer thread's last drain may have left a batch in
+        // [`AppenderInner::pending`]: it appends one the way any write does, and
+        // nothing flushes it once the appender is in sync mode, where
+        // `__Log2File` leaves the file open. Handed to the OS here — the file
+        // is about to be dropped, and a batch that outlived its appender is a
+        // batch no later flush can recover.
+        let _ = guard.flush_pending();
         // C++: `memset(mmap_file_.data(), 0, kBufferBlockLength)` before closing
         // the mapping, so a later `open` starts from an empty cache.
         guard.region.as_mut_slice().fill(0);

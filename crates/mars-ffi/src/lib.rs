@@ -21,8 +21,9 @@
 //! | [`mars_xlog_current_log_path`]      | `mars::xlog::appender_get_current_log_path(char*,unsigned)` |
 //!
 //! The matching C header lives next to this crate at
-//! `crates/mars-ffi/include/mars_xlog.h`; `tests/header_sync.rs` keeps the
-//! two in sync. See `README.md` for link instructions.
+//! `crates/mars-ffi/include/mars_xlog.h` (`include/mars_sdt.h` for the `sdt`
+//! feature, `include/mars_stn.h` for the `stn` one); `tests/header_sync.rs`
+//! keeps them in sync. See `README.md` for link instructions.
 //!
 //! # Safety contract
 //!
@@ -50,16 +51,34 @@
 #![deny(clippy::missing_safety_doc)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
+// The xlog half of the port, behind the feature the Apple artifact is built
+// with. `cstr` stays unconditional: it is the pointer handling every future
+// entry point needs, and it carries no symbols of its own.
+#[cfg(feature = "xlog")]
 pub mod abi;
 pub mod cstr;
+#[cfg(feature = "xlog")]
 pub mod error;
+// The diagnosis, behind its own feature: `mars_sdt_*`, which is the seam
+// `mars/sdt/jni/*_Java2C.cc` has — and the one an app that only logs does not
+// need in its binary.
+#[cfg(feature = "sdt")]
+pub mod sdt;
+#[cfg(feature = "xlog")]
 pub mod state;
+// The task pipeline, behind its own feature: `mars_stn_*`, which is the seam
+// `mars/stn/jni/*_Java2C.cc` has — and the one an app that only logs does not
+// need in its binary.
+#[cfg(feature = "stn")]
+pub mod stn;
 
+#[cfg(feature = "xlog")]
 pub use abi::{
     mars_xlog_close, mars_xlog_current_log_path, mars_xlog_flush, mars_xlog_flush_sync,
     mars_xlog_open, mars_xlog_set_console_log, mars_xlog_set_level,
     mars_xlog_set_max_alive_duration, mars_xlog_set_max_file_size, mars_xlog_write, MarsXLogConfig,
 };
+#[cfg(feature = "xlog")]
 pub use error::{
     MARS_XLOG_ERR_APPENDER, MARS_XLOG_ERR_BAD_COMPRESS, MARS_XLOG_ERR_BAD_MODE,
     MARS_XLOG_ERR_EMPTY_LOG_DIR, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE,
@@ -78,6 +97,10 @@ use std::panic::{self, AssertUnwindSafe};
 /// `void` ones). Note that the *default* panic hook still prints the panic to
 /// stderr, which is intentional: it is the only diagnostics channel a host
 /// process (e.g. the JVM) gives us.
+///
+/// Ungated: it is the barrier every entry point of this crate crosses, xlog's
+/// included but not only theirs — the diagnosis' and the task pipeline's are
+/// built without `xlog` for the Apple net framework.
 pub(crate) fn guard<T>(fallback: T, f: impl FnOnce() -> T) -> T {
     // `AssertUnwindSafe` is sound here: the closures only touch interior-mutable
     // process state (atomics + the appender's own locks) and no panic can leave

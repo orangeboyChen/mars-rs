@@ -14,9 +14,39 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 name = "mars_ffi"
 
 [dependencies]
-mars-appender = { workspace = true }
+mars-appender = { workspace = true, optional = true }
 # Only needed for `CompressMode`, which `XLogConfig` stores by value.
 mars-buffer = { workspace = true }
+# The diagnosis, behind a feature of its own: an app that only logs does not
+# carry SDT's bytes, which is the whole point of the feature set.
+mars-sdt = { workspace = true, optional = true }
+# The task pipeline, behind a feature of its own, for the same reason.
+mars-stn = { workspace = true, optional = true }
+
+# What the C ABI carries, named: the Apple artifact is built `--no-default-features
+# --features xlog`, so it is xlog by construction and not by the accident of what
+# this crate happens to hold today. When STN and SDT get entry points of their
+# own they go behind features of their own, and the xlog build — which spells its
+# set out and never inherits `default` — keeps carrying xlog alone, which is what
+# lets an app that only logs stay off their bytes.
+[features]
+default = ["xlog"]
+# The appender is xlog's: it is what an app that takes the net features and
+# logs nothing would otherwise carry, and `--no-default-features --features
+# sdt,stn` says so at the graph level as well as the symbol level.
+xlog = ["dep:mars-appender"]
+# The diagnosis' entry points live on the same panic barrier xlog's do — every
+# `mars_sdt_*` is wrapped in `guard`.
+#
+# The two halves are additive and neither takes `xlog` with it, which is what
+# lets the Apple net framework be built `--no-default-features --features
+# sdt,stn`: no `mars_xlog_*` in it, so an app that takes both frameworks links
+# xlog's symbols once. Whoever wants all three spells all three out — the host
+# library of a release does.
+sdt = ["dep:mars-sdt"]
+# The task pipeline's entry points: the same panic barrier, spelled out the same
+# way.
+stn = ["dep:mars-stn"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

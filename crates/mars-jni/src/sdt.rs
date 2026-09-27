@@ -202,59 +202,20 @@ pub fn take_delivered_impl() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// A JSON string field: the C++ writes `iter->ip` straight into the document,
-/// so a quote or a newline in a domain name — and the domain names come from
-/// the caller — used to break the whole report.
-fn json_string(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for char in value.chars() {
-        match char {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            control if control < ' ' => out.push_str(&format!("\\u{:04x}", control as u32)),
-            _ => out.push(char),
-        }
-    }
-    out.push('"');
-    out
-}
-
-/// `SdtManagerJniCallback::ReportNetCheckResult()` — the JSON the app gets
-/// through `SdtLogic.reportSignalDetectResults`, field for field the C++'s,
-/// with the string fields escaped (`json_string`).
+/// `SdtManagerJniCallback::ReportNetCheckResult()` — hands a finished diagnosis
+/// over: the JSON [`mars_sdt::report_json`] builds goes to Java, and a copy
+/// stays here for the host ([`take_delivered_impl`]) and for the tests, which
+/// have no JVM to hand it to.
+///
+/// This is the call the C++ makes from inside `ReportNetCheckResult`, so a
+/// diagnosis that ends is never just buffered: it reaches the app's
+/// `SdtLogic.ICallBack` (or is recorded, when there is no JVM yet).
+///
+/// The document itself is [`mars_sdt`]'s: the fields are
+/// [`CheckResultProfile`]'s, and the C ABI hands the same one over, so both
+/// seams spell a report the same way.
 pub fn report_json_impl(check_results: &[CheckResultProfile]) -> String {
-    let mut json = String::from("{\"details\":[");
-    for (index, result) in check_results.iter().enumerate() {
-        if index > 0 {
-            json.push(',');
-        }
-        json.push_str(&format!(
-            "{{\"detectType\":{},\"errorCode\":{},\"networkType\":{},\"detectIP\":{},\"port\":{},\"conntime\":{},\"rtt\":{},\"rttStr\":{},\"httpStatusCode\":{},\"pingCheckCount\":{},\"pingLossRate\":{},\"dnsDomain\":{},\"localDns\":{},\"dnsIP1\":{},\"dnsIP2\":{}}}",
-            result.netcheck_type,
-            result.error_code,
-            result.network_type,
-            json_string(&result.ip),
-            result.port,
-            result.conntime,
-            result.rtt,
-            json_string(&result.rtt_str),
-            result.status_code,
-            result.checkcount,
-            json_string(&result.loss_rate),
-            json_string(&result.domain_name),
-            json_string(&result.local_dns),
-            json_string(&result.ip1),
-            json_string(&result.ip2),
-        ));
-    }
-    json.push_str("]}");
-    json
+    mars_sdt::report_json(check_results)
 }
 
 /// `SdtLogic.getLoadLibraries`.

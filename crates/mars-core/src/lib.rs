@@ -14,9 +14,11 @@
 #![deny(unsafe_code)]
 
 pub mod autobuffer;
+pub mod localtime;
 pub mod ptrbuffer;
 
 pub use autobuffer::AutoBuffer;
+pub use localtime::{local_hour, local_time, now_secs, LocalTime};
 pub use ptrbuffer::{PtrBuffer, Seek};
 
 /// Little-endian helpers used by the xlog on-disk format.
@@ -53,14 +55,6 @@ pub mod le {
     }
 }
 
-/// Returns the current local hour `0..=23`, used for the xlog header's
-/// begin/end hour fields.
-pub fn local_hour() -> u8 {
-    use chrono::Timelike;
-
-    chrono::Local::now().hour() as u8
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,10 +67,5 @@ mod tests {
         write_u32(&mut buf, 2, 0xdead_beef);
         assert_eq!(read_u16(&buf, 0), 0x1234);
         assert_eq!(read_u32(&buf, 2), 0xdead_beef);
-    }
-
-    #[test]
-    fn local_hour_is_valid() {
-        assert!(local_hour() < 24);
     }
 }

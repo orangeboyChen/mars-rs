@@ -14,7 +14,8 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use chrono::{Datelike, Local, TimeZone};
+use chrono::{Local, TimeZone};
+use mars_core::local_time;
 
 /// `LOG_EXT` in `appender.cc`.
 pub(crate) const LOG_EXT: &str = "xlog";
@@ -42,14 +43,12 @@ pub(crate) fn monotonic_millis() -> u64 {
 }
 
 /// Local calendar date of `_tv_sec` as `(year, month, day)`.
+///
+/// Comes out of [`mars_core::local_time`], so the per-record day-rollover check
+/// costs no `localtime` of its own when another part of the same record already
+/// asked for that second.
 fn local_date_parts(tv_sec: i64) -> (i32, u32, u32) {
-    match Local.timestamp_opt(tv_sec, 0).single() {
-        Some(dt) => {
-            let date = dt.date_naive();
-            (date.year(), date.month(), date.day())
-        }
-        None => (1970, 1, 1),
-    }
+    local_time(tv_sec).date
 }
 
 /// `XloggerAppender::__MakeLogFileNamePrefix` — `<prefix>_<YYYYMMDD>`.
@@ -213,13 +212,7 @@ pub(crate) fn build_stamp() -> (String, String) {
     }
 }
 
-/// The day-rollover check of `XloggerAppender::__OpenLogFile`
-/// (`filetm.tm_year == tcur.tm_year && filetm.tm_mon == ...`).
-pub(crate) fn same_local_day(a: i64, b: i64) -> bool {
-    local_date_parts(a) == local_date_parts(b)
-}
-
-/// `XloggerAppender::__DelTimeoutFile`.
+/// `__DelTimeoutFile`.
 ///
 /// Removes `.xlog` files and the `YYYYMMDD` dump directories that have not been
 /// touched for `_max_alive_time` seconds.

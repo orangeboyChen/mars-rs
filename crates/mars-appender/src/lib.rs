@@ -114,14 +114,53 @@ fn slot() -> &'static Mutex<Option<Arc<Appender>>> {
     APPENDER.get_or_init(|| Mutex::new(None))
 }
 
+/// How many times the slot has been filled or emptied.
+///
+/// Bumped by `appender_open` / `appender_close`, so that [`current`] can tell
+/// whether the appender it cached is still the open one with one shared atomic
+/// load instead of a turn through the slot's lock.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    /// This thread's [`current`]: the appender, tagged with the
+    /// [`GENERATION`] it was read at.
+    static CURRENT: std::cell::RefCell<Option<(u64, Arc<Appender>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// The open appender, if any, as an [`Arc`] clone — so that the caller can do
 /// what it wants with it without holding the slot's lock, which is what the
 /// C++'s unlocked `sg_default_appender` read amounts to.
+///
+/// Cached per thread against [`GENERATION`]: a record asks for the appender at
+/// least once, and a mutex per record is a mutex every logging thread in the
+/// process contends for — one cache line they all write, which is the one
+/// thing the write path is otherwise built to avoid (the formatting runs
+/// unlocked, and the C++ reads its `sg_default_appender` with no lock at all).
+/// The generation is a load nobody writes to, so N threads no longer share a
+/// line here; the lock is taken only when the appender actually changed.
 fn current() -> Option<Arc<Appender>> {
-    slot()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone()
+    let generation = GENERATION.load(Ordering::Acquire);
+    CURRENT.with(|cell| {
+        let mut cached = cell.borrow_mut();
+        if let Some((cached_generation, appender)) = &*cached {
+            if *cached_generation == generation {
+                return Some(Arc::clone(appender));
+            }
+        }
+
+        // Either nothing was cached yet, or the appender behind it was closed
+        // or replaced: ask the slot. `None` is cached as `None`, so a closed
+        // appender is not held alive by every thread that ever logged.
+        let fresh = slot()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        *cached = fresh
+            .as_ref()
+            .map(|appender| (generation, Arc::clone(appender)));
+        fresh
+    })
 }
 
 /// `XloggerAppender::NewInstance` — one appender per `XloggerCategory`, as in
@@ -302,6 +341,10 @@ pub fn appender_open(config: XLogConfig) -> Result<(), AppenderError> {
     )?;
     appender.set_console_log(CONSOLE_LOG_OPEN.load(Ordering::Relaxed));
     *slot = Some(Arc::new(appender));
+    // After the slot, so that a thread that sees the new generation also sees
+    // the appender that came with it — and one that does not yet keeps using
+    // whatever it had, which is still a perfectly good appender.
+    GENERATION.fetch_add(1, Ordering::AcqRel);
     Ok(())
 }
 
@@ -340,6 +383,7 @@ pub fn appender_close() {
     let Some(appender) = lock_slot().take() else {
         return;
     };
+    GENERATION.fetch_add(1, Ordering::AcqRel);
     appender.close();
 }
 

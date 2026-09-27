@@ -522,6 +522,8 @@ dependencies = [
  "flate2",
  "mars-appender",
  "mars-buffer",
+ "mars-sdt",
+ "mars-stn",
  "tempfile",
 ]
 

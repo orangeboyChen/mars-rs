@@ -2,17 +2,29 @@ name: Release
 
 # One release for every platform:
 #
-#   * MarsRS.xcframework.zip       -> the binary target of Package.swift (SPM)
+#   * MarsRSXlog.xcframework.zip   -> the xlog binary target of Package.swift
+#   * MarsRSNet.xcframework.zip    -> the net one (the diagnosis and the tasks)
 #   * mars-core.aar              -> JitPack: io.github.orangeboyChen:mars-rs
 #   * mars-xlog.aar              -> JitPack: io.github.orangeboyChen:mars-rs-xlog
 #   * mars-android-native.zip    -> the .so files, for a consumer's own AAR
 #   * mars-rs-<version>-<host>.tar.gz / .zip -> the C ABI for Linux/macOS/Windows
+#
+# The steps that outgrew a `run:` block are `.github/scripts/`: no one runs them
+# by hand, and they are of a piece with the workflows that call them. `scripts/`
+# keeps what a developer runs to build a package — README's "Building the
+# packages" is those two.
 #
 # Trigger it by hand (Actions -> Release -> Run workflow):
 #
 #   * version: the version, typed out — "1.2.3", "v1.2.3-alpha.1", "0.2.0-beta.2"
 #   * bump + prerelease: "the next patch, as the second alpha", which is what
 #     the sequence v1.2.4-alpha.1 -> v1.2.4-alpha.2 -> v1.2.4 is made of
+#
+# The number counts on only while it is that version being worked towards: as
+# long as no stable v1.2.4 is out, the next alpha is v1.2.4-alpha.3, and the
+# bump is what it would be applied to. A v1.2.4 that *is* out already sends the
+# bump to v1.2.5, whose first alpha is v1.2.5-alpha.1 — the number belongs to
+# the version, not to the repository.
 #
 # The tag is the version with a "v" in front: v1.2.3, v1.2.3-alpha.1,
 # v1.2.3-beta.2. Anything with a suffix is published as a GitHub pre-release.
@@ -54,15 +66,26 @@ on:
           - alpha
           - beta
       prerelease:
-        description: 'Number of the pre-release: alpha.2, beta.3 … (empty = the next one)'
+        description: 'Number only: 2 for alpha.2, 3 for beta.3 … (empty = the next one)'
         required: false
+
+# Two releases at once race over the same tag and over the same
+# `chore/package-swift-<tag>` branch, so the second waits for the first instead
+# of running beside it — and it is not cancelled, because by the time it starts
+# the tag it was going to create may already be out.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
   pull-requests: write
 
 env:
-  XCFRAMEWORK_ZIP: MarsRS.xcframework.zip
+  XCFRAMEWORK_ZIP: MarsRSXlog.xcframework.zip
+  # the same slices over the other feature set: `mars_sdt_*` and `mars_stn_*`
+  # and no `mars_xlog_*`, so an app that takes both links xlog's once
+  XCFRAMEWORK_NET_ZIP: MarsRSNet.xcframework.zip
   NATIVE_ZIP: mars-android-native.zip
   # the whole port, and xlog alone: the pair the C++ project publishes as
   # `mars-core` and `mars-xlog`
@@ -89,7 +112,6 @@ jobs:
       prerelease: ${{ steps.resolve.outputs.prerelease }}
       is_new: ${{ steps.resolve.outputs.is_new }}
       skip: ${{ steps.resolve.outputs.skip }}
-      assets: ${{ steps.resolve.outputs.assets }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -103,133 +125,10 @@ jobs:
           INPUT_BUMP: ${{ inputs.bump }}
           INPUT_CHANNEL: ${{ inputs.channel }}
           INPUT_PRERELEASE: ${{ inputs.prerelease }}
-        run: |
-          set -euo pipefail
-
-          tags() {
-            # every tag of the shape vX.Y.Z or vX.Y.Z-<suffix>, oldest first.
-            # awk does the filtering so that a repository with no matching tag
-            # yet is an empty list and not a failed pipeline.
-            git ls-remote --tags --refs origin \
-              | awk -F/ '{ tag = $NF
-                           if (tag ~ /^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$/) print tag }' \
-              | sort -V
-          }
-
-          if [ -n "${INPUT_VERSION:-}" ]; then
-            VERSION="${INPUT_VERSION#v}"
-          else
-            TAGS="$(tags)"
-            LAST_STABLE="$(awk '!/[-]/' <<< "$TAGS" | tail -1)"
-            LAST_PRE="$(awk '/[-]/' <<< "$TAGS" | tail -1)"
-            [ -n "$LAST_STABLE" ] || LAST_STABLE=v0.0.0
-
-            # the greater of two tags, and the version one bump past another
-            newest() { printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1; }
-            bump_of() {
-              IFS='.' read -r MAJOR MINOR PATCH <<< "${1#v}"
-              case "${INPUT_BUMP:-patch}" in
-                major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
-                minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
-                patch) PATCH=$((PATCH + 1)) ;;
-              esac
-              echo "$MAJOR.$MINOR.$PATCH"
-            }
-
-            # the version being worked towards: what the last pre-release is
-            # of, as long as no stable release has caught up with it yet
-            PRE_BASE=""
-            if [ -n "$LAST_PRE" ] \
-                && [ "$(newest "${LAST_PRE%%-*}" "$LAST_STABLE")" = "${LAST_PRE%%-*}" ] \
-                && [ "${LAST_PRE%%-*}" != "$LAST_STABLE" ]; then
-              PRE_BASE="${LAST_PRE#v}"
-              PRE_BASE="${PRE_BASE%%-*}"
-            fi
-
-            if [ "${INPUT_CHANNEL:-stable}" = stable ]; then
-              # a pre-release that is out already is promoted to its version:
-              # v1.2.4-alpha.2 -> v1.2.4, and no bump is applied
-              if [ -n "$PRE_BASE" ]; then
-                VERSION="$PRE_BASE"
-              else
-                VERSION="$(bump_of "$LAST_STABLE")"
-              fi
-            else
-              if [ -n "$PRE_BASE" ]; then
-                VERSION="$PRE_BASE"
-              else
-                VERSION="$(bump_of "$LAST_STABLE")"
-              fi
-              # alpha.1, alpha.2 …: what was typed, else one past the last one
-              # of this channel, else the first
-              if [ -n "${INPUT_PRERELEASE:-}" ]; then
-                NUMBER="$INPUT_PRERELEASE"
-              else
-                case "$LAST_PRE" in
-                  *-${INPUT_CHANNEL}.[0-9]*) NUMBER=$((${LAST_PRE##*-${INPUT_CHANNEL}.} + 1)) ;;
-                  *)                         NUMBER=1 ;;
-                esac
-                case "$NUMBER" in '' | *[!0-9]*) NUMBER=1 ;; esac
-              fi
-              VERSION="$VERSION-$INPUT_CHANNEL.$NUMBER"
-            fi
-          fi
-
-          case "$VERSION" in
-            *-*) PRERELEASE=true ;;
-            *)   PRERELEASE=false ;;
-          esac
-          if ! printf '%s' "$VERSION" \
-              | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$'; then
-            echo "::error::'$VERSION' is not X.Y.Z or X.Y.Z-{alpha,beta}[.N]"
-            exit 1
-          fi
-
-          TAG="v$VERSION"
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            IS_NEW=false
-          else
-            IS_NEW=true
-          fi
-
-          # never republish a release that is already out: the SPM checksum in
-          # Package.swift is bound to the zip that was published for the tag.
-          # A release that is missing an asset stays repairable, though, so
-          # "complete" means every one of them.
-          SKIP=false
-          ASSETS="$XCFRAMEWORK_ZIP $NATIVE_ZIP $CORE_AAR $XLOG_AAR"
-          # one archive per host of the matrix below, in the shape that host
-          # packages it in
-          for HOST in x86_64-unknown-linux-gnu:tar.gz aarch64-apple-darwin:tar.gz \
-                      x86_64-pc-windows-msvc:zip; do
-            ASSETS="$ASSETS mars-rs-$VERSION-${HOST%%:*}.${HOST##*:}"
-          done
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            PUBLISHED=$(gh release view "$TAG" --json assets -q '.assets[].name')
-            COMPLETE=true
-            for ASSET in $ASSETS; do
-              grep -qx "$ASSET" <<< "$PUBLISHED" || COMPLETE=false
-            done
-            [ "$COMPLETE" = false ] || SKIP=true
-          fi
-
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
-          echo "is_new=$IS_NEW" >> "$GITHUB_OUTPUT"
-          echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
-          echo "assets=$ASSETS" >> "$GITHUB_OUTPUT"
-          {
-            echo "### Release $TAG"
-            echo ""
-            echo "| | |"
-            echo "|---|---|"
-            echo "| version | \`$VERSION\` |"
-            echo "| tag | \`$TAG\` |"
-            echo "| pre-release | \`$PRERELEASE\` |"
-            echo "| new tag | \`$IS_NEW\` |"
-            echo "| already published | \`$SKIP\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
+        # The arithmetic of it is .github/scripts/release_version.sh, which is the one
+        # thing here worth running on its own: `git ls-remote` and
+        # `gh release view` are all it needs, and both can be stubbed.
+        run: .github/scripts/release_version.sh
 
   apple:
     needs: version
@@ -245,12 +144,14 @@ jobs:
           swift --version 2>/dev/null | head -2
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build the xcframework
+      - name: Build the xcframeworks
         run: scripts/build_xcframework.sh "${{ needs.version.outputs.version }}" dist
       - uses: actions/upload-artifact@v4
         with:
           name: release-apple
-          path: dist/${{ env.XCFRAMEWORK_ZIP }}
+          path: |
+            dist/${{ env.XCFRAMEWORK_ZIP }}
+            dist/${{ env.XCFRAMEWORK_NET_ZIP }}
 
   android:
     needs: version
@@ -263,29 +164,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      # `android-actions/setup-android` is deliberately not used: it installs
-      # the long-removed `tools` SDK package, so its `sdkmanager` call exits
-      # non-zero and the job fails before any Rust code is compiled. What the
-      # runner image ships is enough — the reason orangeboyChen/mars installs
-      # the SDK by hand too.
+      # The NDK, and the SDK platform and the build tools the AAR is assembled
+      # with. `android-actions/setup-android` is deliberately not used, and why
+      # is written down in .github/scripts/install_android_ndk.sh.
       - name: Install the Android SDK components
-        run: |
-          set -euo pipefail
-          SDKMANAGER=$(command -v sdkmanager || true)
-          if [ -z "$SDKMANAGER" ]; then
-            SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1 || true)
-          fi
-          if [ -z "$SDKMANAGER" ]; then
-            echo "::error::sdkmanager not found under $ANDROID_HOME"
-            exit 1
-          fi
-          echo "sdkmanager: $SDKMANAGER"
-          # `yes` is killed by SIGPIPE as soon as sdkmanager stops reading, and
-          # under `pipefail` that 141 would fail the job although sdkmanager
-          # itself succeeded.
-          { yes || true; } | "$SDKMANAGER" --licenses > /dev/null
-          "$SDKMANAGER" --install "platforms;android-34" "build-tools;34.0.0" "ndk;${NDK_VERSION}"
-          test -d "$ANDROID_HOME/ndk/${NDK_VERSION}"
+        run: .github/scripts/install_android_ndk.sh "platforms;android-34" "build-tools;34.0.0"
       - uses: Swatinem/rust-cache@v2
       - name: Build the native libraries
         # `RUSTFLAGS` is not exported here on purpose: an exported one replaces
@@ -342,7 +225,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the C ABI
-        run: cargo build --release -p mars-ffi
+        # `--features sdt,stn`: a host that links the C ABI gets the diagnosis
+        # and the task pipeline too, which is what the Android `.so` carries.
+        # xlog alone is what the Apple artifact is, and it spells its own set
+        # out.
+        run: cargo build --release -p mars-ffi --features sdt,stn
       - name: Package it
         shell: bash
         run: |
@@ -352,6 +239,8 @@ jobs:
           stage="dist/mars-rs-$version-$target"
           mkdir -p "$stage/include" "$stage/lib"
           cp crates/mars-ffi/include/mars_xlog.h "$stage/include/"
+          cp crates/mars-ffi/include/mars_sdt.h "$stage/include/"
+          cp crates/mars-ffi/include/mars_stn.h "$stage/include/"
           cp LICENSE README.md "$stage/"
           for lib in target/release/libmars_ffi.a target/release/libmars_ffi.so \
                      target/release/libmars_ffi.dylib target/release/mars_ffi.lib \
@@ -387,11 +276,14 @@ jobs:
           merge-multiple: true
           path: dist
 
-      - name: Compute the SPM checksum
+      - name: Compute the SPM checksums
         id: checksum
         run: |
-          CHECKSUM=$(swift package compute-checksum "dist/$XCFRAMEWORK_ZIP")
-          echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          # one per binary target of Package.swift: an artifact is bound to the
+          # checksum of the zip it was published as
+          echo "xlog=$(swift package compute-checksum "dist/$XCFRAMEWORK_ZIP")" >> "$GITHUB_OUTPUT"
+          echo "net=$(swift package compute-checksum "dist/$XCFRAMEWORK_NET_ZIP")" >> "$GITHUB_OUTPUT"
 
       - name: Point Package.swift at this release
         if: needs.version.outputs.is_new == 'true'
@@ -399,7 +291,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.version.outputs.tag }}
-          CHECKSUM: ${{ steps.checksum.outputs.checksum }}
+          CHECKSUM: ${{ steps.checksum.outputs.xlog }}
+          CHECKSUM_NET: ${{ steps.checksum.outputs.net }}
         run: |
           set -euo pipefail
           BRANCH="chore/package-swift-$TAG"
@@ -408,14 +301,10 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$BRANCH"
 
-          python3 - "$TAG" "$CHECKSUM" <<'PY'
-          import re, sys
-          tag, checksum = sys.argv[1], sys.argv[2]
-          src = open('Package.swift').read()
-          src = re.sub(r'releases/download/[^/]+/', 'releases/download/%s/' % tag, src)
-          src = re.sub(r'checksum: "[a-f0-9]+"', 'checksum: "%s"' % checksum, src)
-          open('Package.swift', 'w').write(src)
-          PY
+          # One url and one checksum per artifact; the rewrite is
+          # .github/scripts/update_package_swift.py.
+          python3 .github/scripts/update_package_swift.py "$TAG" "$CHECKSUM" "$XCFRAMEWORK_ZIP" \
+                     "$CHECKSUM_NET" "$XCFRAMEWORK_NET_ZIP"
 
           git commit -am "chore: point Package.swift at $TAG"
           # force: rerunning the same version reuses the branch and its PR
@@ -432,8 +321,8 @@ jobs:
           | | |
           |---|---|
           | tag | \`$TAG\` |
-          | SPM checksum | \`$CHECKSUM\` |
-          | binary | \`$XCFRAMEWORK_ZIP\` |
+          | $XCFRAMEWORK_ZIP | \`$CHECKSUM\` |
+          | $XCFRAMEWORK_NET_ZIP | \`$CHECKSUM_NET\` |
 
           The release and the \`$TAG\` tag are published from this branch, so SPM
           resolves the new \`Package.swift\` from the tag. Merging only keeps
@@ -499,91 +388,11 @@ jobs:
 
       - name: Trigger the JitPack build
         # JitPack builds lazily, so nothing would publish the AAR until a
-        # consumer asks for it. Kick the build off once the release assets are
-        # online and wait for the answer.
+        # consumer asks for it. .github/scripts/jitpack_build.sh kicks the build off
+        # once the release assets are online and waits for the answer.
         env:
           TAG: ${{ needs.version.outputs.tag }}
-        run: |
-          set -euo pipefail
-          # the group the AARs are published under, and the one JitPack always
-          # answers for; both name the same repository, and one build of it
-          # publishes both modules
-          TRIGGERED=""
-          for REPO in "$JITPACK_GROUP.$JITPACK_ARTIFACT" "com.github.orangeboyChen.mars-rs"; do
-            URL="https://jitpack.io/api/builds/$REPO/$TAG"
-            if curl -sSfL "$URL" > /dev/null; then
-              echo "asked jitpack.io to build $REPO $TAG"
-              TRIGGERED="$URL"
-              break
-            fi
-          done
-          if [ -z "$TRIGGERED" ]; then
-            echo "::error::jitpack.io answered none of the build requests for $TAG"
-            exit 1
-          fi
-          LOG="https://jitpack.io/$JITPACK_GROUP.$JITPACK_ARTIFACT/$TAG/build.log"
-          status() {
-            # a build that has not started yet answers 404; that is not a
-            # failure, it is a build to wait for
-            curl -sSfL "$TRIGGERED" 2>/dev/null | python3 -c '
-          import json, os, sys
-
-          try:
-              doc = json.load(sys.stdin)
-          except ValueError:
-              sys.exit(0)
-
-          # the version as tagged, and as JitPack writes it without the "v"
-          wanted = {os.environ["TAG"], os.environ["TAG"].lstrip("v")}
-          found = ""
-
-          def walk(node):
-              global found
-              if isinstance(node, dict):
-                  for key, value in node.items():
-                      if key in wanted and isinstance(value, str):
-                          found = value
-                      else:
-                          walk(value)
-              elif isinstance(node, list):
-                  for item in node:
-                      walk(item)
-
-          walk(doc)
-          print(found)'
-          }
-          for i in $(seq 1 40); do
-            STATE=$(status || true)
-            echo "JitPack $TAG: ${STATE:-unknown}"
-            case "$(printf '%s' "$STATE" | tr '[:upper:]' '[:lower:]')" in
-              ok)
-                echo "JitPack build succeeded"
-                # an "ok" build is not proof that both AARs resolve: check each
-                # one, over the group spellings and the two versions JitPack
-                # answers for. A warning and not an error — the release is
-                # published either way, and the URL convention is JitPack's.
-                for ARTIFACT in "$JITPACK_ARTIFACT" "$JITPACK_ARTIFACT_XLOG"; do
-                  FOUND=""
-                  for GROUP in "$JITPACK_GROUP" "com.github.orangeboyChen.mars-rs"; do
-                    for VERSION in "$TAG" "${TAG#v}"; do
-                      URL="https://jitpack.io/$(printf '%s' "$GROUP" | tr '.' '/')/$ARTIFACT/$VERSION/$ARTIFACT-$VERSION.aar"
-                      if curl -sSfLo /dev/null "$URL"; then
-                        echo "resolved $GROUP:$ARTIFACT:$VERSION"
-                        FOUND="$URL"
-                      fi
-                    done
-                  done
-                  [ -n "$FOUND" ] || echo "::warning::$ARTIFACT did not resolve on jitpack.io for $TAG, see $LOG"
-                done
-                exit 0 ;;
-              error)
-                echo "::error::JitPack build failed, see $LOG"
-                curl -sSfL "$LOG" | tail -40 || true
-                exit 1 ;;
-            esac
-            sleep 30
-          done
-          echo "::warning::JitPack is still building after 20 minutes, see $LOG"
+        run: .github/scripts/jitpack_build.sh
 
       - name: Summary
         env:
@@ -596,7 +405,10 @@ jobs:
             echo ".package(url: \"https://github.com/orangeboyChen/mars-rs\", from: \"${TAG#v}\")"
             echo '```'
             echo ""
-            echo "SPM checksum: \`${{ steps.checksum.outputs.checksum }}\`"
+            # one per binary target: the checksum a consumer's `swift package
+            # resolve` checks is the one of the zip it downloads
+            echo "SPM checksum, $XCFRAMEWORK_ZIP: \`${{ steps.checksum.outputs.xlog }}\`"
+            echo "SPM checksum, $XCFRAMEWORK_NET_ZIP: \`${{ steps.checksum.outputs.net }}\`"
             echo ""
             echo "Package.swift PR: ${{ steps.package.outputs.pr || 'not needed, the tag exists already' }}"
             echo ""
