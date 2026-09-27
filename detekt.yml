@@ -7,7 +7,7 @@
 # this port, or a rule the port cannot answer without changing what it does.
 #
 # `build.maxIssues: 0` is the gate: one finding fails the job. The versions of
-# the tool are pinned in lint.yml, and the reasons below are the point of the
+# the tool are pinned in lint-kotlin.yml, and the reasons below are the point of the
 # file — a rule taken out without one is a rule nobody remembers to revisit.
 
 build:

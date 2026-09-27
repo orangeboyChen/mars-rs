@@ -1,14 +1,18 @@
 name: Rust
 
 # Build / lint / test gate of the xlog workspace: rustfmt, clippy, the test
-# suite on Linux/macOS/Windows (debug and release), cargo doc, the coverage
-# floor, and the Android, HarmonyOS and Apple cross builds of the FFI and
-# JNI crates.
+# suite on Linux/macOS/Windows (debug and release) with the coverage floor
+# measured on the Linux one, cargo doc, and the Android, HarmonyOS and Apple
+# cross builds of the FFI and JNI crates.
 #
 # There is no release build of its own: `cargo test --workspace --release`
 # compiles the whole workspace in the release profile on each of the three
 # hosts already, and the one thing a build job asked for besides that compile —
-# the `sdt,stn` set with xlog off — is a `cargo build` in `lint`.
+# the `sdt,stn` set with xlog off — is a `cargo build` in `lint`. Nor is there
+# a coverage job of its own: it is `cargo test` again under `cargo llvm-cov`,
+# on the same host and over the same workspace, so it is a step of the Linux
+# `test` job rather than a fourth runner with the same checkout and the same
+# toolchain on it.
 #
 # Every cross target of a platform shares one runner instead of taking one
 # each: each of them is the same `cargo build` of the same crate, and four in
@@ -18,10 +22,48 @@ name: Rust
 # a pull request's job at all.
 
 on:
+  # What cargo reads, and only that: a pull request that rewrites the Kotlin
+  # of the AAR or the Swift of the package has nothing to say to `cargo test`,
+  # and seven jobs on four runners is not what it should pay to hear it. The
+  # list is what the build takes as an input — the sources, the manifests, the
+  # lock, the config that sets `RUSTFLAGS`, the two lints' own configuration,
+  # the one script this workflow runs — plus the workflow itself, so that a
+  # change here is proved here.
+  #
+  # Anything new that a build or a test reads belongs in both lists: a path
+  # that is missing does not fail loudly, it simply never starts.
   push:
     branches:
       - main
+    paths:
+      - crates/**
+      - '**/*.rs'
+      - Cargo.toml
+      - '**/Cargo.toml'
+      - Cargo.lock
+      - .cargo/**
+      - clippy.toml
+      - rustfmt.toml
+      - .gitattributes
+      - .github/scripts/**
+      - scripts/build_harmony.sh
+      - .github/workflows/rust.yml
   pull_request:
+    paths:
+      - crates/**
+      - '**/*.rs'
+      - Cargo.toml
+      - '**/Cargo.toml'
+      - Cargo.lock
+      - .cargo/**
+      - clippy.toml
+      - rustfmt.toml
+      - .gitattributes
+      - .github/scripts/**
+      - scripts/build_harmony.sh
+      - .github/workflows/rust.yml
+  # Not filtered: a dispatch is a person asking for the whole gate, whatever
+  # the last commit touched.
   workflow_dispatch:
 
 # A push supersedes the run it interrupts, so the older one is cancelled: only
@@ -87,7 +129,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Only the host that goes on to measure coverage needs the profiler
+          # runtime; an empty `components` installs nothing.
+          components: ${{ matrix.os == 'ubuntu-latest' && 'llvm-tools-preview' || '' }}
       - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-llvm-cov
+        if: matrix.os == 'ubuntu-latest'
+        uses: taiki-e/install-action@cargo-llvm-cov
       - name: cargo test
         run: cargo test --workspace --all-targets
       - name: cargo test (release)
@@ -98,6 +147,21 @@ jobs:
         run: cargo test -p mars-ffi --features sdt
       - name: cargo test (stn)
         run: cargo test -p mars-ffi --features stn
+      # 90 % of the lines, measured over everything `cargo test` can reach.
+      # One host is enough — the coverage of a test is a fact about the test,
+      # and not about the machine it ran on — and this one is already the
+      # cheapest: the workspace is compiled here three times over by now.
+      #
+      # mars-jni/src/jni_bridge.rs is left out on purpose: it is the JVM
+      # boundary and needs a live JNIEnv, so only the Android AAR exercises it.
+      # The logic behind those entry points lives in the crate root and *is*
+      # measured.
+      - name: Measure line coverage
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo llvm-cov --workspace --all-features --summary-only \
+            --ignore-filename-regex 'mars-jni/src/jni_bridge\.rs' \
+            --fail-under-lines 90
 
   android:
     name: build (android)
@@ -123,12 +187,12 @@ jobs:
           # both ABIs, in one job: see the comment on the build step
           targets: aarch64-linux-android, armv7-linux-androideabi
       # `android-actions/setup-android` is intentionally not used, and why is
-      # written down in scripts/install_android_ndk.sh: it installs the
+      # written down in .github/scripts/install_android_ndk.sh: it installs the
       # long-removed `tools` SDK package, so its `sdkmanager` call exits
       # non-zero and the job fails before any Rust code is compiled. The SDK
       # (and its `sdkmanager`) that the runner image already provides is enough.
       - name: Install the Android NDK
-        run: scripts/install_android_ndk.sh
+        run: .github/scripts/install_android_ndk.sh
       - uses: Swatinem/rust-cache@v2
       # `zstd-sys` compiles C, so both cc-rs and rustc need the NDK clang. The
       # two of them spell the env var prefixes differently, so the names are
@@ -245,24 +309,3 @@ jobs:
           components: rust-src
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p mars-ffi --target arm64_32-apple-watchos -Z build-std=std,panic_abort
-
-  coverage:
-    name: coverage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-      - uses: taiki-e/install-action@cargo-llvm-cov
-      - uses: Swatinem/rust-cache@v2
-      # 90 % of the lines, measured over everything `cargo test` can reach.
-      # mars-jni/src/jni_bridge.rs is left out on purpose: it is the JVM
-      # boundary and needs a live JNIEnv, so only the Android AAR exercises it.
-      # The logic behind those entry points lives in the crate root and *is*
-      # measured.
-      - name: Measure line coverage
-        run: |
-          cargo llvm-cov --workspace --all-features --summary-only \
-            --ignore-filename-regex 'mars-jni/src/jni_bridge\.rs' \
-            --fail-under-lines 90

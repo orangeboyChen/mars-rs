@@ -45,9 +45,11 @@ is no safe API for creating a mapping) and the one `JString::from_raw` of
 
 ## Lint
 
-One gate per language, and each of them fails on the first finding.
-`.github/workflows/lint.yml` runs the Swift and the Kotlin gate on every push
-and pull request; `rust.yml` runs the Rust one.
+One gate per language, and each of them fails on the first finding:
+`.github/workflows/lint-swift.yml` and `lint-kotlin.yml` run the Swift and the
+Kotlin gate, `rust.yml` runs the Rust one. Each of the three starts on what it
+reads and not on every push: a pull request with no Swift in it does not pay
+for a macOS runner, and one with no Kotlin in it does not pay for a JDK.
 
 | Language | Tools | Configuration |
 | --- | --- | --- |
@@ -434,6 +436,10 @@ scripts/build_android.sh dist/native      # <abi>/libmarsxlog.so
 # the .so of dist/native has to be under android/<module>/libs first
 (cd android && ./gradlew :mars-core:assembleRelease :mars-xlog:assembleRelease)
 ```
+
+The scripts that only a workflow runs — resolving the version, installing the
+NDK on a runner, waiting for JitPack, rewriting `Package.swift` — are in
+`.github/scripts/`.
 
 ## License
 
