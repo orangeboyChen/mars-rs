@@ -22,7 +22,7 @@ scripts/build_harmony.sh dist/harmony   # <abi>/libmars_ffi.so
    MarsXLogConfig config = {
        .mode = MarsAppenderAsync,
        .log_dir = log_dir,      /* 应用的 files 目录 */
-       .name_prefix = "Ham",
+       .name_prefix = "marsrs",
        .compress_mode = MarsCompressZlib,
    };
    mars_xlog_open(&config);

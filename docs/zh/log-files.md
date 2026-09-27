@@ -8,8 +8,8 @@
 <logDir>/<namePrefix>_YYYYMMDD.xlog
 ```
 
-`XlogConfig(logDir = "/data/…/xlog/log", namePrefix = "Ham")` 写出的就是
-`Ham_20260927.xlog`。目录不存在时会创建；前缀是这个 appender 的身份 —— 两个
+`XlogConfig(logDir = "/data/…/xlog/log", namePrefix = "marsrs")` 写出的就是
+`marsrs_20260927.xlog`。目录不存在时会创建；前缀是这个 appender 的身份 —— 两个
 appender 用了同一个前缀就写同一个文件，关掉其中一个，另一个也就写不了了。
 哪一块日志要单独读取，就给它一个自己的前缀。
 
@@ -84,18 +84,18 @@ mars_xlog_flush_sync();
 ::: code-group
 
 ```bash [命令行]
-xlog-compat decode --privkey=<hex> --in=Ham_20260927.xlog --out=Ham.plain
+xlog-compat decode --privkey=<hex> --in=marsrs_20260927.xlog --out=marsrs.plain
 ```
 
 ```rust [Rust]
 use marsrs::xlog::{get_period_logs, LogBuffer};
 
 // 某一天两个小时之间的那些记录的字节范围
-let (begin, end) = get_period_logs(std::path::Path::new("Ham_20260927.xlog"), 0, 24)?;
+let (begin, end) = get_period_logs(std::path::Path::new("marsrs_20260927.xlog"), 0, 24)?;
 ```
 
 ```python [上游的工具]
-python3 decode_mars_log_file.py Ham_20260927.xlog      # Tencent/mars
+python3 decode_mars_log_file.py marsrs_20260927.xlog      # Tencent/mars
 ```
 
 :::

@@ -45,7 +45,7 @@ use marsrs::xlog::{appender_close, appender_flush_sync, appender_open, appender_
 
 let mut config = XLogConfig::default();
 config.logdir = std::path::PathBuf::from("/tmp/mars-log");
-config.nameprefix = "Ham".to_owned();
+config.nameprefix = "marsrs".to_owned();
 appender_open(config)?;
 
 appender_write(None, "hello from mars");
@@ -58,7 +58,7 @@ appender_close();
 val xlog = Xlog(
     XlogConfig(
         logDir = File(context.filesDir, "xlog/log").path,
-        namePrefix = "Ham",
+        namePrefix = "marsrs",
         level = LogLevel.INFO,
     )
 )
@@ -67,7 +67,7 @@ xlog.i("startup", "cold start in $elapsedMillis ms")
 xlog.flush(sync = true)
 ```
 
-The file is `<logDir>/<namePrefix>_YYYYMMDD.xlog` — `Ham_20260927.xlog` above.
+The file is `<logDir>/<namePrefix>_YYYYMMDD.xlog` — `marsrs_20260927.xlog` above.
 The default mode is async, so a record can sit in the cache for a moment: flush
 before the file is read or uploaded, and again before the process goes away.
 Every option, and its name on each platform, is on

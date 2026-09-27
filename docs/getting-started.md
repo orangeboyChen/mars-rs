@@ -54,7 +54,7 @@ use marsrs::xlog::{appender_close, appender_flush_sync, appender_open, appender_
 
 let mut config = XLogConfig::default();
 config.logdir = std::path::PathBuf::from("/tmp/mars-log");
-config.nameprefix = "Ham".to_owned();
+config.nameprefix = "marsrs".to_owned();
 appender_open(config)?;
 
 appender_write(None, "hello from mars");
@@ -69,7 +69,7 @@ import MarsRSXlog
 let log = try Xlog(
     XlogConfig(
         logDirectory: logDirectory.path,
-        namePrefix: "Ham",
+        namePrefix: "marsrs",
         level: .info
     )
 )
@@ -84,7 +84,7 @@ log.flush(sync: true)    // the records are on disk when this returns
 val xlog = Xlog(
     XlogConfig(
         logDir = File(context.filesDir, "xlog/log").path,
-        namePrefix = "Ham",
+        namePrefix = "marsrs",
         level = LogLevel.INFO,
     )
 )
@@ -99,7 +99,7 @@ xlog.flush(sync = true)  // the records are on disk when this returns
 Xlog.open(
     XlogConfig(
         logDir = logDirectory,
-        namePrefix = "Ham",
+        namePrefix = "marsrs",
         level = LogLevel.Info,
     )
 )
@@ -116,7 +116,7 @@ Xlog.close()
 MarsXLogConfig config = {
     .mode = MarsAppenderAsync,
     .log_dir = "/tmp/mars-log",
-    .name_prefix = "Ham",
+    .name_prefix = "marsrs",
     .compress_mode = MarsCompressZlib,
 };
 if (mars_xlog_open(&config) != MARS_XLOG_OK) { /* see the return code */ }
@@ -132,7 +132,7 @@ mars_xlog_close();
 ## 3. Find the files
 
 An appender writes `<namePrefix>_YYYYMMDD.xlog` into the log directory you gave
-it — `/tmp/mars-log/Ham_20260927.xlog` above. The default mode is async, so a
+it — `/tmp/mars-log/marsrs_20260927.xlog` above. The default mode is async, so a
 record can sit in the cache for a moment: **flush before you read or upload**, and
 again before the process goes away. See [log files](/log-files).
 

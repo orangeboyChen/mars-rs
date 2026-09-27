@@ -22,7 +22,7 @@ use marsrs::xlog::{appender_close, appender_flush_sync, appender_open, appender_
 
 let mut config = XLogConfig::default();
 config.logdir = std::path::PathBuf::from("/tmp/mars-log");
-config.nameprefix = "Ham".to_owned();
+config.nameprefix = "marsrs".to_owned();
 appender_open(config)?;
 
 appender_write(None, "hello from mars");
@@ -99,7 +99,7 @@ let path = appender_get_current_log_path();
 ```rust
 use marsrs::xlog::{get_period_logs, LogBuffer};
 
-let (begin, end) = get_period_logs(std::path::Path::new("Ham_20260927.xlog"), 0, 24)?;
+let (begin, end) = get_period_logs(std::path::Path::new("marsrs_20260927.xlog"), 0, 24)?;
 ```
 
 `LogBuffer` is the decoder; see [log files](/log-files).

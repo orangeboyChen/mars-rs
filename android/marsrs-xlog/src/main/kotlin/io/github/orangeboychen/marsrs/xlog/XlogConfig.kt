@@ -12,7 +12,7 @@ package io.github.orangeboychen.marsrs.xlog
  *     XlogConfig(
  *         logDir = File(context.filesDir, "xlog/log").path,
  *         cacheDir = File(context.filesDir, "xlog/cache").path,
- *         namePrefix = "Ham",
+ *         namePrefix = "marsrs",
  *         level = LogLevel.INFO,
  *         mode = AppenderMode.ASYNC,
  *     )
@@ -33,7 +33,7 @@ data class XlogConfig @JvmOverloads constructor(
      */
     val logDir: String,
     /**
-     * What every file of this appender starts with (`Ham_20260927.xlog`).
+     * What every file of this appender starts with (`marsrs_20260927.xlog`).
      * The `nameprefix` an instance is looked up by, so an app that opens
      * two of them gives them two names.
      */

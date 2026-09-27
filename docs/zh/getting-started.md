@@ -52,7 +52,7 @@ use marsrs::xlog::{appender_close, appender_flush_sync, appender_open, appender_
 
 let mut config = XLogConfig::default();
 config.logdir = std::path::PathBuf::from("/tmp/mars-log");
-config.nameprefix = "Ham".to_owned();
+config.nameprefix = "marsrs".to_owned();
 appender_open(config)?;
 
 appender_write(None, "hello from mars");
@@ -67,7 +67,7 @@ import MarsRSXlog
 let log = try Xlog(
     XlogConfig(
         logDirectory: logDirectory.path,
-        namePrefix: "Ham",
+        namePrefix: "marsrs",
         level: .info
     )
 )
@@ -82,7 +82,7 @@ log.flush(sync: true)    // 返回时记录已经在磁盘上了
 val xlog = Xlog(
     XlogConfig(
         logDir = File(context.filesDir, "xlog/log").path,
-        namePrefix = "Ham",
+        namePrefix = "marsrs",
         level = LogLevel.INFO,
     )
 )
@@ -97,7 +97,7 @@ xlog.flush(sync = true)  // 返回时记录已经在磁盘上了
 Xlog.open(
     XlogConfig(
         logDir = logDirectory,
-        namePrefix = "Ham",
+        namePrefix = "marsrs",
         level = LogLevel.Info,
     )
 )
@@ -114,7 +114,7 @@ Xlog.close()
 MarsXLogConfig config = {
     .mode = MarsAppenderAsync,
     .log_dir = "/tmp/mars-log",
-    .name_prefix = "Ham",
+    .name_prefix = "marsrs",
     .compress_mode = MarsCompressZlib,
 };
 if (mars_xlog_open(&config) != MARS_XLOG_OK) { /* 看返回码 */ }
@@ -130,7 +130,7 @@ mars_xlog_close();
 ## 3. 文件在哪
 
 appender 把日志写进你给的那个目录，名字是 `<namePrefix>_YYYYMMDD.xlog` —— 上面就是
-`/tmp/mars-log/Ham_20260927.xlog`。默认模式是异步，一条记录可能在缓存里待一会儿：
+`/tmp/mars-log/marsrs_20260927.xlog`。默认模式是异步，一条记录可能在缓存里待一会儿：
 **读文件、上传、以及进程退出前都要 flush**。见[日志文件](/zh/log-files)。
 
 ## 接下来

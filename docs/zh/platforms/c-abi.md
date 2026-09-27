@@ -21,7 +21,7 @@ libmars_ffi.a / libmars_ffi.so（.dylib、.dll）
 MarsXLogConfig config = {
     .mode = MarsAppenderAsync,
     .log_dir = "/tmp/mars-log",
-    .name_prefix = "Ham",
+    .name_prefix = "marsrs",
     .compress_mode = MarsCompressZlib,
     /* .pub_key、.compress_level、.cache_dir、.cache_days —— 见头文件 */
 };
