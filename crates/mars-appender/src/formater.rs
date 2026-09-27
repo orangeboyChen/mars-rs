@@ -20,7 +20,7 @@ use crate::config::{LogLevel, XLoggerInfo};
 /// `levelStrings[]` in `formater.cc` / `ConsoleLog.cc`, plus the one level the
 /// C++ array has no string for: `kLevelNone` is 6 and `kLevelFatal` is the last
 /// entry, so `levelStrings[_info->level]` reads one past the end for it. A
-/// record of that level is not impossible — `Xlog.logWrite2` hands the port
+/// record of that level is not impossible — `Xlog.logWrite` hands the port
 /// whatever `Xlog.LEVEL_*` the caller passed — and the port writes `N` where
 /// the C++ reads out of bounds.
 pub(crate) const LEVEL_STRINGS: [&str; 7] = ["V", "D", "I", "W", "E", "F", "N"];
