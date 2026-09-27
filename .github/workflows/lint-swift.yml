@@ -1,0 +1,80 @@
+name: Lint (Swift)
+
+# The Swift gate. The Kotlin one is lint-kotlin.yml and the Rust one lives in
+# rust.yml: `rustfmt`, `clippy` with `-D warnings`, and the lints of
+# `[workspace.lints]`.
+#
+# Each of the three gates fails on the first finding. `swiftlint lint --strict`
+# turns its warnings into errors, ktlint exits non-zero on any violation, and
+# `detekt.yml` sets `build.maxIssues: 0`. None of them is run with a
+# `--format`/`--auto-correct` flag, because a gate that rewrites what it checks
+# is not a gate.
+#
+# The versions are pinned and the tools are fetched as release artefacts rather
+# than installed by a package manager: Homebrew has no `swiftlint@0.65.1`, and a
+# new SwiftLint release brings new rules with it.
+#
+# It starts on what it reads — `Sources` and its own configuration — and on
+# nothing else: a pull request that touches only `crates/` or only `android/`
+# has no Swift in it, and this is the one gate of the three that has to run on
+# macOS, the host a minute of which is billed at ten times a Linux one.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - Sources/**
+      - .swiftlint.yml
+      - .github/workflows/lint-swift.yml
+  pull_request:
+    paths:
+      - Sources/**
+      - .swiftlint.yml
+      - .github/workflows/lint-swift.yml
+  workflow_dispatch:
+
+# A push supersedes the run it interrupts, so the older one is cancelled. A
+# push to main is never cancelled — every commit of it gets its own green or
+# red.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  SWIFTLINT_VERSION: '0.65.1'
+
+jobs:
+  swiftlint:
+    name: swiftlint (Swift)
+    # The macos image is where the Swift of this package is written for, and the
+    # artefact bundle's macos binary is the one for it; the linux binaries need a
+    # Swift runtime the ubuntu image does not carry.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A Swift 6 toolchain is what lints the sources, and it changes nothing
+      # about what is shipped: `scripts/build_xcframework.sh` compiles no Swift
+      # at all (it runs cargo and then `xcodebuild -create-xcframework`), and
+      # Package.swift stays at swift-tools-version 5.9 so that a Swift 5 project
+      # can still depend on the package. Raising `swift-tools-version` is what
+      # would put the floor at Xcode 16 — not the toolchain doing the linting.
+      - name: Swift version
+        run: swift --version
+      # The tools are run out of the workspace rather than installed into
+      # /usr/local/bin, which the runner account cannot write to on ubuntu.
+      - name: Install SwiftLint ${{ env.SWIFTLINT_VERSION }}
+        run: |
+          set -euo pipefail
+          curl -sSfL -o swiftlint.zip \
+            "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/SwiftLintBinary.artifactbundle.zip"
+          unzip -q swiftlint.zip
+          mv SwiftLintBinary.artifactbundle/macos/swiftlint ./swiftlint
+          chmod +x ./swiftlint
+          ./swiftlint version
+      # `.swiftlint.yml` says what is linted (`Sources`) and which opt-in rules
+      # run on top of the defaults; `--strict` is what fails the job.
+      - run: ./swiftlint lint --strict
