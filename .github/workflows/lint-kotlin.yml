@@ -14,8 +14,8 @@ name: Lint (Kotlin)
 # than installed by a package manager, so that a new release of either — and
 # the new rules it brings — is a change made here on purpose.
 #
-# It reads `android/` and the two configuration files the tools are told to
-# use, and nothing else: a pull request that touches neither is not a Kotlin
+# It reads `android/` and `kmp/`, the two configuration files the tools are told
+# to use, and nothing else: a pull request that touches neither is not a Kotlin
 # pull request, whatever else it is. So `kotlin` skips when the commit touches
 # none of them — see the comment on `changes`.
 
@@ -62,8 +62,11 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.after || github.sha }}
         run: |
+          # `kmp/**` is the Kotlin Multiplatform build: the same two tools hold
+          # it to the same configuration, so it is a Kotlin source tree like
+          # `android/` is.
           .github/scripts/changed_paths.sh \
-            'android/**' 'detekt.yml' '.editorconfig' '.github/scripts/**' \
+            'android/**' 'kmp/**' 'detekt.yml' '.editorconfig' '.github/scripts/**' \
             '.github/workflows/lint-kotlin.yml'
 
   kotlin:
@@ -90,13 +93,15 @@ jobs:
             "https://github.com/detekt/detekt/releases/download/v${DETEKT_VERSION}/detekt-cli-${DETEKT_VERSION}-all.jar"
       # `.editorconfig` is the whole of ktlint's configuration: the
       # `android_studio` code style, the 120-column line and the end-of-file
-      # rules. ktlint exits non-zero on any violation.
-      - run: ./ktlint --relative 'android/**/*.kt' 'android/**/*.kts'
+      # rules. ktlint exits non-zero on any violation. `kmp/` is the Kotlin
+      # Multiplatform build: the same style, and the same `.editorconfig`.
+      - run: ./ktlint --relative 'android/**/*.kt' 'android/**/*.kts' 'kmp/**/*.kt' 'kmp/**/*.kts'
       # `--build-upon-default-config`: detekt.yml names only what differs from
       # detekt's own defaults, and its `build.maxIssues: 0` is what fails the
-      # job.
+      # job. The main sources, and not the test ones: the same line the android
+      # modules are held to.
       - run: |
           java -jar detekt-cli-all.jar \
-            --input android/mars-core/src/main/kotlin,android/mars-xlog/src/main/kotlin \
+            --input android/mars-core/src/main/kotlin,android/mars-xlog/src/main/kotlin,kmp/mars-core/src/commonMain/kotlin,kmp/mars-xlog/src/commonMain/kotlin,kmp/mars-xlog/src/androidMain/kotlin,kmp/mars-xlog/src/nativeMain/kotlin \
             --config detekt.yml \
             --build-upon-default-config

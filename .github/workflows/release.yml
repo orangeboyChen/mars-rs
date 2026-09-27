@@ -8,12 +8,19 @@ name: Release
 #   * mars-xlog.aar              -> JitPack: io.github.orangeboyChen:mars-rs-xlog
 #   * mars-android-native.zip    -> the .so files, for a consumer's own AAR
 #   * mars-rs-<version>-<host>.tar.gz / .zip -> the C ABI for Linux/macOS/Windows
+#   * mars-kmp-native.zip    -> the archives the Kotlin module is built out of
+#   * mars-kmp-maven.zip     -> the Kotlin module itself, as a maven repository
 #
 # The steps that outgrew a `run:` block are `.github/scripts/`: no one runs them
 # by hand, and they are of a piece with the workflows that call them. `scripts/`
 # keeps what a developer runs to build a package — README's "Building the
 # packages" is those two.
 #
+# The Kotlin Multiplatform pair is published to GitHub Packages as well, from
+# the `kmp` job. It is one job on macOS and not one per platform, because a
+# Kotlin publication is one artifact per Kotlin target of one module: its module
+# metadata names all of them, so a publication missing one is a publication an
+# app of that platform cannot resolve.
 # Trigger it by hand (Actions -> Release -> Run workflow):
 #
 #   * version: the version, typed out — "1.2.3", "v1.2.3-alpha.1", "0.2.0-beta.2"
@@ -80,6 +87,10 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  # `packages: write` is what lets the `kmp` job publish the Kotlin
+  # Multiplatform pair to GitHub Packages; the default token of a run that does
+  # not ask for it is refused with a 403 at the first `PUT`.
+  packages: write
 
 env:
   XCFRAMEWORK_ZIP: MarsRSXlog.xcframework.zip
@@ -87,6 +98,13 @@ env:
   # and no `mars_xlog_*`, so an app that takes both links xlog's once
   XCFRAMEWORK_NET_ZIP: MarsRSNet.xcframework.zip
   NATIVE_ZIP: mars-android-native.zip
+  # The Kotlin Multiplatform pair: the archives the module is built out of, and
+  # the maven repository it is published as. `mars-kmp-native.zip` is what
+  # `scripts/build_kmp_native.sh` writes for every Kotlin target plus the .so
+  # files of the JNI bridge; `mars-kmp-maven.zip` is the repository itself, for
+  # a consumer who would rather not authenticate to GitHub Packages.
+  KMP_NATIVE_ZIP: mars-kmp-native.zip
+  KMP_MAVEN_ZIP: mars-kmp-maven.zip
   # the whole port, and xlog alone: the pair the C++ project publishes as
   # `mars-core` and `mars-xlog`
   CORE_AAR: mars-core.aar
@@ -97,6 +115,11 @@ env:
   JITPACK_GROUP: io.github.orangeboychen
   JITPACK_ARTIFACT: mars-rs
   JITPACK_ARTIFACT_XLOG: mars-rs-xlog
+  # The Kotlin Multiplatform pair, published to GitHub Packages under the same
+  # group: the whole port and xlog alone, the same two.
+  KMP_GROUP: io.github.orangeboychen
+  KMP_ARTIFACT: mars-rs-kmp
+  KMP_ARTIFACT_XLOG: mars-rs-xlog-kmp
   NDK_VERSION: 27.1.12297006
   ANDROID_HOME: /usr/local/lib/android/sdk
   ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
@@ -261,8 +284,193 @@ jobs:
           name: release-host-${{ matrix.target }}
           path: dist/
 
+  # The native libraries of the Kotlin Multiplatform module, one host per job:
+  # every Apple target on macOS, because an Apple archive cannot be built from
+  # Linux, and Linux and Windows on Linux, where the cross toolchains are.
+  kmp-apple:
+    needs: version
+    if: needs.version.outputs.skip != 'true'
+    runs-on: macos-15
+    env:
+      RUSTFLAGS: '-D warnings'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the Apple archives
+        run: scripts/build_kmp_native.sh dist/kmp-native
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kmp-native-apple
+          path: dist/kmp-native
+
+  kmp-host:
+    needs: [version, android, kmp-apple]
+    if: needs.version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: '-D warnings'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the cross toolchains
+        # `aarch64-linux-gnu-gcc` for the Linux archive of an arm64 machine and
+        # `mingw-w64` for the Windows one: `scripts/build_kmp_native.sh` reads
+        # both out of the environment.
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu mingw-w64
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the Linux and Windows archives
+        run: scripts/build_kmp_native.sh dist/kmp-native
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kmp-native-host
+          path: dist/kmp-native
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      # The Android SDK, for the `androidTarget` of the module: Gradle will not
+      # even configure a project that has one without it, whether or not the
+      # task it is asked for is Android's.
+      - name: Install the Android SDK components
+        run: |
+          set -euo pipefail
+          SDKMANAGER=$(command -v sdkmanager || true)
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1 || true)
+          fi
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::error::no sdkmanager on this image, and the Kotlin Multiplatform module has an Android target"
+            exit 1
+          fi
+          # `yes` is killed by SIGPIPE as soon as sdkmanager stops reading, and
+          # under `pipefail` that 141 would fail the job although sdkmanager
+          # itself succeeded.
+          { yes || true; } | "$SDKMANAGER" --licenses > /dev/null
+          "$SDKMANAGER" --install "platforms;android-36" "build-tools;34.0.0"
+          echo "sdk.dir=$ANDROID_HOME" > kmp/local.properties
+      - name: Collect the JNI libraries
+        uses: actions/download-artifact@v4
+        with:
+          name: release-android
+          path: dist
+      - name: Unpack the JNI libraries
+        run: unzip -q -o "dist/$NATIVE_ZIP" -d kmp/native/android
+      - name: Collect the Apple archives
+        # Every one of them, for a test of the Linux one: cinterop is
+        # commonized, so the klib of a single target cannot be built without the
+        # headers of all thirteen being read — see `kmp/gradle.properties`.
+        uses: actions/download-artifact@v4
+        with:
+          name: kmp-native-apple
+          path: kmp/native
+      - name: Collect the archives of this host
+        run: cp -R dist/kmp-native/. kmp/native/
+      - name: Prove an archive links
+        # The same proof the `kmp` job makes on macOS, for the target this host
+        # can execute: `linuxX64`. It is the only check the Linux linker flags of
+        # `mars_ffi.def` ever get, and the Windows ones get none — there is no
+        # runner that can execute a mingw binary here.
+        run: (cd kmp && ./gradlew --no-daemon :mars-xlog:linuxX64Test)
+
+  # The Kotlin Multiplatform release: `mars-rs-kmp` and `mars-rs-xlog-kmp` as a
+  # maven repository, on GitHub Packages and, as a zip, on the release.
+  #
+  # One job on macOS and not one per target, because a Kotlin Multiplatform
+  # publication is one artifact per target of one module: the module metadata of
+  # `mars-rs-xlog-kmp` names all fourteen of them, so a publication that left
+  # one out is a publication Gradle cannot resolve for the platform it forgot.
+  # macOS is where all fourteen can be built, and it is the only place an Apple
+  # one can.
+  kmp:
+    needs: [version, android, kmp-apple, kmp-host]
+    if: needs.version.outputs.skip != 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install the Android SDK components
+        # The module has an Android target, so every `./gradlew` of it needs the
+        # SDK — the test step as much as the publishing one. The macOS image
+        # ships it under the home directory, which is where Gradle looks for it
+        # once `local.properties` says so.
+        run: |
+          set -euo pipefail
+          android_home="$HOME/Library/Android/sdk"
+          echo "ANDROID_HOME=$android_home" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$android_home" >> "$GITHUB_ENV"
+          sdkmanager=$(ls -d "$android_home"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1 || true)
+          if [ -z "$sdkmanager" ]; then
+            echo "::error::no cmdline-tools under $android_home, and the Kotlin Multiplatform module needs the Android SDK"
+            exit 1
+          fi
+          # `yes` is killed by SIGPIPE as soon as sdkmanager stops reading, and
+          # under `pipefail` that 141 would fail the job although sdkmanager
+          # itself succeeded.
+          { yes || true; } | "$sdkmanager" --licenses > /dev/null
+          "$sdkmanager" --install "platforms;android-36" "build-tools;34.0.0"
+          echo "sdk.dir=$android_home" > kmp/local.properties
+      - name: Collect the native archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: kmp-native-*
+          merge-multiple: true
+          path: kmp/native
+      - name: Collect the JNI libraries
+        uses: actions/download-artifact@v4
+        with:
+          name: release-android
+          path: dist
+      - name: Unpack the JNI libraries
+        run: |
+          set -euo pipefail
+          unzip -q -o "dist/$NATIVE_ZIP" -d kmp/native/android
+          find kmp/native -name '*.a' -o -name '*.so' | sort
+      - name: Prove an archive links
+        # Nothing on the way to Maven links a klib, so without this a wrong
+        # linker flag in mars_ffi.def is a link error in an app a month later
+        # instead of a failed release. It builds and runs the test of the host's
+        # own target: macosArm64 here, the one Kotlin/Native target this runner
+        # can execute.
+        run: (cd kmp && ./gradlew --no-daemon :mars-xlog:macosArm64Test)
+      - name: Publish to GitHub Packages
+        if: needs.version.outputs.is_new == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          (cd kmp && ./gradlew --no-daemon -PpublishedVersion="${{ needs.version.outputs.version }}" \
+            -PmavenUser="$GITHUB_ACTOR" -PmavenPassword="$GITHUB_TOKEN" \
+            :mars-core:publishAllPublicationsToGitHubPackagesRepository \
+            :mars-xlog:publishAllPublicationsToGitHubPackagesRepository)
+      - name: Publish to the local repository
+        # GitHub Packages is immutable — a version it has cannot be overwritten
+        # — so a tag that exists already is only ever republished as the zip.
+        run: |
+          (cd kmp && ./gradlew --no-daemon -PpublishedVersion="${{ needs.version.outputs.version }}" \
+            :mars-core:publishToMavenLocal :mars-xlog:publishToMavenLocal)
+      - name: Package the maven repository
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          (cd "$HOME/.m2/repository/io/github/orangeboychen" \
+            && zip -q -r "$GITHUB_WORKSPACE/dist/$KMP_MAVEN_ZIP" .)
+      - name: Package the native archives
+        run: (cd kmp/native && zip -q -r "$GITHUB_WORKSPACE/dist/$KMP_NATIVE_ZIP" .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-kmp
+          path: |
+            dist/${{ env.KMP_MAVEN_ZIP }}
+            dist/${{ env.KMP_NATIVE_ZIP }}
+
   publish:
-    needs: [version, apple, android, host]
+    needs: [version, apple, android, host, kmp]
     if: needs.version.outputs.skip != 'true'
     # macOS so that the checksum is the one SwiftPM itself computes, the same
     # way orangeboyChen/mars does it
@@ -417,5 +625,12 @@ jobs:
             # coordinate is a maven version, and the tag is not
             echo "implementation(\"$JITPACK_GROUP:$JITPACK_ARTIFACT:${TAG#v}\")"
             echo "implementation(\"$JITPACK_GROUP:$JITPACK_ARTIFACT_XLOG:${TAG#v}\")"
+            echo '```'
+            echo ""
+            echo "Kotlin Multiplatform — every target from `commonMain`, on GitHub Packages:"
+            echo ""
+            echo '```kotlin'
+            echo "implementation(\"$KMP_GROUP:$KMP_ARTIFACT:${TAG#v}\")"
+            echo "implementation(\"$KMP_GROUP:$KMP_ARTIFACT_XLOG:${TAG#v}\")"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
