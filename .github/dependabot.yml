@@ -34,11 +34,17 @@ updates:
     schedule:
       interval: weekly
     # The requirements of Cargo.toml are short on purpose — `memmap2 = "0.9"`
-    # and not `"0.9.5"` — and this is what keeps them that way: a release
-    # already inside the range leaves the manifest alone and moves Cargo.lock,
-    # and a release outside of it (memmap2 0.10) is the only thing that
-    # rewrites the line.
-    versioning-strategy: increase-if-necessary
+    # and not `"0.9.5"` — and `auto`, the default, is what keeps them that
+    # way: a release already inside the range leaves the manifest alone and
+    # moves Cargo.lock, and a release outside of it (memmap2 0.10) is the
+    # only thing that rewrites the line.
+    #
+    # Not `increase-if-necessary`, which is the name of exactly that behaviour
+    # and the value this file used to carry: cargo is not one of the
+    # ecosystems that accept it — Dependabot takes `auto` and `lockfile-only`
+    # here and nothing else — and a value it does not know is not ignored but
+    # fails the parse of the whole file, which is how this one spent its time
+    # updating nothing at all.
     # One pull request a week and not one per crate: minor and patch travel
     # together, while a major stays a pull request of its own, because a major
     # is what does not compile. Security updates are never grouped — they are
