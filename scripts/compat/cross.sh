@@ -66,18 +66,30 @@ while read -r name mode compress sync crypt flush_every file; do
         RUST_CPP=ok
     else
         # The control: the same scenario's golden file — written by the C++
-        # encoders — through the C++ decoder. If that fails too, the decoder is
-        # what cannot read this shape, and the port is not the difference.
+        # encoders — through the C++ decoder. Two things have to hold before
+        # "the decoder cannot read this shape" is a verdict and not an excuse:
+        # the golden file has to fail too, and the two wrong outputs have to be
+        # the *same* wrong bytes. Without the second one, a Rust file that
+        # decodes to something else — nothing at all, a prefix, differently
+        # corrupted bytes — is waved through on the strength of a case the
+        # decoder was already known to fail.
         "$OUT/upstream_decode" "$FIX/$file" "$WORK/$name-control.plain"
         if python3 "$REPO/scripts/compat/check.py" exact "$FIX/expected.bin" \
             "$WORK/$name-control.plain" > /dev/null; then
             RUST_CPP=FAILED
             FAILED=$((FAILED + 1))
             cat "$WORK/$name-rust.diff"
-        else
+        elif python3 "$REPO/scripts/compat/check.py" exact \
+            "$WORK/$name-control.plain" "$WORK/$name-rust.plain" \
+            > "$WORK/$name-control.diff"; then
             RUST_CPP="cpp-decoder"
-            echo "$name: upstream's decoder reads its own golden file the same" \
-                "wrong way, so this is not a difference between the encoders" >&2
+            echo "$name: upstream's decoder reads both files the same wrong" \
+                "way, so this is not a difference between the encoders" >&2
+        else
+            RUST_CPP=FAILED
+            FAILED=$((FAILED + 1))
+            cat "$WORK/$name-rust.diff"
+            cat "$WORK/$name-control.diff"
         fi
     fi
 
