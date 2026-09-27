@@ -123,12 +123,20 @@ for slice in "${slices[@]}"; do
             ;;
     esac
 
+    # `--no-default-features --features xlog` is the whole point of naming the
+    # artifact after xlog: the set the library is built with is spelled out
+    # here, so a feature added to `mars-ffi` later — the `stn` or `sdt` one,
+    # which is where the rest of the port lands — is not in it and cannot leak
+    # into it. What the crate carries by default is irrelevant; this is the
+    # list. The check below then proves the list is what its name says.
     for target in "${slice_targets[@]}"; do
         if [ "$target" = "$build_std_target" ]; then
             cargo +nightly build --release -p mars-ffi --target "$target" \
+                --no-default-features --features xlog \
                 -Z build-std=std,panic_abort
         else
-            cargo build --release -p mars-ffi --target "$target"
+            cargo build --release -p mars-ffi --target "$target" \
+                --no-default-features --features xlog
         fi
     done
 done
