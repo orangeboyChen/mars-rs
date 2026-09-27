@@ -342,7 +342,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the C ABI
-        run: cargo build --release -p mars-ffi
+        # `--features sdt`: a host that links the C ABI gets the diagnosis too,
+        # which is what the Android `.so` carries. xlog alone is what the Apple
+        # artifact is, and it spells its own set out.
+        run: cargo build --release -p mars-ffi --features sdt
       - name: Package it
         shell: bash
         run: |
@@ -352,6 +355,7 @@ jobs:
           stage="dist/mars-rs-$version-$target"
           mkdir -p "$stage/include" "$stage/lib"
           cp crates/mars-ffi/include/mars_xlog.h "$stage/include/"
+          cp crates/mars-ffi/include/mars_sdt.h "$stage/include/"
           cp LICENSE README.md "$stage/"
           for lib in target/release/libmars_ffi.a target/release/libmars_ffi.so \
                      target/release/libmars_ffi.dylib target/release/mars_ffi.lib \

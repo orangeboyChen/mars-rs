@@ -21,8 +21,9 @@
 //! | [`mars_xlog_current_log_path`]      | `mars::xlog::appender_get_current_log_path(char*,unsigned)` |
 //!
 //! The matching C header lives next to this crate at
-//! `crates/mars-ffi/include/mars_xlog.h`; `tests/header_sync.rs` keeps the
-//! two in sync. See `README.md` for link instructions.
+//! `crates/mars-ffi/include/mars_xlog.h` (`include/mars_sdt.h` for the `sdt`
+//! feature); `tests/header_sync.rs` keeps the two in sync. See `README.md` for
+//! link instructions.
 //!
 //! # Safety contract
 //!
@@ -58,6 +59,11 @@ pub mod abi;
 pub mod cstr;
 #[cfg(feature = "xlog")]
 pub mod error;
+// The diagnosis, behind its own feature: `mars_sdt_*`, which is the seam
+// `mars/sdt/jni/*_Java2C.cc` has — and the one an app that only logs does not
+// need in its binary.
+#[cfg(feature = "sdt")]
+pub mod sdt;
 #[cfg(feature = "xlog")]
 pub mod state;
 

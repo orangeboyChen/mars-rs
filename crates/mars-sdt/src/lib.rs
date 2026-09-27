@@ -17,6 +17,7 @@ pub mod checkimpl;
 pub mod constants;
 pub mod http_url_parser;
 pub mod netchecker_profile;
+pub mod report;
 pub mod sdt;
 pub mod sdt_core;
 pub mod sdt_logic;
@@ -25,6 +26,7 @@ pub mod trafficmonitor;
 pub use constants::*;
 pub use http_url_parser::HttpUrlParser;
 pub use netchecker_profile::{CheckRequestProfile, CheckResultProfile};
+pub use report::report_json;
 pub use sdt::{
     Callback, CheckErrCode, CheckIPPort, CheckIPPorts, CheckStatus, CollectingCallback,
     NetCheckStatus, NetCheckType, TcpErrCode,

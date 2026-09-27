@@ -15,7 +15,7 @@ zlib- or zstd-compressed, sync or async — and this is the whole stack:
 | `mars-crypt`     | ECDH + AES-GCM record encryption                                  |
 | `mars-buffer`    | the mmap append buffer (`LogZlibBuffer` / `LogZstdBuffer`)        |
 | `mars-appender`  | the process-wide appender and per-instance loggers                |
-| `mars-ffi`       | C ABI (`cdylib` + `staticlib`) and its hand-written header        |
+| `mars-ffi`       | C ABI (`cdylib` + `staticlib`): `mars_xlog.h`, and `mars_sdt.h` behind the `sdt` feature |
 | `mars-jni`       | JNI bindings of `io.github.orangeboychen.marsrs`: `Xlog`, `StnLogic`, `SdtLogic`|
 | `mars-compat`    | CLI plus the golden `.xlog` files that pin the wire format        |
 
@@ -268,8 +268,9 @@ logs keeps downloading this one. `scripts/build_xcframework.sh` already builds
 `MarsRSXlog.xcframework.zip` under that name, and it does not take the crate's
 word for what is in it: it builds `-p mars-ffi --no-default-features --features
 xlog`, so the artifact is the xlog feature set and not whatever the crate
-carries by default — STN and SDT reach the C ABI behind features of their own,
-and a set that is spelled out does not inherit them — and then it fails if a
+carries by default — SDT reaches the C ABI behind a feature of its own, `sdt`,
+and STN will behind one of its own, and a set that is spelled out does not
+inherit them — and then it fails if a
 slice still exports anything of the port's beyond `mars_xlog_*`, so the name
 stays a checked promise; `Package.swift` follows at the release that publishes it, which is also
 when the C module takes the name — a module is what a consumer imports, so it
@@ -297,9 +298,10 @@ link, because every `mars_xlog_*` is an external symbol and stays.
 `Sources/MarsRSXlog/Xlog.swift` is what the port exposes today: `mars-ffi` is
 an xlog C ABI (28 `mars_xlog_*` symbols, nothing else), so xlog is all the Swift
 layer can reach and `MarsRS` re-exports `MarsRSXlog` and nothing more.
-`Stn.swift` and `Sdt.swift` join the umbrella when the C ABI carries them —
-that is why `MarsRS` exists as a module of its own and not just as a name for
-xlog. orangeboyChen/mars ships a single `MarsXlog` product for the same reason;
+`Stn.swift` and `Sdt.swift` join the umbrella when the framework does — the C
+ABI carries the diagnosis already, behind the `sdt` feature, but the artifact a
+consumer downloads is xlog's — that is why `MarsRS` exists as a module of its
+own and not just as a name for xlog. orangeboyChen/mars ships a single `MarsXlog` product for the same reason;
 here the xlog-only import is `import MarsRSXlog`.
 
 An app writes through an `Xlog` of its own — `let log = try Xlog(XlogConfig(
@@ -396,9 +398,10 @@ site at a time.
 ### The C ABI
 
 `mars-rs-<version>-<host>.tar.gz` (Linux, macOS) and `.zip` (Windows) hold
-`include/mars_xlog.h` and the static and shared libraries of `mars-ffi`, for
-`x86_64-unknown-linux-gnu`, `aarch64-apple-darwin` and
-`x86_64-pc-windows-msvc`.
+`include/mars_xlog.h`, `include/mars_sdt.h` and the static and shared libraries
+of `mars-ffi` — built `--features sdt`, the diagnosis included, which is what
+the Android `.so` carries — for `x86_64-unknown-linux-gnu`,
+`aarch64-apple-darwin` and `x86_64-pc-windows-msvc`.
 
 ### Building the packages
 
