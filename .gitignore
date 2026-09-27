@@ -7,3 +7,12 @@ android/build/
 android/*/build/
 android/local.properties
 /dist
+
+# the Kotlin Multiplatform project: the native libraries the release unpacks
+# into it (kmp/native/<kotlin-target>/libmars_ffi.a, kmp/native/android/<abi>/)
+# and what Gradle writes
+kmp/native/
+kmp/.gradle/
+kmp/build/
+kmp/*/build/
+kmp/local.properties

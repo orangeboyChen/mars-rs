@@ -15,7 +15,8 @@
 #   INPUT_BUMP                 major | minor | patch
 #   INPUT_CHANNEL              stable | alpha | beta
 #   INPUT_PRERELEASE           the number of the pre-release, when typed
-#   XCFRAMEWORK_ZIP, XCFRAMEWORK_NET_ZIP, NATIVE_ZIP, CORE_AAR, XLOG_AAR
+#   XCFRAMEWORK_ZIP, XCFRAMEWORK_NET_ZIP, NATIVE_ZIP, CORE_AAR, XLOG_AAR,
+#   KMP_NATIVE_ZIP, KMP_MAVEN_ZIP
 #                              the assets a complete release carries
 #   GH_TOKEN                   what `gh release view` reads
 #   GITHUB_OUTPUT              appended to: tag, version, prerelease, is_new,
@@ -138,6 +139,10 @@ fi
 # "complete" means every one of them.
 SKIP=false
 ASSETS="$XCFRAMEWORK_ZIP $XCFRAMEWORK_NET_ZIP $NATIVE_ZIP $CORE_AAR $XLOG_AAR"
+# the Kotlin Multiplatform pair: the archives the module is built out of, and
+# the maven repository it is published as. Both are one asset whatever the
+# version is, unlike the host archives below.
+ASSETS="$ASSETS $KMP_NATIVE_ZIP $KMP_MAVEN_ZIP"
 # one archive per host of the matrix in release.yml, in the shape that host
 # packages it in
 for HOST in x86_64-unknown-linux-gnu:tar.gz aarch64-apple-darwin:tar.gz \
