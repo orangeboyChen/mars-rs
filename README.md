@@ -129,6 +129,13 @@ no channel ships a std for, so it is built out of a nightly's sources with
 watchOS 26 because its std is. `x86_64-apple-watchos-sim` is left out — a
 watchOS simulator is arm64.
 
+What an app pays for the framework is about 1.0 MB of `__TEXT` on arm64,
+measured by linking a slice into an otherwise empty executable with
+`-dead_strip`: the 21 MB archive of a slice is the shelf the linker picks from,
+not what lands in the app. Each archive is stripped of its local symbols before
+it is packaged — 31 % off the zip a consumer downloads, and nothing off the
+link, because every `mars_xlog_*` is an external symbol and stays.
+
 `Sources/MarsRSXlog/Xlog.swift` is what the port exposes today: `mars-ffi` is
 an xlog C ABI (21 `mars_xlog_*` symbols, nothing else), so xlog is all the Swift
 layer can reach and `MarsRS` re-exports `MarsRSXlog` and nothing more.
