@@ -65,6 +65,12 @@ RCT_EXPORT_METHOD(open:(NSDictionary *)config
     return;
   }
   NSString *namePrefix = MarsRsXlogString(config, @"namePrefix");
+  // `mars_xlog_new_instance` answers `0` for the empty prefix, and an appender
+  // it refused is an appender the caller has no handle to.
+  if (namePrefix.length == 0) {
+    reject(kMarsRsXlogError, @"namePrefix is empty", nil);
+    return;
+  }
   NSString *cacheDirectory = MarsRsXlogOptionalString(config, @"cacheDirectory");
 
   MarsXLogConfig xlogConfig;

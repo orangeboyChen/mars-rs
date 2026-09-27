@@ -9,9 +9,10 @@
 // `Sources/MarsRSXlog/Xlog.swift` has: an appender of its own, opened with a
 // configuration and released by the name it was opened with.
 //
-// The fields and their defaults are `XLogConfig`'s; `logDirectory` is the one
-// with no default, because the appender answers
-// `MARS_XLOG_ERR_EMPTY_LOG_DIR` without it.
+// The fields and their defaults are `XLogConfig`'s; two of them have none —
+// `logDirectory`, because the appender answers `MARS_XLOG_ERR_EMPTY_LOG_DIR`
+// without it, and `namePrefix`, because `new_xlogger_instance` answers `0` —
+// a refused configuration — without it.
 
 import 'package:flutter/services.dart';
 
@@ -59,9 +60,9 @@ enum MarsXlogCompression {
 class MarsXlogConfig {
   const MarsXlogConfig({
     required this.logDirectory,
+    required this.namePrefix,
     this.level = MarsXlogLevel.info,
     this.mode = MarsXlogMode.async,
-    this.namePrefix = '',
     this.publicKey = '',
     this.compression = MarsXlogCompression.zlib,
     this.compressionLevel = 0,
@@ -75,10 +76,12 @@ class MarsXlogConfig {
   /// Whether the appender writes on its own thread or on the caller's.
   final MarsXlogMode mode;
 
-  /// Where the log files go: the one field with no default.
+  /// Where the log files go: one of the two fields with no default.
   final String logDirectory;
 
-  /// Written verbatim, as the C++ does: no default.
+  /// Written verbatim, as the C++ does — and required, because
+  /// `new_xlogger_instance` answers `0` (a refused configuration) for the
+  /// empty one.
   final String namePrefix;
 
   /// Empty means the log is written unencrypted.
@@ -123,7 +126,8 @@ class MarsRsXlog {
   ///
   /// The platform side answers `mars_rs_xlog` / `the appender refused the
   /// configuration` when the appender would not take it, and
-  /// `logDirectory is empty` when [MarsXlogConfig.logDirectory] is.
+  /// `logDirectory is empty` / `namePrefix is empty` when
+  /// [MarsXlogConfig.logDirectory] / [MarsXlogConfig.namePrefix] is.
   static Future<void> open(MarsXlogConfig config) {
     return _channel.invokeMethod<void>('open', config.toMap());
   }

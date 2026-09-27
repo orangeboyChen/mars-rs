@@ -80,11 +80,18 @@ class MarsRsXlogPlugin :
             result.error("mars_rs_xlog", "logDirectory is empty", null)
             return
         }
+        // `new_xlogger_instance` answers `0` for the empty prefix, and an
+        // appender it refused is an appender the caller has no handle to.
+        val prefix = call.argument<String>("namePrefix").orEmpty()
+        if (prefix.isEmpty()) {
+            result.error("mars_rs_xlog", "namePrefix is empty", null)
+            return
+        }
         val config = Xlog.XLogConfig().apply {
             level = call.argument<Int>("level") ?: Xlog.LEVEL_INFO
             mode = call.argument<Int>("mode") ?: Xlog.APPENDER_MODE_ASYNC
             logdir = logDirectory
-            nameprefix = call.argument<String>("namePrefix").orEmpty()
+            nameprefix = prefix
             pubkey = call.argument<String>("publicKey").orEmpty()
             compressmode = call.argument<Int>("compression") ?: Xlog.ZLIB_MODE
             compresslevel = call.argument<Int>("compressionLevel") ?: 0
@@ -100,7 +107,7 @@ class MarsRsXlogPlugin :
             return
         }
         instance = handle
-        namePrefix = config.nameprefix.orEmpty()
+        namePrefix = prefix
         result.success(null)
     }
 

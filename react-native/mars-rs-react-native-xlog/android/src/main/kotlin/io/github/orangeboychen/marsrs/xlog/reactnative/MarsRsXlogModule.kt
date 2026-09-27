@@ -49,11 +49,18 @@ class MarsRsXlogModule(reactContext: ReactApplicationContext) : ReactContextBase
             promise.reject(ERROR, "logDirectory is empty")
             return
         }
+        // `new_xlogger_instance` answers `0` for the empty prefix, and an
+        // appender it refused is an appender the caller has no handle to.
+        val prefix = config.string("namePrefix")
+        if (prefix.isEmpty()) {
+            promise.reject(ERROR, "namePrefix is empty")
+            return
+        }
         val xlogConfig = Xlog.XLogConfig().apply {
             level = config.int("level", Xlog.LEVEL_INFO)
             mode = config.int("mode", Xlog.APPENDER_MODE_ASYNC)
             logdir = logDirectory
-            nameprefix = config.string("namePrefix")
+            nameprefix = prefix
             pubkey = config.string("publicKey")
             compressmode = config.int("compression", Xlog.ZLIB_MODE)
             compresslevel = config.int("compressionLevel")
@@ -69,7 +76,7 @@ class MarsRsXlogModule(reactContext: ReactApplicationContext) : ReactContextBase
             return
         }
         instance = handle
-        namePrefix = xlogConfig.nameprefix.orEmpty()
+        namePrefix = prefix
         promise.resolve(null)
     }
 

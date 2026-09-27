@@ -456,6 +456,33 @@ fn null_pointers_are_never_dereferenced() {
 }
 
 #[test]
+fn an_instance_without_a_name_prefix_is_refused() {
+    let _g = lock();
+    let _close = CloseOnDrop;
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path()).unwrap();
+
+    // The prefix is the key an instance of its own is registered under, so the
+    // empty one has no instance to be: `0`, the handle of no appender, is the
+    // answer for it, and that is why every surface above the C ABI asks the
+    // caller for a prefix rather than defaulting it to the empty string.
+    let owned = Config::new(dir.path(), 1, 0);
+    let empty_prefix = CString::new("").unwrap();
+    let mut cfg = owned.raw;
+    cfg.name_prefix = empty_prefix.as_ptr();
+    assert_eq!(unsafe { mars_ffi::abi::mars_xlog_new_instance(&cfg, 2) }, 0);
+
+    // The same config with a prefix opens one, and `close` of the plugin is a
+    // `release_instance` of it, so give it back.
+    cfg.name_prefix = owned.name_prefix.as_ptr();
+    let handle = unsafe { mars_ffi::abi::mars_xlog_new_instance(&cfg, 2) };
+    assert_ne!(handle, 0);
+    unsafe {
+        mars_ffi::abi::mars_xlog_release_instance(cfg.name_prefix);
+    }
+}
+
+#[test]
 fn no_path_before_open() {
     let _g = lock();
     let _close = CloseOnDrop;

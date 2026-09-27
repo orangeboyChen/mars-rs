@@ -7,10 +7,12 @@
 // one appender, opened with a configuration and closed by the name it was
 // opened with.
 //
-// The fields and their defaults are `XLogConfig`'s; `logDirectory` is the one
-// with no default, because the appender answers `MARS_XLOG_ERR_EMPTY_LOG_DIR`
-// without it. They are filled in by the native side, so a field left out here
-// is a field the C ABI defaults and not a field sent as `undefined`.
+// The fields and their defaults are `XLogConfig`'s; two of them have none —
+// `logDirectory`, because the appender answers `MARS_XLOG_ERR_EMPTY_LOG_DIR`
+// without it, and `namePrefix`, because `mars_xlog_new_instance` answers `0` —
+// a refused configuration — without it. The rest are filled in by the native
+// side, so a field left out here is a field the C ABI defaults and not a field
+// sent as `undefined`.
 
 import { NativeModules } from 'react-native';
 
@@ -48,14 +50,16 @@ export type MarsXlogCompression =
 
 /** `XLogConfig`, with the defaults the C++ gives the fields it is not told. */
 export interface MarsXlogConfig {
-  /** Where the log files go: the one field with no default. */
+  /** Where the log files go: one of the two fields with no default. */
   logDirectory: string;
   /** The level the appender is opened at; `info` when left out. */
   level?: MarsXlogLevel;
   /** Whether the appender writes on its own thread or on the caller's. */
   mode?: MarsXlogMode;
-  /** Written verbatim, as the C++ does: no default. */
-  namePrefix?: string;
+  /** Written verbatim, as the C++ does — and required, because
+   * `mars_xlog_new_instance` answers `0` (a refused configuration) for the
+   * empty one. */
+  namePrefix: string;
   /** Empty means the log is written unencrypted. */
   publicKey?: string;
   /** How the log is compressed; `zlib` is what the C++ defaults to. */
@@ -97,7 +101,7 @@ export const MarsRsXlog = {
   /** `mars_xlog_new_instance`: opens an appender of its own with `config`.
    *
    * Rejects when the appender refused the configuration, or when
-   * `config.logDirectory` is empty. */
+   * `config.logDirectory` or `config.namePrefix` is empty. */
   open(config: MarsXlogConfig): Promise<void> {
     return native().open(config);
   },

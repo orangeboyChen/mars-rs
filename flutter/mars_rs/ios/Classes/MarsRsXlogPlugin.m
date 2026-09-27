@@ -96,6 +96,14 @@ static NSString *MarsRsXlogOptionalString(NSDictionary *arguments, NSString *key
     return;
   }
   NSString *namePrefix = MarsRsXlogString(arguments, @"namePrefix");
+  // `mars_xlog_new_instance` answers `0` for the empty prefix, and an appender
+  // it refused is an appender the caller has no handle to.
+  if (namePrefix.length == 0) {
+    result([FlutterError errorWithCode:@"mars_rs_xlog"
+                               message:@"namePrefix is empty"
+                               details:nil]);
+    return;
+  }
   NSString *cacheDirectory = MarsRsXlogOptionalString(arguments, @"cacheDirectory");
 
   MarsXLogConfig config;
