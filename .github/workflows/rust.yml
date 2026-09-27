@@ -2,7 +2,8 @@ name: Rust
 
 # Build / lint / test gate of the xlog workspace: rustfmt, clippy, the test
 # suite on Linux/macOS/Windows (debug and release), cargo doc, the coverage
-# floor, and the Android and Apple cross builds of the FFI and JNI crates.
+# floor, and the Android, HarmonyOS and Apple cross builds of the FFI and
+# JNI crates.
 #
 # There is no release build of its own: `cargo test --workspace --release`
 # compiles the whole workspace in the release profile on each of the three
@@ -163,6 +164,38 @@ jobs:
             cargo build --release -p mars-jni --target "$target"
             ls -l "target/$target/release/libmarsxlog.so"
           done
+
+  # HarmonyOS. The three OHOS targets are tier 2 with host tools, so a std ships
+  # for them and stable is enough; what is gated here is everything the SDK has
+  # to answer for instead — its sysroot, the C build of `zstd-sys` against it,
+  # and the unwinder rustc asks the linker for, which the SDK keeps beside clang
+  # rather than in the sysroot. One job for the three ABIs because the SDK they
+  # are built with is 2.7 GB and is downloaded once, not once per ABI.
+  harmony:
+    name: build (harmony)
+    runs-on: ubuntu-latest
+    env:
+      OHOS_SDK_VERSION: 6.1-Release
+      # Outside `target/`, so that the rust cache below does not carry the SDK
+      # a second time.
+      OHOS_SDK_CACHE: ${{ github.workspace }}/.ohos-sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: >-
+            aarch64-unknown-linux-ohos
+            armv7-unknown-linux-ohos
+            x86_64-unknown-linux-ohos
+      - name: Cache the OHOS SDK
+        uses: actions/cache@v4
+        with:
+          path: .ohos-sdk
+          key: ohos-sdk-${{ env.OHOS_SDK_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+      - run: scripts/build_harmony.sh dist/harmony
+      - name: The three libraries a HarmonyOS module carries
+        run: ls -l dist/harmony/*/libmars_ffi.so
 
   apple:
     name: build (apple)
