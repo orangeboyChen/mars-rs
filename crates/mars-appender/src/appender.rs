@@ -1488,9 +1488,19 @@ impl Appender {
     /// the file is a dead writer's; the log's own lock, taken here for the
     /// whole drain, says nobody else is writing to the log while it is appended
     /// to.
+    ///
+    /// `slot` is that very lock's handle, and it is the one the records are
+    /// read through — not a second `open` of `path`. A range locked with
+    /// `LockFileEx` is not the advisory `flock` it is on unix: Windows denies
+    /// every *other* handle access to it, including handles opened afterwards
+    /// in the process that took it, so a drain that reopened the slot to read
+    /// it got `ERROR_LOCK_VIOLATION` and reported `ReadFailed` on every cache
+    /// file it was given. The handle that holds a lock is the only one the
+    /// bytes are readable through.
     pub(crate) fn treat_mapping_as_file_and_flush(
         &self,
         path: &Path,
+        slot: &mut File,
     ) -> crate::config::FileIoAction {
         use crate::config::FileIoAction;
 
@@ -1500,13 +1510,9 @@ impl Appender {
 
         // Read the whole cache file into a heap region.
         let mut data = vec![0u8; BUFFER_BLOCK_LENGTH];
-        let Ok(mut file) = File::open(path) else {
-            return FileIoAction::OpenFailed;
-        };
-        if file.read_exact(&mut data).is_err() {
+        if slot.read_exact(&mut data).is_err() {
             return FileIoAction::ReadFailed;
         }
-        drop(file);
 
         // One guard for the whole drain, write and unlink, and the log's lock
         // held across it: the records go into a log file another writer may be
@@ -2367,7 +2373,10 @@ mod tests {
         fs::create_dir(&log_file).unwrap();
 
         let appender = Appender::oneshot(&config(tmp.path(), AppenderMode::Sync), 0, 0).unwrap();
-        let action = appender.treat_mapping_as_file_and_flush(&mmap_path);
+        // The handle the drain reads the records through, which is the one a
+        // real recovery claims the slot with.
+        let mut mmap = fs::File::open(&mmap_path).unwrap();
+        let action = appender.treat_mapping_as_file_and_flush(&mmap_path, &mut mmap);
         appender.close();
 
         assert_eq!(action, FileIoAction::WriteFailed);

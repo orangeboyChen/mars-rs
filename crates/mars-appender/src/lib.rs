@@ -441,7 +441,14 @@ pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
         {
             return FileIoAction::Unnecessary;
         }
-        let action = appender.treat_mapping_as_file_and_flush(&mmap_file_path(config));
+        // A lock nobody on this platform can take is not a reason not to read
+        // the file: the drain reads it through this handle either way.
+        let path = mmap_file_path(config);
+        let Ok(mut file) = std::fs::File::open(&path) else {
+            appender.close();
+            return FileIoAction::OpenFailed;
+        };
+        let action = appender.treat_mapping_as_file_and_flush(&path, &mut file);
         appender.close();
         return action;
     }
@@ -458,13 +465,15 @@ pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
         }
         // Held for the whole drain and the unlink that follows it: the lock is
         // what says the slot is a dead writer's, and it has to still be ours
-        // when the file goes away.
-        let Some(_claim) = crate::appender::claim_dead_cache_slot(&path) else {
-            // A live writer still owns it — in another process, or in another
-            // copy of this crate in this one.
+        // when the file goes away — and it is the handle the drain reads the
+        // records through, for the reason `treat_mapping_as_file_and_flush`
+        // gives.
+        // A live writer still owns it — in another process, or in another
+        // copy of this crate in this one.
+        let Some(mut claim) = crate::appender::claim_dead_cache_slot(&path) else {
             continue;
         };
-        match appender.treat_mapping_as_file_and_flush(&path) {
+        match appender.treat_mapping_as_file_and_flush(&path, &mut claim) {
             FileIoAction::Success => action = FileIoAction::Success,
             FileIoAction::Unnecessary => {}
             // Every slot is tried, so any one of them says the same thing to
