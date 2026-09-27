@@ -17,6 +17,9 @@ name = "mars_ffi"
 mars-appender = { workspace = true }
 # Only needed for `CompressMode`, which `XLogConfig` stores by value.
 mars-buffer = { workspace = true }
+# The diagnosis, behind a feature of its own: an app that only logs does not
+# carry SDT's bytes, which is the whole point of the feature set.
+mars-sdt = { workspace = true, optional = true }
 
 # What the C ABI carries, named: the Apple artifact is built `--no-default-features
 # --features xlog`, so it is xlog by construction and not by the accident of what
@@ -27,6 +30,10 @@ mars-buffer = { workspace = true }
 [features]
 default = ["xlog"]
 xlog = []
+# The diagnosis' entry points live on the same panic barrier xlog's do — every
+# `mars_sdt_*` is wrapped in `guard` — and a process that runs a diagnosis is a
+# process that logs what it found, so `sdt` takes `xlog` with it.
+sdt = ["dep:mars-sdt", "xlog"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

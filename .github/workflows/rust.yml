@@ -39,7 +39,9 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # `--all-features`: SDT's C ABI is behind a feature of its own, so a
+      # plain `--workspace` never compiles it.
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
     name: test
@@ -56,6 +58,9 @@ jobs:
         run: cargo test --workspace --all-targets
       - name: cargo test (release)
         run: cargo test --workspace --release
+      # The SDT C ABI, behind the feature an app that only logs leaves off.
+      - name: cargo test (sdt)
+        run: cargo test -p mars-ffi --features sdt
 
   build:
     name: build (release)
@@ -200,7 +205,7 @@ jobs:
       # measured.
       - name: Measure line coverage
         run: |
-          cargo llvm-cov --workspace --summary-only \
+          cargo llvm-cov --workspace --all-features --summary-only \
             --ignore-filename-regex 'mars-jni/src/jni_bridge\.rs' \
             --fail-under-lines 90
   docs:
@@ -211,4 +216,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo doc --workspace --no-deps
+      - run: cargo doc --workspace --no-deps --all-features
