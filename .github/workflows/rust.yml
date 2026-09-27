@@ -1,8 +1,13 @@
 name: Rust
 
 # Build / lint / test gate of the xlog workspace: rustfmt, clippy, the test
-# suite on Linux/macOS/Windows (debug and release), a release build, cargo doc,
-# and the Android and Apple cross builds of the FFI and JNI crates.
+# suite on Linux/macOS/Windows (debug and release), cargo doc, the coverage
+# floor, and the Android and Apple cross builds of the FFI and JNI crates.
+#
+# There is no release build of its own: `cargo test --workspace --release`
+# compiles the whole workspace in the release profile on each of the three
+# hosts already, and the one thing a build job asked for besides that compile —
+# the `sdt,stn` set with xlog off — is a `cargo check` in `lint`.
 
 on:
   push:
@@ -10,6 +15,15 @@ on:
       - main
   pull_request:
   workflow_dispatch:
+
+# A push supersedes the run it interrupts, so the older one is cancelled: only
+# the newest commit of a branch or a pull request is worth the minutes, and a
+# push to every branch of a stack used to leave four runs of seventeen jobs
+# racing each other. A push to main is never cancelled — every commit of it is
+# a release candidate and gets its own green or red.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -20,28 +34,27 @@ env:
   RUSTFLAGS: '-D warnings'
 
 jobs:
-  format:
-    name: rustfmt
+  lint:
+    name: rustfmt + clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
-      - run: cargo fmt --all -- --check
-
-  clippy:
-    name: clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
       # `--all-features`: the SDT and STN C ABIs are behind features of their
       # own, so a plain `--workspace` never compiles them.
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # The set the Apple net framework is built with: the diagnosis and the
+      # task pipeline, and not xlog. Nothing else asks for it — `--all-features`
+      # above is every one of them, and the tests take the two net ones one at a
+      # time — so it is spelled out here. A `check` is what is wanted: the
+      # question is whether this pairing compiles, and answering it used to cost
+      # a release build of it on each of the three hosts.
+      - name: cargo check (sdt, stn)
+        run: cargo check -p mars-ffi --no-default-features --features sdt,stn
 
   test:
     name: test
@@ -64,24 +77,6 @@ jobs:
         run: cargo test -p mars-ffi --features sdt
       - name: cargo test (stn)
         run: cargo test -p mars-ffi --features stn
-
-  build:
-    name: build (release)
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace --release --all-targets
-      # The set the Apple net framework is built with: the diagnosis and the
-      # task pipeline, and not xlog. Nothing else asks for it — `--all-features`
-      # is every one of them, and the tests take the two net ones one at a time —
-      # so it is spelled out here.
-      - run: cargo build --release -p mars-ffi --no-default-features --features sdt,stn
 
   android:
     name: build (${{ matrix.target }})
@@ -113,22 +108,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      # `android-actions/setup-android` is intentionally not used: it installs
-      # the long-removed `tools` SDK package, so its `sdkmanager` call exits
+      # `android-actions/setup-android` is intentionally not used, and why is
+      # written down in scripts/install_android_ndk.sh: it installs the
+      # long-removed `tools` SDK package, so its `sdkmanager` call exits
       # non-zero and the job fails before any Rust code is compiled. The SDK
-      # (and its `sdkmanager`) that the runner image already provides is enough
-      # to install the NDK.
+      # (and its `sdkmanager`) that the runner image already provides is enough.
       - name: Install the Android NDK
-        run: |
-          set -euo pipefail
-          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          # `yes` is killed by SIGPIPE as soon as sdkmanager stops reading, and
-          # under `pipefail` that 141 would fail the job even though sdkmanager
-          # itself succeeded. Grouping it keeps the pipeline status to
-          # sdkmanager's own exit code.
-          { yes || true; } | "$sdkmanager" --licenses > /dev/null
-          "$sdkmanager" --install "ndk;${NDK_VERSION}"
-          test -d "$ANDROID_HOME/ndk/${NDK_VERSION}"
+        run: scripts/install_android_ndk.sh
       - uses: Swatinem/rust-cache@v2
       # `zstd-sys` compiles C, so both cc-rs and rustc need the NDK clang. The
       # two of them spell the env var prefixes differently, so the names are
