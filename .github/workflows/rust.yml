@@ -50,11 +50,16 @@ jobs:
       # The set the Apple net framework is built with: the diagnosis and the
       # task pipeline, and not xlog. Nothing else asks for it — `--all-features`
       # above is every one of them, and the tests take the two net ones one at a
-      # time — so it is spelled out here. A `check` is what is wanted: the
-      # question is whether this pairing compiles, and answering it used to cost
-      # a release build of it on each of the three hosts.
-      - name: cargo check (sdt, stn)
-        run: cargo check -p mars-ffi --no-default-features --features sdt,stn
+      # time — so it is spelled out here.
+      #
+      # A build, and not a `check`: what `mars-ffi` is, is a `staticlib` and a
+      # `cdylib`, and `cargo check` stops before code generation, so a missing
+      # symbol, a duplicate one or any other linker failure in this pairing is
+      # invisible to it and would next be seen in the release workflow. One host
+      # is enough — what is asked here is whether it links, and the Apple
+      # slices of the very same set are built by `scripts/build_xcframework.sh`.
+      - name: cargo build (sdt, stn)
+        run: cargo build --release -p mars-ffi --no-default-features --features sdt,stn
 
   test:
     name: test
