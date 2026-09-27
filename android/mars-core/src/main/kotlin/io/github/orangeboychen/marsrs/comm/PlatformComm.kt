@@ -5,7 +5,7 @@
 
 package io.github.orangeboychen.marsrs.comm
 
-// `PlatformComm$C2Java` — the nine static methods `mars-jni` calls when it
+// `PlatformComm$C2Java` — the nine static methods `marsrs-jni` calls when it
 // wants to know what the device is on (`platform_comm.rs`'s `Ask`); the C++
 // asked the same nine of the same class. Every one of them is `@JvmStatic`,
 // because a method JNI calls as a static of `PlatformComm$C2Java` has to *be*
@@ -27,7 +27,7 @@ import android.telephony.TelephonyManager
 /**
  * What mars gets
  *
- * The [C2Java] nested object is the class `mars-jni` looks up; the three info
+ * The [C2Java] nested object is the class `marsrs-jni` looks up; the three info
  * classes are what three of its answers come back as, and their fields are
  * `@JvmField`s because the Rust reads them by name.
  */

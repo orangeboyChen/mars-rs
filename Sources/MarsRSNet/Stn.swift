@@ -1,4 +1,4 @@
-// The Swift face of the C ABI in `mars_stn.h` (crate `mars-ffi`, the `stn`
+// The Swift face of the C ABI in `mars_stn.h` (crate `marsrs-ffi`, the `stn`
 // feature): the task pipeline, and the one thing a caller supplies — the app the
 // eighteen questions are asked of.
 //

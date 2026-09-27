@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Builds `libmarsxlog.so` (crate `mars-jni`) for every Android ABI the release
+# Builds `libmarsxlog.so` (crate `marsrs-jni`) for every Android ABI the release
 # ships, and lays them out as <output-dir>/<abi>/libmarsxlog.so — the shape of
 # mars-android-native.zip and of android/mars-xlog/libs/, which is what the AAR
 # is assembled from.
@@ -59,8 +59,8 @@ for entry in "${abis[@]}"; do
     export "CARGO_TARGET_${upper}_LINKER=$clang"
     export PATH="$ndk_bin:$PATH"
 
-    echo "building mars-jni for $target ($abi)"
-    cargo build --release -p mars-jni --target "$target"
+    echo "building marsrs-jni for $target ($abi)"
+    cargo build --release -p marsrs-jni --target "$target"
 
     mkdir -p "$out/$abi"
     cp "target/$target/release/libmarsxlog.so" "$out/$abi/libmarsxlog.so"

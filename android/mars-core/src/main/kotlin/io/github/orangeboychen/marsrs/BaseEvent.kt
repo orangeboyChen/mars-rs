@@ -11,7 +11,7 @@ import android.util.Log
 
 /**
  * The base event notification class — every `external` here is one
- * `Java_io_github_orangeboychen_marsrs_BaseEvent_*` symbol of `mars-jni`, so
+ * `Java_io_github_orangeboychen_marsrs_BaseEvent_*` symbol of `marsrs-jni`, so
  * every one of them is `@JvmStatic`: a native that is not a static of this
  * class is not the symbol JNI looks up.
  *

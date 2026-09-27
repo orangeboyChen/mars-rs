@@ -2,7 +2,7 @@ package io.github.orangeboychen.marsrs.xlog
 
 /**
  * What an [Xlog] is opened with: the Kotlin face of the `Xlog.XLogConfig`
- * whose fields `mars-jni` reads by name.
+ * whose fields `marsrs-jni` reads by name.
  *
  * Every property has the default the C++ project's own `XLogConfig` carries,
  * so the only one an app has to give is [logDir]:
@@ -20,7 +20,7 @@ package io.github.orangeboychen.marsrs.xlog
  * ```
  *
  * A config the appender cannot honour is refused here and not by the `.so`:
- * `mars-jni` answers a config it does not like by opening nothing, and an app
+ * `marsrs-jni` answers a config it does not like by opening nothing, and an app
  * that finds out three days later that it has no logs has no way back.
  * [require] is what turns that silence into an [IllegalArgumentException] at
  * the call.
@@ -29,7 +29,7 @@ data class XlogConfig @JvmOverloads constructor(
     /**
      * The directory the `.xlog` files are written to, created when it is
      * not there. The one property with no default, because it is the one
-     * `mars-jni` refuses a config without.
+     * `marsrs-jni` refuses a config without.
      */
     val logDir: String,
     /**
@@ -79,7 +79,7 @@ data class XlogConfig @JvmOverloads constructor(
     val pubKey: String = ""
 ) {
     init {
-        require(logDir.isNotBlank()) { "logDir must not be blank: mars-jni opens nothing without one" }
+        require(logDir.isNotBlank()) { "logDir must not be blank: marsrs-jni opens nothing without one" }
         require(namePrefix.isNotBlank()) { "namePrefix must not be blank: it is what an instance is looked up by" }
         require(cacheDays >= 0) { "cacheDays must not be negative, was $cacheDays" }
         require(compressLevel in DEFAULT_COMPRESS_LEVEL..MAX_COMPRESS_LEVEL) {
@@ -87,7 +87,7 @@ data class XlogConfig @JvmOverloads constructor(
         }
     }
 
-    /** The `Xlog.XLogConfig` `mars-jni` reads this config's fields out of. */
+    /** The `Xlog.XLogConfig` `marsrs-jni` reads this config's fields out of. */
     internal fun toNative(): Xlog.XLogConfig = Xlog.XLogConfig().apply {
         this.level = this@XlogConfig.level.native
         this.mode = this@XlogConfig.mode.native

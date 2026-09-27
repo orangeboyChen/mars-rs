@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Builds `libmars_ffi.so` (crate `mars-ffi`, the C ABI) for every HarmonyOS ABI
+# Builds `libmars_ffi.so` (crate `marsrs-ffi`, the C ABI) for every HarmonyOS ABI
 # the port can target, and lays them out as <output-dir>/<abi>/libmars_ffi.so —
 # the shape a HarmonyOS module wants its natives in (`libs/arm64-v8a/…`), and so
 # the shape a HAR is packed from.
@@ -150,8 +150,8 @@ for entry in "${abis[@]}"; do
 -C link-arg=-L$native/llvm/lib/$sdk_target \
 -C link-arg=-Wl,--exclude-libs,libunwind.a"
 
-    echo "building mars-ffi for $target ($abi)"
-    cargo build --release -p mars-ffi --target "$target"
+    echo "building marsrs-ffi for $target ($abi)"
+    cargo build --release -p marsrs-ffi --target "$target"
 
     mkdir -p "$out/$abi"
     cp "target/$target/release/libmars_ffi.so" "$out/$abi/libmars_ffi.so"

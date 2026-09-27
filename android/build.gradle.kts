@@ -11,7 +11,7 @@ plugins {
     // Declared here and applied in the module, so that the version of the
     // Android Gradle Plugin is the one thing there is to bump.
     id("com.android.library") version "9.4.1" apply false
-    // The face of `mars-jni` is Kotlin, so that a consumer of the AAR writes
+    // The face of `marsrs-jni` is Kotlin, so that a consumer of the AAR writes
     // Kotlin against it; AGP 9 compiles it without a Kotlin plugin of its own.
 }
 

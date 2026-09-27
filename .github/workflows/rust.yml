@@ -111,14 +111,14 @@ jobs:
       # above is every one of them, and the tests take the two net ones one at a
       # time — so it is spelled out here.
       #
-      # A build, and not a `check`: what `mars-ffi` is, is a `staticlib` and a
+      # A build, and not a `check`: what `marsrs-ffi` is, is a `staticlib` and a
       # `cdylib`, and `cargo check` stops before code generation, so a missing
       # symbol, a duplicate one or any other linker failure in this pairing is
       # invisible to it and would next be seen in the release workflow. One host
       # is enough — what is asked here is whether it links, and the Apple
       # slices of the very same set are built by `scripts/build_xcframework.sh`.
       - name: cargo build (sdt, stn)
-        run: cargo build --release -p mars-ffi --no-default-features --features sdt,stn
+        run: cargo build --release -p marsrs-ffi --no-default-features --features sdt,stn
       # `cargo doc` had a runner of its own for no better reason than that it
       # was written as a job. `clippy` above has compiled the workspace with
       # every feature already, which is what `--all-features` asks of `doc`
@@ -168,16 +168,16 @@ jobs:
       # leaves off.
       - name: cargo test (sdt)
         if: needs.changes.outputs.needed == 'true'
-        run: cargo test -p mars-ffi --features sdt
+        run: cargo test -p marsrs-ffi --features sdt
       - name: cargo test (stn)
         if: needs.changes.outputs.needed == 'true'
-        run: cargo test -p mars-ffi --features stn
+        run: cargo test -p marsrs-ffi --features stn
       # 90 % of the lines, measured over everything `cargo test` can reach.
       # One host is enough — the coverage of a test is a fact about the test,
       # and not about the machine it ran on — and this one is already the
       # cheapest: the workspace is compiled here three times over by now.
       #
-      # mars-jni/src/jni_bridge.rs is left out on purpose: it is the JVM
+      # marsrs-jni/src/jni_bridge.rs is left out on purpose: it is the JVM
       # boundary and needs a live JNIEnv, so only the Android AAR exercises it.
       # The logic behind those entry points lives in the crate root and *is*
       # measured.
@@ -185,7 +185,7 @@ jobs:
         if: needs.changes.outputs.needed == 'true' && matrix.os == 'ubuntu-latest'
         run: |
           cargo llvm-cov --workspace --all-features --summary-only \
-            --ignore-filename-regex 'mars-jni/src/jni_bridge\.rs' \
+            --ignore-filename-regex 'marsrs-jni/src/jni_bridge\.rs' \
             --fail-under-lines 90
 
   android:
@@ -251,8 +251,8 @@ jobs:
             export "CC_${flat}=$clang"
             export "AR_${flat}=$ndk_bin/llvm-ar"
             export "CARGO_TARGET_${upper}_LINKER=$clang"
-            cargo build --release -p mars-ffi --target "$target"
-            cargo build --release -p mars-jni --target "$target"
+            cargo build --release -p marsrs-ffi --target "$target"
+            cargo build --release -p marsrs-jni --target "$target"
             ls -l "target/$target/release/libmarsxlog.so"
           done
 
@@ -315,7 +315,7 @@ jobs:
           # is what builds for one.
           for target in aarch64-apple-ios aarch64-apple-ios-sim \
                         aarch64-apple-watchos aarch64-apple-watchos-sim; do
-            cargo build --release -p mars-ffi --target "$target"
+            cargo build --release -p marsrs-ffi --target "$target"
           done
 
   # The watchOS device slice of the xcframework is two architectures, and the
@@ -340,4 +340,4 @@ jobs:
         with:
           components: rust-src
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release -p mars-ffi --target arm64_32-apple-watchos -Z build-std=std,panic_abort
+      - run: cargo build --release -p marsrs-ffi --target arm64_32-apple-watchos -Z build-std=std,panic_abort

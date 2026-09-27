@@ -1,0 +1,20 @@
+[package]
+name = "marsrs-buffer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The on-disk .xlog buffer of the Mars port: write, flush and read the files xlog writes"
+
+[dependencies]
+marsrs-core = { workspace = true }
+marsrs-crypt = { workspace = true }
+flate2 = { workspace = true }
+zstd = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

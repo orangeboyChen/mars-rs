@@ -1,0 +1,15 @@
+[package]
+name = "marsrs-stn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Rust port of the Mars STN task pipeline (task model, anti-avalanche, dynamic timeout)"
+
+[dependencies]
+marsrs-comm = { workspace = true }
+marsrs-sdt = { workspace = true }
+
+[lints]
+workspace = true

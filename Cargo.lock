@@ -455,99 +455,119 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
-name = "mars-appender"
+name = "marsrs"
+version = "0.1.0"
+dependencies = [
+ "marsrs-comm",
+ "marsrs-core",
+ "marsrs-sdt",
+ "marsrs-stn",
+ "marsrs-xlog",
+]
+
+[[package]]
+name = "marsrs-appender"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "flate2",
  "libc",
- "mars-buffer",
- "mars-core",
- "mars-crypt",
+ "marsrs-buffer",
+ "marsrs-core",
+ "marsrs-crypt",
  "memmap2",
  "tempfile",
 ]
 
 [[package]]
-name = "mars-buffer"
+name = "marsrs-buffer"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "mars-core",
- "mars-crypt",
+ "marsrs-core",
+ "marsrs-crypt",
  "tempfile",
  "zstd",
 ]
 
 [[package]]
-name = "mars-comm"
+name = "marsrs-comm"
 version = "0.1.0"
 dependencies = [
  "md5",
 ]
 
 [[package]]
-name = "mars-compat"
+name = "marsrs-compat"
 version = "0.1.0"
 dependencies = [
  "flate2",
  "k256",
- "mars-buffer",
- "mars-core",
- "mars-crypt",
+ "marsrs-buffer",
+ "marsrs-core",
+ "marsrs-crypt",
  "serde_json",
  "tempfile",
  "zstd",
 ]
 
 [[package]]
-name = "mars-core"
+name = "marsrs-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
 ]
 
 [[package]]
-name = "mars-crypt"
+name = "marsrs-crypt"
 version = "0.1.0"
 dependencies = [
  "k256",
- "mars-core",
+ "marsrs-core",
 ]
 
 [[package]]
-name = "mars-ffi"
+name = "marsrs-ffi"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "mars-appender",
- "mars-buffer",
- "mars-sdt",
- "mars-stn",
+ "marsrs-appender",
+ "marsrs-buffer",
+ "marsrs-sdt",
+ "marsrs-stn",
  "tempfile",
 ]
 
 [[package]]
-name = "mars-jni"
+name = "marsrs-jni"
 version = "0.1.0"
 dependencies = [
  "jni",
- "mars-appender",
- "mars-comm",
- "mars-sdt",
- "mars-stn",
+ "marsrs-appender",
+ "marsrs-comm",
+ "marsrs-sdt",
+ "marsrs-stn",
 ]
 
 [[package]]
-name = "mars-sdt"
+name = "marsrs-sdt"
 version = "0.1.0"
 
 [[package]]
-name = "mars-stn"
+name = "marsrs-stn"
 version = "0.1.0"
 dependencies = [
- "mars-comm",
- "mars-sdt",
+ "marsrs-comm",
+ "marsrs-sdt",
+]
+
+[[package]]
+name = "marsrs-xlog"
+version = "0.1.0"
+dependencies = [
+ "marsrs-appender",
+ "marsrs-buffer",
+ "marsrs-core",
 ]
 
 [[package]]

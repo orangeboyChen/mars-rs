@@ -3,7 +3,7 @@ package io.github.orangeboychen.marsrs.app
 /**
  * The class of the app's attributes
  *
- * The four statics `mars-jni` calls (`getAppFilePath`, `getAccountInfo`,
+ * The four statics `marsrs-jni` calls (`getAppFilePath`, `getAccountInfo`,
  * `getClientVersion`, `getDeviceType`) and the two classes it reads the answers
  * out of — [AccountInfo] and [DeviceInfo]. The field names are the ones the
  * Rust asks for, so they are `@JvmField`s and not properties with a getter.

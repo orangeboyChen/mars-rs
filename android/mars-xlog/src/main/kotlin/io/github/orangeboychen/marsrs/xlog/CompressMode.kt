@@ -4,7 +4,7 @@ package io.github.orangeboychen.marsrs.xlog
  * What an appender compresses a log file with once it is closed and no longer
  * written to, the pair the C++ project's `ZLIB_MODE`/`ZSTD_MODE` are.
  *
- * [native] is the number `mars-jni` reads out of `Xlog.XLogConfig.compressmode`.
+ * [native] is the number `marsrs-jni` reads out of `Xlog.XLogConfig.compressmode`.
  */
 enum class CompressMode(internal val native: Int) {
     /**

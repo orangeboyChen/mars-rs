@@ -1,0 +1,48 @@
+[package]
+name = "marsrs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Rust port of Tencent's mars: the xlog appender, the STN task pipeline and the SDT network diagnosis"
+keywords = ["mars", "xlog", "stn", "sdt", "mobile"]
+categories = ["development-tools::debugging", "network-programming"]
+readme = "README.md"
+
+[dependencies]
+# The byte primitives every signature below is written in terms of, so they are
+# not optional: [`xlog`]'s formatter and [`sdt`]'s profile both take one.
+marsrs-core = { workspace = true }
+
+marsrs-comm = { workspace = true, optional = true }
+marsrs-stn = { workspace = true, optional = true }
+marsrs-sdt = { workspace = true, optional = true }
+marsrs-xlog = { workspace = true, optional = true }
+
+# The C++ project publishes `mars-core` (everything) and `mars-xlog` (the
+# logger alone) as two artifacts, and this port does the same for Swift
+# (`MarsRS` / `MarsRSXlog`) and for Kotlin (`mars-core.aar` / `mars-xlog.aar`).
+# Here the pair is these two crates: this one is `mars-core`, and an app that
+# only logs takes `marsrs-xlog` and carries none of STN's or SDT's bytes.
+#
+# A feature per component, and `default` is all of them: `--no-default-features
+# --features xlog` is the build that stays off the net half, the way the Apple
+# artifact is built from `marsrs-ffi` with `--no-default-features --features
+# xlog`.
+[features]
+default = ["comm", "sdt", "stn", "xlog"]
+# The logger: [`marsrs-xlog`](https://crates.io/crates/marsrs-xlog), re-exported
+# as [`xlog`].
+xlog = ["dep:marsrs-xlog"]
+# The task pipeline. It is written over `marsrs-comm`'s tick counts and
+# frequency limits, so it cannot come without them.
+stn = ["dep:marsrs-stn", "comm"]
+# The network diagnosis: ping, DNS, TCP and HTTP against the hosts STN uses.
+sdt = ["dep:marsrs-sdt"]
+# The utilities the C++ keeps in `mars/comm`: tick counts, base64, the address
+# and proxy vocabulary. Public because STN's signatures are written in them.
+comm = ["dep:marsrs-comm"]
+
+[lints]
+workspace = true

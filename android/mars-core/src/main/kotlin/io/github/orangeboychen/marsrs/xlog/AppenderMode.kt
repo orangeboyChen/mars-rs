@@ -4,7 +4,7 @@ package io.github.orangeboychen.marsrs.xlog
  * Whether a write reaches the file before it returns, the pair the C++ project's
  * `AppednerModeAsync`/`AppednerModeSync` are.
  *
- * [native] is the number `mars-jni` reads out of `Xlog.XLogConfig.mode` and
+ * [native] is the number `marsrs-jni` reads out of `Xlog.XLogConfig.mode` and
  * out of `Xlog.setAppenderMode`.
  */
 enum class AppenderMode(internal val native: Int) {

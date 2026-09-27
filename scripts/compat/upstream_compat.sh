@@ -11,14 +11,14 @@
 # The decoder is `mars/xlog/crypt/decode_log_file_c_impl/decode_log_file.c`,
 # which is the C++ project's own reader. It carries its ECDH keys as two
 # compile-time constants, so the copy that is built here is patched with the
-# keys `crates/mars-compat/fixtures/manifest.json` holds: the pair the golden
+# keys `crates/marsrs-compat/fixtures/manifest.json` holds: the pair the golden
 # files were encrypted with, and the pair the Rust decoder is handed.
 set -e
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 OUTDIR=${1:-$REPO/target/compat}
 UP=${MARS_UPSTREAM_DIR:-$REPO/target/upstream/Tencent-mars}
-MANIFEST=$REPO/crates/mars-compat/fixtures/manifest.json
+MANIFEST=$REPO/crates/marsrs-compat/fixtures/manifest.json
 DECODER_DIR=$UP/mars/xlog/crypt/decode_log_file_c_impl
 
 if [ ! -d "$UP/mars/xlog" ]; then

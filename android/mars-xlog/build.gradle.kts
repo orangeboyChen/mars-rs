@@ -1,4 +1,4 @@
-// The xlog-only Android AAR of mars-rs: `libmarsxlog.so` (crate `mars-jni`)
+// The xlog-only Android AAR of mars-rs: `libmarsxlog.so` (crate `marsrs-jni`)
 // for every ABI, plus the two Kotlin classes of the logging half — `Xlog` and
 // the `Log` facade over it. The whole port is the `mars-core` module; this is the
 // package for an app that only logs, the way the C++ project's `mars-xlog` is.
@@ -21,7 +21,7 @@ plugins {
     id("maven-publish")
 }
 
-// `mars-jni` asks for Java 17 bytecode, and the Kotlin compiler targets 1.8
+// `marsrs-jni` asks for Java 17 bytecode, and the Kotlin compiler targets 1.8
 // unless it is told otherwise.
 kotlin {
     compilerOptions {
@@ -38,7 +38,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        // `mars-jni` is built against NDK 27 / API 24; 21 is the floor the C++
+        // `marsrs-jni` is built against NDK 27 / API 24; 21 is the floor the C++
         // project ships with.
         minSdk = 21
     }

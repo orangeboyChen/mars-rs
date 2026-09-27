@@ -1,16 +1,23 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/mars-core",
-    "crates/mars-comm",
-    "crates/mars-stn",
-    "crates/mars-sdt",
-    "crates/mars-crypt",
-    "crates/mars-buffer",
-    "crates/mars-appender",
-    "crates/mars-ffi",
-    "crates/mars-compat",
-    "crates/mars-jni",
+    # The two crates a Rust caller depends on: the whole port, and xlog on its
+    # own — the pair the C++ project publishes as `mars-core` and `mars-xlog`,
+    # and this port as `MarsRS` and `MarsRSXlog`. Everything below them is an
+    # implementation detail of the pair and is published only because a
+    # published crate cannot depend on a crate that is not.
+    "crates/marsrs",
+    "crates/marsrs-xlog",
+    "crates/marsrs-core",
+    "crates/marsrs-comm",
+    "crates/marsrs-stn",
+    "crates/marsrs-sdt",
+    "crates/marsrs-crypt",
+    "crates/marsrs-buffer",
+    "crates/marsrs-appender",
+    "crates/marsrs-ffi",
+    "crates/marsrs-compat",
+    "crates/marsrs-jni",
 ]
 
 [workspace.package]
@@ -21,13 +28,20 @@ repository = "https://github.com/orangeboyChen/mars-rs"
 authors = ["Mars Rust Working Group"]
 
 [workspace.dependencies]
-mars-core = { path = "crates/mars-core" }
-mars-comm = { path = "crates/mars-comm" }
-mars-stn = { path = "crates/mars-stn" }
-mars-sdt = { path = "crates/mars-sdt" }
-mars-crypt = { path = "crates/mars-crypt" }
-mars-buffer = { path = "crates/mars-buffer" }
-mars-appender = { path = "crates/mars-appender" }
+# The version beside every path: `cargo publish` refuses to package a crate
+# whose path dependencies carry no version requirement, because the packaged
+# manifest drops the `path` and resolves the dependency from crates.io
+# instead. The release workflow rewrites both this version and the one in
+# `[workspace.package]` from the tag, so that a release never publishes a
+# crate that asks for a `^0.1.0` sibling it has itself outgrown.
+marsrs-core = { version = "0.1.0", path = "crates/marsrs-core" }
+marsrs-comm = { version = "0.1.0", path = "crates/marsrs-comm" }
+marsrs-stn = { version = "0.1.0", path = "crates/marsrs-stn" }
+marsrs-sdt = { version = "0.1.0", path = "crates/marsrs-sdt" }
+marsrs-crypt = { version = "0.1.0", path = "crates/marsrs-crypt" }
+marsrs-buffer = { version = "0.1.0", path = "crates/marsrs-buffer" }
+marsrs-appender = { version = "0.1.0", path = "crates/marsrs-appender" }
+marsrs-xlog = { version = "0.1.0", path = "crates/marsrs-xlog" }
 
 memmap2 = "0.9"
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
@@ -547,7 +561,7 @@ semicolon_inside_block = "deny"
 #   indexing_slicing 1014  shadow_unrelated 304  absolute_paths 831
 #   cast_possible_truncation 120                redundant_closure_for_method_calls 357
 #   missing_docs_in_private_items 525           semicolon_if_nothing_returned 379
-#   ref_as_ptr 1 (crates/mars-ffi/tests/ffi_smoke.rs:90)
+#   ref_as_ptr 1 (crates/marsrs-ffi/tests/ffi_smoke.rs:90)
 #   unsafe_code 104        unsafe_op_in_unsafe_fn (E0133, 10)
 #   unsafe_attr_outside_unsafe 134              undocumented_unsafe_blocks 11
 #   missing_docs 104       missing_errors_doc 54  missing_panics_doc 48
@@ -596,7 +610,7 @@ redundant_else = "deny"
 
 # -- what ships -------------------------------------------------------------
 # One codegen unit for the release profile. Measured on `aarch64-apple-ios`:
-# an app that links `mars-ffi` carries 25 KB less `__TEXT` (1,032,606 ->
+# an app that links `marsrs-ffi` carries 25 KB less `__TEXT` (1,032,606 ->
 # 1,007,176 bytes) and the archive is 3 % smaller (21.1 MB -> 20.5 MB, and
 # 14.5 MB -> 13.9 MB once it is stripped).
 #

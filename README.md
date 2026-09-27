@@ -8,16 +8,26 @@ zlib- or zstd-compressed, sync or async — and this is the whole stack:
 
 | crate                 | what it is                                                        |
 |-----------------------|-------------------------------------------------------------------|
-| `mars-core`      | block buffer, log file framing, zlib/zstd helpers                 |
-| `mars-comm`      | common utilities: `strutil`, `tickcount`, thread, message queue, alarm |
-| `mars-stn`       | the task model and the anti-avalanche / dynamic-timeout policies   |
-| `mars-sdt`       | the network diagnosis: check profiles, the plan a mode turns into  |
-| `mars-crypt`     | ECDH + AES-GCM record encryption                                  |
-| `mars-buffer`    | the mmap append buffer (`LogZlibBuffer` / `LogZstdBuffer`)        |
-| `mars-appender`  | the process-wide appender and per-instance loggers                |
-| `mars-ffi`       | C ABI (`cdylib` + `staticlib`): `mars_xlog.h`, `mars_sdt.h` behind the `sdt` feature and `mars_stn.h` behind the `stn` one |
-| `mars-jni`       | JNI bindings of `io.github.orangeboychen.marsrs`: `Xlog`, `StnLogic`, `SdtLogic`|
-| `mars-compat`    | CLI plus the golden `.xlog` files that pin the wire format        |
+| `marsrs`           | the whole port, re-exported: `xlog`, `stn`, `sdt`, `comm`, `bytes` |
+| `marsrs-xlog`      | xlog alone — the pair's other half, for an app that only logs      |
+| `marsrs-core`      | block buffer, log file framing, zlib/zstd helpers                 |
+| `marsrs-comm`      | common utilities: `strutil`, `tickcount`, thread, message queue, alarm |
+| `marsrs-stn`       | the task model and the anti-avalanche / dynamic-timeout policies   |
+| `marsrs-sdt`       | the network diagnosis: check profiles, the plan a mode turns into  |
+| `marsrs-crypt`     | ECDH + AES-GCM record encryption                                  |
+| `marsrs-buffer`    | the mmap append buffer (`LogZlibBuffer` / `LogZstdBuffer`)        |
+| `marsrs-appender`  | the process-wide appender and per-instance loggers                |
+| `marsrs-ffi`       | C ABI (`cdylib` + `staticlib`): `mars_xlog.h`, `mars_sdt.h` behind the `sdt` feature and `mars_stn.h` behind the `stn` one |
+| `marsrs-jni`       | JNI bindings of `io.github.orangeboychen.marsrs`: `Xlog`, `StnLogic`, `SdtLogic`|
+| `marsrs-compat`    | CLI plus the golden `.xlog` files that pin the wire format        |
+
+The two at the top of that table are the crates a Rust caller depends on:
+`marsrs`, the whole port, and `marsrs-xlog`, xlog alone — the pair the C++
+project publishes as `mars-core` and `mars-xlog`, and this one as `MarsRS` and
+`MarsRSXlog`. The seven between them and `marsrs-ffi` are implementation details
+of the pair, and are on crates.io only because a published crate cannot depend
+on a crate that is not: crates.io resolves a dependency out of the registry and
+not out of a path.
 
 ## Build and test
 
@@ -35,13 +45,13 @@ the linker):
 ```bash
 rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 export ANDROID_HOME=...            # .cargo/config.toml forces 16 KiB pages
-cargo build --release -p mars-jni --target aarch64-linux-android
+cargo build --release -p marsrs-jni --target aarch64-linux-android
 ```
 
-`unsafe` appears in exactly three places: the C ABI shims of `mars-ffi`,
-the single `memmap2::MmapOptions::map_mut` call of `mars-appender` (there
+`unsafe` appears in exactly three places: the C ABI shims of `marsrs-ffi`,
+the single `memmap2::MmapOptions::map_mut` call of `marsrs-appender` (there
 is no safe API for creating a mapping) and the one `JString::from_raw` of
-`mars-jni`, which re-wraps a borrowed local ref. All three carry SAFETY notes.
+`marsrs-jni`, which re-wraps a borrowed local ref. All three carry SAFETY notes.
 
 ## Lint
 
@@ -83,16 +93,16 @@ the way Kotlin spells a constant — `kPingCheck` of the C++ project's Java is
 `K_PING_CHECK` here — rather than kept under a `ktlint-disable`, and the JNI
 reaches a constant by the number it carries, not by its name. `detekt.yml` is
 the only place a rule a tool turns on by default is off, and each of the seven
-says why. The ten crates are held to the same rule: no `#[allow]` answers a lint
+says why. The twelve crates are held to the same rule: no `#[allow]` answers a lint
 in them, and the one `#[allow]` left in the tree is `unsafe_code` on the single
-`mmap` of `mars-appender` — a crate that denies `unsafe_code` outright, with the
+`mmap` of `marsrs-appender` — a crate that denies `unsafe_code` outright, with the
 invariant the mapping needs argued beside it.
 
 ## The format is pinned by golden files
 
-The 16 `.xlog` files in `crates/mars-compat/fixtures` were written by the
+The 16 `.xlog` files in `crates/marsrs-compat/fixtures` were written by the
 *original C++* encoders — one per combination of zlib/zstd, sync/async,
-encryption on/off and flush policy — and `cargo test -p mars-compat`
+encryption on/off and flush policy — and `cargo test -p marsrs-compat`
 decodes every one of them back to the exact text that went in. That is what
 keeps the port readable/writable against files produced by the C++ it replaced.
 
@@ -105,7 +115,7 @@ Two differences are known and accepted:
 
 ## The two implementations read each other's files
 
-`cargo test -p mars-compat` proves one half of that: the 16 `.xlog` files under
+`cargo test -p marsrs-compat` proves one half of that: the 16 `.xlog` files under
 `fixtures/` were written by the C++ encoders and the Rust decoder reads every one
 back. The other half — a file this port wrote, read by the C++ — needs the C++
 in the tree, so it lives in a script instead of a test:
@@ -194,7 +204,7 @@ is worth it when the file is the bottleneck and not when the record is.
 
 | | upstream `Tencent/mars` | this port |
 |---|---|---|
-| local time | **four `localtime` calls per record** — `formater.cc:90`, both halves of the day check in `__OpenLogFile` (`appender.cc:750-751`, one of them on `openfiletime_`, which never changes) and, with crypt on, `log_crypt.cc:191` | one per **second**, cached per thread (`mars_core::localtime`) |
+| local time | **four `localtime` calls per record** — `formater.cc:90`, both halves of the day check in `__OpenLogFile` (`appender.cc:750-751`, one of them on `openfiletime_`, which never changes) and, with crypt on, `log_crypt.cc:191` | one per **second**, cached per thread (`marsrs_core::localtime`) |
 | the scratch buffer | `char temp[16 * 1024] = {0}` per call — 16 KiB of stores — in `__WriteSync` / `__WriteAsync` (`appender.cc:960`, `972`) | one `Vec` per thread, grown once (`RECORD`) |
 | the thread id | `syscall(SYS_gettid)` per record (`comm/unix/xlogger_threadinfo.cc:39`); only the pid next to it is a cached static | cached per thread, keyed on the pid so that a `fork` re-reads it (`sys.rs`) |
 | the open appender | `sg_default_appender`, read with no lock at all | a per-thread `Arc` tagged with a generation counter: no lock per record, and no shared atomic write either |
@@ -211,7 +221,7 @@ Measured the same way, against the port as it stood before them:
 format 360 → 104 ns, `append sync/zlib/1t` 1150 → 830 ns, at the other end
 `append async/zlib/8t` 3259 → 2979 ns. In the order they pay:
 
-1. **`mars_core::localtime`** — a per-thread snapshot of the second (offset,
+1. **`marsrs_core::localtime`** — a per-thread snapshot of the second (offset,
    hour, date) that every caller of `localtime` in a record shares. This is the
    one that moves the needle: it is what turns four conversions per record into
    one per second.
@@ -251,6 +261,40 @@ builds them when it is run by hand (Actions → Release → Run workflow) with a
 version, or with a bump and a channel — `v1.2.3-alpha.1`, `v1.2.3-beta.2`,
 `v1.2.3`. Anything with a suffix is published as a GitHub pre-release.
 
+### Rust (crates.io)
+
+```bash
+cargo add marsrs          # the whole port: xlog, stn and sdt
+cargo add marsrs-xlog     # xlog alone
+```
+
+```toml
+# the whole port with the net half left out of it
+[dependencies]
+marsrs = { version = "0.1", default-features = false, features = ["xlog"] }
+```
+
+```rust
+use marsrs::xlog::{appender_close, appender_flush_sync, appender_open, appender_write, XLogConfig};
+
+let mut config = XLogConfig::default();
+config.logdir = std::path::PathBuf::from("/tmp/mars-log");
+appender_open(config).unwrap();
+appender_write(None, "hello from mars");
+appender_flush_sync();
+appender_close();
+```
+
+`marsrs` is one module per component — `xlog`, `stn`, `sdt`, `comm`, `bytes` —
+and each of the first four is behind a feature of its own, all four on by
+default, so `--no-default-features --features xlog` is the build that carries
+the logger and nothing else. `bytes` is not gated: it is the byte buffer every
+signature is written in terms of. `marsrs-xlog` is that build as a crate of its
+own, and is what `marsrs` re-exports as `xlog`.
+
+The nine crates are published by the release workflow, in dependency order, at
+the version of the tag.
+
 ### SwiftPM
 
 ```swift
@@ -266,7 +310,7 @@ over the `MarsRSFFI` binary target, `MarsRSNet` over `MarsRSNetFFI`, and each is
 a static xcframework published with the release.
 
 What either one holds is the feature set it is named for.
-`scripts/build_xcframework.sh` builds `-p mars-ffi --no-default-features
+`scripts/build_xcframework.sh` builds `-p marsrs-ffi --no-default-features
 --features xlog` for the first and `--no-default-features --features sdt,stn`
 for the second — SDT and STN reach the C ABI behind features of their own, and a
 set that is spelled out does not inherit them — and then fails if a slice of
@@ -342,13 +386,13 @@ implementation("io.github.orangeboychen:mars-rs-xlog:0.1.0")  // xlog alone
 
 | AAR | artifact | what is in it |
 |---|---|---|
-| `mars-core.aar` | `mars-rs` | every Kotlin class whose natives `mars-jni` exports — `xlog`, `stn`, `sdt`, `app`, `comm` and `BaseEvent`/`Mars` — plus `libmarsxlog.so` for `arm64-v8a`, `armeabi-v7a` and `x86_64` |
+| `mars-core.aar` | `mars-rs` | every Kotlin class whose natives `marsrs-jni` exports — `xlog`, `stn`, `sdt`, `app`, `comm` and `BaseEvent`/`Mars` — plus `libmarsxlog.so` for `arm64-v8a`, `armeabi-v7a` and `x86_64` |
 | `mars-xlog.aar` | `mars-rs-xlog` | `xlog.Xlog` — with `XlogConfig`, `LogLevel`, `AppenderMode` and `CompressMode` — and the `xlog.Log` facade over it, plus the same `libmarsxlog.so` |
 
 Take `mars-rs` when you want STN or SDT, `mars-rs-xlog` when the app only logs;
 both carry the whole library, because there is one `.so` and it is not split.
 The Kotlin and Java package is `io.github.orangeboychen.marsrs`, the package
-whose natives `mars-jni` exports, so the two are renamed together. The AAR's face
+whose natives `marsrs-jni` exports, so the two are renamed together. The AAR's face
 is Kotlin — `Xlog`, `Log`, `StnLogic`, `SdtLogic` and the rest — written so that
 an app in Java sees the same statics the C++ project's Java had. A repository is also
 reachable on JitPack as `com.github.<owner>.<repo>`, which is the spelling its
@@ -427,16 +471,16 @@ xlog.e("login", "login failed\n${cause.stackTraceToString()}")
 The write is `android.util.Log`'s shape — `v`/`d`/`i`/`w`/`e`/`f`, each of them
 a tag and a message, and `log(level, tag, message)` when the level is not known
 until the call — so Java writes `new Xlog(config)` and `xlog.i(tag, message)`
-with nothing else to learn. A record costs one JNI call: `mars-jni` is what
+with nothing else to learn. A record costs one JNI call: `marsrs-jni` is what
 drops a record the appender's level is above, before anything is formatted, and
 what fills the pid and the tid in from the OS. A message that is expensive to
 build is worth an `if (xlog.isLoggable(LogLevel.DEBUG))` first — a record the
 level drops costs the caller the `String` either way.
 
 `XlogConfig` is the Kotlin face of the appender's options — `LogLevel`,
-`AppenderMode` and `CompressMode` are enums over the numbers `mars-jni` speaks
+`AppenderMode` and `CompressMode` are enums over the numbers `marsrs-jni` speaks
 — and it refuses a config the `.so` cannot honour here, in Kotlin, because
-`mars-jni` answers a config it does not like by opening nothing. A part of an
+`marsrs-jni` answers a config it does not like by opening nothing. A part of an
 app whose logs are read apart from the rest gets an appender of its own out of
 a second `Xlog(XlogConfig(...))` with a `namePrefix` of its own, and
 `xlog.flush(sync = true)` before the app reads or uploads its files: a record of
@@ -455,7 +499,7 @@ site at a time.
 
 `mars-rs-<version>-<host>.tar.gz` (Linux, macOS) and `.zip` (Windows) hold
 `include/mars_xlog.h`, `include/mars_sdt.h`, `include/mars_stn.h` and the static
-and shared libraries of `mars-ffi` — built `--features sdt,stn`, the task
+and shared libraries of `marsrs-ffi` — built `--features sdt,stn`, the task
 pipeline and the diagnosis included, which is what the Android `.so` carries —
 for `x86_64-unknown-linux-gnu`,
 `aarch64-apple-darwin` and `x86_64-pc-windows-msvc`.

@@ -5,7 +5,7 @@
 //   upstream_encode --mode=zlib --compress=1 --sync=0 --flush-every=0 \
 //       --pubkey=HEX --records=records.bin --out=a.xlog
 //
-// Every option is the one `crates/mars-compat/src/lib.rs` reads, with the same
+// Every option is the one `crates/marsrs-compat/src/lib.rs` reads, with the same
 // meaning: `sync` picks `Write(data, len, out_buff)` (one block per record, the
 // way `__WriteFile` calls it) over `Write(data, len)` + `Flush(out)`, and
 // `flush-every` is how often the async path drains the region. `--pubkey`
@@ -55,7 +55,7 @@ bool flag(int argc, char** argv, const char* key, bool fallback) {
 }
 
 /// One record per line; a single trailing newline is not a record — the same
-/// rule `mars_compat::read_records` uses, so both sides encode the same number
+/// rule `marsrs_compat::read_records` uses, so both sides encode the same number
 /// of records out of the same file.
 std::vector<std::string> read_records(const std::string& path) {
     FILE* file = fopen(path.c_str(), "rb");

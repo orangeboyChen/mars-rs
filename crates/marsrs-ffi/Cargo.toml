@@ -1,0 +1,62 @@
+[package]
+name = "marsrs-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "C ABI (cdylib + staticlib) over the Rust port of the Mars xlog appender"
+# Not on crates.io: what a C, C++ or Swift caller needs from this crate is the
+# `libmars_ffi.a` and the three headers beside it, and neither is in what
+# `cargo publish` packs — they reach an app through the release's tarball and
+# the xcframework, not through the registry. A Rust caller takes `marsrs`.
+publish = false
+
+[lib]
+# `cdylib`/`staticlib` for the C/C++/JNI/ObjC callers, `rlib` so the Rust
+# integration tests in `tests/` can call the very same symbols.
+crate-type = ["cdylib", "staticlib", "rlib"]
+name = "mars_ffi"
+
+[dependencies]
+marsrs-appender = { workspace = true, optional = true }
+# Only needed for `CompressMode`, which `XLogConfig` stores by value.
+marsrs-buffer = { workspace = true }
+# The diagnosis, behind a feature of its own: an app that only logs does not
+# carry SDT's bytes, which is the whole point of the feature set.
+marsrs-sdt = { workspace = true, optional = true }
+# The task pipeline, behind a feature of its own, for the same reason.
+marsrs-stn = { workspace = true, optional = true }
+
+# What the C ABI carries, named: the Apple artifact is built `--no-default-features
+# --features xlog`, so it is xlog by construction and not by the accident of what
+# this crate happens to hold today. When STN and SDT get entry points of their
+# own they go behind features of their own, and the xlog build — which spells its
+# set out and never inherits `default` — keeps carrying xlog alone, which is what
+# lets an app that only logs stay off their bytes.
+[features]
+default = ["xlog"]
+# The appender is xlog's: it is what an app that takes the net features and
+# logs nothing would otherwise carry, and `--no-default-features --features
+# sdt,stn` says so at the graph level as well as the symbol level.
+xlog = ["dep:marsrs-appender"]
+# The diagnosis' entry points live on the same panic barrier xlog's do — every
+# `mars_sdt_*` is wrapped in `guard`.
+#
+# The two halves are additive and neither takes `xlog` with it, which is what
+# lets the Apple net framework be built `--no-default-features --features
+# sdt,stn`: no `mars_xlog_*` in it, so an app that takes both frameworks links
+# xlog's symbols once. Whoever wants all three spells all three out — the host
+# library of a release does.
+sdt = ["dep:marsrs-sdt"]
+# The task pipeline's entry points: the same panic barrier, spelled out the same
+# way.
+stn = ["dep:marsrs-stn"]
+
+[dev-dependencies]
+tempfile = { workspace = true }
+# Used by `tests/ffi_smoke.rs` to inflate the (always compressed) .xlog records.
+flate2 = { workspace = true }
+
+[lints]
+workspace = true

@@ -12,7 +12,7 @@ import io.github.orangeboychen.marsrs.Mars
  *
  * Two `external`s, both of them statics of this very class — that is what makes
  * them the `Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_*` symbols
- * `mars-jni` exports — and one private static the Rust calls back.
+ * `marsrs-jni` exports — and one private static the Rust calls back.
  */
 object SdtLogic {
 

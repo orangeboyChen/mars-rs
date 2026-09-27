@@ -11,7 +11,7 @@ import io.github.orangeboychen.marsrs.comm.PlatformComm
  * What the C++ project's `Mars.java` loads is three libraries — `c++_shared`,
  * `marsxlog` and `marsstn` — because it is C++ and its two `.so` files are two
  * builds. This one is Rust and there is one, `marsxlog`: the `crate-name` of
- * `mars-jni`, which carries xlog *and* STN *and* SDT, and needs no
+ * `marsrs-jni`, which carries xlog *and* STN *and* SDT, and needs no
  * `libc++_shared.so` beside it.
  *
  * It is an `object` and not a class of statics, but the members are the ones an
