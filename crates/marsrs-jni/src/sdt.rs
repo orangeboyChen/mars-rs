@@ -12,7 +12,7 @@
 //! crate: `reportSignalDetectResults` is a static **Java** method the native
 //! side calls when a diagnosis ends
 //! (`com_tencent_mars_sdt_SdtLogic_C2Java.cc`), not a `native` method Java
-//! calls. It needs a live `JNIEnv`, so it lives in
+//! calls. It needs a live `Env`, so it lives in
 //! [`crate::jni_bridge::report_signal_detect_results`] and is left out of the
 //! tests; everything up to it — the JSON, and the record of what was handed
 //! over — is here and is covered by `cargo test`.
