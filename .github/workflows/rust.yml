@@ -1,15 +1,79 @@
 name: Rust
 
 # Build / lint / test gate of the xlog workspace: rustfmt, clippy, the test
-# suite on Linux/macOS/Windows (debug and release), a release build, cargo doc,
-# and the Android, HarmonyOS and Apple cross builds of the FFI and JNI crates.
+# suite on Linux/macOS/Windows (debug and release) with the coverage floor
+# measured on the Linux one, cargo doc, and the Android, HarmonyOS and Apple
+# cross builds of the FFI and JNI crates.
+#
+# There is no release build of its own: `cargo test --workspace --release`
+# compiles the whole workspace in the release profile on each of the three
+# hosts already, and the one thing a build job asked for besides that compile —
+# the `sdt,stn` set with xlog off — is a `cargo build` in `lint`. Nor is there
+# a coverage job of its own: it is `cargo test` again under `cargo llvm-cov`,
+# on the same host and over the same workspace, so it is a step of the Linux
+# `test` job rather than a fourth runner with the same checkout and the same
+# toolchain on it.
+#
+# Every cross target of a platform shares one runner instead of taking one
+# each: each of them is the same `cargo build` of the same crate, and four in
+# a row on one runner cost less than four side by side — on macOS, ten times
+# less, at the rate it is billed — and no longer than the slowest job of the
+# run anyway. The nightly `arm64_32` build is the one exception, and it is not
+# a pull request's job at all.
 
 on:
+  # What cargo reads, and only that: a pull request that rewrites the Kotlin
+  # of the AAR or the Swift of the package has nothing to say to `cargo test`,
+  # and seven jobs on four runners is not what it should pay to hear it. The
+  # list is what the build takes as an input — the sources, the manifests, the
+  # lock, the config that sets `RUSTFLAGS`, the two lints' own configuration,
+  # the one script this workflow runs — plus the workflow itself, so that a
+  # change here is proved here.
+  #
+  # Anything new that a build or a test reads belongs in both lists: a path
+  # that is missing does not fail loudly, it simply never starts.
   push:
     branches:
       - main
+    paths:
+      - crates/**
+      - '**/*.rs'
+      - Cargo.toml
+      - '**/Cargo.toml'
+      - Cargo.lock
+      - .cargo/**
+      - clippy.toml
+      - rustfmt.toml
+      - .gitattributes
+      - .github/scripts/**
+      - scripts/build_harmony.sh
+      - .github/workflows/rust.yml
   pull_request:
+    paths:
+      - crates/**
+      - '**/*.rs'
+      - Cargo.toml
+      - '**/Cargo.toml'
+      - Cargo.lock
+      - .cargo/**
+      - clippy.toml
+      - rustfmt.toml
+      - .gitattributes
+      - .github/scripts/**
+      - scripts/build_harmony.sh
+      - .github/workflows/rust.yml
+  # Not filtered: a dispatch is a person asking for the whole gate, whatever
+  # the last commit touched.
   workflow_dispatch:
+
+# A push supersedes the run it interrupts, so the older one is cancelled: only
+# the newest commit of a branch or a pull request is worth the minutes, and a
+# push to every branch of a stack used to leave four runs of seventeen jobs
+# racing each other. A push to main is never cancelled — every commit of it is
+# a release candidate and gets its own green or red.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -20,28 +84,40 @@ env:
   RUSTFLAGS: '-D warnings'
 
 jobs:
-  format:
-    name: rustfmt
+  lint:
+    name: rustfmt + clippy + doc + net build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
-      - run: cargo fmt --all -- --check
-
-  clippy:
-    name: clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
       # `--all-features`: the SDT and STN C ABIs are behind features of their
       # own, so a plain `--workspace` never compiles them.
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # The set the Apple net framework is built with: the diagnosis and the
+      # task pipeline, and not xlog. Nothing else asks for it — `--all-features`
+      # above is every one of them, and the tests take the two net ones one at a
+      # time — so it is spelled out here.
+      #
+      # A build, and not a `check`: what `mars-ffi` is, is a `staticlib` and a
+      # `cdylib`, and `cargo check` stops before code generation, so a missing
+      # symbol, a duplicate one or any other linker failure in this pairing is
+      # invisible to it and would next be seen in the release workflow. One host
+      # is enough — what is asked here is whether it links, and the Apple
+      # slices of the very same set are built by `scripts/build_xcframework.sh`.
+      - name: cargo build (sdt, stn)
+        run: cargo build --release -p mars-ffi --no-default-features --features sdt,stn
+      # `cargo doc` had a runner of its own for no better reason than that it
+      # was written as a job. `clippy` above has compiled the workspace with
+      # every feature already, which is what `--all-features` asks of `doc`
+      # too, so on a warm cache this is the cheap half of that job.
+      - name: cargo doc
+        env:
+          RUSTDOCFLAGS: '-D warnings'
+        run: cargo doc --workspace --no-deps --all-features
 
   test:
     name: test
@@ -53,7 +129,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Only the host that goes on to measure coverage needs the profiler
+          # runtime; an empty `components` installs nothing.
+          components: ${{ matrix.os == 'ubuntu-latest' && 'llvm-tools-preview' || '' }}
       - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-llvm-cov
+        if: matrix.os == 'ubuntu-latest'
+        uses: taiki-e/install-action@cargo-llvm-cov
       - name: cargo test
         run: cargo test --workspace --all-targets
       - name: cargo test (release)
@@ -64,22 +147,24 @@ jobs:
         run: cargo test -p mars-ffi --features sdt
       - name: cargo test (stn)
         run: cargo test -p mars-ffi --features stn
-
-  build:
-    name: build (release)
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace --release --all-targets
+      # 90 % of the lines, measured over everything `cargo test` can reach.
+      # One host is enough — the coverage of a test is a fact about the test,
+      # and not about the machine it ran on — and this one is already the
+      # cheapest: the workspace is compiled here three times over by now.
+      #
+      # mars-jni/src/jni_bridge.rs is left out on purpose: it is the JVM
+      # boundary and needs a live JNIEnv, so only the Android AAR exercises it.
+      # The logic behind those entry points lives in the crate root and *is*
+      # measured.
+      - name: Measure line coverage
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo llvm-cov --workspace --all-features --summary-only \
+            --ignore-filename-regex 'mars-jni/src/jni_bridge\.rs' \
+            --fail-under-lines 90
 
   android:
-    name: build (${{ matrix.target }})
+    name: build (android)
     runs-on: ubuntu-latest
     env:
       NDK_VERSION: 27.1.12297006
@@ -95,35 +180,19 @@ jobs:
       # because the `cargo build` step derives the NDK path from it.
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: aarch64-linux-android
-            clang: aarch64-linux-android24-clang
-          - target: armv7-linux-androideabi
-            clang: armv7a-linux-androideabi24-clang
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
-      # `android-actions/setup-android` is intentionally not used: it installs
-      # the long-removed `tools` SDK package, so its `sdkmanager` call exits
+          # both ABIs, in one job: see the comment on the build step
+          targets: aarch64-linux-android, armv7-linux-androideabi
+      # `android-actions/setup-android` is intentionally not used, and why is
+      # written down in .github/scripts/install_android_ndk.sh: it installs the
+      # long-removed `tools` SDK package, so its `sdkmanager` call exits
       # non-zero and the job fails before any Rust code is compiled. The SDK
-      # (and its `sdkmanager`) that the runner image already provides is enough
-      # to install the NDK.
+      # (and its `sdkmanager`) that the runner image already provides is enough.
       - name: Install the Android NDK
-        run: |
-          set -euo pipefail
-          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          # `yes` is killed by SIGPIPE as soon as sdkmanager stops reading, and
-          # under `pipefail` that 141 would fail the job even though sdkmanager
-          # itself succeeded. Grouping it keeps the pipeline status to
-          # sdkmanager's own exit code.
-          { yes || true; } | "$sdkmanager" --licenses > /dev/null
-          "$sdkmanager" --install "ndk;${NDK_VERSION}"
-          test -d "$ANDROID_HOME/ndk/${NDK_VERSION}"
+        run: .github/scripts/install_android_ndk.sh
       - uses: Swatinem/rust-cache@v2
       # `zstd-sys` compiles C, so both cc-rs and rustc need the NDK clang. The
       # two of them spell the env var prefixes differently, so the names are
@@ -131,27 +200,34 @@ jobs:
       - name: cargo build
         run: |
           set -euo pipefail
-          target="${{ matrix.target }}"
-          # `aarch64-linux-android` -> `aarch64_linux_android`
-          flat="$(printf '%s' "$target" | tr '-' '_')"
-          upper="$(printf '%s' "$flat" | tr '[:lower:]' '[:upper:]')"
           ndk_bin="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          clang="$ndk_bin/${{ matrix.clang }}"
-          test -x "$clang"
-          # Casing matters here and the two prefixes are spelled differently:
-          # cargo reads the upper-cased `CARGO_TARGET_<TRIPLE>_LINKER`, while
-          # cc-rs reads `CC_<triple>` verbatim (it also tries the underscore
-          # form, then `TARGET_CC`, then `CC`). The upper-cased `CC_<TRIPLE>`
-          # is silently ignored on Linux, which makes cc-rs fall back to a bare
-          # `<triple>-clang` on `$PATH` and fail.
-          export "CC_${flat}=$clang"
-          export "AR_${flat}=$ndk_bin/llvm-ar"
-          export "CARGO_TARGET_${upper}_LINKER=$clang"
           # So that plain `llvm-ar` and friends are reachable too.
           export PATH="$ndk_bin:$PATH"
-          cargo build --release -p mars-ffi --target "$target"
-          cargo build --release -p mars-jni --target "$target"
-          ls -l "target/$target/release/libmarsxlog.so"
+          # Both ABIs on one runner. Each of them is two `cargo build`s of the
+          # same two crates, so what a matrix of two bought was a second
+          # check-out, a second toolchain, a second NDK install and a second
+          # cold cache — for one command each.
+          for entry in aarch64-linux-android:aarch64-linux-android24-clang \
+                       armv7-linux-androideabi:armv7a-linux-androideabi24-clang; do
+            target="${entry%%:*}"
+            clang="$ndk_bin/${entry##*:}"
+            test -x "$clang"
+            # `aarch64-linux-android` -> `aarch64_linux_android`
+            flat="$(printf '%s' "$target" | tr '-' '_')"
+            upper="$(printf '%s' "$flat" | tr '[:lower:]' '[:upper:]')"
+            # Casing matters here and the two prefixes are spelled differently:
+            # cargo reads the upper-cased `CARGO_TARGET_<TRIPLE>_LINKER`, while
+            # cc-rs reads `CC_<triple>` verbatim (it also tries the underscore
+            # form, then `TARGET_CC`, then `CC`). The upper-cased `CC_<TRIPLE>`
+            # is silently ignored on Linux, which makes cc-rs fall back to a bare
+            # `<triple>-clang` on `$PATH` and fail.
+            export "CC_${flat}=$clang"
+            export "AR_${flat}=$ndk_bin/llvm-ar"
+            export "CARGO_TARGET_${upper}_LINKER=$clang"
+            cargo build --release -p mars-ffi --target "$target"
+            cargo build --release -p mars-jni --target "$target"
+            ls -l "target/$target/release/libmarsxlog.so"
+          done
 
   # HarmonyOS. The three OHOS targets are tier 2 with host tools, so a std ships
   # for them and stable is enough; what is gated here is everything the SDK has
@@ -186,25 +262,30 @@ jobs:
         run: ls -l dist/harmony/*/libmars_ffi.so
 
   apple:
-    name: build (${{ matrix.target }})
+    name: build (apple)
     runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - aarch64-apple-ios
-          - aarch64-apple-ios-sim
-          # An arm64 watch is a watchOS 26 watch, and `aarch64-apple-watchos`
-          # is what builds for one.
-          - aarch64-apple-watchos
-          - aarch64-apple-watchos-sim
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          # all four, in one job: see the comment on the build step
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim, aarch64-apple-watchos, aarch64-apple-watchos-sim
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release -p mars-ffi --target ${{ matrix.target }}
+      # Four targets on one runner, and the four of them in a row: each is the
+      # same `cargo build` of the same crate, so what a matrix of four bought
+      # was four check-outs, four toolchains and four cold caches for one
+      # command each — on the host GitHub bills at ten times the rate of a
+      # Linux one. Compiled in a row they take about as long as
+      # `test (windows-latest)` does, so the run ends when it did before.
+      - name: cargo build
+        run: |
+          set -euo pipefail
+          # An arm64 watch is a watchOS 26 watch, and `aarch64-apple-watchos`
+          # is what builds for one.
+          for target in aarch64-apple-ios aarch64-apple-ios-sim \
+                        aarch64-apple-watchos aarch64-apple-watchos-sim; do
+            cargo build --release -p mars-ffi --target "$target"
+          done
 
   # The watchOS device slice of the xcframework is two architectures, and the
   # older of them is the one a watchOS 10 to 25 app links: `arm64_32` is tier 3,
@@ -212,8 +293,14 @@ jobs:
   # a nightly's sources. It is the same Rust the stable jobs above compile, so
   # what this job is really gating is the tier 3 target itself — a nightly that
   # stops building it fails here and not in the release.
+  #
+  # Which is why it is not a pull request's problem: the answer it gives is
+  # about the nightly and not about the commit, and one more macOS runner — the
+  # fifth — is not what a pull request should wait for. It runs on main, where
+  # the next tag is cut from, and on demand.
   apple-watchos-arm64-32:
     name: build (arm64_32-apple-watchos)
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -222,33 +309,3 @@ jobs:
           components: rust-src
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p mars-ffi --target arm64_32-apple-watchos -Z build-std=std,panic_abort
-
-  coverage:
-    name: coverage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-      - uses: taiki-e/install-action@cargo-llvm-cov
-      - uses: Swatinem/rust-cache@v2
-      # 90 % of the lines, measured over everything `cargo test` can reach.
-      # mars-jni/src/jni_bridge.rs is left out on purpose: it is the JVM
-      # boundary and needs a live JNIEnv, so only the Android AAR exercises it.
-      # The logic behind those entry points lives in the crate root and *is*
-      # measured.
-      - name: Measure line coverage
-        run: |
-          cargo llvm-cov --workspace --all-features --summary-only \
-            --ignore-filename-regex 'mars-jni/src/jni_bridge\.rs' \
-            --fail-under-lines 90
-  docs:
-    name: docs
-    runs-on: ubuntu-latest
-    env:
-      RUSTDOCFLAGS: '-D warnings'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo doc --workspace --no-deps --all-features

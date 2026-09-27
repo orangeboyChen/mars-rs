@@ -45,9 +45,11 @@ is no safe API for creating a mapping) and the one `JString::from_raw` of
 
 ## Lint
 
-One gate per language, and each of them fails on the first finding.
-`.github/workflows/lint.yml` runs the Swift and the Kotlin gate on every push
-and pull request; `rust.yml` runs the Rust one.
+One gate per language, and each of them fails on the first finding:
+`.github/workflows/lint-swift.yml` and `lint-kotlin.yml` run the Swift and the
+Kotlin gate, `rust.yml` runs the Rust one. Each of the three starts on what it
+reads and not on every push: a pull request with no Swift in it does not pay
+for a macOS runner, and one with no Kotlin in it does not pay for a JDK.
 
 | Language | Tools | Configuration |
 | --- | --- | --- |
@@ -252,31 +254,35 @@ version, or with a bump and a channel — `v1.2.3-alpha.1`, `v1.2.3-beta.2`,
 .package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
 ```
 
-Two products, the pair the Android packages make of `mars-rs` and
-`mars-rs-xlog`: `MarsRS` is the whole port, `MarsRSXlog` is the logging half
-of it, for an app that only logs. Both are Swift over the `MarsRSFFI` binary
-target, the static xcframework published with the release. What that binary
-holds is xlog: `mars-ffi` is 28 `mars_xlog_*` symbols and nothing else, so
-taking `MarsRSXlog` today costs exactly what `MarsRS` costs, and the difference
-between the two is the promise, not the bytes. That is also how the C++ project
-answers it — orangeboyChen/mars publishes one SPM product, `MarsXlog`, over a
-`MarsXlog.xcframework` built from the xlog subset of its sources, and its
-Android build has an `--xlog-only` mode for the same reason — and it is why the
-artifact is named after xlog here and not after the port: `Stn.swift` and
-`Sdt.swift` land in `MarsRS` with a framework of their own, and an app that only
-logs keeps downloading this one. `scripts/build_xcframework.sh` already builds
-`MarsRSXlog.xcframework.zip` under that name, and it does not take the crate's
-word for what is in it: it builds `-p mars-ffi --no-default-features --features
-xlog`, so the artifact is the xlog feature set and not whatever the crate
-carries by default — SDT and STN reach the C ABI behind features of their own,
-`sdt` and `stn`, and a set that is spelled out does not inherit them — and then
-it fails if a
-slice still exports anything of the port's beyond `mars_xlog_*`, so the name
-stays a checked promise; `Package.swift` follows at the release that publishes it, which is also
-when the C module takes the name — a module is what a consumer imports, so it
-cannot be renamed under one. The tag and the SPM checksum are written into
-`Package.swift` by the release workflow on a `chore/package-swift-<tag>` branch,
-proposed as a pull request.
+Three products: `MarsRS` is the whole port, `MarsRSXlog` is the logging half of
+it and `MarsRSNet` is the half that is not logging — the diagnosis and the task
+pipeline — for an app that runs tasks and does not log. The two halves are two
+artifacts and not one library split at the Swift layer: `MarsRSXlog` is Swift
+over the `MarsRSFFI` binary target, `MarsRSNet` over `MarsRSNetFFI`, and each is
+a static xcframework published with the release.
+
+What either one holds is the feature set it is named for.
+`scripts/build_xcframework.sh` builds `-p mars-ffi --no-default-features
+--features xlog` for the first and `--no-default-features --features sdt,stn`
+for the second — SDT and STN reach the C ABI behind features of their own, and a
+set that is spelled out does not inherit them — and then fails if a slice of
+either one exports a symbol of the port's that is not its own. That is what makes
+the split worth having: an app that only logs downloads xlog's bytes and nothing
+else, and an app that takes both links xlog's symbols exactly once. Two Rust
+static libraries out of one crate do link side by side, which is not obvious —
+the symbols they share are the crate's own, and rustc emits those private extern,
+so the second copy is not a duplicate definition.
+
+That is also how the C++ project answers it — orangeboyChen/mars publishes one
+SPM product, `MarsXlog`, over a `MarsXlog.xcframework` built from the xlog subset
+of its sources, and its Android build has an `--xlog-only` mode for the same
+reason — and it is why the xlog artifact is named after xlog here and not after
+the port. The tag and the SPM checksums are written into `Package.swift` by the
+release workflow on a `chore/package-swift-<tag>` branch, proposed as a pull
+request; there is one checksum per binary target, because a checksum is bound to
+the zip it was computed from. A module is what a consumer imports, so the xlog
+one keeps the name `MarsRSFFI` until a release carries the renamed asset — it
+cannot be renamed under one — while the net one is new and named after itself.
 
 The framework carries four slices — `ios-arm64`, `ios-arm64_x86_64-simulator`,
 `watchos-arm64_arm64_32` and `watchos-arm64-simulator` — so an app target of
@@ -288,21 +294,23 @@ no channel ships a std for, so it is built out of a nightly's sources with
 watchOS 26 because its std is. `x86_64-apple-watchos-sim` is left out — a
 watchOS simulator is arm64.
 
-What an app pays for the framework is about 1.0 MB of `__TEXT` on arm64,
+What an app pays for the xlog framework is about 1.0 MB of `__TEXT` on arm64,
 measured by linking a slice into an otherwise empty executable with
 `-dead_strip`: the 21 MB archive of a slice is the shelf the linker picks from,
 not what lands in the app. Each archive is stripped of its local symbols before
 it is packaged — 31 % off the zip a consumer downloads, and nothing off the
-link, because every `mars_xlog_*` is an external symbol and stays.
+link, because every symbol the artifact is named for is an external symbol and
+stays.
 
-`Sources/MarsRSXlog/Xlog.swift` is what the port exposes today: `mars-ffi` is
-an xlog C ABI (28 `mars_xlog_*` symbols, nothing else), so xlog is all the Swift
-layer can reach and `MarsRS` re-exports `MarsRSXlog` and nothing more.
-`Stn.swift` and `Sdt.swift` join the umbrella when the framework does — the C
-ABI carries the task pipeline and the diagnosis already, behind the `stn` and
-`sdt` features, but the artifact a consumer downloads is xlog's — that is why `MarsRS` exists as a module of its
-own and not just as a name for xlog. orangeboyChen/mars ships a single `MarsXlog` product for the same reason;
-here the xlog-only import is `import MarsRSXlog`.
+`Sources/MarsRSXlog/Xlog.swift` and `Sources/MarsRSNet/` are what the port
+exposes: the Swift over the 28 `mars_xlog_*` symbols, and the Swift over the
+`mars_sdt_*` and `mars_stn_*` of the diagnosis and the task pipeline —
+`MarsSdt`, `MarsStn` and the `StnTask`, `StnQuestion` and `StnAnswer` they ask
+and answer with. `MarsRS` is the module that re-exports both halves, which is
+why it exists as a module of its own and not just as a name for xlog.
+orangeboyChen/mars ships a single `MarsXlog` product because xlog is all its
+package has; here the xlog-only import is `import MarsRSXlog` and the net-only
+one is `import MarsRSNet`.
 
 An app writes through an `Xlog` of its own — `let log = try Xlog(XlogConfig(
 logDirectory: dir))`, then `log.info(message: "hello", tag: "Net")` — the two
@@ -423,11 +431,15 @@ when `OHOS_SDK_HOME` is not set.
 ### Building the packages
 
 ```bash
-scripts/build_xcframework.sh 0.1.0 dist   # MarsRSXlog.xcframework.zip
+scripts/build_xcframework.sh 0.1.0 dist   # MarsRSXlog.xcframework.zip, MarsRSNet.xcframework.zip
 scripts/build_android.sh dist/native      # <abi>/libmarsxlog.so
 # the .so of dist/native has to be under android/<module>/libs first
 (cd android && ./gradlew :mars-core:assembleRelease :mars-xlog:assembleRelease)
 ```
+
+The scripts that only a workflow runs — resolving the version, installing the
+NDK on a runner, waiting for JitPack, rewriting `Package.swift` — are in
+`.github/scripts/`.
 
 ## License
 
