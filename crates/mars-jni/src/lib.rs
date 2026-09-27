@@ -143,7 +143,7 @@ pub(crate) fn log_write_impl(info: Option<XLoggerInfo>, log: &str) -> bool {
 
 /// `Xlog.write` body — the one record, one JNI call write of the Kotlin API.
 ///
-/// [`is_enabled_for`] is asked *before* the record is formatted, which is what
+/// [`mars_appender::is_enabled_for`] is asked *before* the record is formatted, which is what
 /// gives the level something to say on the process-wide appender: the C++'s
 /// `xlogger_Write` — what handle `0` reaches — has no level filter of its own,
 /// so a record of a level the appender is above reached the file anyway. Asking

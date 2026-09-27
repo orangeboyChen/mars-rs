@@ -362,7 +362,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logWrite<'l
 }
 
 /// `Xlog.write` — the write of the Kotlin API: one record in one JNI call,
-/// with the level filter in [`crate::write_impl`] and no `XLoggerInfo` for the
+/// with the level filter in `write_impl` and no `XLoggerInfo` for the
 /// caller to fill in.
 ///
 /// `Xlog.logWrite` is the write the C++ project's Java spelled, and it is what
