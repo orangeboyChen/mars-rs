@@ -1,6 +1,6 @@
 // swift-tools-version: 5.9
 //
-//  mars-rs — Swift Package Manager distribution (iOS)
+//  mars-rs — Swift Package Manager distribution (iOS, watchOS)
 //
 //      .package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
 //
@@ -41,7 +41,17 @@ import PackageDescription
 let package = Package(
     name: "mars-rs",
     platforms: [
-        .iOS(.v12)
+        .iOS(.v12),
+        // watchOS 10, and the framework is 10 on the device too: what a watch
+        // that runs watchOS 10–25 links is the `arm64_32` half of the device
+        // slice — the 32-bit-pointer arm64 of every watch before the arm64
+        // ones. That architecture is a tier 3 target no channel ships a std
+        // for, so `scripts/build_xcframework.sh` builds one out of a nightly's
+        // sources with `-Z build-std`. The arm64 half next to it is the
+        // watchOS 26 one, and `.v10` is as new as `Platform.watchOS` gets in
+        // swift-tools-version 5.9, which is where the manifest stays so that a
+        // Swift 5 project can still depend on the package.
+        .watchOS(.v10)
     ],
     products: [
         .library(name: "MarsRS", targets: ["MarsRS"]),
@@ -49,7 +59,8 @@ let package = Package(
         .library(name: "MarsRSXlog", targets: ["MarsRSXlog"]),
     ],
     targets: [
-        // Prebuilt binary: ios-arm64 + ios-arm64_x86_64-simulator, each with
+        // Prebuilt binary: ios-arm64 + ios-arm64_x86_64-simulator +
+        // watchos-arm64_arm64_32 + watchos-arm64-simulator, each with
         // `mars_xlog.h` and the module map that names it `MarsRSFFI`.
         .binaryTarget(
             name: "MarsRSFFI",

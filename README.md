@@ -119,6 +119,16 @@ taking the smaller one drops nothing but the promise of STN and SDT. The tag
 and the SPM checksum are written into `Package.swift` by the release workflow
 on a `chore/package-swift-<tag>` branch, proposed as a pull request.
 
+The framework carries four slices — `ios-arm64`, `ios-arm64_x86_64-simulator`,
+`watchos-arm64_arm64_32` and `watchos-arm64-simulator` — so an app target of
+either platform resolves it. The watchOS device slice holds two architectures:
+`arm64_32`, which is what a watch running watchOS 10 to 25 links, and `arm64`,
+which is what watchOS 26 moved its watches onto. `arm64_32` is a tier 3 target
+no channel ships a std for, so it is built out of a nightly's sources with
+`-Z build-std`; the arm64 half needs no such thing, and is built for
+watchOS 26 because its std is. `x86_64-apple-watchos-sim` is left out — a
+watchOS simulator is arm64.
+
 `Sources/MarsRSXlog/Xlog.swift` is what the port exposes today: `mars-ffi` is
 an xlog C ABI (21 `mars_xlog_*` symbols, nothing else), so xlog is all the Swift
 layer can reach and `MarsRS` re-exports `MarsRSXlog` and nothing more.
