@@ -97,6 +97,47 @@ Two differences are known and accepted:
 * **zstd** — the C++ build vendored 1.4.4, this one uses the `zstd` crate
   1.5.x, so compressed sizes differ.
 
+## The two implementations read each other's files
+
+`cargo test -p mars-compat` proves one half of that: the 16 `.xlog` files under
+`fixtures/` were written by the C++ encoders and the Rust decoder reads every one
+back. The other half — a file this port wrote, read by the C++ — needs the C++
+in the tree, so it lives in a script instead of a test:
+
+```bash
+sh scripts/compat/cross.sh
+```
+
+It builds upstream's own decoder (`mars/xlog/crypt/decode_log_file_c_impl/
+decode_log_file.c`, patched with the fixtures' ECDH keys) and an encoder
+(`scripts/compat/upstream_encode.cpp`) that mirrors `xlog-compat encode`
+option for option, then runs the same 16 combinations — zlib/zstd × sync/async ×
+crypt on/off × flush policy — in both directions: encode here and decode there,
+encode there and decode here, byte for byte against `fixtures/expected.bin`.
+It then does the same through the real appenders, so what is decoded is a
+`<prefix>_YYYYMMDD.xlog` an app would ship and not just the block bytes.
+
+| layer | rust → C++ | C++ → rust |
+|---|---|---|
+| record layer, 16 combinations | 12 ok, 4 `cpp-decoder` | 16 ok |
+| appender layer, 8 combinations | 8 ok | 8 ok |
+
+`cpp-decoder` is the four `zstd-async` cases, and it is not a difference between
+the encoders: upstream's decoder reads *its own* golden `zstd-async` files the
+same wrong way — 4501 of 4510 bytes with one flush, 432 with one per record —
+while the Rust decoder reads both encoders' files whole. The script runs that
+control itself and says so instead of failing.
+
+Two things the run turns up that are worth knowing:
+
+* upstream's `decode_log_file.c` **does not compile as it stands** —
+  `zstdDecompress` reads a `lastPos` it never declares (line 212). The build
+  patches one `size_t` into its copy under `target/`.
+* the Rust appender's `appender_write` takes a `&str`, so a record that is not
+  UTF-8 cannot be logged through it; the C++ `xlogger_Write` takes bytes. The
+  appender layer of the test checks the records that are UTF-8 and the record
+  layer carries the rest through both encoders unchanged.
+
 ## What a record costs, measured against the C++
 
 xlog writes a record on the thread that logs it, so what one record costs is
