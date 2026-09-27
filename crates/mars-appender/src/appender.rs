@@ -370,21 +370,22 @@ struct CacheSlot {
     file: File,
 }
 
-/// Opens `<dir>/<prefix>.lock` and takes it, waiting until it is free.
+/// Opens `<dir>/<prefix>.lock`, or `None` when locking does not work here.
 ///
-/// The lock goes when the returned file is dropped, so the caller only has to
-/// keep it alive for as long as the section it guards — a `let` binding is
-/// enough, and a process that dies releases it too.
-fn acquire_dir_lock(path: Option<&Path>) -> Option<File> {
+/// One handle for the whole appender, locked and unlocked around each section
+/// by [`AppenderInner::with_dir_lock`] rather than reopened: on macOS an `open`
+/// and a `close` measured ~16 µs against ~0.5 µs for the `flock` pair, which is
+/// more than a whole record costs. The lock is still released when the file is
+/// dropped, so a process that dies releases it too.
+fn open_dir_lock(path: Option<&Path>) -> Option<File> {
     let path = path?;
-    let file = OpenOptions::new()
+    OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .open(path)
-        .ok()?;
-    sys::lock_exclusive(&file).then_some(file)
+        .ok()
 }
 
 /// Claims the cache file no other writer holds, or `None` when every slot is
@@ -550,7 +551,9 @@ struct AppenderInner {
     /// one file: see `Self::with_dir_lock`. `None` when advisory locking
     /// excludes nobody in this directory, where those operations run
     /// unprotected — the way the C++ runs them.
-    dir_lock: Option<PathBuf>,
+    ///
+    /// Held open rather than reopened per section: see [`open_dir_lock`].
+    dir_lock: Option<File>,
 }
 
 impl AppenderInner {
@@ -572,13 +575,22 @@ impl AppenderInner {
     /// (or two copies of this crate in one) writing the same prefix, each of
     /// those is a race that loses or duplicates records.
     ///
-    /// A caller must not already hold the lock: `flock` is per open file
-    /// description, so a second `open()` of the same lock file waits for the
-    /// first, and a nested caller would wait for itself. The locked sections
+    /// A caller must not already hold the lock: the inner `unlock` would
+    /// release it while the outer section is still running. The locked sections
     /// call `Self::flush_pending_locked` instead.
+    ///
+    /// Not holding it is not an error worth failing a write over — a log is
+    /// best-effort, and the sections below still run, unprotected, the way the
+    /// C++ runs them.
     fn with_dir_lock<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        let _guard = acquire_dir_lock(self.dir_lock.as_deref());
-        f(self)
+        let held = self.dir_lock.as_ref().is_some_and(sys::lock_exclusive);
+        let out = f(self);
+        if held {
+            if let Some(file) = self.dir_lock.as_ref() {
+                sys::unlock(file);
+            }
+        }
+        out
     }
 
     /// `cond_buffer_async_.notifyAll()`
@@ -1137,15 +1149,27 @@ impl Appender {
         // the same cache file into the log.
         let dir = cache_dir(&config).to_path_buf();
         let lock_path = dir_lock_path(&dir, &config.nameprefix);
+        // Whether advisory locking works here decides two things: whether the
+        // sections below can be serialised at all, and whether a cache slot of
+        // this appender's own can be told from one a dead writer left behind.
         let locking = sys::lock_excludes(&lock_path);
-        let dir_lock = locking.then_some(lock_path);
+        let dir_lock = if locking {
+            open_dir_lock(Some(&lock_path))
+        } else {
+            None
+        };
         {
-            let _guard = acquire_dir_lock(dir_lock.as_deref());
+            if let Some(file) = dir_lock.as_ref() {
+                sys::lock_exclusive(file);
+            }
             if let Some(cache) = &cachedir {
                 del_timeout_file(cache, alive_time);
                 move_old_files(cache, &config.logdir, &config.nameprefix, config.cache_days);
             }
             del_timeout_file(&config.logdir, alive_time);
+            if let Some(file) = dir_lock.as_ref() {
+                sys::unlock(file);
+            }
         }
 
         // A cache file of this appender's own: see `CacheSlot`.

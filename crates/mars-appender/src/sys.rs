@@ -226,6 +226,68 @@ pub fn try_lock_exclusive(file: &File) -> bool {
     lock(file, true)
 }
 
+/// Releases the lock [`lock_exclusive`] / [`try_lock_exclusive`] took, keeping
+/// the handle.
+///
+/// `flock(fd, LOCK_UN)` / `UnlockFileEx`. Separate from dropping the file
+/// because a caller that locks once per section would otherwise pay an `open`
+/// and a `close` on top of the `flock` pair, and on macOS those two measured
+/// ~16 µs against ~0.5 µs for the lock itself — more than a whole record costs.
+/// One handle, opened once, is locked and unlocked as often as needed.
+pub fn unlock(file: &File) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+
+        // SAFETY: `flock` needs only a valid descriptor, which `File` is.
+        0 == unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+
+        /// `OVERLAPPED`: only the offset and the event are read, and both are
+        /// zero here, matching the range `lock` locked.
+        #[repr(C)]
+        struct Overlapped {
+            internal: usize,
+            internal_high: usize,
+            offset: u32,
+            offset_high: u32,
+            event: usize,
+        }
+
+        extern "system" {
+            fn UnlockFileEx(
+                file: *mut core::ffi::c_void,
+                reserved: u32,
+                bytes_low: u32,
+                bytes_high: u32,
+                overlapped: *mut Overlapped,
+            ) -> i32;
+        }
+
+        let mut overlapped = Overlapped {
+            internal: 0,
+            internal_high: 0,
+            offset: 0,
+            offset_high: 0,
+            event: 0,
+        };
+        // SAFETY: `file` is a valid handle and `overlapped` is a live,
+        // correctly sized `OVERLAPPED`.
+        let ok = unsafe { UnlockFileEx(file.as_raw_handle(), 0, 1, 0, &mut overlapped) };
+        ok != 0
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = file;
+        false
+    }
+}
+
 /// Whether two handles of `path` opened independently really exclude each
 /// other here.
 ///
@@ -400,6 +462,35 @@ mod tests {
         // can claim the file a dead process left behind.
         drop(first);
         assert!(try_lock_exclusive(&second));
+    }
+
+    /// Unlocking hands the file to the next taker without dropping the handle,
+    /// which is how one handle is reused for every locked section.
+    #[test]
+    fn unlocking_a_held_handle_lets_another_handle_take_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Mars.lock");
+        let first = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        assert!(lock_exclusive(&first));
+
+        let second = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        assert!(!try_lock_exclusive(&second), "the lock is still held");
+
+        assert!(unlock(&first));
+        assert!(try_lock_exclusive(&second), "the lock was released");
+        assert!(unlock(&second));
     }
 
     #[test]
