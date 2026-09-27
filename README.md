@@ -47,9 +47,13 @@ is no safe API for creating a mapping) and the one `JString::from_raw` of
 
 One gate per language, and each of them fails on the first finding:
 `.github/workflows/lint-swift.yml` and `lint-kotlin.yml` run the Swift and the
-Kotlin gate, `rust.yml` runs the Rust one. Each of the three starts on what it
-reads and not on every push: a pull request with no Swift in it does not pay
-for a macOS runner, and one with no Kotlin in it does not pay for a JDK.
+Kotlin gate, `rust.yml` runs the Rust one. Every run starts, but a job of it
+skips its work when the commit touches nothing that job reads: a pull request
+with no Swift in it does not pay for a macOS runner, and one with no Kotlin in
+it does not pay for a JDK. The filter is on the jobs and not on the run because
+a workflow that never starts reports no status at all, and the checks the
+ruleset requires would be left waiting for one — as #108 was, for two days —
+while a skipped job answers them.
 
 | Language | Tools | Configuration |
 | --- | --- | --- |
@@ -438,8 +442,8 @@ scripts/build_android.sh dist/native      # <abi>/libmarsxlog.so
 ```
 
 The scripts that only a workflow runs — resolving the version, installing the
-NDK on a runner, waiting for JitPack, rewriting `Package.swift` — are in
-`.github/scripts/`.
+NDK on a runner, waiting for JitPack, rewriting `Package.swift`, naming the
+files a commit touched — are in `.github/scripts/`.
 
 ## License
 
