@@ -1,0 +1,109 @@
+name: Gradle wrapper
+
+# The one version in this repository Dependabot cannot move, moved.
+#
+# GitHub's own ecosystem table says what the `gradle` entry of
+# .github/dependabot.yml updates: dependencies declared in a build script —
+# here the Android Gradle Plugin of android/build.gradle.kts — and not Gradle
+# itself, whose only declaration in the tree is the `distributionUrl` of
+# android/gradle/wrapper/gradle-wrapper.properties. So the wrapper has an
+# updater of its own: a `gradlew wrapper` against the newest Gradle there is,
+# and a pull request, which is what puts the branch through rust.yml and
+# lint.yml the way every other pull request goes through them.
+#
+# Nothing here runs a Gradle build: `wrapper` is a task of the distribution the
+# wrapper already points at, and all it rewrites is the wrapper.
+
+on:
+  schedule:
+    # Monday, 04:17. Weekly, like the rest of the updates, and not on the hour:
+    # every repository that picked 04:00 would ask services.gradle.org at once.
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  wrapper:
+    name: gradle wrapper
+    runs-on: ubuntu-latest
+    env:
+      # Asked for before any task runs: the Android Gradle Plugin looks for the
+      # SDK while the build is being *configured*, and `wrapper` is a task of a
+      # build that configures all of android/. The runner image ships the SDK;
+      # release.yml names it for the same reason, and a job that runs once a
+      # week should not leave this to the first Monday run to discover.
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+    steps:
+      - uses: actions/checkout@v4
+      # Gradle 9 runs on 17 and up; 21 is the LTS the Kotlin jobs are on.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: The newest Gradle there is
+        id: latest
+        run: |
+          set -euo pipefail
+          version="$(curl -sSfL https://services.gradle.org/versions/current \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])')"
+          case "$version" in
+            [0-9]*.[0-9]*) ;;
+            *) echo "::error::services.gradle.org answered '$version'"; exit 1 ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # `--distribution-type bin` is what the wrapper already asks for: the
+      # `-bin` distribution, and not the `-all` one, which carries the sources
+      # and the documentation of Gradle itself.
+      - name: ./gradlew wrapper
+        env:
+          LATEST: ${{ steps.latest.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd android
+          ./gradlew wrapper --gradle-version "$LATEST" --distribution-type bin
+      - name: Open the pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LATEST: ${{ steps.latest.outputs.version }}
+          BASE: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain android)" ]; then
+            echo "the wrapper is already Gradle $LATEST"
+            exit 0
+          fi
+          # One branch, forced: a wrapper left open for a week is updated in
+          # place when the next Gradle comes out, and not stacked on itself.
+          branch=deps/gradle-wrapper
+          git switch -C "$branch"
+          git add -A android
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -m "deps(gradle): the wrapper moves to Gradle $LATEST"
+          git push --force origin "$branch"
+          # A file, and not an argument: the body is prose, and prose in a
+          # `-f body=…` is a quoting problem.
+          cat > pr.md <<BODY
+          `gradlew wrapper --gradle-version $LATEST`.
+
+          Dependabot cannot do this one: its \`gradle\` entry updates what a build
+          script declares, and Gradle itself is declared only in
+          \`android/gradle/wrapper/gradle-wrapper.properties\`.
+
+          Everything else in the pull request is the gate every branch goes
+          through: rustfmt, clippy, the test suite, the cross builds, ktlint
+          and detekt.
+          BODY
+          if gh pr view "$branch" --json url --jq .url > /dev/null 2>&1; then
+            gh pr edit "$branch" \
+              --title "deps(gradle): the wrapper moves to Gradle $LATEST" \
+              --body-file pr.md
+          else
+            gh pr create --base "$BASE" --head "$branch" \
+              --title "deps(gradle): the wrapper moves to Gradle $LATEST" \
+              --body-file pr.md
+          fi

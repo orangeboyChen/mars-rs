@@ -14,24 +14,22 @@ name: Lint (Swift)
 # than installed by a package manager: Homebrew has no `swiftlint@0.65.1`, and a
 # new SwiftLint release brings new rules with it.
 #
-# It starts on what it reads — `Sources` and its own configuration — and on
-# nothing else: a pull request that touches only `crates/` or only `android/`
-# has no Swift in it, and this is the one gate of the three that has to run on
-# macOS, the host a minute of which is billed at ten times a Linux one.
+# It reads `Sources` and its own configuration, and nothing else: a pull
+# request that touches only `crates/` or only `android/` has no Swift in it,
+# and this is the one gate of the three that has to run on macOS, the host a
+# minute of which is billed at ten times a Linux one. Which is why `swiftlint`
+# skips when the commit touches neither — see the comment on `changes`.
 
 on:
+  # Every run starts, whatever the commit touched: what decides whether the job
+  # of it does any work is `changes` below. A job that is skipped answers the
+  # ruleset — a skipped check satisfies a requirement — while a run that never
+  # started answers nothing at all, and leaves the pull request BLOCKED waiting
+  # for a status that is not coming (#108).
   push:
     branches:
       - main
-    paths:
-      - Sources/**
-      - .swiftlint.yml
-      - .github/workflows/lint-swift.yml
   pull_request:
-    paths:
-      - Sources/**
-      - .swiftlint.yml
-      - .github/workflows/lint-swift.yml
   workflow_dispatch:
 
 # A push supersedes the run it interrupts, so the older one is cancelled. A
@@ -48,8 +46,30 @@ env:
   SWIFTLINT_VERSION: '0.65.1'
 
 jobs:
+  changes:
+    name: What changed (Swift)
+    runs-on: ubuntu-latest
+    outputs:
+      needed: ${{ steps.paths.outputs.needed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The diff is against the base of the pull request, which is behind
+          # the tip of the branch it was cut from.
+          fetch-depth: 0
+      - id: paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.after || github.sha }}
+        run: |
+          .github/scripts/changed_paths.sh \
+            'Sources/**' '.swiftlint.yml' '.github/scripts/**' \
+            '.github/workflows/lint-swift.yml'
+
   swiftlint:
     name: swiftlint (Swift)
+    needs: changes
+    if: needs.changes.outputs.needed == 'true'
     # The macos image is where the Swift of this package is written for, and the
     # artefact bundle's macos binary is the one for it; the linux binaries need a
     # Swift runtime the ubuntu image does not carry.
