@@ -15,6 +15,12 @@ name: Release
 #   * bump + prerelease: "the next patch, as the second alpha", which is what
 #     the sequence v1.2.4-alpha.1 -> v1.2.4-alpha.2 -> v1.2.4 is made of
 #
+# The number counts on only while it is that version being worked towards: as
+# long as no stable v1.2.4 is out, the next alpha is v1.2.4-alpha.3, and the
+# bump is what it would be applied to. A v1.2.4 that *is* out already sends the
+# bump to v1.2.5, whose first alpha is v1.2.5-alpha.1 — the number belongs to
+# the version, not to the repository.
+#
 # The tag is the version with a "v" in front: v1.2.3, v1.2.3-alpha.1,
 # v1.2.3-beta.2. Anything with a suffix is published as a GitHub pre-release.
 # The number is separated from the channel by a dot, the way semver separates
@@ -55,7 +61,7 @@ on:
           - alpha
           - beta
       prerelease:
-        description: 'Number of the pre-release: alpha.2, beta.3 … (empty = the next one)'
+        description: 'Number only: 2 for alpha.2, 3 for beta.3 … (empty = the next one)'
         required: false
 
 # Two releases at once race over the same tag and over the same

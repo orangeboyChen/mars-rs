@@ -83,14 +83,32 @@ else
       VERSION="$(bump_of "$LAST_STABLE")"
     fi
     # alpha.1, alpha.2 …: what was typed, else one past the last one
-    # of this channel, else the first
+    # of this channel, else the first.
+    #
+    # Counting on is only right while it is the same line being continued,
+    # which is what a non-empty `$PRE_BASE` means: `v1.1.1-alpha.9` is followed
+    # by `v1.1.1-alpha.10`. An empty one means the version moved — a v1.1.1
+    # that is out already sends a patch bump to v1.1.2 — and the first alpha of
+    # v1.1.2 is `v1.1.2-alpha.1`, not the tenth: the number belongs to the
+    # version, not to the repository.
     if [ -n "${INPUT_PRERELEASE:-}" ]; then
+      # A number that was typed is taken as it is: an operator who asked for
+      # `alpha.10` and got `alpha.1` has to be told, not published, so a bad
+      # one is left for the check below to reject instead of being made a
+      # harmless-looking first.
       NUMBER="$INPUT_PRERELEASE"
     else
-      case "$LAST_PRE" in
-        *-${INPUT_CHANNEL}.[0-9]*) NUMBER=$((${LAST_PRE##*-${INPUT_CHANNEL}.} + 1)) ;;
-        *)                         NUMBER=1 ;;
-      esac
+      if [ -n "$PRE_BASE" ]; then
+        case "$LAST_PRE" in
+          *-${INPUT_CHANNEL}.[0-9]*) NUMBER=$((${LAST_PRE##*-${INPUT_CHANNEL}.} + 1)) ;;
+          *)                         NUMBER=1 ;;
+        esac
+      else
+        NUMBER=1
+      fi
+      # Only what the script derived itself: a tag whose suffix is not a
+      # plain number — `beta9`, which sorts before `beta2` — is not a line
+      # that can be counted on, so it starts one.
       case "$NUMBER" in '' | *[!0-9]*) NUMBER=1 ;; esac
     fi
     VERSION="$VERSION-$INPUT_CHANNEL.$NUMBER"
