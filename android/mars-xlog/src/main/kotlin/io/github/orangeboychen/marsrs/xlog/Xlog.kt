@@ -40,10 +40,10 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * ## What a record costs
  *
- * One JNI call: [write] hands `mars-jni` the handle, the level, the tag and the
- * message, and `mars-jni` decides whether the level lets the record through
+ * One JNI call: [write] hands `marsrs-jni` the handle, the level, the tag and the
+ * message, and `marsrs-jni` decides whether the level lets the record through
  * before it formats anything. The pid, the tid and the main tid are not
- * gathered here — `mars-jni` fills them in from the OS, which is a truer tid
+ * gathered here — `marsrs-jni` fills them in from the OS, which is a truer tid
  * than `Thread.currentThread().id` and needs no `Looper`. A message that is
  * expensive to build is worth asking [isLoggable] about first; a record the
  * level drops costs the caller the `String` either way.
@@ -122,20 +122,20 @@ class Xlog : Log.LogImp {
      * of the same prefix writes through.
      *
      * @param config what to open it with; [XlogConfig]
-     * @throws IllegalArgumentException when `mars-jni` opens nothing, which is
+     * @throws IllegalArgumentException when `marsrs-jni` opens nothing, which is
      *                                  what a directory it cannot create comes
      *                                  to. [XlogConfig] refuses a config it
      *                                  cannot honour before this is reached.
      */
     constructor(config: XlogConfig) {
-        // `marsxlog` is the `crate-name` of `mars-jni`; loading it twice is
+        // `marsxlog` is the `crate-name` of `marsrs-jni`; loading it twice is
         // nothing, so an app that loaded it already needs no way to say so.
         System.loadLibrary(LIBRARY)
         namePrefix = config.namePrefix
         currentMode = config.mode
         val opened = newXlogInstance(config.toNative())
         require(opened != NO_HANDLE) {
-            "mars-jni opened no appender for ${config.namePrefix} in ${config.logDir}"
+            "marsrs-jni opened no appender for ${config.namePrefix} in ${config.logDir}"
         }
         handle = opened
         openHandles[namePrefix] = opened
@@ -168,7 +168,7 @@ class Xlog : Log.LogImp {
     /**
      * The level of this appender: a record less severe than this is dropped.
      *
-     * Read from `mars-jni` and not mirrored in Kotlin, so a level another part
+     * Read from `marsrs-jni` and not mirrored in Kotlin, so a level another part
      * of the app set through `setLogLevel` is what this answers with.
      */
     var level: LogLevel
@@ -262,12 +262,12 @@ class Xlog : Log.LogImp {
 
     /**
      * Closes this appender: drains what is left and drops it. Writing through
-     * this [Xlog] afterwards writes nothing, and asking `mars-jni` for this
+     * this [Xlog] afterwards writes nothing, and asking `marsrs-jni` for this
      * [namePrefix] answers `0`. Safe to call twice.
      *
      * [level], [mode], [consoleLogEnabled], [maxFileSizeBytes] and
      * [maxAliveTimeSeconds] throw [IllegalStateException] afterwards: handle
-     * `0` is the process-wide appender to `mars-jni`, and a closed [Xlog] that
+     * `0` is the process-wide appender to `marsrs-jni`, and a closed [Xlog] that
      * went on forwarding it would read and move the appender every other part
      * of the app writes through, rather than its own.
      */
@@ -276,7 +276,7 @@ class Xlog : Log.LogImp {
             return
         }
         releaseXlogInstance(namePrefix)
-        // The appender is the prefix's and not this wrapper's: `mars-jni`
+        // The appender is the prefix's and not this wrapper's: `marsrs-jni`
         // answers an [Xlog] of the same prefix with the same handle, so every
         // one of them is closed with this one.
         openHandles.remove(namePrefix, handle)
@@ -378,7 +378,7 @@ class Xlog : Log.LogImp {
          * The write of this whole API: the handle, the level, the tag and the
          * message, and nothing else.
          *
-         * `mars-jni` is what drops a record whose level the appender is above —
+         * `marsrs-jni` is what drops a record whose level the appender is above —
          * asking it from Kotlin would be a second JNI call per line — and what
          * fills the pid, the tid and the main tid in from the OS.
          */
@@ -388,18 +388,18 @@ class Xlog : Log.LogImp {
         // `private` in the C++ project's Java too — an app opens the appender
         // through `open` or through `Log.appenderOpen`, not through this. It
         // still has to be `@JvmStatic`, or the symbol JNI wants is not the one
-        // `mars-jni` exports.
+        // `marsrs-jni` exports.
         @JvmStatic
         private external fun appenderOpen(logConfig: XLogConfig)
 
-        /** `marsxlog` — the `crate-name` of `mars-jni`, i.e. the library [write] and the rest live in. */
+        /** `marsxlog` — the `crate-name` of `marsrs-jni`, i.e. the library [write] and the rest live in. */
         private const val LIBRARY = "marsxlog"
 
         /**
          * The handle of every appender this process has open, by the prefix it
          * was opened with: what tells an [Xlog] that the appender it shares
          * with another [Xlog] of the same [namePrefix] has been closed, which
-         * the handle alone cannot — `mars-jni` answers both with the same one,
+         * the handle alone cannot — `marsrs-jni` answers both with the same one,
          * so a [close] through either is a [close] of both.
          */
         private val openHandles: ConcurrentHashMap<String, Long> = ConcurrentHashMap()
@@ -407,20 +407,20 @@ class Xlog : Log.LogImp {
         /** The handle of the process-wide appender: what `Log` writes through. */
         private const val PROCESS_WIDE = 0L
 
-        /** The handle `mars-jni` answers for an appender it did not open. */
+        /** The handle `marsrs-jni` answers for an appender it did not open. */
         private const val NO_HANDLE = 0L
 
-        /** `mars-jni` reads a max file size of `0` as "never split". */
+        /** `marsrs-jni` reads a max file size of `0` as "never split". */
         private const val NO_FILE_SIZE_LIMIT = 0L
 
-        /** `mars-jni` reads a max alive time of `0` as the C++'s own ten days. */
+        /** `marsrs-jni` reads a max alive time of `0` as the C++'s own ten days. */
         private const val NO_ALIVE_TIME_LIMIT = 0L
     }
 
     // #################### the natives ####################
     //
     // Every `external` below is one of the
-    // `Java_io_github_orangeboychen_marsrs_xlog_Xlog_*` symbols of `mars-jni`,
+    // `Java_io_github_orangeboychen_marsrs_xlog_Xlog_*` symbols of `marsrs-jni`,
     // and the field names of [XLogConfig] are the ones its `config_from_java`
     // reads, so the two must be changed together.
 
@@ -455,7 +455,7 @@ class Xlog : Log.LogImp {
     // `Log.setLogImp` — `Xlog()`, here. Everything below is a straight call of
     // a native above; the filename, the function and the line the C++ project's
     // Java passes are `""`, `""` and `0` (`Log` has no `__FILE__`), and the
-    // pid, the tid and the main tid `mars-jni` fills in from the OS are truer
+    // pid, the tid and the main tid `marsrs-jni` fills in from the OS are truer
     // than the `Thread.id` Java hands over.
 
     override fun logV(

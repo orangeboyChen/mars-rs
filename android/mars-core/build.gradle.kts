@@ -1,4 +1,4 @@
-// The Android AAR of the whole port: `libmarsxlog.so` (crate `mars-jni`) for
+// The Android AAR of the whole port: `libmarsxlog.so` (crate `marsrs-jni`) for
 // every ABI, plus every Kotlin class whose natives it implements — xlog, STN,
 // SDT, the app and the platform callbacks. `mars-xlog` is the same library with
 // the xlog half of the Kotlin only, the way the C++ project publishes
@@ -17,7 +17,7 @@ plugins {
     id("maven-publish")
 }
 
-// `mars-jni` asks for Java 17 bytecode, and the Kotlin compiler targets 1.8
+// `marsrs-jni` asks for Java 17 bytecode, and the Kotlin compiler targets 1.8
 // unless it is told otherwise.
 kotlin {
     compilerOptions {
@@ -34,7 +34,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        // `mars-jni` is built against NDK 27 / API 24; 21 is the floor the C++
+        // `marsrs-jni` is built against NDK 27 / API 24; 21 is the floor the C++
         // project ships with.
         minSdk = 21
     }

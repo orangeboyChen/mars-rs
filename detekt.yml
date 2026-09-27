@@ -80,8 +80,8 @@ style:
   # carries whether or not this implementation reads them.
   UnusedParameter:
     active: false
-  # `getLoadLibraries` is `external` — `mars-jni` is its body — and
-  # `reportConnectStatus` is called back by name from `mars-jni`, so neither has
+  # `getLoadLibraries` is `external` — `marsrs-jni` is its body — and
+  # `reportConnectStatus` is called back by name from `marsrs-jni`, so neither has
   # a caller Kotlin can see.
   UnusedPrivateMember:
     active: false

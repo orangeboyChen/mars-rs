@@ -17,12 +17,12 @@ import java.util.TreeSet
  * interval with.
  *
  * One [external] is here and it is the only one of the class: [onAlarm], the
- * `Java_io_github_orangeboychen_marsrs_comm_Alarm_onAlarm` symbol `mars-jni`
+ * `Java_io_github_orangeboychen_marsrs_comm_Alarm_onAlarm` symbol `marsrs-jni`
  * exports. It is an *instance* native — JNI is handed `this` — while `start`,
  * `stop` and `resetAlarm` are the statics the C++ project's `Alarm` has too.
  *
  * The C++ project's `Alarm` also keeps a `WakerLock`; the port takes the wake
- * lock itself, on the thread that heard the alarm (`mars-jni`'s
+ * lock itself, on the thread that heard the alarm (`marsrs-jni`'s
  * `START_ALARM_WAKELOCK_MS`), which is where the C++ takes it too and the only
  * place acquiring one works.
  */

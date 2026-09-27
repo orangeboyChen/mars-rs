@@ -1,7 +1,7 @@
 // The levels, the modes and the config of the Kotlin API — what `Xlog(...)` and
 // `xlog.i(tag, message)` are written in. Nothing here is a native, and
 // nothing here is reached by JNI: the numbers these carry are handed to `Xlog`,
-// whose statics are the symbols `mars-jni` exports, and that class is the only
+// whose statics are the symbols `marsrs-jni` exports, and that class is the only
 // door to the `.so`.
 //
 // They are named the way the Kotlin of this port already names things, which
@@ -16,7 +16,7 @@ package io.github.orangeboychen.marsrs.xlog
  * How severe a log record is, in the order the C++ project's `TLogLevel` is —
  * [VERBOSE] lets everything through and [NONE] lets nothing through.
  *
- * [native] is the number `mars-jni` speaks: the one `Xlog.getLogLevel`
+ * [native] is the number `marsrs-jni` speaks: the one `Xlog.getLogLevel`
  * answers with, the one `Xlog.setLogLevel` reads, and the one the
  * `Xlog.LEVEL_*` constants of the older API spell. [of] is the way back from
  * that number, for a level that arrives from somewhere else — a remote
@@ -26,7 +26,7 @@ package io.github.orangeboychen.marsrs.xlog
  * most its own: an appender opened at [INFO] keeps [WARNING] and drops
  * [DEBUG].
  */
-// The numbers `mars-jni` speaks, one per level of the C++ project's
+// The numbers `marsrs-jni` speaks, one per level of the C++ project's
 // `TLogLevel`. They sit outside the enum because an enum entry's argument
 // cannot reach into the enum's own companion object — `VERBOSE(0)` and
 // `VERBOSE(LEVEL_VERBOSE)` are the same class file otherwise.
@@ -68,9 +68,9 @@ enum class LogLevel(internal val native: Int) {
 
     companion object {
         /**
-         * The level of a number `mars-jni` speaks.
+         * The level of a number `marsrs-jni` speaks.
          *
-         * A number outside `0..6` is read the way `mars-jni` reads it: a
+         * A number outside `0..6` is read the way `marsrs-jni` reads it: a
          * negative one is [VERBOSE] — what `(TLogLevel)-1`, the C++'s "log
          * everything", meant — and anything above [NONE] is [FATAL].
          */

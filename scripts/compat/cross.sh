@@ -20,7 +20,7 @@
 set -e
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
-FIX=$REPO/crates/mars-compat/fixtures
+FIX=$REPO/crates/marsrs-compat/fixtures
 OUT=$REPO/target/compat
 WORK=$OUT/cross
 MANIFEST=$FIX/manifest.json
@@ -28,8 +28,8 @@ MANIFEST=$FIX/manifest.json
 PRIVKEY=$(python3 -c "import json;print(json.load(open('$MANIFEST'))['privkey'])")
 PUBKEY=$(python3 -c "import json;print(json.load(open('$MANIFEST'))['pubkey'])")
 
-cargo build --manifest-path "$REPO/Cargo.toml" -p mars-compat --release
-cargo build --manifest-path "$REPO/Cargo.toml" -p mars-appender --release \
+cargo build --manifest-path "$REPO/Cargo.toml" -p marsrs-compat --release
+cargo build --manifest-path "$REPO/Cargo.toml" -p marsrs-appender --release \
     --example xlog_file
 
 if [ ! -x "$OUT/upstream_encode" ] || [ ! -x "$OUT/upstream_decode" ]; then

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Builds MarsRSXlog.xcframework.zip and MarsRSNet.xcframework.zip: `mars-ffi` as
+# Builds MarsRSXlog.xcframework.zip and MarsRSNet.xcframework.zip: `marsrs-ffi` as
 # a static library for the iOS device and simulator and for the watchOS device
 # and simulator, with its headers and a module map next to them, which is what
 # Package.swift hands to a Swift app.
@@ -139,11 +139,11 @@ for artifact in "${artifacts[@]}"; do
             ;;
     esac
 
-    echo "building $name (mars-ffi --no-default-features --features $features)"
+    echo "building $name (marsrs-ffi --no-default-features --features $features)"
 
     # The feature set is spelled out here and never inherited from `default`,
     # which is the whole point of building two artifacts: a feature added to
-    # `mars-ffi` later is in neither of them until it is named here. What the
+    # `marsrs-ffi` later is in neither of them until it is named here. What the
     # crate carries by default is irrelevant; this is the list. The check below
     # then proves the list is what the name says.
     for slice in "${slices[@]}"; do
@@ -171,11 +171,11 @@ for artifact in "${artifacts[@]}"; do
 
         for target in "${slice_targets[@]}"; do
             if [ "$target" = "$build_std_target" ]; then
-                cargo +nightly build --release -p mars-ffi --target "$target" \
+                cargo +nightly build --release -p marsrs-ffi --target "$target" \
                     --no-default-features --features "$features" \
                     -Z build-std=std,panic_abort
             else
-                cargo build --release -p mars-ffi --target "$target" \
+                cargo build --release -p marsrs-ffi --target "$target" \
                     --no-default-features --features "$features"
             fi
         done
@@ -194,7 +194,7 @@ for artifact in "${artifacts[@]}"; do
 
     mkdir -p "$header_dir"
     for header in "${headers[@]}"; do
-        cp "crates/mars-ffi/include/$header" "$header_dir/"
+        cp "crates/marsrs-ffi/include/$header" "$header_dir/"
     done
     # The net half's umbrella is written here; xlog's is the one header the
     # crate owns, copied above.

@@ -1,0 +1,23 @@
+[package]
+name = "marsrs-xlog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The xlog half of the Mars port: an appender that writes the same .xlog files as Tencent's mars/xlog"
+keywords = ["xlog", "logging", "mobile", "mars"]
+categories = ["development-tools::debugging"]
+readme = "README.md"
+
+[dependencies]
+# The three crates the xlog half is made of. They are published too, because a
+# published crate cannot depend on a crate that is not on crates.io — but they
+# are an implementation detail of this one, and a caller that depends on them
+# directly gets none of the stability this facade is for.
+marsrs-core = { workspace = true }
+marsrs-buffer = { workspace = true }
+marsrs-appender = { workspace = true }
+
+[lints]
+workspace = true

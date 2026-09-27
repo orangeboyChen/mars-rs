@@ -10,6 +10,7 @@ name: Release
 #   * mars-rs-<version>-<host>.tar.gz / .zip -> the C ABI for Linux/macOS/Windows
 #   * mars-kmp-native.zip    -> the archives the Kotlin module is built out of
 #   * mars-kmp-maven.zip     -> the Kotlin module itself, as a maven repository
+#   * crates.io: `marsrs` and `marsrs-xlog`, at the version of the tag
 #
 # The steps that outgrew a `run:` block are `.github/scripts/`: no one runs them
 # by hand, and they are of a piece with the workflows that call them. `scripts/`
@@ -252,7 +253,7 @@ jobs:
         # and the task pipeline too, which is what the Android `.so` carries.
         # xlog alone is what the Apple artifact is, and it spells its own set
         # out.
-        run: cargo build --release -p mars-ffi --features sdt,stn
+        run: cargo build --release -p marsrs-ffi --features sdt,stn
       - name: Package it
         shell: bash
         run: |
@@ -261,9 +262,9 @@ jobs:
           target="${{ matrix.target }}"
           stage="dist/mars-rs-$version-$target"
           mkdir -p "$stage/include" "$stage/lib"
-          cp crates/mars-ffi/include/mars_xlog.h "$stage/include/"
-          cp crates/mars-ffi/include/mars_sdt.h "$stage/include/"
-          cp crates/mars-ffi/include/mars_stn.h "$stage/include/"
+          cp crates/marsrs-ffi/include/mars_xlog.h "$stage/include/"
+          cp crates/marsrs-ffi/include/mars_sdt.h "$stage/include/"
+          cp crates/marsrs-ffi/include/mars_stn.h "$stage/include/"
           cp LICENSE README.md "$stage/"
           for lib in target/release/libmars_ffi.a target/release/libmars_ffi.so \
                      target/release/libmars_ffi.dylib target/release/mars_ffi.lib \
@@ -643,5 +644,151 @@ jobs:
             echo '```kotlin'
             echo "implementation(\"$KMP_GROUP:$KMP_ARTIFACT:${TAG#v}\")"
             echo "implementation(\"$KMP_GROUP:$KMP_ARTIFACT_XLOG:${TAG#v}\")"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The registry half of the same release. Two of the twelve crates are the
+  # ones a Rust caller takes — `marsrs`, the whole port, and `marsrs-xlog`,
+  # xlog alone, the pair the C++ project publishes as `mars-core` and
+  # `mars-xlog` — and seven go with them because crates.io resolves a
+  # dependency out of the registry and not out of a path: a published crate
+  # cannot depend on a crate that is not published.
+  #
+  # `marsrs-ffi`, `marsrs-jni` and `marsrs-compat` are the three that stay off
+  # it, each with `publish = false` and a note saying why: what their callers
+  # need is a `libmars_ffi.a`, a `libmarsxlog.so` and a CLI, and none of those
+  # is in what `cargo publish` packs.
+  crates:
+    name: crates.io
+    runs-on: ubuntu-latest
+    # After the release and not beside it: a version on crates.io is published
+    # once and never overwritten, so a crate goes out only for a release that
+    # exists.
+    needs: [version, publish]
+    if: needs.version.outputs.is_new == 'true'
+    env:
+      # crates.io answers 403 to the user agent `curl` sends by default.
+      CRATES_IO_UA: mars-rs release (https://github.com/orangeboyChen/mars-rs)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Give the manifests the release's version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - "$VERSION" <<'PY'
+          import re, sys
+
+          version = sys.argv[1]
+          src = open('Cargo.toml').read()
+
+          # Both spellings of the workspace version: the one in
+          # `[workspace.package]`, which every crate inherits, and the one in
+          # each `[workspace.dependencies]` entry of a crate of ours, which is
+          # the version requirement a published crate resolves its siblings by.
+          # A release that shipped 0.2.0 while its crates still asked for
+          # `^0.1.0` would not resolve for anybody. Only the two places are
+          # touched, so an external dependency that happens to be at the same
+          # version as the workspace keeps the version it asks for.
+          ours = re.search(r'\[workspace\.package\]\n(.*?)\n\n', src, re.S).group(1)
+          current = re.search(r'version = "([^"]+)"', ours).group(1)
+
+          out = []
+          in_deps = False
+          for line in src.splitlines(keepends=True):
+              if line.startswith('[workspace.dependencies]'):
+                  in_deps = True
+              elif line.startswith('['):
+                  in_deps = False
+              if line.startswith('version = ') or (in_deps and line.startswith('marsrs-')):
+                  line = line.replace('version = "%s"' % current, 'version = "%s"' % version)
+              out.append(line)
+
+          open('Cargo.toml', 'w').write(''.join(out))
+          print('crates.io version: %s (was %s)' % (version, current))
+          PY
+
+      - name: Publish the nine crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::warning::CARGO_REGISTRY_TOKEN is not set; publish $VERSION to crates.io by hand"
+            exit 0
+          fi
+
+          # The status of a version of a crate on crates.io: 200 is "it is
+          # there", 404 is "it is not", and both are answers about the version.
+          # `curl -f` folds every other status into the same false branch as a
+          # 404 — a rate limit, an outage, a token that expired or lost its
+          # scope — and 404 is the branch that publishes, which is not a thing
+          # crates.io lets anyone do twice over one version. So the status is
+          # what is read here, and those two are the only two acted on.
+          crate_status() {
+            curl -sS -o /dev/null -w '%{http_code}' -A "$CRATES_IO_UA" \
+              "https://crates.io/api/v1/crates/$1/$VERSION"
+          }
+
+          # Dependency order, and the two crates a caller takes last: crates.io
+          # resolves a dependency out of the registry, so a crate is only
+          # publishable once the crates it names are on it.
+          for CRATE in marsrs-core marsrs-comm marsrs-crypt marsrs-buffer \
+                       marsrs-appender marsrs-sdt marsrs-stn marsrs-xlog marsrs; do
+            # Asked up to five times, because a 429 or a 5xx is crates.io being
+            # busy and not a fact about the version: ten seconds, then again.
+            for _ in 1 2 3 4 5; do
+              status="$(crate_status "$CRATE")"
+              case "$status" in
+                429|5[0-9][0-9]) sleep 10; continue ;;
+              esac
+              break
+            done
+
+            case "$status" in
+              200)
+                echo "$CRATE $VERSION is already on crates.io"
+                continue
+                ;;
+              404)
+                ;;
+              *)
+                echo "::error::crates.io answered $status for $CRATE $VERSION; whether it is up is unknown, so it is not published over"
+                exit 1
+                ;;
+            esac
+
+            # The version is the tag's and the tag is this release's, so the
+            # checkout carries an edit `cargo publish` would otherwise refuse.
+            cargo publish -p "$CRATE" --allow-dirty
+
+            # crates.io's index is not its database: a publish is visible to
+            # the next `cargo publish` only once the index has caught up, and a
+            # dependency that has not is "no matching package". Anything but a
+            # 200 is "not yet" here — the index that answers 404, and an answer
+            # this job could not read — and either way the publish that follows
+            # is what decides, and says so.
+            for _ in $(seq 1 60); do
+              [ "$(crate_status "$CRATE")" = 200 ] && break
+              sleep 5
+            done
+          done
+
+      - name: Summary
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          {
+            echo "### crates.io $VERSION"
+            echo ""
+            echo '```toml'
+            echo "marsrs = \"$VERSION\"       # the whole port"
+            echo "marsrs-xlog = \"$VERSION\"  # xlog alone"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

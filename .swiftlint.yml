@@ -1,7 +1,7 @@
 # SwiftLint configuration for the Swift face of the port.
 #
 # `Sources/` is all the Swift there is: `MarsRSXlog` is the Swift over the C ABI
-# of `mars-ffi`, and `MarsRS` is the umbrella over it. The rest of the port is
+# of `marsrs-ffi`, and `MarsRS` is the umbrella over it. The rest of the port is
 # Rust, and Package.swift is a manifest the release workflow rewrites, so
 # neither is linted here.
 #

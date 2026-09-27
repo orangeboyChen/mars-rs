@@ -1,0 +1,27 @@
+[package]
+name = "marsrs-jni"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "JNI bindings for the Rust port of Mars xlog (io.github.orangeboychen.marsrs.xlog.Xlog)"
+# Not on crates.io, for the same reason `marsrs-ffi` is not: what an Android
+# app needs is the `libmarsxlog.so` inside the AAR, and a crate on the registry
+# carries no shared object. It reaches an app through JitPack.
+publish = false
+
+[lib]
+# `libmarsxlog.so`, the name Xlog.java passes to System.loadLibrary.
+crate-type = ["cdylib"]
+name = "marsxlog"
+
+[dependencies]
+marsrs-appender = { workspace = true }
+marsrs-comm = { workspace = true }
+marsrs-sdt = { workspace = true }
+marsrs-stn = { workspace = true }
+jni = { workspace = true }
+
+[lints]
+workspace = true

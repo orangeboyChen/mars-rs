@@ -1,6 +1,6 @@
 /*
  *  The Kotlin face of STN: every `external` is one
- *  `Java_io_github_orangeboychen_marsrs_stn_StnLogic_*` symbol of `mars-jni`,
+ *  `Java_io_github_orangeboychen_marsrs_stn_StnLogic_*` symbol of `marsrs-jni`,
  *  and the private members below are the ones it calls back — the port of
  *  `com_tencent_mars_stn_StnLogic_C2Java.cc`.
  *
@@ -10,7 +10,7 @@
  *  task's `clientSequenceId` and `buf2Resp` an `int[]` for it — and
  *  `resetAndInitEncoderVersion` takes the encoder's name beside its version.
  *
- *  The statics have to *be* statics: `mars-jni` asks JNI for
+ *  The statics have to *be* statics: `marsrs-jni` asks JNI for
  *  `io/github/orangeboychen/marsrs/stn/StnLogic` and calls the method on the
  *  class, so every one is `@JvmStatic` — including the private ones JNI calls
  *  back, which is what the C++'s own Java declares too.

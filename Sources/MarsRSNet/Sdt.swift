@@ -1,4 +1,4 @@
-// The Swift face of the C ABI in `mars_sdt.h` (crate `mars-ffi`, the `sdt`
+// The Swift face of the C ABI in `mars_sdt.h` (crate `marsrs-ffi`, the `sdt`
 // feature).
 //
 // This is the net half of the port: `MarsRSNet` carries this file and

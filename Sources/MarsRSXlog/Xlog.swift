@@ -1,8 +1,8 @@
-// The Swift face of the C ABI in `mars_xlog.h` (crate `mars-ffi`).
+// The Swift face of the C ABI in `mars_xlog.h` (crate `marsrs-ffi`).
 //
 // This is the `MarsRSXlog` module, the xlog half of the port: `import MarsRSXlog`
 // is what an app that only logs takes. `MarsRS` is the whole port and re-exports
-// this module, so `Stn.swift` and `Sdt.swift` join the umbrella as `mars-ffi`
+// this module, so `Stn.swift` and `Sdt.swift` join the umbrella as `marsrs-ffi`
 // grows past the logging half.
 //
 // The binary target of Package.swift is a static library plus a module map, so

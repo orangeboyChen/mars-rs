@@ -6,7 +6,5 @@
 // diagnosis and the task pipeline. Each comes from a framework of its own —
 // neither carries a symbol of the other — so an app that only logs imports
 // `MarsRSXlog` and downloads xlog alone, and an app that imports this one gets
-// both, with xlog's symbols linked exactly once.
-
-@_exported import MarsRSNet
+// both, with @_exported import MarsRSNet
 @_exported import MarsRSXlog
