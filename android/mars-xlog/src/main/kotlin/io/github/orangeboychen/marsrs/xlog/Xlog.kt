@@ -165,22 +165,22 @@ class Xlog : Log.LogImp {
      * of the app set through `setLogLevel` is what this answers with.
      */
     var level: LogLevel
-        get() = LogLevel.of(getLogLevel(handle))
-        set(value) = setLogLevel(handle, value.native)
+        get() = LogLevel.of(getLogLevel(requireOpen()))
+        set(value) = setLogLevel(requireOpen(), value.native)
 
     /** [AppenderMode] of this appender: what the [XlogConfig] gave, until this says otherwise. */
     var mode: AppenderMode
         get() = currentMode
         set(value) {
+            setAppenderMode(requireOpen(), value.native)
             currentMode = value
-            setAppenderMode(handle, value.native)
         }
 
     /** Whether the console prints the log too — off until an app turns it on. */
     var consoleLogEnabled: Boolean = false
         set(value) {
+            setConsoleLogOpen(requireOpen(), value)
             field = value
-            setConsoleLogOpen(handle, value)
         }
 
     /**
@@ -189,8 +189,9 @@ class Xlog : Log.LogImp {
      */
     var maxFileSizeBytes: Long = NO_FILE_SIZE_LIMIT
         set(value) {
-            field = value.coerceAtLeast(NO_FILE_SIZE_LIMIT)
-            setMaxFileSize(handle, field)
+            val size = value.coerceAtLeast(NO_FILE_SIZE_LIMIT)
+            setMaxFileSize(requireOpen(), size)
+            field = size
         }
 
     /**
@@ -199,15 +200,17 @@ class Xlog : Log.LogImp {
      */
     var maxAliveTimeSeconds: Long = NO_ALIVE_TIME_LIMIT
         set(value) {
-            field = value.coerceAtLeast(NO_ALIVE_TIME_LIMIT)
-            setMaxAliveTime(handle, field)
+            val seconds = value.coerceAtLeast(NO_ALIVE_TIME_LIMIT)
+            setMaxAliveTime(requireOpen(), seconds)
+            field = seconds
         }
 
     /**
      * Whether a record of [level] would be written: what an app asks before it
-     * builds a message that is expensive to build.
+     * builds a message that is expensive to build. `false` once [close] ran,
+     * which is the one honest answer of an appender that writes nothing.
      */
-    fun isLoggable(level: LogLevel): Boolean = LogLevel.of(getLogLevel(handle)).isEnabledFor(level)
+    fun isLoggable(level: LogLevel): Boolean = isOpen && LogLevel.of(getLogLevel(handle)).isEnabledFor(level)
 
     /** Writes a record of [level]. */
     fun log(level: LogLevel, tag: String, message: String) {
@@ -254,6 +257,12 @@ class Xlog : Log.LogImp {
      * Closes this appender: drains what is left and drops it. Writing through
      * this [Xlog] afterwards writes nothing, and asking `mars-jni` for this
      * [namePrefix] answers `0`. Safe to call twice.
+     *
+     * [level], [mode], [consoleLogEnabled], [maxFileSizeBytes] and
+     * [maxAliveTimeSeconds] throw [IllegalStateException] afterwards: handle
+     * `0` is the process-wide appender to `mars-jni`, and a closed [Xlog] that
+     * went on forwarding it would read and move the appender every other part
+     * of the app writes through, rather than its own.
      */
     fun close() {
         if (!isOpen) {
@@ -261,6 +270,19 @@ class Xlog : Log.LogImp {
         }
         releaseXlogInstance(namePrefix)
         handle = NO_HANDLE
+    }
+
+    /**
+     * The handle of this appender, or [IllegalStateException] when there is
+     * none left to forward: handle `0` names the process-wide appender in this
+     * JNI API, so a closed [Xlog] that handed it on would read and move the
+     * appender `Log` writes through — and read a level that is not its own.
+     */
+    private fun requireOpen(): Long {
+        check(isOpen) {
+            "no appender of this Xlog is open ('$namePrefix'): build another Xlog(XlogConfig(...)) to log again"
+        }
+        return handle
     }
 
     private var handle: Long
