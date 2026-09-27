@@ -23,3 +23,14 @@ kmp/local.properties
 docs/node_modules/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+# the Flutter and React Native packages: what scripts/package_flutter.sh and
+# scripts/package_react_native.sh drop into a package before it is packed — the
+# Apple framework of the release, the C ABI's own header, and the licence of the
+# port. None of the three is a source of this repository.
+flutter/*/ios/Frameworks/
+flutter/*/ios/include/
+flutter/*/LICENSE
+react-native/*/ios/Frameworks/
+react-native/*/ios/include/
+react-native/*/LICENSE
