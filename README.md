@@ -23,11 +23,14 @@ zlib- or zstd-compressed, sync or async — and this is the whole stack:
 
 The two at the top of that table are the crates a Rust caller depends on:
 `marsrs`, the whole port, and `marsrs-xlog`, xlog alone — the pair the C++
-project publishes as `mars-core` and `mars-xlog`, and this one as `MarsRS` and
-`MarsRSXlog`. The seven between them and `marsrs-ffi` are implementation details
-of the pair, and are on crates.io only because a published crate cannot depend
-on a crate that is not: crates.io resolves a dependency out of the registry and
-not out of a path.
+project publishes as `mars-core` and `mars-xlog`. SwiftPM's three products are
+`MarsRS`, `MarsRSXlog` and `MarsRSNet`, the same names an app writes after
+`import`: a product is what a manifest depends on and a module is what `import`
+names, and they are one name here because two would be a name a consumer has to
+translate first. The seven between them and `marsrs-ffi` are implementation
+details of the pair, and are on crates.io only because a published crate cannot
+depend on a crate that is not: crates.io resolves a dependency out of the
+registry and not out of a path.
 
 ## Build and test
 
@@ -300,14 +303,25 @@ the version of the tag.
 ```swift
 // Package.swift
 .package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
+// and, in the target that takes it:
+.product(name: "MarsRSXlog", package: "mars-rs")
 ```
 
-Three products: `MarsRS` is the whole port, `MarsRSXlog` is the logging half of
-it and `MarsRSNet` is the half that is not logging — the diagnosis and the task
-pipeline — for an app that runs tasks and does not log. The two halves are two
-artifacts and not one library split at the Swift layer: `MarsRSXlog` is Swift
-over the `MarsRSFFI` binary target, `MarsRSNet` over `MarsRSNetFFI`, and each is
-a static xcframework published with the release.
+Three products, one per way of taking the port: `MarsRS` is the whole port,
+`MarsRSXlog` is the logging half of it and `MarsRSNet` is the half that is not
+logging — the diagnosis and the task pipeline — for an app that runs tasks and
+does not log. A product is what a manifest depends on and a module is what
+`import` names, and SwiftPM asks for no agreement between the two; these three
+give them the same name anyway, which is what every package Apple ships does —
+`swift-log`'s product is `Logging`, and all twelve of `swift-collections`' are
+their module names. A second name would only be one a consumer translates
+before they can write the import: a product shows up in a manifest and in the
+list Xcode offers to tick, and every artifact of the build —
+`MarsRSXlog.swiftmodule`, `MarsRSXlog-Swift.h` — is named after the module. The
+two halves are two artifacts and not one library split at the Swift layer:
+`MarsRSXlog` is Swift over the `MarsRSFFI` binary target, `MarsRSNet` over
+`MarsRSNetFFI`, and each is a static xcframework published with the release —
+`marsrs-xlog.xcframework` and `marsrs-net.xcframework`.
 
 What either one holds is the feature set it is named for.
 `scripts/build_xcframework.sh` builds `-p marsrs-ffi --no-default-features
@@ -328,9 +342,17 @@ reason — and it is why the xlog artifact is named after xlog here and not afte
 the port. The tag and the SPM checksums are written into `Package.swift` by the
 release workflow on a `chore/package-swift-<tag>` branch, proposed as a pull
 request; there is one checksum per binary target, because a checksum is bound to
-the zip it was computed from. A module is what a consumer imports, so the xlog
-one keeps the name `MarsRSFFI` until a release carries the renamed asset — it
-cannot be renamed under one — while the net one is new and named after itself.
+the zip it was computed from. A module is what a consumer imports and a zip is
+what a consumer downloads, so the two are named by different rules: the
+artifacts take the lower-case pair — `marsrs-xlog.xcframework.zip` and
+`marsrs-net.xcframework.zip` — with the next release, while the C module inside
+keeps the name `MarsRSFFI`, because a module rename travels only with the
+release that publishes the renamed one. A zip's name asks for nothing of the
+kind: SwiftPM extracts an artifact under its binary target's name and reads the
+module map inside it, which is why the file can be lower-case while the module
+it carries is not. A product is the other way round — it is a name a consumer
+writes in a manifest, next to an `import` of the module behind it — so it takes
+the module's spelling and not the zip's.
 
 The framework carries four slices — `ios-arm64`, `ios-arm64_x86_64-simulator`,
 `watchos-arm64_arm64_32` and `watchos-arm64-simulator` — so an app target of
@@ -523,7 +545,7 @@ when `OHOS_SDK_HOME` is not set.
 ### Building the packages
 
 ```bash
-scripts/build_xcframework.sh 0.1.0 dist   # MarsRSXlog.xcframework.zip, MarsRSNet.xcframework.zip
+scripts/build_xcframework.sh 0.1.0 dist   # marsrs-xlog.xcframework.zip, marsrs-net.xcframework.zip
 scripts/build_android.sh dist/native      # <abi>/libmarsxlog.so
 # the .so of dist/native has to be under android/<module>/libs first
 (cd android && ./gradlew :mars-core:assembleRelease :mars-xlog:assembleRelease)

@@ -6,7 +6,7 @@
 // It declares nothing that is not xlog's, and that is the point: `mars-ffi`
 // exports 28 `mars_xlog_*` symbols and nothing else today, so the whole port and
 // its logging half are the same module — exactly the reason
-// `MarsRSXlog.xcframework` is named after xlog and `MarsRS` in `Package.swift`
+// `marsrs-xlog.xcframework` is named after xlog and `MarsRS` in `Package.swift`
 // has no symbols of its own. What this module is for is the coordinate: an app
 // that depends on it gets xlog now and STN and SDT later, without a fourth
 // artifact and without a rename.

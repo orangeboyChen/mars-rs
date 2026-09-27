@@ -24,14 +24,31 @@
 //
 //      import MarsRSNet       // the diagnosis and the task pipeline
 //
-//  Two products over one prebuilt library, and the library is xlog's: the C ABI
-//  is 28 `mars_xlog_*` symbols and nothing else, which is why the artifact is
-//  named after xlog and not after the port — orangeboyChen/mars publishes
+//  A product is not a module — the product is what a dependency is declared
+//  against, the module is what `import` names — and SwiftPM asks for no
+//  agreement between the two. These three give them the same name anyway,
+//  which is what an app writes in its own manifest:
+//
+//      .product(name: "MarsRSXlog", package: "mars-rs")
+//
+//  A product is what Xcode lists to tick and what a manifest names, so one
+//  spelled differently from the module behind it is a name a consumer has to
+//  translate before they can write the import. Every package Apple ships
+//  answers it the same way: `swift-log`'s product is `Logging`, and all twelve
+//  of `swift-collections`' are their module names. What is lower-case is the
+//  package, `mars-rs`, after the URL it is fetched from, and the two files a
+//  consumer downloads — `marsrs-xlog.xcframework.zip` and
+//  `marsrs-net.xcframework.zip` — the way the crates are spelled, because a
+//  file name asks for nothing of a compiler.
+//
+//  Three products over two prebuilt libraries, and the first library is xlog's:
+//  the C ABI is 28 `mars_xlog_*` symbols and nothing else, which is why its
+//  artifact is named after xlog and not after the port — orangeboyChen/mars publishes
 //  `MarsXlog.xcframework` for the same reason, and taking xlog alone is the only
 //  thing its package offers. `MarsRSXlog` is the Swift over it.
 //
 //  The net half — `Stn.swift` and `Sdt.swift` — is the second artifact,
-//  `MarsRSNet.xcframework`, built `--no-default-features --features sdt,stn`:
+//  `marsrs-net.xcframework`, built `--no-default-features --features sdt,stn`:
 //  it carries `mars_sdt_*` and `mars_stn_*` and no `mars_xlog_*` at all, so an
 //  app that only logs keeps downloading xlog alone and an app that takes both
 //  links xlog's symbols exactly once. Two Rust static libraries out of one
@@ -44,10 +61,13 @@
 //  need neither a Rust toolchain nor an NDK. The one the xlog binary target
 //  points at is still `MarsRS.xcframework.zip`, because that is the name the tag
 //  it resolves was published under; the release after it publishes
-//  `MarsRSXlog.xcframework.zip`, and the workflow rewrites the name along with
+//  `marsrs-xlog.xcframework.zip`, and the workflow rewrites the name along with
 //  the tag. The C module inside keeps the port's name, `MarsRSFFI`, for the
 //  same reason: renaming it would break the asset every consumer resolves
-//  until a release carries the renamed one.
+//  until a release carries the renamed one. A binary target is named after the
+//  module it carries and not after the zip it downloads, and SwiftPM asks for
+//  no match between the two — the zip is extracted under the target's name and
+//  the module is the one the module map inside declares.
 //
 //  `Package.swift` is rewritten by that workflow for every release: each binary
 //  target's url and checksum are the ones of the tag being published — one pair
@@ -72,6 +92,10 @@ let package = Package(
         .watchOS(.v10)
     ],
     products: [
+        // One name for two things, and the way Apple's own packages do it —
+        // `swift-log` is a package whose product is `Logging`: a product is the
+        // name a manifest depends on and the module behind it is the name an
+        // `import` spells, so there is nothing to translate between the two.
         .library(name: "MarsRS", targets: ["MarsRS"]),
         // for a consumer who logs and nothing else
         .library(name: "MarsRSXlog", targets: ["MarsRSXlog"]),
@@ -100,6 +124,12 @@ let package = Package(
         // `mars_xlog.h` become something Swift can call. It re-exports the C
         // module too, so `mars_xlog_*` stays available for the callers who
         // want it.
+        //
+        // `MarsRSXlog` and not `marsrs-xlog`: the product above is the name a
+        // consumer depends on, and this is the name their `import` spells —
+        // the same name, so the two ask for no translating. It is also the
+        // name every artifact of the build carries: `MarsRSXlog.swiftmodule`,
+        // `MarsRSXlog-Swift.h`, and the product never appears in one of them.
         //
         // The framework the static library needs and cannot name for itself:
         // a Rust static library carries no link flags, and the time zone
@@ -139,7 +169,7 @@ let package = Package(
         // artifact.
         .binaryTarget(
             name: "MarsRSNetFFI",
-            url: "https://github.com/orangeboyChen/mars-rs/releases/download/v0.1.0-alpha.3/MarsRSNet.xcframework.zip",
+            url: "https://github.com/orangeboyChen/mars-rs/releases/download/v0.1.0-alpha.3/marsrs-net.xcframework.zip",
             checksum: "0000000000000000000000000000000000000000000000000000000000000000"
         ),
         // The Swift over the net half's C ABI: `MarsSdt`, `MarsStn`, and the

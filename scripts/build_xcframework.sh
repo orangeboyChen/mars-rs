@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #
-# Builds MarsRSXlog.xcframework.zip and MarsRSNet.xcframework.zip: `marsrs-ffi` as
+# Builds marsrs-xlog.xcframework.zip and marsrs-net.xcframework.zip: `marsrs-ffi` as
 # a static library for the iOS device and simulator and for the watchOS device
 # and simulator, with its headers and a module map next to them, which is what
 # Package.swift hands to a Swift app.
 #
 # Two artifacts and not one, because the feature set the library is built with
-# is what an app links and not what the crate happens to hold: `MarsRSXlog` is
+# is what an app links and not what the crate happens to hold: `marsrs-xlog` is
 # `--no-default-features --features xlog`, so it is xlog's 28 `mars_xlog_*`
-# symbols and nothing else, and `MarsRSNet` is `--no-default-features --features
+# symbols and nothing else, and `marsrs-net` is `--no-default-features --features
 # sdt,stn`, so it carries no `mars_xlog_*` at all. That is what lets an app that
 # only logs take the first and stop there, and an app that takes both link
 # xlog's symbols exactly once instead of twice. The check at the bottom of each
@@ -19,17 +19,20 @@
 # The version is only a name for the zip's directory of origin; the binaries are
 # the same whatever it says. Run it from anywhere; it finds the workspace from
 # its own path. The xcframeworks are left in
-# <output-dir>/MarsRSXlog.xcframework.zip and
-# <output-dir>/MarsRSNet.xcframework.zip (default: target/xcframework), and each
+# <output-dir>/marsrs-xlog.xcframework.zip and
+# <output-dir>/marsrs-net.xcframework.zip (default: target/xcframework), and each
 # prints the checksum Package.swift names for it.
 #
 # Why a static library and not a framework bundle: the C++ project ships the
 # same shape (see MarsXlog.xcframework of orangeboyChen/mars) and SwiftPM's
 # binary targets take either. `-headers` is what makes `import MarsRSFFI` — or
-# `import MarsRSNetFFI` — resolve in Swift: the xlog module keeps the port's
-# name while its artifact takes xlog's, because a module rename is a rename of
-# what every consumer imports and can only travel with the release that
-# publishes it; the net one is new, so it is named after itself.
+# `import MarsRSNetFFI` — resolve in Swift: an artifact is named for the feature
+# set it holds and the module inside it for the C surface a consumer imports, and
+# a module rename is a rename of what every consumer imports, so it can only
+# travel with the release that publishes it. A zip's name asks for nothing of
+# the kind — SwiftPM extracts it under the binary target's name and reads the
+# module map inside — which is why these two can be lower-case, the way the
+# crates are, while the modules they carry are not.
 
 set -euo pipefail
 
@@ -54,8 +57,8 @@ esac
 # One entry per artifact: `<xcframework>:<c module>:<feature set>`. The headers
 # and the symbol prefix each one is checked against follow from its name below.
 artifacts=(
-    MarsRSXlog.xcframework:MarsRSFFI:xlog
-    MarsRSNet.xcframework:MarsRSNetFFI:sdt,stn
+    marsrs-xlog.xcframework:MarsRSFFI:xlog
+    marsrs-net.xcframework:MarsRSNetFFI:sdt,stn
 )
 
 # One entry per slice every artifact carries, and a slice is one (sdk,
@@ -123,12 +126,12 @@ for artifact in "${artifacts[@]}"; do
     # pipeline's, two of them, and a module map takes one umbrella — so it gets
     # one here, out of the two it is made of.
     case "$stem" in
-        MarsRSXlog)
+        marsrs-xlog)
             headers=(mars_xlog.h)
             umbrella=mars_xlog.h
             owns='_mars_xlog_'
             ;;
-        MarsRSNet)
+        marsrs-net)
             headers=(mars_sdt.h mars_stn.h)
             umbrella=mars_net.h
             owns='_mars_(sdt|stn)_'
