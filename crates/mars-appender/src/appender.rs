@@ -48,8 +48,9 @@
 //!   their own flush: records are lost, and each flush either writes what the
 //!   other buffered or clears it before the other gets there. The port gives
 //!   every writer a cache file of its own (`CacheSlot`, claimed by `O_EXCL`
-//!   and held for the appender's lifetime) and takes the prefix's `<prefix>.lock` around the steps that move more than one file, so
-//!   a log two writers share is still complete. Where the filesystem's
+//!   and held for the appender's lifetime) and takes the log's own
+//!   `<logdir>/<prefix>.lock` around the steps that move more than one file,
+//!   so a log two writers share is still complete. Where the filesystem's
 //!   advisory locking excludes nobody the C++ behaviour — one shared cache
 //!   file, unprotected — is all there is, and that is what the port falls back
 //!   to rather than trusting a lock that locks nobody.
@@ -318,15 +319,31 @@ pub(crate) fn mmap_file_path(config: &XLogConfig) -> PathBuf {
     cache_slot_path(cache_dir(config), &config.nameprefix, 0)
 }
 
-/// `<dir>/<prefix>.lock` — the lock the operations that span several files of
-/// one prefix are taken under.
+/// `<dir>/<prefix>.lock`.
 ///
-/// It is a sibling of the cache files and, like them, outside everything the
-/// sweep and the log-file discovery look at: `del_timeout_file` only removes
-/// `.xlog` files and `YYYYMMDD` directories, and
-/// [`file_util::get_file_names_by_prefix`] only matches `.xlog`.
+/// Two different locks of that shape are taken, each in the directory of the
+/// thing it is about: the log's own (see [`output_lock_path`]) and, only to
+/// find out whether locking excludes anybody there at all, the cache
+/// directory's (see [`claim_cache_slot`]).
+///
+/// Neither is inside anything the sweep or the log-file discovery look at:
+/// `del_timeout_file` only removes `.xlog` files and `YYYYMMDD` directories,
+/// and [`file_util::get_file_names_by_prefix`] only matches `.xlog`.
 pub(crate) fn dir_lock_path(dir: &Path, prefix: &str) -> PathBuf {
     dir.join(format!("{prefix}.lock"))
+}
+
+/// `<logdir>/<prefix>.lock` — the lock every writer of one log file takes: see
+/// [`AppenderInner::with_dir_lock`].
+///
+/// The log file is what writers that name this `logdir` and prefix share,
+/// wherever each of them keeps its cache — a cache directory of its own,
+/// another one's, or none at all — so a lock named after the cache directory
+/// would be a different file for every one of them and would exclude nobody:
+/// two writers with two cache directories would interleave their batches and
+/// their cache-file moves inside one `.xlog`.
+pub(crate) fn output_lock_path(config: &XLogConfig) -> PathBuf {
+    dir_lock_path(&config.logdir, &config.nameprefix)
 }
 
 /// `<dir>/<prefix>.mmap3` for slot `0`, `<dir>/<prefix>_<n>.mmap3` after that.
@@ -370,13 +387,19 @@ struct CacheSlot {
     file: File,
 }
 
-/// Opens `<dir>/<prefix>.lock`, or `None` when locking does not work here.
+/// Opens the log's lock — [`output_lock_path`] — or `None` when it cannot be
+/// opened.
 ///
 /// One handle for the whole appender, locked and unlocked around each section
 /// by [`AppenderInner::with_dir_lock`] rather than reopened: on macOS an `open`
 /// and a `close` measured ~16 µs against ~0.5 µs for the `flock` pair, which is
 /// more than a whole record costs. The lock is still released when the file is
 /// dropped, so a process that dies releases it too.
+///
+/// Opened whatever [`sys::lock_excludes`] answered: on a filesystem whose
+/// advisory locking excludes nobody the sections below run unprotected, which
+/// is the fallback either way, but a directory that *does* exclude while the
+/// cache directory does not — or the other way round — is still protected.
 fn open_dir_lock(path: Option<&Path>) -> Option<File> {
     let path = path?;
     OpenOptions::new()
@@ -1144,20 +1167,21 @@ impl Appender {
 
         // The C++ runs these on 2-3 minute delayed threads; the port prunes at
         // open time so the directory is clean by the time `open` returns. It is
-        // held under the prefix's lock because it reads, moves and removes
-        // whole files: two processes opening at once would otherwise both move
-        // the same cache file into the log.
+        // held under the log's lock because it reads, moves and removes whole
+        // files: two processes opening at once would otherwise both move the
+        // same cache file into the log.
+        //
+        // That lock is the log's, not the cache's: what the sweep and the
+        // sections below protect is one `<prefix>_<YYYYMMDD>.xlog`, which every
+        // writer of this `logdir` appends to whatever its `cachedir` is — so a
+        // lock named after the cache directory would be a different file for
+        // each of them and would exclude nobody.
         let dir = cache_dir(&config).to_path_buf();
-        let lock_path = dir_lock_path(&dir, &config.nameprefix);
-        // Whether advisory locking works here decides two things: whether the
-        // sections below can be serialised at all, and whether a cache slot of
-        // this appender's own can be told from one a dead writer left behind.
-        let locking = sys::lock_excludes(&lock_path);
-        let dir_lock = if locking {
-            open_dir_lock(Some(&lock_path))
-        } else {
-            None
-        };
+        let dir_lock = open_dir_lock(Some(&output_lock_path(&config)));
+        // Whether advisory locking excludes anybody *where the cache files
+        // live* decides the other thing `open` needs it for: whether a slot a
+        // dead writer left behind can be told from one a live writer is using.
+        let locking = sys::lock_excludes(&dir_lock_path(&dir, &config.nameprefix));
         {
             if let Some(file) = dir_lock.as_ref() {
                 sys::lock_exclusive(file);
@@ -2317,6 +2341,26 @@ mod tests {
 
         assert_eq!(action, FileIoAction::WriteFailed);
         assert!(mmap_path.exists(), "the cache is the only copy left");
+    }
+
+    /// The lock the sections are taken under is the log's: writers that name
+    /// one `logdir` and prefix append to one `.xlog` wherever each of them
+    /// keeps its cache, so a lock named after the cache directory would be a
+    /// different file for every one of them and would exclude nobody.
+    #[test]
+    fn the_shared_log_lock_comes_from_the_log_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("log");
+        let mut with_cache = config(&log, AppenderMode::Sync);
+        with_cache.cachedir = Some(tmp.path().join("cache"));
+        let without_cache = config(&log, AppenderMode::Sync);
+
+        assert_eq!(output_lock_path(&with_cache), log.join("Mars.lock"));
+        assert_eq!(
+            output_lock_path(&without_cache),
+            output_lock_path(&with_cache),
+            "one cache dir and none must not mean two locks"
+        );
     }
 
     /// Two writers of one prefix in one directory: what two processes — or two

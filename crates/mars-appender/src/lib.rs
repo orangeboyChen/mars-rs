@@ -51,10 +51,11 @@
 //! region with their own idea of its length: records are lost, and each flush
 //! either writes what the other buffered or clears it before the other gets
 //! there. The port gives every writer a cache file of its own
-//! (`<prefix>.mmap3`, then `<prefix>_1.mmap3` …) and takes the prefix's
-//! `<prefix>.lock` around the steps that move more than one file, so a log two
-//! writers share is still complete: every record of both, in a file that still
-//! decodes end to end.
+//! (`<prefix>.mmap3`, then `<prefix>_1.mmap3` …) and, around the steps that
+//! move more than one file, takes the lock of the log they share —
+//! `<logdir>/<prefix>.lock`, which is theirs whatever cache directory each of
+//! them was given — so a log two writers share is still complete: every record
+//! of both, in a file that still decodes end to end.
 //!
 //! Everything else has a counterpart: the per-prefix instance table lives in
 //! [`category`], and the hex dump of a binary blob in [`xlogger_memory_dump`]
@@ -418,7 +419,11 @@ pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
     }
 
     let dir = cache_dir(config).to_path_buf();
-    let lock_path = dir_lock_path(&dir, &config.nameprefix);
+    // Whether a slot a dead writer left behind can be told from one a live
+    // writer is using — which is asked of the cache directory, because that is
+    // where the slots are. (The lock the drain itself is taken under is the
+    // log's: see `appender::output_lock_path`.)
+    let slot_lock_path = dir_lock_path(&dir, &config.nameprefix);
     let Ok(appender) = Appender::oneshot(
         config,
         MAX_FILE_SIZE.load(Ordering::Relaxed),
@@ -430,7 +435,7 @@ pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
     // Without a lock a live cache file cannot be told from a dead one, so all
     // that is left is the C++'s own behaviour: the single fixed name, drained
     // only when no appender of this process is using it.
-    if !crate::sys::lock_excludes(&lock_path) {
+    if !crate::sys::lock_excludes(&slot_lock_path) {
         if appender_get_current_log_path().is_some()
             || crate::category::instance_owns_mmap_path(&mmap_file_path(config))
         {

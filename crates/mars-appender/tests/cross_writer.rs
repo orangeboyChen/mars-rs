@@ -170,6 +170,58 @@ fn two_instances_of_one_prefix_keep_every_record() {
     }
 }
 
+/// Two writers of one prefix and one log directory, each with a cache
+/// directory of its own.
+///
+/// What the two share is the log file, so the lock that serialises them has to
+/// be the log's: next to each writer's own cache it would be a different file
+/// for each of them, and would exclude nobody — a direct flush could then land
+/// between the chunks of the other's cache-file move.
+#[test]
+fn two_cache_directories_share_the_log_directories_lock() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("log");
+    let mut cfg = config(&log);
+    cfg.cachedir = Some(tmp.path().join("cache-a"));
+
+    let first = appender_open_instance(cfg.clone()).unwrap();
+    cfg.cachedir = Some(tmp.path().join("cache-b"));
+    let second = appender_open_instance(cfg).unwrap();
+
+    let entries: Vec<_> = fs::read_dir(&log)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        log.join("Mars.lock").exists(),
+        "the shared-log lock is not in the log directory: {entries:?}"
+    );
+
+    for i in 0..RECORDS {
+        assert!(appender_write_instance(
+            first,
+            Some(&info(LogLevel::Info)),
+            &format!("cache-a-{i:04}")
+        ));
+        assert!(appender_write_instance(
+            second,
+            Some(&info(LogLevel::Info)),
+            &format!("cache-b-{i:04}")
+        ));
+    }
+    appender_flush_instance(first, true);
+    appender_flush_instance(second, true);
+    appender_close_instance(first);
+    appender_close_instance(second);
+
+    let text = payload_text(&fs::read(today_log_file(&log)).unwrap());
+    for i in 0..RECORDS {
+        assert!(text.contains(&format!("cache-a-{i:04}")), "{text}");
+        assert!(text.contains(&format!("cache-b-{i:04}")), "{text}");
+    }
+}
+
 /// The body [`two_processes_keep_every_record`] runs in a second process: open
 /// the same prefix in the same directory and write.
 ///
