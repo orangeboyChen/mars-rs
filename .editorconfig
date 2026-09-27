@@ -1,6 +1,7 @@
-# ktlint reads this file for the Kotlin of the Android packaging (android/);
-# nothing else in the repository does, so the section below is the only one
-# here. Editors read it too, so the style a developer types in is the one the
+# ktlint reads this file for every Kotlin of the repository — the AARs of
+# android/, and the Android half of the Flutter plugin and of the React Native
+# module; nothing else in the repository does, so the section below is the only
+# one. Editors read it too, so the style a developer types in is the one the
 # gate checks.
 #
 # `android_studio` and not ktlint's own `ktlint_official`: this Kotlin was

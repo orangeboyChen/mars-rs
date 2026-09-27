@@ -197,6 +197,59 @@ downloads `mars-android-native.zip` of the same release first — see
 `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin` and
 `x86_64-pc-windows-msvc`.
 
+### Flutter
+
+`mars-rs-flutter-<version>.tar.gz` is the `mars_rs_xlog` plugin — unpack it next
+to the app and depend on the directory:
+
+```yaml
+# pubspec.yaml
+dependencies:
+  mars_rs_xlog:
+    path: ../mars_rs_xlog
+```
+
+```dart
+await MarsRsXlog.open(MarsXlogConfig(logDirectory: dir, namePrefix: 'Ham'));
+await MarsRsXlog.write(MarsXlogLevel.info, 'hello', tag: 'Net');
+await MarsRsXlog.flush(sync: true);
+```
+
+### React Native
+
+`mars-rs-react-native-xlog-<version>.tgz` is the module, packed by `npm pack`:
+
+```bash
+npm install ./mars-rs-react-native-xlog-<version>.tgz
+cd ios && pod install
+```
+
+```ts
+await MarsRsXlog.open({ logDirectory: dir, namePrefix: 'Ham' });
+await MarsRsXlog.write(MarsXlogLevel.info, 'hello', 'Net');
+await MarsRsXlog.flush(true);
+```
+
+Both are the xlog half, and both are the same instance API `MarsXlogInstance` of
+`Sources/MarsRSXlog/Xlog.swift` is: one appender, opened with a configuration and
+released by the name it was opened with. What they resolve and what they carry
+differs, and the difference is the two ecosystems':
+
+* their Android halves **depend** on the `mars-rs-xlog` AAR of the same release,
+  from JitPack — the same coordinate, resolved the same way, as for an app that
+  takes the AAR directly, so nothing Rust is built for them either;
+* their Apple halves **carry** `MarsRSXlog.xcframework`, with `mars_xlog.h` next
+  to it. CocoaPods cannot resolve the SwiftPM binary target of `Package.swift`,
+  and there is no pod for it, so the release drops the framework of its own tag
+  into the package before packing it. It is the one thing either package vendors
+  instead of resolves, and it is why the iOS glue of both is Objective-C over the
+  header rather than Swift over `MarsRSFFI`.
+
+`scripts/package_flutter.sh` and `scripts/package_react_native.sh` are what turn
+the directory into the package: they stamp the version and the AAR's coordinate,
+and drop the framework and the header in. What is checked in is the package
+without them; what is published is the package with.
+
 ### Building the packages
 
 ```bash
@@ -204,6 +257,8 @@ scripts/build_xcframework.sh 0.1.0 dist   # MarsRSXlog.xcframework.zip
 scripts/build_android.sh dist/native      # <abi>/libmarsxlog.so
 # the .so of dist/native has to be under android/<module>/libs first
 (cd android && ./gradlew :mars-core:assembleRelease :mars-xlog:assembleRelease)
+scripts/package_flutter.sh 0.1.0 dist       # mars-rs-flutter-0.1.0.tar.gz
+scripts/package_react_native.sh 0.1.0 dist  # mars-rs-react-native-xlog-0.1.0.tgz
 ```
 
 ## License

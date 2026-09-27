@@ -78,7 +78,15 @@ jobs:
           ./ktlint --version
       # `.editorconfig` is the whole configuration: the `android_studio` code
       # style, the 120-column line and the end-of-file rules.
-      - run: ./ktlint --relative 'android/**/*.kt' 'android/**/*.kts'
+      #
+      # Three directories and not one: the AARs of android/, and the Android
+      # half of the Flutter plugin and of the React Native module. The iOS
+      # halves are Objective-C against `mars_xlog.h`, which neither gate reads.
+      - run: |
+          ./ktlint --relative \
+            'android/**/*.kt' 'android/**/*.kts' \
+            'flutter/**/*.kt' 'flutter/**/*.kts' \
+            'react-native/**/*.kt' 'react-native/**/*.kts'
 
   detekt:
     name: detekt (Kotlin)
@@ -98,6 +106,6 @@ jobs:
       # detekt's own defaults, and its `build.maxIssues: 0` is what fails the job.
       - run: |
           java -jar detekt-cli-all.jar \
-            --input android/mars-core/src/main/kotlin,android/mars-xlog/src/main/kotlin \
+            --input android/mars-core/src/main/kotlin,android/mars-xlog/src/main/kotlin,flutter/mars_rs_xlog/android/src/main/kotlin,react-native/android/src/main/kotlin \
             --config detekt.yml \
             --build-upon-default-config
