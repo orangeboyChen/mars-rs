@@ -94,18 +94,19 @@ xlog.flush(sync = true)  // 返回时记录已经在磁盘上了
 ```
 
 ```kotlin [Kotlin Multiplatform]
-Xlog.open(
+val xlog = Xlog(
     XlogConfig(
         logDir = logDirectory,
         namePrefix = "marsrs",
-        level = LogLevel.Info,
+        level = LogLevel.INFO,
     )
 )
+xlog.consoleLogEnabled = isDebug
 
-Xlog.write(LogLevel.Info, "startup", "hello from mars")
+xlog.i("startup", "hello from mars")
 
-Xlog.flush(sync = true)  // 返回时记录已经在磁盘上了
-Xlog.close()
+xlog.flush(sync = true)  // 返回时记录已经在磁盘上了
+xlog.close()
 ```
 
 ```c [C]

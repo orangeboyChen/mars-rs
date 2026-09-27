@@ -3,7 +3,7 @@
 // are a pair, `mars-core` and `mars-xlog` are the C++ project's, and `MarsRS`
 // and `MarsRSXlog` are the pair `Package.swift` exposes.
 //
-// It declares nothing that is not xlog's, and that is the point: `mars-ffi`
+// It declares nothing that is not xlog's, and that is the point: `marsrs-ffi`
 // exports 28 `mars_xlog_*` symbols and nothing else today, so the whole port and
 // its logging half are the same module — exactly the reason
 // `marsrs-xlog.xcframework` is named after xlog and `MarsRS` in `Package.swift`

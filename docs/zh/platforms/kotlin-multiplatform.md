@@ -27,51 +27,67 @@ import io.github.orangeboychen.marsrs.xlog.LogLevel
 import io.github.orangeboychen.marsrs.xlog.Xlog
 import io.github.orangeboychen.marsrs.xlog.XlogConfig
 
-Xlog.open(
+val xlog = Xlog(
     XlogConfig(
         logDir = logDirectory,
         namePrefix = "marsrs",
-        level = LogLevel.Info,
-        mode = AppenderMode.Async,
+        level = LogLevel.INFO,
+        mode = AppenderMode.ASYNC,
     )
 )
+xlog.consoleLogEnabled = isDebug
 
-Xlog.write(LogLevel.Info, "startup", "cold start in $elapsedMillis ms")
+xlog.i("startup", "cold start in $elapsedMillis ms")
 
-Xlog.flush(sync = true)   // 读文件或上传前
-Xlog.close()
+xlog.flush(sync = true)   // 读文件或上传前
+xlog.close()
 ```
 
 `logDir` 是唯一没有默认值的选项，其余都在[配置项](/zh/configuration)那页。
 
+这就是 [Android](/zh/platforms/android) 那个 `Xlog`：同一个构造函数、同样的成员、
+同样的名字，所以在 `xlog-kmp` 和 `xlog` 之间搬动的共享模块什么都不用改。
+
 ## 写
 
-`Xlog.write` 就是一条记录：级别、tag、消息，共享代码里有的话再加上调用处的文件、
-函数和行号。
+写是 `android.util.Log` 那个形状 —— `v`/`d`/`i`/`w`/`e`/`f`，每个都是 tag 加消息，
+级别要到调用时才知道就用 `log(level, tag, message)`。
 
 ```kotlin
-Xlog.write(LogLevel.Debug, "net", "…")
-Xlog.write(LogLevel.Error, "login", "…")
+xlog.v("net", "…")
+xlog.d("net", "…")
+xlog.i("startup", "…")
+xlog.w("net", "…")
+xlog.e("login", "…")
+xlog.f("login", "…")
 
-Xlog.write(LogLevel.Debug, "net", "…", file = "Net.kt", function = "fetch", line = 42)
+xlog.log(LogLevel.DEBUG, "net", "…")
 ```
 
-级别低于 appender 打开时那个级别的记录，在格式化之前就被丢掉了。
-
-## `Log` 门面
-
-`Log` 是 C++ 项目那套门面 —— `Log.d(tag, message)` 这些，写进同一个 appender ——
-给更愿意这么写的共享代码用：
+级别低于 appender 打开时那个级别的记录，在格式化之前就被丢掉了。构造起来很贵的消息
+值得先问一句，因为被丢掉的记录仍然要调用方先把 `String` 拼出来：
 
 ```kotlin
-Log.setLevel(LogLevel.Info)
-Log.v("net", "…")
-Log.d("net", "…")
-Log.i("startup", "…")
-Log.w("net", "…")
-Log.e("login", "…")
-Log.f("login", "…")
+if (xlog.isLoggable(LogLevel.DEBUG)) {
+    xlog.d("net", expensiveDescription())
+}
 ```
+
+## 开着的时候
+
+| 要什么 | 怎么写 |
+|---|---|
+| 改级别 | `xlog.level = LogLevel.WARNING` |
+| 切异步 / 同步 | `xlog.mode = AppenderMode.SYNC` |
+| 同时打到控制台 | `xlog.consoleLogEnabled = true` |
+| 到某个大小就切文件 | `xlog.maxFileSizeBytes = 8 * 1024 * 1024` |
+| 到某个年龄就删文件 | `xlog.maxAliveTimeSeconds = 10 * 24 * 3600` |
+| 还开着吗 | `xlog.isOpen` |
+| 把缓存排空 | `xlog.flush(sync = true)` |
+
+`close()` 排空剩下的并关掉这个 appender。同一个 `namePrefix` 的两个 `Xlog` 是同一个
+appender，所以关掉一个就关掉了另一个正在写的 —— 应用里日志要单独读的那部分，给它一个
+自己的 prefix。
 
 ## 哪些平台
 
@@ -84,6 +100,7 @@ Log.f("login", "…")
 
 ## 不在这里面的
 
-这个 API 面是两座桥的交集，也是 `common` 声明唯一能是的东西。C ABI 的具名实例
-（`mars_xlog_new_instance`、`mars_xlog_current_log_path`）和 Android 那个按实例的
-`Xlog` 都不在里面；要用它们就是某个单一平台的调用方，写在那平台的 source set 里。
+这个 API 面是两座桥的交集，也是 `common` 声明唯一能是的东西。C ABI 那个进程级的
+appender —— `mars_xlog_open`、`mars_xlog_close`、`mars_xlog_current_log_path` —— 不在
+里面，因为 JNI 桥没有对应的东西：要用它们就是某个单一平台的调用方，写在那平台的
+source set 里。
