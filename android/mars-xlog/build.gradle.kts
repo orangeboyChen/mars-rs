@@ -10,7 +10,7 @@
 //
 // The .so files are not built here. Neither JitPack nor a plain `./gradlew`
 // has an NDK and a Rust toolchain, so .github/workflows/release.yml builds
-// them and publishes `mars-android-native.zip` with the release; that zip (see
+// them and publishes `marsrs-android-native.zip` with the release; that zip (see
 // ../../jitpack.yml, and the `android` job of the workflow) is what puts them
 // in `libs/<abi>/`.
 
@@ -105,7 +105,7 @@ afterEvaluate {
     val abis = file("libs").listFiles()?.filter { it.isDirectory } ?: emptyList()
     if (abis.isEmpty()) {
         throw GradleException(
-            "No native libraries found in ${file("libs")}. Unpack mars-android-native.zip " +
+            "No native libraries found in ${file("libs")}. Unpack marsrs-android-native.zip " +
                 "of the release into it first (see jitpack.yml and the 'android' job of " +
                 ".github/workflows/release.yml)."
         )

@@ -6,11 +6,15 @@ name: Release
 #   * marsrs-net.xcframework.zip    -> the net one (the diagnosis and the tasks)
 #   * mars-core.aar              -> JitPack: io.github.orangeboyChen:mars-rs
 #   * mars-xlog.aar              -> JitPack: io.github.orangeboyChen:mars-rs-xlog
-#   * mars-android-native.zip    -> the .so files, for a consumer's own AAR
-#   * mars-rs-<version>-<host>.tar.gz / .zip -> the C ABI for Linux/macOS/Windows
-#   * mars-kmp-native.zip    -> the archives the Kotlin module is built out of
-#   * mars-kmp-maven.zip     -> the Kotlin module itself, as a maven repository
+#   * marsrs-android-native.zip    -> the .so files, for a consumer's own AAR
+#   * marsrs-<version>-<host>.tar.gz / .zip -> the C ABI for Linux/macOS/Windows
+#   * marsrs-kmp-native.zip    -> the archives the Kotlin module is built out of
+#   * marsrs-kmp-maven.zip     -> the Kotlin module itself, as a maven repository
 #   * crates.io: `marsrs` and `marsrs-xlog`, at the version of the tag
+#
+# The archives this port packages itself are `marsrs-*`, the way the crates are;
+# the two AARs keep the C++ project's names, `mars-core` and `mars-xlog`, because
+# an app that takes the port in place of it changes the group and not the file.
 #
 # The steps that outgrew a `run:` block are `.github/scripts/`: no one runs them
 # by hand, and they are of a piece with the workflows that call them. `scripts/`
@@ -103,14 +107,20 @@ env:
   # the same slices over the other feature set: `mars_sdt_*` and `mars_stn_*`
   # and no `mars_xlog_*`, so an app that takes both links xlog's once
   XCFRAMEWORK_NET_ZIP: marsrs-net.xcframework.zip
-  NATIVE_ZIP: mars-android-native.zip
+  # Every archive of this port's own — the natives the two Android AARs and the
+  # Kotlin module are assembled from, and the C ABI a host links — takes the
+  # crates' spelling, because a zip is a file a consumer downloads and not a
+  # name a compiler reads. The two AARs below do not: they are the names the C++
+  # project publishes them under, and taking the port in place of it is a change
+  # of the group, not of the file.
+  NATIVE_ZIP: marsrs-android-native.zip
   # The Kotlin Multiplatform pair: the archives the module is built out of, and
-  # the maven repository it is published as. `mars-kmp-native.zip` is what
+  # the maven repository it is published as. `marsrs-kmp-native.zip` is what
   # `scripts/build_kmp_native.sh` writes for every Kotlin target plus the .so
-  # files of the JNI bridge; `mars-kmp-maven.zip` is the repository itself, for
+  # files of the JNI bridge; `marsrs-kmp-maven.zip` is the repository itself, for
   # a consumer who would rather not authenticate to GitHub Packages.
-  KMP_NATIVE_ZIP: mars-kmp-native.zip
-  KMP_MAVEN_ZIP: mars-kmp-maven.zip
+  KMP_NATIVE_ZIP: marsrs-kmp-native.zip
+  KMP_MAVEN_ZIP: marsrs-kmp-maven.zip
   # the whole port, and xlog alone: the pair the C++ project publishes as
   # `mars-core` and `mars-xlog`
   CORE_AAR: mars-core.aar
@@ -223,7 +233,7 @@ jobs:
           name: release-android
           # the three files this module publishes, and not `dist/`: that
           # directory also holds dist/native, the .so tree that
-          # mars-android-native.zip is zipped from, and a directory is not
+          # marsrs-android-native.zip is zipped from, and a directory is not
           # something the release can be given
           path: |
             dist/${{ env.NATIVE_ZIP }}
@@ -265,7 +275,7 @@ jobs:
           set -euo pipefail
           version="${{ needs.version.outputs.version }}"
           target="${{ matrix.target }}"
-          stage="dist/mars-rs-$version-$target"
+          stage="dist/marsrs-$version-$target"
           mkdir -p "$stage/include" "$stage/lib"
           cp crates/marsrs-ffi/include/mars_xlog.h "$stage/include/"
           cp crates/marsrs-ffi/include/mars_sdt.h "$stage/include/"
@@ -279,10 +289,10 @@ jobs:
           test -n "$(ls -A "$stage/lib")"
           ls -l "$stage/lib"
           if [ "${{ matrix.archive }}" = zip ]; then
-            (cd dist && 7z a -r -tzip "mars-rs-$version-$target.zip" "mars-rs-$version-$target" > /dev/null)
+            (cd dist && 7z a -r -tzip "marsrs-$version-$target.zip" "marsrs-$version-$target" > /dev/null)
             rm -rf "$stage"
           else
-            tar -czf "dist/mars-rs-$version-$target.tar.gz" -C dist "mars-rs-$version-$target"
+            tar -czf "dist/marsrs-$version-$target.tar.gz" -C dist "marsrs-$version-$target"
             rm -rf "$stage"
           fi
       - uses: actions/upload-artifact@v7
