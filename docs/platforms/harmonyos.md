@@ -23,7 +23,7 @@ script downloads when `OHOS_SDK_HOME` is not set.
    MarsXLogConfig config = {
        .mode = MarsAppenderAsync,
        .log_dir = log_dir,      /* the app's files directory */
-       .name_prefix = "Ham",
+       .name_prefix = "marsrs",
        .compress_mode = MarsCompressZlib,
    };
    mars_xlog_open(&config);

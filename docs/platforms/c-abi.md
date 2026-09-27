@@ -21,7 +21,7 @@ built for `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin` and
 MarsXLogConfig config = {
     .mode = MarsAppenderAsync,
     .log_dir = "/tmp/mars-log",
-    .name_prefix = "Ham",
+    .name_prefix = "marsrs",
     .compress_mode = MarsCompressZlib,
     /* .pub_key, .compress_level, .cache_dir, .cache_days — see the header */
 };

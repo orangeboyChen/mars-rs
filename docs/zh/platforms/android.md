@@ -24,7 +24,7 @@ val xlog = Xlog(
     XlogConfig(
         logDir = File(context.filesDir, "xlog/log").path,
         cacheDir = File(context.filesDir, "xlog/cache").path,
-        namePrefix = "Ham",
+        namePrefix = "marsrs",
         level = LogLevel.INFO,
         mode = AppenderMode.ASYNC,
     )
@@ -96,6 +96,6 @@ Log.setLogImp(Xlog())
 Log.d("net", "…")
 
 // 现在
-val xlog = Xlog(XlogConfig(logDir = dir, namePrefix = "Ham"))
+val xlog = Xlog(XlogConfig(logDir = dir, namePrefix = "marsrs"))
 xlog.d("net", "…")
 ```

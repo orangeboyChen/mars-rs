@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap
  *     XlogConfig(
  *         logDir = File(context.filesDir, "xlog/log").path,
  *         cacheDir = File(context.filesDir, "xlog/cache").path,
- *         namePrefix = "Ham",
+ *         namePrefix = "marsrs",
  *         level = LogLevel.INFO,
  *     )
  * )

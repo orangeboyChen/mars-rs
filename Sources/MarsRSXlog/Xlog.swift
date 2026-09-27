@@ -37,7 +37,7 @@ import Foundation
 ///     XlogConfig(
 ///         logDirectory: logDirectory.path,
 ///         cacheDirectory: cacheDirectory.path,
-///         namePrefix: "Ham",
+///         namePrefix: "marsrs",
 ///         level: .info
 ///     )
 /// )

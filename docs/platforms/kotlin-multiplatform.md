@@ -32,7 +32,7 @@ import io.github.orangeboychen.marsrs.xlog.XlogConfig
 Xlog.open(
     XlogConfig(
         logDir = logDirectory,
-        namePrefix = "Ham",
+        namePrefix = "marsrs",
         level = LogLevel.Info,
         mode = AppenderMode.Async,
     )

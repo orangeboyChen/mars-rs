@@ -9,7 +9,7 @@
 //      import MarsRS          // the whole port
 //
 //      var config = XlogConfig(logDirectory: logDir)
-//      config.namePrefix = "Ham"
+//      config.namePrefix = "marsrs"
 //      config.publicKey = "..."
 //      let log = try Xlog(config)
 //

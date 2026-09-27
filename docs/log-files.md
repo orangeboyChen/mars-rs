@@ -8,8 +8,8 @@ An appender writes one file per day into the log directory of its config:
 <logDir>/<namePrefix>_YYYYMMDD.xlog
 ```
 
-`XlogConfig(logDir = "/data/…/xlog/log", namePrefix = "Ham")` gives
-`Ham_20260927.xlog`. The directory is created when it is not there, and the
+`XlogConfig(logDir = "/data/…/xlog/log", namePrefix = "marsrs")` gives
+`marsrs_20260927.xlog`. The directory is created when it is not there, and the
 prefix is what the appender is known by: two appenders that share one share the
 file, and closing one of them closes what the other writes through. Give a part
 of an app whose logs are read apart from the rest a prefix of its own.
@@ -90,18 +90,18 @@ mars logs reads these.
 ::: code-group
 
 ```bash [The CLI]
-xlog-compat decode --privkey=<hex> --in=Ham_20260927.xlog --out=Ham.plain
+xlog-compat decode --privkey=<hex> --in=marsrs_20260927.xlog --out=marsrs.plain
 ```
 
 ```rust [Rust]
 use marsrs::xlog::{get_period_logs, LogBuffer};
 
 // the bytes of the records between two hours of the day
-let (begin, end) = get_period_logs(std::path::Path::new("Ham_20260927.xlog"), 0, 24)?;
+let (begin, end) = get_period_logs(std::path::Path::new("marsrs_20260927.xlog"), 0, 24)?;
 ```
 
 ```python [Upstream's tooling]
-python3 decode_mars_log_file.py Ham_20260927.xlog      # Tencent/mars
+python3 decode_mars_log_file.py marsrs_20260927.xlog      # Tencent/mars
 ```
 
 :::
