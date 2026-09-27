@@ -1,7 +1,7 @@
 //! The JVM boundary: the entry points Java calls and the readers that turn
 //! Java objects into Rust values.
 //!
-//! Everything here needs a live `JNIEnv`, so it can only be exercised from Java
+//! Everything here needs a live `Env`, so it can only be exercised from Java
 //! (the Android AAR CI builds). The logic behind it lives in the crate root and
 //! is covered by `cargo test`, which is why this file is left out of the
 //! coverage measurement.
@@ -9,9 +9,11 @@
 use jni::objects::{
     JByteArray, JClass, JIntArray, JObject, JObjectArray, JString, JValue, JValueOwned,
 };
-use jni::strings::JavaStr;
+use jni::signature::MethodSignature;
+use jni::strings::{JNIStr, MUTF8Chars};
 use jni::sys::{jboolean, jint, jlong, jobject, JNI_VERSION_1_6};
-use jni::{JNIEnv, JavaVM};
+use jni::{jni_sig, jni_str};
+use jni::{Env, EnvUnowned, JavaVM};
 
 use marsrs_appender::{AppenderMode, CompressMode, LogLevel, XLogConfig, XLoggerInfo};
 use marsrs_stn::{CgiProfile, Task};
@@ -50,6 +52,28 @@ use crate::{
     set_max_file_size_impl, write_impl,
 };
 
+/// Runs `f` with an [`Env`], which is what an entry point has to go through
+/// now: the handle the JVM hands a native method is an [`EnvUnowned`], and
+/// none of the calls below live on it — they live on the `Env` borrowed from
+/// it for the length of the call.
+///
+/// [`guard`] still holds inside: a panic or a JNI error is the default value
+/// of `T`, never an unwind into the JVM, and the panic still says so on
+/// stderr.
+fn guard_env<'local, T, F>(env: &mut EnvUnowned<'local>, f: F) -> T
+where
+    T: Default,
+    F: FnOnce(&mut Env<'local>) -> T,
+{
+    match env
+        .with_env(|env| Ok::<_, jni::errors::Error>(guard(|| f(env))))
+        .into_outcome()
+    {
+        jni::Outcome::Ok(value) => value,
+        jni::Outcome::Err(_) | jni::Outcome::Panic(_) => T::default(),
+    }
+}
+
 /// The VM the library was loaded into.
 ///
 /// Every other call in this file goes Java -> Rust, but two of them go the
@@ -61,9 +85,20 @@ static VM: OnceLock<JavaVM> = OnceLock::new();
 
 /// `JNI_OnLoad` — `System.loadLibrary` calls it, and it is the only place the
 /// library can get hold of the VM.
+///
+/// The VM arrives as the raw `JavaVM*` the JNI header declares, because a
+/// `jni::JavaVM` by value is not FFI-safe to hand across the boundary.
+///
+/// # Safety
+///
+/// `vm` has to be the live VM the JVM hands `JNI_OnLoad`: nothing checks it
+/// here, and it is kept until the process goes away.
 #[no_mangle]
-pub extern "system" fn JNI_OnLoad(vm: JavaVM, _reserved: *mut std::ffi::c_void) -> jint {
-    let _ = VM.set(vm);
+pub unsafe extern "system" fn JNI_OnLoad(
+    vm: *mut jni::sys::JavaVM,
+    _reserved: *mut std::ffi::c_void,
+) -> jint {
+    let _ = VM.set(JavaVM::from_raw(vm));
     JNI_VERSION_1_6 as jint
 }
 
@@ -78,37 +113,33 @@ pub fn report_signal_detect_results(json: String) {
         let Some(vm) = VM.get() else {
             return;
         };
-        let Ok(mut env) = vm.attach_current_thread() else {
-            return;
-        };
-        let Ok(class) = env.find_class("io/github/orangeboychen/marsrs/sdt/SdtLogic") else {
-            return;
-        };
-        let Ok(message) = env.new_string(&json) else {
-            return;
-        };
-        let argument = JObject::from(message);
-        let argument = JValue::Object(&argument);
-        let _ = env.call_static_method(
-            class,
-            "reportSignalDetectResults",
-            "(Ljava/lang/String;)V",
-            &[argument],
-        );
+        // Attaching lends the `Env` to a closure now rather than handing back
+        // a guard, so the whole call moves inside it.
+        let _ = vm.attach_current_thread(|env| {
+            let class = env.find_class(jni_str!("io/github/orangeboychen/marsrs/sdt/SdtLogic"))?;
+            let message = JObject::from(env.new_string(&json)?);
+            env.call_static_method(
+                class,
+                jni_str!("reportSignalDetectResults"),
+                jni_sig!("(Ljava/lang/String;)V"),
+                &[JValue::Object(&message)],
+            )?;
+            Ok::<_, jni::errors::Error>(())
+        });
     })
 }
 
-fn int_field(env: &mut JNIEnv<'_>, obj: &JObject<'_>, name: &str) -> i32 {
+fn int_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> i32 {
     guard(|| {
-        env.get_field(obj, name, "I")
+        env.get_field(obj, name, jni_sig!("I"))
             .and_then(|value| value.i())
             .unwrap_or(0)
     })
 }
 
-fn long_field(env: &mut JNIEnv<'_>, obj: &JObject<'_>, name: &str) -> i64 {
+fn long_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> i64 {
     guard(|| {
-        env.get_field(obj, name, "J")
+        env.get_field(obj, name, jni_sig!("J"))
             .and_then(|value| value.j())
             .unwrap_or(0)
     })
@@ -119,44 +150,47 @@ fn long_field(env: &mut JNIEnv<'_>, obj: &JObject<'_>, name: &str) -> i64 {
 /// A handle to *borrow* the characters from (see [`borrowed_str`]), not a copy:
 /// `Java2C_Xlog.cc` hands the appender the `char*` of a `ScopedJstring`, and a
 /// `String` per field per record was three allocations it never makes.
-fn java_string_handle<'local>(value: &JObject<'local>) -> Option<JString<'local>> {
+fn java_string_handle<'local>(
+    env: &Env<'local>,
+    value: &JObject<'local>,
+) -> Option<JString<'local>> {
     if value.is_null() {
         return None;
     }
     // `JObject` is a borrowed handle: re-wrap the same raw reference without
     // taking ownership of the local ref.
-    Some(unsafe { JString::from_raw(value.as_raw()) })
+    Some(unsafe { JString::from_raw(env, value.as_raw()) })
 }
 
-/// The characters of a borrowed `JavaStr`, or `""` when it is absent.
+/// The characters of a borrowed `MUTF8Chars`, or `""` when it is absent.
 ///
 /// Valid UTF-8 comes back borrowed (Java's modified UTF-8 only differs for
 /// supplementary characters, and those are converted lossily, exactly like the
 /// old `to_string_lossy().into_owned()` did).
-fn borrowed_str<'a>(java_str: Option<&'a JavaStr<'a, 'a, 'a>>) -> Cow<'a, str> {
-    java_str.map_or(Cow::Borrowed(""), |java_str| java_str.to_string_lossy())
+fn borrowed_str<'a>(java_str: Option<&'a MUTF8Chars<'a, &JString<'a>>>) -> Cow<'a, str> {
+    java_str.map_or(Cow::Borrowed(""), |java_str| java_str.to_str())
 }
 
 /// [`java_string_handle`] for a `java.lang.String` *field* of `obj`.
 fn string_field_handle<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     obj: &JObject<'_>,
-    name: &str,
+    name: &JNIStr,
 ) -> Option<JString<'local>> {
     guard(|| {
-        let Ok(field) = env.get_field(obj, name, "Ljava/lang/String;") else {
+        let Ok(field) = env.get_field(obj, name, jni_sig!("Ljava/lang/String;")) else {
             return None;
         };
         let Ok(object) = field.l() else {
             return None;
         };
-        java_string_handle(&object)
+        java_string_handle(env, &object)
     })
 }
 
-fn string_field(env: &mut JNIEnv<'_>, obj: &JObject<'_>, name: &str) -> String {
+fn string_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> String {
     guard(|| {
-        let Ok(field) = env.get_field(obj, name, "Ljava/lang/String;") else {
+        let Ok(field) = env.get_field(obj, name, jni_sig!("Ljava/lang/String;")) else {
             return String::new();
         };
         let Ok(object) = field.l() else {
@@ -165,77 +199,78 @@ fn string_field(env: &mut JNIEnv<'_>, obj: &JObject<'_>, name: &str) -> String {
         if object.is_null() {
             return String::new();
         }
-        let jstring = JString::from(object);
-        let Ok(java_str) = env.get_string(&jstring) else {
+        let jstring = unsafe { JString::from_raw(env, object.as_raw()) };
+        let Ok(java_str) = jstring.mutf8_chars(env) else {
             return String::new();
         };
-        java_str.to_string_lossy().into_owned()
+        java_str.to_str().into_owned()
     })
 }
 
 /// Reads `io.github.orangeboychen.marsrs.xlog.Xlog$XLogConfig`.
-fn config_from_java(env: &mut JNIEnv<'_>, config: &JObject<'_>) -> Option<(XLogConfig, LogLevel)> {
+fn config_from_java(env: &mut Env<'_>, config: &JObject<'_>) -> Option<(XLogConfig, LogLevel)> {
     if config.is_null() {
         return None;
     }
 
-    let mode = match int_field(env, config, "mode") {
+    let mode = match int_field(env, config, jni_str!("mode")) {
         0 => AppenderMode::Async,
         1 => AppenderMode::Sync,
         _ => return None,
     };
-    let compress_mode = match int_field(env, config, "compressmode") {
+    let compress_mode = match int_field(env, config, jni_str!("compressmode")) {
         0 => CompressMode::Zlib,
         _ => CompressMode::Zstd,
     };
 
-    let logdir = string_field(env, config, "logdir");
+    let logdir = string_field(env, config, jni_str!("logdir"));
     if logdir.is_empty() {
         return None;
     }
-    let cachedir = string_field(env, config, "cachedir");
+    let cachedir = string_field(env, config, jni_str!("cachedir"));
 
     Some((
         XLogConfig {
             mode,
             logdir: std::path::PathBuf::from(logdir),
-            nameprefix: string_field(env, config, "nameprefix"),
-            pub_key: string_field(env, config, "pubkey"),
+            nameprefix: string_field(env, config, jni_str!("nameprefix")),
+            pub_key: string_field(env, config, jni_str!("pubkey")),
             compress_mode,
-            compress_level: int_field(env, config, "compresslevel"),
+            compress_level: int_field(env, config, jni_str!("compresslevel")),
             cachedir: if cachedir.is_empty() {
                 None
             } else {
                 Some(std::path::PathBuf::from(cachedir))
             },
-            cache_days: int_field(env, config, "cachedays").max(0) as u32,
+            cache_days: int_field(env, config, jni_str!("cachedays")).max(0) as u32,
         },
-        level_from_java(int_field(env, config, "level")),
+        level_from_java(int_field(env, config, jni_str!("level"))),
     ))
 }
 
-fn java_string(env: &mut JNIEnv<'_>, value: &JObject<'_>) -> String {
+fn java_string(env: &mut Env<'_>, value: &JObject<'_>) -> String {
     guard(|| {
         if value.is_null() {
             return String::new();
         }
         // `JObject` is a borrowed handle: re-wrap the same raw reference
         // without taking ownership of the local ref.
-        let jstring = unsafe { JString::from_raw(value.as_raw()) };
-        env.get_string(&jstring)
-            .map(|java_str| java_str.to_string_lossy().into_owned())
+        let jstring = unsafe { JString::from_raw(env, value.as_raw()) };
+        jstring
+            .mutf8_chars(env)
+            .map(|java_str| java_str.to_str().into_owned())
             .unwrap_or_default()
     })
 }
 
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderOpen<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     config: JObject<'local>,
 ) {
-    guard(|| {
-        let Some((config, level)) = config_from_java(&mut env, &config) else {
+    guard_env(&mut env, |env| {
+        let Some((config, level)) = config_from_java(env, &config) else {
             return;
         };
         open_appender(config, level);
@@ -245,7 +280,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderOpe
 /// `Xlog.appenderClose`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderClose<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _this: JObject<'local>,
 ) {
     guard(close_impl)
@@ -254,22 +289,22 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderClo
 /// `Xlog.appenderFlush`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderFlush<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _this: JObject<'local>,
     instance: jlong,
     is_sync: jboolean,
 ) {
-    guard(|| flush_impl(instance as u64, is_sync != 0))
+    guard(|| flush_impl(instance as u64, is_sync))
 }
 
 /// `Xlog.newXlogInstance` — returns the handle, or `0` on a bad config.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_newXlogInstance<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     config: JObject<'local>,
 ) -> jlong {
-    guard(|| match config_from_java(&mut env, &config) {
+    guard_env(&mut env, |env| match config_from_java(env, &config) {
         Some((config, level)) => new_instance_impl(config, level),
         None => 0,
     })
@@ -278,14 +313,14 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_newXlogInst
 /// `Xlog.getXlogInstance` — the handle for `nameprefix`, or `0`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_getXlogInstance<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     nameprefix: JString<'local>,
 ) -> jlong {
-    guard(|| {
-        let prefix = env
-            .get_string(&nameprefix)
-            .map(|value| value.to_string_lossy().into_owned())
+    guard_env(&mut env, |env| {
+        let prefix = nameprefix
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
         get_instance_impl(&prefix)
     })
@@ -294,14 +329,14 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_getXlogInst
 /// `Xlog.releaseXlogInstance`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_releaseXlogInstance<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     nameprefix: JString<'local>,
 ) {
-    guard(|| {
-        let prefix = env
-            .get_string(&nameprefix)
-            .map(|value| value.to_string_lossy().into_owned())
+    guard_env(&mut env, |env| {
+        let prefix = nameprefix
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
         release_instance_impl(&prefix);
     })
@@ -310,41 +345,41 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_releaseXlog
 /// `Xlog.logWrite` — writes through the process-wide appender.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logWrite<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     info: JObject<'local>,
     log: JString<'local>,
 ) {
-    guard(|| {
-        let log = env
-            .get_string(&log)
-            .map(|value| value.to_string_lossy().into_owned())
+    guard_env(&mut env, |env| {
+        let log = log
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
         if info.is_null() {
             log_write_impl(None, &log);
             return;
         }
-        let level = level_from_java(int_field(&mut env, &info, "level"));
-        let line = int_field(&mut env, &info, "line");
+        let level = level_from_java(int_field(env, &info, jni_str!("level")));
+        let line = int_field(env, &info, jni_str!("line"));
         // -1 makes the category fill these in from the OS; Java passes real
         // values, which the port keeps.
-        let pid = long_field(&mut env, &info, "pid");
-        let tid = long_field(&mut env, &info, "tid");
-        let maintid = long_field(&mut env, &info, "maintid");
+        let pid = long_field(env, &info, jni_str!("pid"));
+        let tid = long_field(env, &info, jni_str!("tid"));
+        let maintid = long_field(env, &info, jni_str!("maintid"));
 
         // The three strings are borrowed from the JVM instead of copied into
-        // `String`s: a `JavaStr` keeps the characters alive for as long as the
-        // record needs them, which is this call.
-        let tag = string_field_handle(&mut env, &info, "tag");
-        let filename = string_field_handle(&mut env, &info, "filename");
-        let funcname = string_field_handle(&mut env, &info, "funcname");
-        let tag = tag.as_ref().and_then(|value| env.get_string(value).ok());
+        // `String`s: an `MUTF8Chars` keeps the characters alive for as long as
+        // the record needs them, which is this call.
+        let tag = string_field_handle(env, &info, jni_str!("tag"));
+        let filename = string_field_handle(env, &info, jni_str!("filename"));
+        let funcname = string_field_handle(env, &info, jni_str!("funcname"));
+        let tag = tag.as_ref().and_then(|value| value.mutf8_chars(env).ok());
         let filename = filename
             .as_ref()
-            .and_then(|value| env.get_string(value).ok());
+            .and_then(|value| value.mutf8_chars(env).ok());
         let funcname = funcname
             .as_ref()
-            .and_then(|value| env.get_string(value).ok());
+            .and_then(|value| value.mutf8_chars(env).ok());
 
         let info = XLoggerInfo {
             level,
@@ -370,22 +405,22 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logWrite<'l
 /// one now, whichever API asked.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_write<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     instance: jlong,
     level: jint,
     tag: JString<'local>,
     log: JString<'local>,
 ) {
-    guard(|| {
-        let log = env
-            .get_string(&log)
-            .map(|value| value.to_string_lossy().into_owned())
+    guard_env(&mut env, |env| {
+        let log = log
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
         // Borrowed from the JVM, like `logWrite` does: a `String` per record is
         // an allocation `Java2C_Xlog.cc` never makes.
-        let tag = java_string_handle(&tag);
-        let tag = tag.as_ref().and_then(|value| env.get_string(value).ok());
+        let tag = java_string_handle(env, tag.as_ref());
+        let tag = tag.as_ref().and_then(|value| value.mutf8_chars(env).ok());
         let _ = write_impl(
             instance as u64,
             level_from_java(level),
@@ -398,7 +433,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_write<'loca
 /// `Xlog.getLogLevel` — `-1` for an unknown handle.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_getLogLevel(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _this: JObject<'_>,
     instance: jlong,
 ) -> jint {
@@ -408,7 +443,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_getLogLevel
 /// `Xlog.setLogLevel`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_setLogLevel(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _this: JObject<'_>,
     instance: jlong,
     level: jint,
@@ -419,7 +454,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_setLogLevel
 /// `Xlog.setAppenderMode`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_setAppenderMode(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _this: JObject<'_>,
     instance: jlong,
     mode: jint,
@@ -430,18 +465,18 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_setAppender
 /// `Xlog.setConsoleLogOpen`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_setConsoleLogOpen(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _this: JObject<'_>,
     instance: jlong,
     is_open: jboolean,
 ) {
-    guard(|| set_console_log_open_impl(instance as u64, is_open != 0))
+    guard(|| set_console_log_open_impl(instance as u64, is_open))
 }
 
 /// `Xlog.setMaxFileSize`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_setMaxFileSize(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _this: JObject<'_>,
     instance: jlong,
     size: jlong,
@@ -452,7 +487,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_setMaxFileS
 /// `Xlog.setMaxAliveTime`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_setMaxAliveTime(
-    _env: JNIEnv<'_>,
+    _env: EnvUnowned<'_>,
     _this: JObject<'_>,
     instance: jlong,
     seconds: jlong,
@@ -463,37 +498,37 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_setMaxAlive
 // #################### io.github.orangeboychen.marsrs.stn.StnLogic ####################
 
 /// Reads a Java `int[]`.
-fn int_array(env: &mut JNIEnv<'_>, array: &JObject<'_>) -> Vec<i32> {
+fn int_array(env: &mut Env<'_>, array: &JObject<'_>) -> Vec<i32> {
     if array.is_null() {
         return Vec::new();
     }
     // Re-borrow the handle as an `int[]` without touching the local ref.
-    let array: &JIntArray = array.into();
-    let Ok(len) = env.get_array_length(array) else {
+    let array = unsafe { JIntArray::from_raw(env, array.as_raw()) };
+    let Ok(len) = array.len(env) else {
         return Vec::new();
     };
-    if len <= 0 {
+    if len == 0 {
         return Vec::new();
     }
-    let mut ports = vec![0; len as usize];
-    if env.get_int_array_region(array, 0, &mut ports).is_err() {
+    let mut ports = vec![0; len];
+    if array.get_region(env, 0, &mut ports).is_err() {
         return Vec::new();
     }
     ports
 }
 
 /// Reads a Java `String[]`.
-fn string_array(env: &mut JNIEnv<'_>, array: &JObject<'_>) -> Vec<String> {
+fn string_array(env: &mut Env<'_>, array: &JObject<'_>) -> Vec<String> {
     if array.is_null() {
         return Vec::new();
     }
-    let array: &JObjectArray = array.into();
-    let Ok(len) = env.get_array_length(array) else {
+    let array = unsafe { JObjectArray::<'_, JObject<'_>>::from_raw(env, array.as_raw()) };
+    let Ok(len) = array.len(env) else {
         return Vec::new();
     };
     let mut values = Vec::new();
     for index in 0..len {
-        let Ok(element) = env.get_object_array_element(array, index) else {
+        let Ok(element) = array.get_element(env, index) else {
             continue;
         };
         if element.is_null() {
@@ -506,21 +541,24 @@ fn string_array(env: &mut JNIEnv<'_>, array: &JObject<'_>) -> Vec<String> {
 
 /// Reads a Java `List<String>` the way the C++ reads `shortLinkHostList`: with
 /// `size()` and `get(int)`.
-fn string_list(env: &mut JNIEnv<'_>, list: &JObject<'_>) -> Vec<String> {
+fn string_list(env: &mut Env<'_>, list: &JObject<'_>) -> Vec<String> {
     if list.is_null() {
         return Vec::new();
     }
     let Ok(len) = env
-        .call_method(list, "size", "()I", &[])
+        .call_method(list, jni_str!("size"), jni_sig!("()I"), &[])
         .and_then(|value| value.i())
     else {
         return Vec::new();
     };
     let mut values = Vec::new();
     for index in 0..len {
-        let Ok(element) =
-            env.call_method(list, "get", "(I)Ljava/lang/Object;", &[JValue::Int(index)])
-        else {
+        let Ok(element) = env.call_method(
+            list,
+            jni_str!("get"),
+            jni_sig!("(I)Ljava/lang/Object;"),
+            &[JValue::Int(index)],
+        ) else {
             continue;
         };
         let Ok(element) = element.l() else {
@@ -536,18 +574,28 @@ fn string_list(env: &mut JNIEnv<'_>, list: &JObject<'_>) -> Vec<String> {
 
 /// Reads a Java `Map<String, String>` through its `entrySet`, the way the C++
 /// `JNU_JObject2Map` does.
-fn string_map(env: &mut JNIEnv<'_>, map: &JObject<'_>) -> BTreeMap<String, String> {
+fn string_map(env: &mut Env<'_>, map: &JObject<'_>) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     if map.is_null() {
         return out;
     }
-    let Ok(entries) = env.call_method(map, "entrySet", "()Ljava/util/Set;", &[]) else {
+    let Ok(entries) = env.call_method(
+        map,
+        jni_str!("entrySet"),
+        jni_sig!("()Ljava/util/Set;"),
+        &[],
+    ) else {
         return out;
     };
     let Ok(entries) = entries.l() else {
         return out;
     };
-    let Ok(iterator) = env.call_method(&entries, "iterator", "()Ljava/util/Iterator;", &[]) else {
+    let Ok(iterator) = env.call_method(
+        &entries,
+        jni_str!("iterator"),
+        jni_sig!("()Ljava/util/Iterator;"),
+        &[],
+    ) else {
         return out;
     };
     let Ok(iterator) = iterator.l() else {
@@ -555,7 +603,7 @@ fn string_map(env: &mut JNIEnv<'_>, map: &JObject<'_>) -> BTreeMap<String, Strin
     };
     loop {
         let Ok(has_next) = env
-            .call_method(&iterator, "hasNext", "()Z", &[])
+            .call_method(&iterator, jni_str!("hasNext"), jni_sig!("()Z"), &[])
             .and_then(|value| value.z())
         else {
             return out;
@@ -563,19 +611,34 @@ fn string_map(env: &mut JNIEnv<'_>, map: &JObject<'_>) -> BTreeMap<String, Strin
         if !has_next {
             return out;
         }
-        let Ok(entry) = env.call_method(&iterator, "next", "()Ljava/lang/Object;", &[]) else {
+        let Ok(entry) = env.call_method(
+            &iterator,
+            jni_str!("next"),
+            jni_sig!("()Ljava/lang/Object;"),
+            &[],
+        ) else {
             return out;
         };
         let Ok(entry) = entry.l() else {
             return out;
         };
         let key = env
-            .call_method(&entry, "getKey", "()Ljava/lang/Object;", &[])
+            .call_method(
+                &entry,
+                jni_str!("getKey"),
+                jni_sig!("()Ljava/lang/Object;"),
+                &[],
+            )
             .and_then(|value| value.l())
             .map(|key| java_string(env, &key))
             .unwrap_or_default();
         let value = env
-            .call_method(&entry, "getValue", "()Ljava/lang/Object;", &[])
+            .call_method(
+                &entry,
+                jni_str!("getValue"),
+                jni_sig!("()Ljava/lang/Object;"),
+                &[],
+            )
             .and_then(|value| value.l())
             .map(|value| java_string(env, &value))
             .unwrap_or_default();
@@ -586,42 +649,45 @@ fn string_map(env: &mut JNIEnv<'_>, map: &JObject<'_>) -> BTreeMap<String, Strin
 /// Reads `io.github.orangeboychen.marsrs.stn.StnLogic$Task` into a [`Task`]. The fields the
 /// C++ reads are the ones below; the rest of the Java class has no counterpart
 /// in the port's `Task`.
-fn task_from_java(env: &mut JNIEnv<'_>, task: &JObject<'_>) -> Option<Task> {
+fn task_from_java(env: &mut Env<'_>, task: &JObject<'_>) -> Option<Task> {
     if task.is_null() {
         return None;
     }
-    let taskid = int_field(env, task, "taskID");
+    let taskid = int_field(env, task, jni_str!("taskID"));
     if taskid < 0 {
         return None;
     }
-    let cmdid = int_field(env, task, "cmdID");
+    let cmdid = int_field(env, task, jni_str!("cmdID"));
     let mut parsed = Task::new(taskid as u32, cmdid as u32);
 
-    parsed.channel_select = int_field(env, task, "channelSelect");
-    parsed.cgi = string_field(env, task, "cgi");
-    parsed.send_only = bool_field(env, task, "sendOnly");
-    parsed.need_authed = bool_field(env, task, "needAuthed");
-    parsed.limit_flow = bool_field(env, task, "limitFlow");
-    parsed.limit_frequency = bool_field(env, task, "limitFrequency");
-    parsed.channel_strategy = int_field(env, task, "channelStrategy");
-    parsed.network_status_sensitive = bool_field(env, task, "networkStatusSensitive");
-    parsed.priority = int_field(env, task, "priority");
-    parsed.retry_count = int_field(env, task, "retryCount");
-    parsed.server_process_cost = int_field(env, task, "serverProcessCost");
-    parsed.total_timeout = int_field(env, task, "totalTimeout");
-    parsed.report_arg = string_field(env, task, "reportArg");
-    parsed.long_polling = bool_field(env, task, "longPolling");
-    parsed.long_polling_timeout = int_field(env, task, "longPollingTimeout");
-    parsed.client_sequence_id = int_field(env, task, "clientSequenceId") as u16;
-    parsed.shortlink_host_list = match env.get_field(task, "shortLinkHostList", "Ljava/util/List;")
-    {
+    parsed.channel_select = int_field(env, task, jni_str!("channelSelect"));
+    parsed.cgi = string_field(env, task, jni_str!("cgi"));
+    parsed.send_only = bool_field(env, task, jni_str!("sendOnly"));
+    parsed.need_authed = bool_field(env, task, jni_str!("needAuthed"));
+    parsed.limit_flow = bool_field(env, task, jni_str!("limitFlow"));
+    parsed.limit_frequency = bool_field(env, task, jni_str!("limitFrequency"));
+    parsed.channel_strategy = int_field(env, task, jni_str!("channelStrategy"));
+    parsed.network_status_sensitive = bool_field(env, task, jni_str!("networkStatusSensitive"));
+    parsed.priority = int_field(env, task, jni_str!("priority"));
+    parsed.retry_count = int_field(env, task, jni_str!("retryCount"));
+    parsed.server_process_cost = int_field(env, task, jni_str!("serverProcessCost"));
+    parsed.total_timeout = int_field(env, task, jni_str!("totalTimeout"));
+    parsed.report_arg = string_field(env, task, jni_str!("reportArg"));
+    parsed.long_polling = bool_field(env, task, jni_str!("longPolling"));
+    parsed.long_polling_timeout = int_field(env, task, jni_str!("longPollingTimeout"));
+    parsed.client_sequence_id = int_field(env, task, jni_str!("clientSequenceId")) as u16;
+    parsed.shortlink_host_list = match env.get_field(
+        task,
+        jni_str!("shortLinkHostList"),
+        jni_sig!("Ljava/util/List;"),
+    ) {
         Ok(field) => field
             .l()
             .map(|list| string_list(env, &list))
             .unwrap_or_default(),
         Err(_) => Vec::new(),
     };
-    parsed.headers = match env.get_field(task, "headers", "Ljava/util/Map;") {
+    parsed.headers = match env.get_field(task, jni_str!("headers"), jni_sig!("Ljava/util/Map;")) {
         Ok(field) => field
             .l()
             .map(|map| string_map(env, &map))
@@ -631,20 +697,20 @@ fn task_from_java(env: &mut JNIEnv<'_>, task: &JObject<'_>) -> Option<Task> {
     Some(parsed)
 }
 
-fn bool_field(env: &mut JNIEnv<'_>, obj: &JObject<'_>, name: &str) -> bool {
+fn bool_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> bool {
     guard(|| {
-        env.get_field(obj, name, "Z")
+        env.get_field(obj, name, jni_sig!("Z"))
             .and_then(|value| value.z())
             .unwrap_or(false)
     })
 }
 
 /// Builds a Java `ArrayList<String>`.
-fn string_array_list(env: &mut JNIEnv<'_>, values: &[String]) -> jobject {
-    let Ok(class) = env.find_class("java/util/ArrayList") else {
+fn string_array_list(env: &mut Env<'_>, values: &[String]) -> jobject {
+    let Ok(class) = env.find_class(jni_str!("java/util/ArrayList")) else {
         return std::ptr::null_mut();
     };
-    let Ok(list) = env.new_object(class, "()V", &[]) else {
+    let Ok(list) = env.new_object(class, jni_sig!("()V"), &[]) else {
         return std::ptr::null_mut();
     };
     for value in values {
@@ -653,8 +719,8 @@ fn string_array_list(env: &mut JNIEnv<'_>, values: &[String]) -> jobject {
         };
         let _ = env.call_method(
             &list,
-            "add",
-            "(Ljava/lang/Object;)Z",
+            jni_str!("add"),
+            jni_sig!("(Ljava/lang/Object;)Z"),
             &[JValue::Object(&JObject::from(text))],
         );
     }
@@ -664,7 +730,7 @@ fn string_array_list(env: &mut JNIEnv<'_>, values: &[String]) -> jobject {
 /// `StnLogic.reset`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_reset<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) {
     guard(reset_impl)
@@ -675,15 +741,15 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_reset<'l
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_resetAndInitEncoderVersion<
     'local,
 >(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     version: jint,
     name: JString<'local>,
 ) {
-    guard(|| {
-        let name = env
-            .get_string(&name)
-            .map(|value| value.to_string_lossy().into_owned())
+    guard_env(&mut env, |env| {
+        let name = name
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
         reset_and_init_encoder_version_impl(version, &name);
     })
@@ -694,22 +760,22 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_resetAnd
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setLonglinkSvrAddr<
     'local,
 >(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     host: JString<'local>,
     ports: JObject<'local>,
     debug_ip: JString<'local>,
 ) {
-    guard(|| {
-        let host = env
-            .get_string(&host)
-            .map(|value| value.to_string_lossy().into_owned())
+    guard_env(&mut env, |env| {
+        let host = host
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
-        let debug_ip = env
-            .get_string(&debug_ip)
-            .map(|value| value.to_string_lossy().into_owned())
+        let debug_ip = debug_ip
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
-        set_longlink_svr_addr_impl(&host, &int_array(&mut env, &ports), &debug_ip);
+        set_longlink_svr_addr_impl(&host, &int_array(env, &ports), &debug_ip);
     })
 }
 
@@ -718,15 +784,15 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setLongl
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setShortlinkSvrAddr<
     'local,
 >(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     port: jint,
     debug_ip: JString<'local>,
 ) {
-    guard(|| {
-        let debug_ip = env
-            .get_string(&debug_ip)
-            .map(|value| value.to_string_lossy().into_owned())
+    guard_env(&mut env, |env| {
+        let debug_ip = debug_ip
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
         set_shortlink_svr_addr_impl(port, &debug_ip);
     })
@@ -735,19 +801,19 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setShort
 /// `StnLogic.setDebugIP`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setDebugIP<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     host: JString<'local>,
     ip: JString<'local>,
 ) {
-    guard(|| {
-        let host = env
-            .get_string(&host)
-            .map(|value| value.to_string_lossy().into_owned())
+    guard_env(&mut env, |env| {
+        let host = host
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
-        let ip = env
-            .get_string(&ip)
-            .map(|value| value.to_string_lossy().into_owned())
+        let ip = ip
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
         set_debug_ip_impl(&host, &ip);
     })
@@ -756,29 +822,29 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setDebug
 /// `StnLogic.setBackupIPs`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setBackupIPs<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     host: JString<'local>,
     ips: JObject<'local>,
 ) {
-    guard(|| {
-        let host = env
-            .get_string(&host)
-            .map(|value| value.to_string_lossy().into_owned())
+    guard_env(&mut env, |env| {
+        let host = host
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
-        set_backup_ips_impl(&host, &string_array(&mut env, &ips));
+        set_backup_ips_impl(&host, &string_array(env, &ips));
     })
 }
 
 /// `StnLogic.startTask`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_startTask<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     task: JObject<'local>,
 ) {
-    guard(|| {
-        if let Some(task) = task_from_java(&mut env, &task) {
+    guard_env(&mut env, |env| {
+        if let Some(task) = task_from_java(env, &task) {
             start_task_impl(task);
         }
     })
@@ -787,7 +853,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_startTas
 /// `StnLogic.stopTask`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_stopTask<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
     taskid: jint,
 ) {
@@ -799,17 +865,17 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_stopTask
 /// `StnLogic.hasTask`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_hasTask<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
     taskid: jint,
 ) -> jboolean {
-    guard(|| has_task_impl(taskid.max(0) as u32) as jboolean)
+    guard(|| has_task_impl(taskid.max(0) as u32))
 }
 
 /// `StnLogic.redoTask`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_redoTask<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) {
     guard(|| {
@@ -820,7 +886,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_redoTask
 /// `StnLogic.touchTasks`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_touchTasks<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) {
     guard(touch_tasks_impl)
@@ -829,7 +895,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_touchTas
 /// `StnLogic.clearTask`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_clearTask<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) {
     guard(|| {
@@ -842,7 +908,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_clearTas
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_makesureLongLinkConnected<
     'local,
 >(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) {
     guard(|| {
@@ -855,7 +921,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_makesure
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setSignallingStrategy<
     'local,
 >(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
     period: jlong,
     keep_time: jlong,
@@ -866,7 +932,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setSigna
 /// `StnLogic.keepSignalling`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_keepSignalling<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) {
     guard(keep_signalling_impl)
@@ -875,7 +941,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_keepSign
 /// `StnLogic.stopSignalling`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_stopSignalling<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) {
     guard(stop_signalling_impl)
@@ -884,7 +950,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_stopSign
 /// `StnLogic.setClientVersion`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setClientVersion<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
     version: jint,
 ) {
@@ -894,7 +960,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_setClien
 /// `StnLogic.genTaskID`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_genTaskID<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) -> jint {
     guard(|| gen_task_id_impl() as jint)
@@ -903,7 +969,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_genTaskI
 /// `StnLogic.genSequenceId` — declared by the C++ but not by the Java class.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_genSequenceId<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) -> jint {
     guard(|| gen_sequence_id_impl() as jint)
@@ -912,7 +978,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_genSeque
 /// `StnLogic.trigNooping` — declared by the C++ but not by the Java class.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_trigNooping<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) {
     guard(trig_nooping_impl)
@@ -921,10 +987,12 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_trigNoop
 /// `StnLogic.getLoadLibraries`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_getLoadLibraries<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) -> jobject {
-    guard(|| string_array_list(&mut env, &get_load_libraries_impl()))
+    guard_env(&mut env, |env| {
+        string_array_list(env, &get_load_libraries_impl())
+    })
 }
 
 // #################### the questions STN asks Java ####################
@@ -932,10 +1000,17 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_getLoadL
 /// `StnLogic` — the class the C++'s thirteen C2Java calls are static methods
 /// of. Every one of them forwards to the `ICallBack` the app handed to
 /// `setCallBack`, which is why the native side never keeps the app itself.
-const STN_CALLBACK: &str = "io/github/orangeboychen/marsrs/stn/StnLogic";
+const STN_CALLBACK: &JNIStr = jni_str!("io/github/orangeboychen/marsrs/stn/StnLogic");
 
 /// `StnLogic$CgiProfile` — the object `onTaskEnd` is handed.
-const STN_CGI_PROFILE: &str = "io/github/orangeboychen/marsrs/stn/StnLogic$CgiProfile";
+const STN_CGI_PROFILE: &JNIStr = jni_str!("io/github/orangeboychen/marsrs/stn/StnLogic$CgiProfile");
+
+/// `getLongLinkIdentifyCheckBuffer(String, ByteArrayOutputStream,
+/// ByteArrayOutputStream, int[])`, kept up here because it does not fit on the
+/// line it is called from.
+const GET_LONG_LINK_IDENTIFY_CHECK_BUFFER_SIG: MethodSignature = jni_sig!(
+    "(Ljava/lang/String;Ljava/io/ByteArrayOutputStream;Ljava/io/ByteArrayOutputStream;[I)I"
+);
 
 /// One of the thirteen `C2Java_*` functions of
 /// `com_tencent_mars_stn_StnLogic_C2Java.cc`, i.e. what
@@ -951,17 +1026,17 @@ pub(crate) fn ask_java(question: Question) -> Answer {
         let Some(vm) = VM.get() else {
             return Answer::Nothing;
         };
-        let Ok(mut env) = vm.attach_current_thread() else {
-            return Answer::Nothing;
-        };
-        let Ok(class) = env.find_class(STN_CALLBACK) else {
-            return Answer::Nothing;
-        };
-        ask_stn(&mut env, class, question)
+        vm.attach_current_thread(|env| -> jni::errors::Result<Answer> {
+            let Ok(class) = env.find_class(STN_CALLBACK) else {
+                return Ok(Answer::Nothing);
+            };
+            Ok(ask_stn(env, class, question))
+        })
+        .unwrap_or(Answer::Nothing)
     })
 }
 
-fn ask_stn<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: Question) -> Answer {
+fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answer {
     match question {
         Question::MakesureAuthed { host } => {
             let Ok(host) = env.new_string(&host) else {
@@ -970,8 +1045,8 @@ fn ask_stn<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: Question) -> A
             let host = JObject::from(host);
             let called = env.call_static_method(
                 class,
-                "makesureAuthed",
-                "(Ljava/lang/String;)Z",
+                jni_str!("makesureAuthed"),
+                jni_sig!("(Ljava/lang/String;)Z"),
                 &[JValue::Object(&host)],
             );
             Answer::Yes(bool_of(called))
@@ -979,8 +1054,8 @@ fn ask_stn<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: Question) -> A
         Question::TrafficData { send, recv } => {
             let _ = env.call_static_method(
                 class,
-                "trafficData",
-                "(II)V",
+                jni_str!("trafficData"),
+                jni_sig!("(II)V"),
                 &[JValue::Int(send as jint), JValue::Int(recv as jint)],
             );
             Answer::Nothing
@@ -992,8 +1067,8 @@ fn ask_stn<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: Question) -> A
             let host = JObject::from(host);
             let called = env.call_static_method(
                 class,
-                "onNewDns",
-                "(Ljava/lang/String;)[Ljava/lang/String;",
+                jni_str!("onNewDns"),
+                jni_sig!("(Ljava/lang/String;)[Ljava/lang/String;"),
                 &[JValue::Object(&host)],
             );
             Answer::Ips(strings_of(env, called))
@@ -1011,8 +1086,8 @@ fn ask_stn<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: Question) -> A
             let body = bytes_argument(env, &body);
             let _ = env.call_static_method(
                 class,
-                "onPush",
-                "(Ljava/lang/String;II[B)V",
+                jni_str!("onPush"),
+                jni_sig!("(Ljava/lang/String;II[B)V"),
                 &[
                     JValue::Object(&channel_id),
                     JValue::Int(cmdid as jint),
@@ -1039,8 +1114,10 @@ fn ask_stn<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: Question) -> A
             let errcode_argument = errcode.as_ref();
             let called = env.call_static_method(
                 class,
-                "req2Buf",
-                "(ILjava/lang/Object;Ljava/io/ByteArrayOutputStream;[IILjava/lang/String;I)Z",
+                jni_str!("req2Buf"),
+                jni_sig!(
+                    "(ILjava/lang/Object;Ljava/io/ByteArrayOutputStream;[IILjava/lang/String;I)Z"
+                ),
                 &[
                     JValue::Int(taskid as jint),
                     JValue::Object(&user_context),
@@ -1070,8 +1147,8 @@ fn ask_stn<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: Question) -> A
             let sequence_argument = sequence.as_ref();
             let called = env.call_static_method(
                 class,
-                "buf2Resp",
-                "(ILjava/lang/Object;[B[II[I)I",
+                jni_str!("buf2Resp"),
+                jni_sig!("(ILjava/lang/Object;[B[II[I)I"),
                 &[
                     JValue::Int(taskid as jint),
                     JValue::Object(&user_context),
@@ -1097,9 +1174,8 @@ fn ask_stn<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: Question) -> A
             };
             let user_context = JObject::null();
             let called = env.call_static_method(
-                class,
-                "onTaskEnd",
-                "(ILjava/lang/Object;IILio/github/orangeboychen/marsrs/stn/StnLogic$CgiProfile;)I",
+                class, jni_str!("onTaskEnd"),
+                jni_sig!("(ILjava/lang/Object;IILio/github/orangeboychen/marsrs/stn/StnLogic$CgiProfile;)I"),
                 &[
                     JValue::Int(taskid as jint),
                     JValue::Object(&user_context),
@@ -1113,8 +1189,8 @@ fn ask_stn<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: Question) -> A
         Question::ReportConnectStatus { all, longlink } => {
             let _ = env.call_static_method(
                 class,
-                "reportConnectStatus",
-                "(II)V",
+                jni_str!("reportConnectStatus"),
+                jni_sig!("(II)V"),
                 &[JValue::Int(all as jint), JValue::Int(longlink as jint)],
             );
             Answer::Nothing
@@ -1134,11 +1210,8 @@ fn ask_stn<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: Question) -> A
             let cmdids_argument = cmdids.as_ref();
             let called = env.call_static_method(
                 class,
-                "getLongLinkIdentifyCheckBuffer",
-                concat!(
-                    "(Ljava/lang/String;Ljava/io/ByteArrayOutputStream;",
-                    "Ljava/io/ByteArrayOutputStream;[I)I"
-                ),
+                jni_str!("getLongLinkIdentifyCheckBuffer"),
+                GET_LONG_LINK_IDENTIFY_CHECK_BUFFER_SIG,
                 &[
                     JValue::Object(&channel_id),
                     JValue::Object(buffer_argument),
@@ -1166,8 +1239,8 @@ fn ask_stn<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: Question) -> A
             let hash = bytes_argument(env, &hash);
             let called = env.call_static_method(
                 class,
-                "onLongLinkIdentifyResp",
-                "(Ljava/lang/String;[B[B)Z",
+                jni_str!("onLongLinkIdentifyResp"),
+                jni_sig!("(Ljava/lang/String;[B[B)Z"),
                 &[
                     JValue::Object(&channel_id),
                     JValue::Object(&response),
@@ -1177,14 +1250,14 @@ fn ask_stn<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: Question) -> A
             Answer::Yes(bool_of(called))
         }
         Question::RequestSync => {
-            let _ = env.call_static_method(class, "requestDoSync", "()V", &[]);
+            let _ = env.call_static_method(class, jni_str!("requestDoSync"), jni_sig!("()V"), &[]);
             Answer::Nothing
         }
         Question::NetCheckShortLinkHosts => {
             let called = env.call_static_method(
                 class,
-                "requestNetCheckShortLinkHosts",
-                "()[Ljava/lang/String;",
+                jni_str!("requestNetCheckShortLinkHosts"),
+                jni_sig!("()[Ljava/lang/String;"),
                 &[],
             );
             Answer::Ips(strings_of(env, called))
@@ -1196,8 +1269,8 @@ fn ask_stn<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: Question) -> A
             let json = JObject::from(json);
             let _ = env.call_static_method(
                 class,
-                "reportTaskProfile",
-                "(Ljava/lang/String;)V",
+                jni_str!("reportTaskProfile"),
+                jni_sig!("(Ljava/lang/String;)V"),
                 &[JValue::Object(&json)],
             );
             Answer::Nothing
@@ -1224,19 +1297,19 @@ fn object_of<'a>(called: jni::errors::Result<JValueOwned<'a>>) -> Option<JObject
 
 /// A `String` Java answered with — empty for a call that could not be made, or
 /// for one that answered `null`, which is the C++'s `""` too.
-fn string_of(env: &mut JNIEnv<'_>, called: jni::errors::Result<JValueOwned>) -> String {
+fn string_of(env: &mut Env<'_>, called: jni::errors::Result<JValueOwned>) -> String {
     let Some(object) = object_of(called) else {
         return String::new();
     };
-    let jstring = JString::from(object);
-    let Ok(java) = env.get_string(&jstring) else {
+    let jstring = unsafe { JString::from_raw(env, object.as_raw()) };
+    let Ok(java) = jstring.mutf8_chars(env) else {
         return String::new();
     };
-    java.to_string_lossy().into_owned()
+    java.to_str().into_owned()
 }
 
 /// A `String[]` Java answered with.
-fn strings_of(env: &mut JNIEnv<'_>, called: jni::errors::Result<JValueOwned>) -> Vec<String> {
+fn strings_of(env: &mut Env<'_>, called: jni::errors::Result<JValueOwned>) -> Vec<String> {
     let Ok(array) = called.and_then(|value| value.l()) else {
         return Vec::new();
     };
@@ -1245,13 +1318,13 @@ fn strings_of(env: &mut JNIEnv<'_>, called: jni::errors::Result<JValueOwned>) ->
 
 /// An `int[]` Java writes an answer into — the C++'s `env->NewIntArray`, which
 /// is two ints wide for `req2Buf` and one everywhere else.
-fn int_out<'a>(env: &mut JNIEnv<'a>, len: i32) -> Option<JIntArray<'a>> {
-    env.new_int_array(len).ok()
+fn int_out<'a>(env: &mut Env<'a>, len: i32) -> Option<JIntArray<'a>> {
+    env.new_int_array(len.max(0) as usize).ok()
 }
 
-fn int_at(env: &mut JNIEnv<'_>, array: &JIntArray<'_>, index: usize) -> i32 {
+fn int_at(env: &mut Env<'_>, array: &JIntArray<'_>, index: usize) -> i32 {
     let mut values = vec![0; index + 1];
-    if env.get_int_array_region(array, 0, &mut values).is_err() {
+    if array.get_region(env, 0, &mut values).is_err() {
         return 0;
     }
     values[index]
@@ -1259,7 +1332,7 @@ fn int_at(env: &mut JNIEnv<'_>, array: &JIntArray<'_>, index: usize) -> i32 {
 
 /// A `byte[]` argument — `null` for an empty one, which is what the C++ hands
 /// over when the buffer it is carrying has nothing in it.
-fn bytes_argument<'a>(env: &mut JNIEnv<'a>, bytes: &[u8]) -> JObject<'a> {
+fn bytes_argument<'a>(env: &mut Env<'a>, bytes: &[u8]) -> JObject<'a> {
     if bytes.is_empty() {
         return JObject::null();
     }
@@ -1271,23 +1344,23 @@ fn bytes_argument<'a>(env: &mut JNIEnv<'a>, bytes: &[u8]) -> JObject<'a> {
 
 /// A `ByteArrayOutputStream` — the C++ hands one to a call that answers bytes
 /// and reads it back with `toByteArray()`.
-fn byte_stream<'a>(env: &mut JNIEnv<'a>) -> Option<JObject<'a>> {
-    let Ok(class) = env.find_class("java/io/ByteArrayOutputStream") else {
+fn byte_stream<'a>(env: &mut Env<'a>) -> Option<JObject<'a>> {
+    let Ok(class) = env.find_class(jni_str!("java/io/ByteArrayOutputStream")) else {
         return None;
     };
-    env.new_object(class, "()V", &[]).ok()
+    env.new_object(class, jni_sig!("()V"), &[]).ok()
 }
 
 /// `toByteArray()` of one — empty for a stream Java never wrote to, which is
 /// what the C++ ends up with too.
-fn bytes_of(env: &mut JNIEnv<'_>, stream: &JObject<'_>) -> Vec<u8> {
-    let Ok(bytes) = env.call_method(stream, "toByteArray", "()[B", &[]) else {
+fn bytes_of(env: &mut Env<'_>, stream: &JObject<'_>) -> Vec<u8> {
+    let Ok(bytes) = env.call_method(stream, jni_str!("toByteArray"), jni_sig!("()[B"), &[]) else {
         return Vec::new();
     };
     let Ok(bytes) = bytes.l() else {
         return Vec::new();
     };
-    env.convert_byte_array(JByteArray::from(bytes))
+    env.convert_byte_array(unsafe { JByteArray::from_raw(env, bytes.as_raw()) })
         .unwrap_or_default()
 }
 
@@ -1298,35 +1371,44 @@ fn bytes_of(env: &mut JNIEnv<'_>, stream: &JObject<'_>) -> Vec<u8> {
 /// `0` — the port's [`CgiProfile`] keeps no tls handshake, because nothing in
 /// the port writes one. Nor is the connect's `nettype`, which the Java class
 /// has no field for.
-fn cgi_profile<'a>(env: &mut JNIEnv<'a>, profile: &CgiProfile) -> Option<JObject<'a>> {
+fn cgi_profile<'a>(env: &mut Env<'a>, profile: &CgiProfile) -> Option<JObject<'a>> {
     let Ok(class) = env.find_class(STN_CGI_PROFILE) else {
         return None;
     };
-    let Ok(object) = env.new_object(class, "()V", &[]) else {
+    let Ok(object) = env.new_object(class, jni_sig!("()V"), &[]) else {
         return None;
     };
     for (name, value) in [
-        ("taskStartTime", profile.start_time as i64),
-        ("startConnectTime", profile.start_connect_time as i64),
+        (jni_str!("taskStartTime"), profile.start_time as i64),
         (
-            "connectSuccessfulTime",
+            jni_str!("startConnectTime"),
+            profile.start_connect_time as i64,
+        ),
+        (
+            jni_str!("connectSuccessfulTime"),
             profile.connect_successful_time as i64,
         ),
-        ("startSendPacketTime", profile.start_send_packet_time as i64),
-        ("startReadPacketTime", profile.start_read_packet_time as i64),
         (
-            "readPacketFinishedTime",
+            jni_str!("startSendPacketTime"),
+            profile.start_send_packet_time as i64,
+        ),
+        (
+            jni_str!("startReadPacketTime"),
+            profile.start_read_packet_time as i64,
+        ),
+        (
+            jni_str!("readPacketFinishedTime"),
             profile.read_packet_finished_time as i64,
         ),
-        ("rtt", profile.rtt as i64),
+        (jni_str!("rtt"), profile.rtt as i64),
     ] {
-        let _ = env.set_field(&object, name, "J", JValue::Long(value));
+        let _ = env.set_field(&object, name, jni_sig!("J"), JValue::Long(value));
     }
     for (name, value) in [
-        ("channelType", profile.channel_type),
-        ("protocolType", profile.transport_protocol),
+        (jni_str!("channelType"), profile.channel_type),
+        (jni_str!("protocolType"), profile.transport_protocol),
     ] {
-        let _ = env.set_field(&object, name, "I", JValue::Int(value));
+        let _ = env.set_field(&object, name, jni_sig!("I"), JValue::Int(value));
     }
     Some(object)
 }
@@ -1336,7 +1418,7 @@ fn cgi_profile<'a>(env: &mut JNIEnv<'a>, profile: &CgiProfile) -> Option<JObject
 /// `AppLogic` — the class the C++'s four C2Java calls are static methods of.
 /// Unlike [`STN_CALLBACK`], it forwards nothing: what it answers is the app's
 /// own, which is why the native side never keeps the app itself.
-const APP_LOGIC: &str = "io/github/orangeboychen/marsrs/app/AppLogic";
+const APP_LOGIC: &JNIStr = jni_str!("io/github/orangeboychen/marsrs/app/AppLogic");
 
 /// One of the four `C2Java_*` functions of
 /// `com_tencent_mars_app_AppLogic_C2Java.cc`, i.e. what
@@ -1353,57 +1435,62 @@ pub(crate) fn ask_app_logic(question: AppQuestion) -> AppAnswer {
         let Some(vm) = VM.get() else {
             return AppAnswer::Nothing;
         };
-        let Ok(mut env) = vm.attach_current_thread() else {
-            return AppAnswer::Nothing;
-        };
-        let Ok(class) = env.find_class(APP_LOGIC) else {
-            return AppAnswer::Nothing;
-        };
-        ask_app(&mut env, class, question)
+        vm.attach_current_thread(|env| -> jni::errors::Result<AppAnswer> {
+            let Ok(class) = env.find_class(APP_LOGIC) else {
+                return Ok(AppAnswer::Nothing);
+            };
+            Ok(ask_app(env, class, question))
+        })
+        .unwrap_or(AppAnswer::Nothing)
     })
 }
 
-fn ask_app<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: AppQuestion) -> AppAnswer {
+fn ask_app<'a>(env: &mut Env<'a>, class: JClass<'a>, question: AppQuestion) -> AppAnswer {
     match question {
         AppQuestion::AppFilePath => {
-            let called =
-                env.call_static_method(class, "getAppFilePath", "()Ljava/lang/String;", &[]);
+            let called = env.call_static_method(
+                class,
+                jni_str!("getAppFilePath"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            );
             AppAnswer::Path(string_of(env, called))
         }
         AppQuestion::AccountInfo => {
             // `AppLogic$AccountInfo` — `uin` and `userName`.
             let called = env.call_static_method(
                 class,
-                "getAccountInfo",
-                "()Lio/github/orangeboychen/marsrs/app/AppLogic$AccountInfo;",
+                jni_str!("getAccountInfo"),
+                jni_sig!("()Lio/github/orangeboychen/marsrs/app/AppLogic$AccountInfo;"),
                 &[],
             );
             let Some(account) = object_of(called) else {
                 return AppAnswer::Nothing;
             };
             AppAnswer::Account(AccountInfo::new(
-                long_field(env, &account, "uin"),
-                string_field(env, &account, "userName"),
+                long_field(env, &account, jni_str!("uin")),
+                string_field(env, &account, jni_str!("userName")),
             ))
         }
         AppQuestion::ClientVersion => {
-            let called = env.call_static_method(class, "getClientVersion", "()I", &[]);
+            let called =
+                env.call_static_method(class, jni_str!("getClientVersion"), jni_sig!("()I"), &[]);
             AppAnswer::Version(int_of(called))
         }
         AppQuestion::DeviceInfo => {
             // `AppLogic$DeviceInfo` — `devicename` and `devicetype`.
             let called = env.call_static_method(
                 class,
-                "getDeviceType",
-                "()Lio/github/orangeboychen/marsrs/app/AppLogic$DeviceInfo;",
+                jni_str!("getDeviceType"),
+                jni_sig!("()Lio/github/orangeboychen/marsrs/app/AppLogic$DeviceInfo;"),
                 &[],
             );
             let Some(device) = object_of(called) else {
                 return AppAnswer::Nothing;
             };
             AppAnswer::Device(DeviceInfo::new(
-                string_field(env, &device, "devicename"),
-                string_field(env, &device, "devicetype"),
+                string_field(env, &device, jni_str!("devicename")),
+                string_field(env, &device, jni_str!("devicetype")),
             ))
         }
     }
@@ -1413,7 +1500,7 @@ fn ask_app<'a>(env: &mut JNIEnv<'a>, class: JClass<'a>, question: AppQuestion) -
 
 /// `PlatformComm$C2Java` — the class the C++'s nine C2Java calls are static
 /// methods of.
-const PLATFORM_COMM: &str = "io/github/orangeboychen/marsrs/comm/PlatformComm$C2Java";
+const PLATFORM_COMM: &JNIStr = jni_str!("io/github/orangeboychen/marsrs/comm/PlatformComm$C2Java");
 
 /// One of the nine functions of `mars/comm/jni/platform_comm.cc`, i.e. what
 /// [`crate::platform_comm::Ask::jvm`] asks: attach the thread, call the one
@@ -1430,28 +1517,34 @@ pub(crate) fn ask_platform_comm(question: PlatformQuestion) -> PlatformAnswer {
         let Some(vm) = VM.get() else {
             return PlatformAnswer::Nothing;
         };
-        let Ok(mut env) = vm.attach_current_thread() else {
-            return PlatformAnswer::Nothing;
-        };
-        let Ok(class) = env.find_class(PLATFORM_COMM) else {
-            return PlatformAnswer::Nothing;
-        };
-        ask_platform(&mut env, class, question)
+        vm.attach_current_thread(|env| -> jni::errors::Result<PlatformAnswer> {
+            let Ok(class) = env.find_class(PLATFORM_COMM) else {
+                return Ok(PlatformAnswer::Nothing);
+            };
+            Ok(ask_platform(env, class, question))
+        })
+        .unwrap_or(PlatformAnswer::Nothing)
     })
 }
 
 fn ask_platform<'a>(
-    env: &mut JNIEnv<'a>,
+    env: &mut Env<'a>,
     class: JClass<'a>,
     question: PlatformQuestion,
 ) -> PlatformAnswer {
     match question {
         PlatformQuestion::NetInfo => {
-            let called = env.call_static_method(class, "getNetInfo", "()I", &[]);
+            let called =
+                env.call_static_method(class, jni_str!("getNetInfo"), jni_sig!("()I"), &[]);
             PlatformAnswer::NetInfo(NetInfo::of(int_of(called)))
         }
         PlatformQuestion::StatisticsNetType => {
-            let called = env.call_static_method(class, "getStatisticsNetType", "()I", &[]);
+            let called = env.call_static_method(
+                class,
+                jni_str!("getStatisticsNetType"),
+                jni_sig!("()I"),
+                &[],
+            );
             PlatformAnswer::StatisticsNetType(NetType::of(int_of(called)))
         }
         PlatformQuestion::ProxyInfo => {
@@ -1463,12 +1556,17 @@ fn ask_platform<'a>(
             let argument = JValue::Object(buffer.as_ref());
             let called = env.call_static_method(
                 class,
-                "getProxyInfo",
-                "(Ljava/lang/StringBuffer;)I",
+                jni_str!("getProxyInfo"),
+                jni_sig!("(Ljava/lang/StringBuffer;)I"),
                 &[argument],
             );
             let port = int_of(called);
-            let called = env.call_method(&buffer, "toString", "()Ljava/lang/String;", &[]);
+            let called = env.call_method(
+                &buffer,
+                jni_str!("toString"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            );
             PlatformAnswer::Proxy {
                 port,
                 host: string_of(env, called),
@@ -1478,16 +1576,16 @@ fn ask_platform<'a>(
             // `PlatformComm$WifiInfo` — `ssid` and `bssid`.
             let called = env.call_static_method(
                 class,
-                "getCurWifiInfo",
-                "()Lio/github/orangeboychen/marsrs/comm/PlatformComm$WifiInfo;",
+                jni_str!("getCurWifiInfo"),
+                jni_sig!("()Lio/github/orangeboychen/marsrs/comm/PlatformComm$WifiInfo;"),
                 &[],
             );
             let Some(wifi) = object_of(called) else {
                 return PlatformAnswer::Nothing;
             };
             PlatformAnswer::Wifi(Some(WifiInfo {
-                ssid: string_field(env, &wifi, "ssid"),
-                bssid: string_field(env, &wifi, "bssid"),
+                ssid: string_field(env, &wifi, jni_str!("ssid")),
+                bssid: string_field(env, &wifi, jni_str!("bssid")),
             }))
         }
         PlatformQuestion::SimInfo => {
@@ -1495,50 +1593,56 @@ fn ask_platform<'a>(
             // the Java writes `"" + ispCode`.
             let called = env.call_static_method(
                 class,
-                "getCurSIMInfo",
-                "()Lio/github/orangeboychen/marsrs/comm/PlatformComm$SIMInfo;",
+                jni_str!("getCurSIMInfo"),
+                jni_sig!("()Lio/github/orangeboychen/marsrs/comm/PlatformComm$SIMInfo;"),
                 &[],
             );
             let Some(sim) = object_of(called) else {
                 return PlatformAnswer::Nothing;
             };
             PlatformAnswer::Sim(Some(SimInfo {
-                isp_code: string_field(env, &sim, "ispCode"),
-                isp_name: string_field(env, &sim, "ispName"),
+                isp_code: string_field(env, &sim, jni_str!("ispCode")),
+                isp_name: string_field(env, &sim, jni_str!("ispName")),
             }))
         }
         PlatformQuestion::ApnInfo => {
             // `PlatformComm$APNInfo` — `netType`, `subNetType` and `extraInfo`.
             let called = env.call_static_method(
                 class,
-                "getAPNInfo",
-                "()Lio/github/orangeboychen/marsrs/comm/PlatformComm$APNInfo;",
+                jni_str!("getAPNInfo"),
+                jni_sig!("()Lio/github/orangeboychen/marsrs/comm/PlatformComm$APNInfo;"),
                 &[],
             );
             let Some(apn) = object_of(called) else {
                 return PlatformAnswer::Nothing;
             };
             PlatformAnswer::Apn(Some(ApnInfo {
-                net_type: int_field(env, &apn, "netType"),
-                sub_net_type: int_field(env, &apn, "subNetType"),
-                extra_info: string_field(env, &apn, "extraInfo"),
+                net_type: int_field(env, &apn, jni_str!("netType")),
+                sub_net_type: int_field(env, &apn, jni_str!("subNetType")),
+                extra_info: string_field(env, &apn, jni_str!("extraInfo")),
             }))
         }
         PlatformQuestion::RadioAccessNetwork => {
-            let called = env.call_static_method(class, "getCurRadioAccessNetworkInfo", "()I", &[]);
+            let called = env.call_static_method(
+                class,
+                jni_str!("getCurRadioAccessNetworkInfo"),
+                jni_sig!("()I"),
+                &[],
+            );
             PlatformAnswer::RadioAccessNetwork(int_of(called))
         }
         PlatformQuestion::Signal { wifi } => {
             let called = env.call_static_method(
                 class,
-                "getSignal",
-                "(Z)J",
-                &[JValue::Bool(wifi as jboolean)],
+                jni_str!("getSignal"),
+                jni_sig!("(Z)J"),
+                &[JValue::Bool(wifi)],
             );
             PlatformAnswer::Signal(long_of(called))
         }
         PlatformQuestion::NetworkConnected => {
-            let called = env.call_static_method(class, "isNetworkConnected", "()Z", &[]);
+            let called =
+                env.call_static_method(class, jni_str!("isNetworkConnected"), jni_sig!("()Z"), &[]);
             PlatformAnswer::Connected(bool_of(called))
         }
     }
@@ -1547,11 +1651,11 @@ fn ask_platform<'a>(
 /// A `StringBuffer` Java writes an answer into — the C++'s own
 /// `NewObject(StringBuffer)`, handed to `getProxyInfo` and read back with
 /// `toString()`.
-fn string_buffer<'a>(env: &mut JNIEnv<'a>) -> Option<JObject<'a>> {
-    let Ok(class) = env.find_class("java/lang/StringBuffer") else {
+fn string_buffer<'a>(env: &mut Env<'a>) -> Option<JObject<'a>> {
+    let Ok(class) = env.find_class(jni_str!("java/lang/StringBuffer")) else {
         return None;
     };
-    env.new_object(class, "()V", &[]).ok()
+    env.new_object(class, jni_sig!("()V"), &[]).ok()
 }
 
 /// A `J` Java answered with — `0` for a call that could not be made.
@@ -1564,7 +1668,7 @@ fn long_of(called: jni::errors::Result<JValueOwned>) -> i64 {
 /// `BaseEvent.onCreate` — the app is up, which is when the net core is made.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onCreate<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) {
     guard(|| {
@@ -1577,7 +1681,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onCreate<'l
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onInitConfigBeforeOnCreate<
     'local,
 >(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
     packer_encoder_version: jint,
 ) {
@@ -1587,7 +1691,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onInitConfi
 /// `BaseEvent.onDestroy`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onDestroy<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) {
     guard(|| {
@@ -1598,17 +1702,17 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onDestroy<'
 /// `BaseEvent.onForeground`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onForeground<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
     is_foreground: jboolean,
 ) {
-    guard(|| on_foreground_impl(is_foreground != 0))
+    guard(|| on_foreground_impl(is_foreground))
 }
 
 /// `BaseEvent.onNetworkChange`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onNetworkChange<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) {
     guard(on_network_change_impl)
@@ -1618,7 +1722,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onNetworkCh
 /// so it is not read; what the crash does is close the appender.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onSingalCrash<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
     _sig: jint,
 ) {
@@ -1628,7 +1732,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onSingalCra
 /// `BaseEvent.onExceptionCrash`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onExceptionCrash<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) {
     guard(on_exception_crash_impl)
@@ -1641,14 +1745,14 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onException
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_setHttpNetcheckCGI<
     'local,
 >(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     cgi: JString<'local>,
 ) {
-    guard(|| {
-        let cgi = env
-            .get_string(&cgi)
-            .map(|value| value.to_string_lossy().into_owned())
+    guard_env(&mut env, |env| {
+        let cgi = cgi
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
         set_http_netcheck_cgi_impl(&cgi);
     })
@@ -1657,10 +1761,10 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_setHttpN
 /// `SdtLogic.getLoadLibraries`.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_getLoadLibraries<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) -> jobject {
-    guard(|| string_array_list(&mut env, &sdt_libraries()))
+    guard_env(&mut env, |env| string_array_list(env, &sdt_libraries()))
 }
 
 // #################### io.github.orangeboychen.marsrs.comm.Alarm ####################
@@ -1669,7 +1773,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_getLoadL
 /// `onReceive` once the broadcast found the id.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_comm_Alarm_onAlarm<'local>(
-    _env: JNIEnv<'local>,
+    _env: EnvUnowned<'local>,
     _this: JObject<'local>,
     id: jlong,
 ) {
