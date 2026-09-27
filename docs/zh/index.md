@@ -35,12 +35,12 @@ features:
 |---|---|---|
 | Rust | `marsrs` 或 `marsrs-xlog` | [Rust](/zh/platforms/rust) |
 | iOS / watchOS，Swift | SwiftPM 的 `MarsRSXlog` | [SwiftPM](/zh/platforms/swift) |
-| Android，Kotlin 或 Java | JitPack 上的 `mars-rs` / `mars-rs-xlog` | [Android](/zh/platforms/android) |
-| Kotlin Multiplatform | `mars-rs-kmp` / `mars-rs-xlog-kmp` | [Kotlin Multiplatform](/zh/platforms/kotlin-multiplatform) |
-| 任何能调 C 的语言 | `mars-rs-<version>-<host>` 压缩包 | [C ABI](/zh/platforms/c-abi) |
+| Android，Kotlin 或 Java | JitPack 上的 `marsrs` / `xlog` | [Android](/zh/platforms/android) |
+| Kotlin Multiplatform | `marsrs-kmp` / `xlog-kmp` | [Kotlin Multiplatform](/zh/platforms/kotlin-multiplatform) |
+| 任何能调 C 的语言 | `marsrs-<version>-<host>` 压缩包 | [C ABI](/zh/platforms/c-abi) |
 | HarmonyOS | `libmars_ffi.so`，目前要自己编译 | [HarmonyOS](/zh/platforms/harmonyos) |
 
-`mars-xlog` 只有日志；`mars-core`（Rust 里是 `marsrs`）再加上 STN 任务链路和 SDT 网络诊断。只打日志的 App 用前者。
+`xlog` 只有日志；`marsrs` 再加上 STN 任务链路和 SDT 网络诊断 —— 和 crates.io 上那两个 crate 是同一对。只打日志的 App 用前者。
 
 ## 其余几页
 

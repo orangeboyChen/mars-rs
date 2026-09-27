@@ -24,17 +24,17 @@ cargo add marsrs-xlog     # 只有 xlog —— 日志，别的都没有
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen:mars-rs-xlog:0.1.0")  // 只有 xlog
+implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")  // 只有 xlog
 ```
 
 ```kotlin [Kotlin Multiplatform]
 // 共享模块的 build.gradle.kts
-implementation("io.github.orangeboychen:mars-rs-xlog-kmp:0.1.0")
+implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")
 ```
 
 ```text [C]
-mars-rs-<version>-<host>.tar.gz   （Linux、macOS）
-mars-rs-<version>-<host>.zip      （Windows）
+marsrs-<version>-<host>.tar.gz   （Linux、macOS）
+marsrs-<version>-<host>.zip      （Windows）
     include/mars_xlog.h
     include/mars_sdt.h
     include/mars_stn.h

@@ -5,12 +5,12 @@
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen:mars-rs-xlog:0.1.0")  // xlog alone
-implementation("io.github.orangeboychen:mars-rs:0.1.0")       // the whole port: + STN, SDT
+implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")    // xlog alone
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")  // the whole port: + STN, SDT
 ```
 
-Both AARs carry the same `libmarsxlog.so`, for `arm64-v8a`, `armeabi-v7a` and
-`x86_64`. Take `mars-rs-xlog` when the app only logs. The Kotlin and Java package
+Both AARs carry the same `libmarsrsxlog.so`, for `arm64-v8a`, `armeabi-v7a` and
+`x86_64`. Take `xlog` when the app only logs. The Kotlin and Java package
 is `io.github.orangeboychen.marsrs`.
 
 ## Open, write, flush

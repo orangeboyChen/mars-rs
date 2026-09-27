@@ -5,12 +5,12 @@
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen:mars-rs-xlog:0.1.0")  // 只有 xlog
-implementation("io.github.orangeboychen:mars-rs:0.1.0")       // 整个端口：还有 STN、SDT
+implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")    // 只有 xlog
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")  // 整个端口：还有 STN、SDT
 ```
 
-两个 AAR 带的是同一个 `libmarsxlog.so`，覆盖 `arm64-v8a`、`armeabi-v7a`、`x86_64`。
-只打日志就用 `mars-rs-xlog`。Kotlin 和 Java 的包名是 `io.github.orangeboychen.marsrs`。
+两个 AAR 带的是同一个 `libmarsrsxlog.so`，覆盖 `arm64-v8a`、`armeabi-v7a`、`x86_64`。
+只打日志就用 `xlog`。Kotlin 和 Java 的包名是 `io.github.orangeboychen.marsrs`。
 
 ## 打开、写、flush
 

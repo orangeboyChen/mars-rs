@@ -1,6 +1,6 @@
 # The C ABI
 
-`mars-rs-<version>-<host>.tar.gz` (Linux, macOS) and `.zip` (Windows) hold the
+`marsrs-<version>-<host>.tar.gz` (Linux, macOS) and `.zip` (Windows) hold the
 headers and the libraries of `marsrs-ffi`:
 
 ```text
