@@ -119,6 +119,12 @@ taking the smaller one drops nothing but the promise of STN and SDT. The tag
 and the SPM checksum are written into `Package.swift` by the release workflow
 on a `chore/package-swift-<tag>` branch, proposed as a pull request.
 
+The framework carries four slices — `ios-arm64`, `ios-arm64_x86_64-simulator`,
+`watchos-arm64` and `watchos-arm64-simulator` — so an app target of either
+platform resolves it. watchOS is arm64 only: `arm64_32-apple-watchos` and
+`x86_64-apple-watchos-sim` are tier 3 targets that rustup ships no std for, so
+cargo cannot build them.
+
 `Sources/MarsRSXlog/Xlog.swift` is what the port exposes today: `mars-ffi` is
 an xlog C ABI (21 `mars_xlog_*` symbols, nothing else), so xlog is all the Swift
 layer can reach and `MarsRS` re-exports `MarsRSXlog` and nothing more.

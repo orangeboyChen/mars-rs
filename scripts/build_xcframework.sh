@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
 # Builds MarsRS.xcframework.zip: `mars-ffi` as a static library for the iOS
-# device and for the iOS simulator, with its header and a module map next to
-# it, which is what Package.swift hands to a Swift app.
+# device and simulator and for the watchOS device and simulator, with its
+# header and a module map next to it, which is what Package.swift hands to a
+# Swift app.
 
 # The framework is named after the project, not after xlog: the C ABI is the
 # port's, and everything the port grows into belongs in it. xlog is what it
@@ -44,17 +45,66 @@ esac
 name=MarsRS.xcframework
 header_dir="$root/target/xcframework-build/headers"
 
-# `aarch64-apple-ios` is the device; the two others are the simulator on an
-# Apple Silicon Mac and on an Intel one, and `lipo` makes one library of both.
-device_target=aarch64-apple-ios
-sim_targets=(aarch64-apple-ios-sim x86_64-apple-ios)
+# One entry per slice the framework carries, and a slice is one (sdk,
+# destination) a consumer can build for: `<name>:<triple>[:<triple>…]`.
+# A destination with two architectures — the iOS simulator on an Apple Silicon
+# Mac and on an Intel one — is lipo'd into the single library an xcframework
+# takes, because that is the shape `xcodebuild -create-xcframework` wants.
+#
+# watchOS is arm64 and only arm64 here: `arm64_32-apple-watchos` (the
+# 32-bit-pointer arm64 of an older watch) and `x86_64-apple-watchos-sim` are
+# tier 3, so rustup ships no std for either and cargo cannot be pointed at
+# them. What is left is `aarch64-apple-watchos`, whose std is built for
+# watchOS 26 — an arm64 watch is a watchOS 26 watch — so the device slice of
+# the framework asks for watchOS 26 whatever `WATCHOS_DEPLOYMENT_TARGET` says;
+# the simulator slice takes what it is given.
+slices=(
+    ios-device:aarch64-apple-ios
+    ios-simulator:aarch64-apple-ios-sim:x86_64-apple-ios
+    watchos-device:aarch64-apple-watchos
+    watchos-simulator:aarch64-apple-watchos-sim
+)
 
-echo "building mars-ffi for $device_target and ${sim_targets[*]}"
+# The floor `Package.swift` declares for each platform, which is what the
+# slices are built at.
+ios_min=12.0
+watchos_min=10.0
 
-rustup target add "$device_target" "${sim_targets[@]}" > /dev/null
-cargo build --release -p mars-ffi --target "$device_target"
-for target in "${sim_targets[@]}"; do
-    cargo build --release -p mars-ffi --target "$target"
+# Every triple of every slice, which is what `rustup target add` is asked for.
+targets=()
+for slice in "${slices[@]}"; do
+    IFS=':' read -r -a slice_targets <<< "${slice#*:}"
+    targets+=("${slice_targets[@]}")
+done
+
+echo "building mars-ffi for ${targets[*]}"
+
+rustup target add "${targets[@]}" > /dev/null
+for slice in "${slices[@]}"; do
+    IFS=':' read -r -a slice_targets <<< "${slice#*:}"
+
+    # The deployment target of the sdk, which `rustc` and `cc-rs` both read out
+    # of the environment and which is what `Package.swift` promises: 12 for iOS,
+    # 10 for watchOS. Left unset, the C objects of `zstd-sys` come out at the
+    # deployment target of the SDK itself — 26.5 today — and an app whose own
+    # target is lower than that is warned about once per object by `ld64`.
+    #
+    # It does not move every slice: the arm64 watchOS device one is built for
+    # watchOS 26 whatever this says, because its std is.
+    case "${slice%%:*}" in
+        ios-*)
+            export IPHONEOS_DEPLOYMENT_TARGET=$ios_min
+            unset WATCHOS_DEPLOYMENT_TARGET
+            ;;
+        watchos-*)
+            export WATCHOS_DEPLOYMENT_TARGET=$watchos_min
+            unset IPHONEOS_DEPLOYMENT_TARGET
+            ;;
+    esac
+
+    for target in "${slice_targets[@]}"; do
+        cargo build --release -p mars-ffi --target "$target"
+    done
 done
 
 rm -rf "$root/target/xcframework-build" "$out"
@@ -68,24 +118,37 @@ module MarsRSFFI {
 }
 MAP
 
-device_lib="$root/target/$device_target/release/libmars_ffi.a"
-test -f "$device_lib" || { echo "::error::$device_lib is missing"; exit 1; }
-
-sim_lib="$root/target/xcframework-build/simulator/libmars_ffi.a"
-mkdir -p "$(dirname "$sim_lib")"
-sim_libs=()
-for target in "${sim_targets[@]}"; do
-    sim_libs+=("$root/target/$target/release/libmars_ffi.a")
+# One `-library … -headers …` pair per slice. `create-xcframework` works out
+# the sdk and the destination of each library from the build version of its
+# objects, which is what makes a static library built by cargo recognizable as
+# a watchOS one.
+args=()
+for slice in "${slices[@]}"; do
+    label="${slice%%:*}"
+    IFS=':' read -r -a slice_targets <<< "${slice#*:}"
+    libs=()
+    for target in "${slice_targets[@]}"; do
+        lib="$root/target/$target/release/libmars_ffi.a"
+        test -f "$lib" || { echo "::error::$lib is missing"; exit 1; }
+        libs+=("$lib")
+    done
+    if [ "${#libs[@]}" -eq 1 ]; then
+        slice_lib="${libs[0]}"
+    else
+        slice_lib="$root/target/xcframework-build/$label/libmars_ffi.a"
+        mkdir -p "$(dirname "$slice_lib")"
+        lipo -create "${libs[@]}" -output "$slice_lib"
+    fi
+    args+=(-library "$slice_lib" -headers "$header_dir")
 done
-lipo -create "${sim_libs[@]}" -output "$sim_lib"
 
-xcodebuild -create-xcframework \
-    -library "$device_lib" -headers "$header_dir" \
-    -library "$sim_lib" -headers "$header_dir" \
+xcodebuild -create-xcframework "${args[@]}" \
     -output "$root/target/xcframework-build/$name"
 
 # `-allow-warnings` is not an option of `create-xcframework`, so a name clash
-# would fail above; what is left to check is that both slices are there.
+# would fail above; what is left to check is that every slice is there, named
+# the way a consumer's `xcodebuild` looks for it (ios-arm64,
+# ios-arm64_x86_64-simulator, watchos-arm64, watchos-arm64-simulator).
 ls "$root/target/xcframework-build/$name"
 
 (cd "$root/target/xcframework-build" && zip -q -r "$out/$name.zip" "$name")

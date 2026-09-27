@@ -154,6 +154,11 @@ jobs:
         target:
           - aarch64-apple-ios
           - aarch64-apple-ios-sim
+          # watchOS is arm64 only: the tier 3 `arm64_32-apple-watchos` and
+          # `x86_64-apple-watchos-sim` ship no std, so rustup cannot install
+          # them and cargo cannot build for them.
+          - aarch64-apple-watchos
+          - aarch64-apple-watchos-sim
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

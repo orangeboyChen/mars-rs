@@ -1,6 +1,6 @@
 // swift-tools-version: 5.9
 //
-//  mars-rs — Swift Package Manager distribution (iOS)
+//  mars-rs — Swift Package Manager distribution (iOS, watchOS)
 //
 //      .package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
 //
@@ -41,7 +41,18 @@ import PackageDescription
 let package = Package(
     name: "mars-rs",
     platforms: [
-        .iOS(.v12)
+        .iOS(.v12),
+        // watchOS 10 is the newest watchOS this manifest can name: the
+        // constants of `Platform.watchOS` stop at `.v10` in
+        // swift-tools-version 5.9, which is where the manifest stays so that a
+        // Swift 5 project can still depend on the package. The framework asks
+        // for more than that in practice — its watchOS device slice is arm64,
+        // and an arm64 watch runs watchOS 26, so `ld64` warns once per object
+        // when an app whose deployment target is lower links it. The link
+        // succeeds; going below the warning needs either `swift-tools-version
+        // 6.2`, which would put the floor at Xcode 26, or a std built for an
+        // older watchOS, which is `-Z build-std` on a nightly.
+        .watchOS(.v10)
     ],
     products: [
         .library(name: "MarsRS", targets: ["MarsRS"]),
@@ -49,8 +60,9 @@ let package = Package(
         .library(name: "MarsRSXlog", targets: ["MarsRSXlog"]),
     ],
     targets: [
-        // Prebuilt binary: ios-arm64 + ios-arm64_x86_64-simulator, each with
-        // `mars_xlog.h` and the module map that names it `MarsRSFFI`.
+        // Prebuilt binary: ios-arm64 + ios-arm64_x86_64-simulator +
+        // watchos-arm64 + watchos-arm64-simulator, each with `mars_xlog.h` and
+        // the module map that names it `MarsRSFFI`.
         .binaryTarget(
             name: "MarsRSFFI",
             url: "https://github.com/orangeboyChen/mars-rs/releases/download/v0.1.0-alpha.1/MarsRS.xcframework.zip",
