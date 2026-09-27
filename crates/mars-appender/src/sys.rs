@@ -386,6 +386,44 @@ fn lock(file: &File, non_blocking: bool) -> bool {
             offset_high: 0,
             event: 0,
         };
+
+        // `LockFileEx` does not make a process wait for itself: a request that
+        // overlaps a lock this process already holds — through another handle,
+        // which is what a second appender of one prefix has — fails at once
+        // with ERROR_LOCK_VIOLATION, whether LOCKFILE_FAIL_IMMEDIATELY is set
+        // or not. Two copies of this crate in one process are a case the port
+        // supports, so the waiting is done here instead: immediate requests,
+        // retried until the lock is free. The give-up is what keeps a writer
+        // that never lets go from stalling the process — it is orders of
+        // magnitude more than a section below takes.
+        if !non_blocking {
+            use std::time::{Duration, Instant};
+
+            /// Five seconds: a cache-file move is milliseconds.
+            const GIVE_UP_AFTER: Duration = Duration::from_secs(5);
+            let deadline = Instant::now() + GIVE_UP_AFTER;
+            loop {
+                // SAFETY: as below.
+                let taken = unsafe {
+                    LockFileEx(
+                        file.as_raw_handle(),
+                        EXCLUSIVE | FAIL_IMMEDIATELY,
+                        0,
+                        1,
+                        0,
+                        &mut overlapped,
+                    )
+                };
+                if taken != 0 {
+                    return true;
+                }
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+
         // SAFETY: `file` is a valid handle and `overlapped` is a live,
         // correctly sized `OVERLAPPED` (zeroed, which is what the call wants).
         let ok = unsafe { LockFileEx(file.as_raw_handle(), flags, 0, 1, 0, &mut overlapped) };
