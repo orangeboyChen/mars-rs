@@ -119,14 +119,24 @@ It then does the same through the real appenders, so what is decoded is a
 
 | layer | rust → C++ | C++ → rust |
 |---|---|---|
-| record layer, 16 combinations | 12 ok, 4 `cpp-decoder` | 16 ok |
+| record layer, 16 combinations | 12 ok, 2 `cpp-decoder`, 2 fail | 16 ok |
 | appender layer, 8 combinations | 8 ok | 8 ok |
 
-`cpp-decoder` is the four `zstd-async` cases, and it is not a difference between
-the encoders: upstream's decoder reads *its own* golden `zstd-async` files the
-same wrong way — 4501 of 4510 bytes with one flush, 432 with one per record —
-while the Rust decoder reads both encoders' files whole. The script runs that
-control itself and says so instead of failing.
+`cpp-decoder` is two of the four `zstd-async` cases, and it is not a difference
+between the encoders: upstream's decoder reads both encoders' `zstd-async`
+files the same wrong way — 4501 of 4510 bytes with one flush — while the Rust
+decoder reads both whole. The script runs that control itself and says so
+instead of failing, but only when the two wrong outputs are the *same* wrong
+bytes; a Rust file that decodes to something else fails.
+
+The two that fail are the `zstd-async` cases that flush once per record. There
+the Rust encoder's zstd frame for the 4096-byte record is one byte shorter than
+upstream's — one raw literal before the match where upstream writes two, two
+spellings of the same 4096 bytes, which the Rust decoder reads back whole from
+both files. It only shows up because upstream's decoder returns 17 and 18 bytes
+instead of 4096 for that block, so the two files come out of it 431 and 432
+bytes long. Everything else — all 8 appender combinations, including async and
+zstd — is byte for byte.
 
 Two things the run turns up that are worth knowing:
 
