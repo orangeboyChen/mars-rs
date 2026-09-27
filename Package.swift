@@ -8,13 +8,13 @@
 //
 //      import MarsRS          // the whole port
 //
-//      var config = MarsXlogConfiguration(logDirectory: logDir)
+//      var config = XlogConfig(logDirectory: logDir)
 //      config.namePrefix = "Ham"
 //      config.publicKey = "..."
-//      MarsXlog.open(config)
+//      let log = try Xlog(config)
 //
-//      MarsXlog.write(.info, tag: "Net", message: "hello")
-//      MarsXlog.flush(sync: true)
+//      log.info(message: "hello", tag: "Net")
+//      log.flush(sync: true)
 //
 //  or, for an app that only logs:
 //

@@ -137,6 +137,16 @@ that is why `MarsRS` exists as a module of its own and not just as a name for
 xlog. orangeboyChen/mars ships a single `MarsXlog` product for the same reason;
 here the xlog-only import is `import MarsRSXlog`.
 
+An app writes through an `Xlog` of its own — `let log = try Xlog(XlogConfig(
+logDirectory: dir))`, then `log.info(message: "hello", tag: "Net")` — the two
+steps the Android `Xlog` is, with `XlogConfig`, `LogLevel`, `AppenderMode` and
+`CompressMode` spelled the way the Kotlin API spells them, so one app reads the
+same either way. `file`, `function` and `line` of a record come from the call
+site: `#file` costs Swift nothing, and the C ABI carries them anyway. Nothing
+here is deprecated, because there is no older Swift API to keep — the
+process-wide appender is a set of C symbols, and `@_exported import MarsRSFFI`
+reaches them.
+
 ### Android (JitPack)
 
 Two AARs over the same `libmarsxlog.so` — the pair the C++ project publishes

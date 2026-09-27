@@ -30,18 +30,15 @@
 #
 #      - `contrasted_opening_brace` would put every `{` on a line of its own,
 #        which is Allman rather than the style Swift is written in.
-#      - `type_contents_order` would order the members of `MarsXlog` by kind;
+#      - `type_contents_order` would order the members of `Xlog` by kind;
 #        they are ordered as the symbols are ordered in `mars_xlog.h`.
-#      - `sorted_enum_cases` would sort `MarsXlogLevel` alphabetically and hide
+#      - `sorted_enum_cases` would sort `LogLevel` alphabetically and hide
 #        the `kLevel*` order its raw values are.
 #      - `explicit_type_interface` would spell out the type of every local and
 #        of every closure parameter, most of which the compiler infers.
 #      - `one_declaration_per_file` and `file_name` want one type per file;
-#        `Xlog.swift` is `mars_xlog.h`, which declares all of them.
-#      - `function_default_parameter_at_end` would move `message` of `write`
-#        above the arguments that have defaults, away from the argument order of
-#        `mars_xlog_write`.
-#      - `discouraged_none_name` objects to `MarsXlogLevel.none`, which is the
+#        the two files are `mars_xlog.h`, which declares all of them.
+#      - `discouraged_none_name` objects to `LogLevel.none`, which is the
 #        C ABI's `kLevelNone` under the name Swift spells it with.
 #
 #   and five more opt-in rules (`capture_variable`, `explicit_self`,
@@ -97,6 +94,7 @@ opt_in_rules:
   - first_where
   - flatmap_over_map_reduce
   - force_unwrapping
+  - function_default_parameter_at_end
   - identical_operands
   - implicit_return
   - implicitly_unwrapped_optional
@@ -181,7 +179,7 @@ line_length:
   warning: 120
   error: 121
 
-# One type per file is the rule the sources already keep; 279 lines is what the
+# One type per file is the rule the sources already keep; 350 lines is what the
 # largest of them is.
 file_length:
   warning: 400
