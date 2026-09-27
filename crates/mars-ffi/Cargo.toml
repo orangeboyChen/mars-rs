@@ -20,6 +20,8 @@ mars-buffer = { workspace = true }
 # The diagnosis, behind a feature of its own: an app that only logs does not
 # carry SDT's bytes, which is the whole point of the feature set.
 mars-sdt = { workspace = true, optional = true }
+# The task pipeline, behind a feature of its own, for the same reason.
+mars-stn = { workspace = true, optional = true }
 
 # What the C ABI carries, named: the Apple artifact is built `--no-default-features
 # --features xlog`, so it is xlog by construction and not by the accident of what
@@ -34,6 +36,10 @@ xlog = []
 # `mars_sdt_*` is wrapped in `guard` — and a process that runs a diagnosis is a
 # process that logs what it found, so `sdt` takes `xlog` with it.
 sdt = ["dep:mars-sdt", "xlog"]
+# The task pipeline's entry points: the same panic barrier, and a process that
+# runs a task is a process that logs what happened to it, so `stn` takes `xlog`
+# with it.
+stn = ["dep:mars-stn", "xlog"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

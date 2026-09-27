@@ -156,6 +156,27 @@ pub enum TaskFailHandleType {
     SlientTaskEnd = -16,
 }
 
+impl TaskFailHandleType {
+    /// The `int` the app answered `buf2Resp` with, as what STN is to do about
+    /// the task. An int that is not one of them is
+    /// [`TaskFailHandleType::Normal`], which is what the C++'s `switch` leaves
+    /// it at.
+    ///
+    /// Both seams that hand an app's `int` to STN — the JNI's and the C ABI's —
+    /// read it here, so what a host answers means the same thing on either side.
+    pub fn of(handle: i32) -> Self {
+        match handle {
+            -1 => Self::Default,
+            -12 => Self::RetryAllTasks,
+            -13 => Self::SessionTimeout,
+            -14 => Self::TaskEnd,
+            -15 => Self::TaskTimeout,
+            -16 => Self::SlientTaskEnd,
+            _ => Self::Normal,
+        }
+    }
+}
+
 /// `NoopProfile` — one heartbeat of a link: how long after the last one it
 /// went out, how long after that it *actually* went out (an alarm that fires
 /// late is how a dozing network shows itself), how long its answer took, and

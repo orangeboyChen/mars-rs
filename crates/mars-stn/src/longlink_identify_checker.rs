@@ -95,6 +95,28 @@ impl IdentifyBuffer {
         Self::Never { hash }
     }
 
+    /// `ECHECK_NOW` / `ECHECK_NEXT` / `ECHECK_NEVER` — the `int` an app answers
+    /// the identify question with, as when the buffer goes out.
+    ///
+    /// The comment above Java's `getLongLinkIdentifyCheckBuffer` reads
+    /// `ECHECK_NOW, ECHECK_NEVER, ECHECK_NEXT`, but the C++ switches the int it
+    /// got back on its own `kCheckNow, kCheckNext, kCheckNever`, and that is the
+    /// one it is: `0` sends it now, `1` asks again on the next connect and
+    /// anything else stops asking.
+    ///
+    /// Not ported: the C++ returns before it reads the streams for the two that
+    /// are not "now", so a hash it hands over for them is always empty. This one
+    /// hands over what the app wrote, because the port's [`IdentifyBuffer`]
+    /// keeps a hash for all three and the checker asks for it once the app is
+    /// ready.
+    pub fn of(mode: i32, buffer: Vec<u8>, hash: Vec<u8>, cmdid: u32) -> Self {
+        match mode {
+            0 => Self::now(buffer, hash, cmdid),
+            1 => Self::next(hash),
+            _ => Self::never(hash),
+        }
+    }
+
     /// When it goes out — the [`IdentifyMode`] the C++ switches on.
     pub fn mode(&self) -> IdentifyMode {
         match self {
