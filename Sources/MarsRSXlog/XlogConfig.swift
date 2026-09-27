@@ -43,8 +43,8 @@ public enum XlogError: Error, CustomStringConvertible {
     /// `close()` asks the C ABI to release it by.
     case emptyNamePrefix
 
-    /// `compressionLevel` outside `0...9`, the range the C++ spells
-    /// `COMPRESS_LEVEL1`..`COMPRESS_LEVEL9`.
+    /// `compressionLevel` outside what the compressor takes: `0...9` for
+    /// `.zlib`, `0...22` for `.zstd`.
     case invalidCompressionLevel
 
     /// `cacheDays` was negative.
@@ -62,7 +62,7 @@ public enum XlogError: Error, CustomStringConvertible {
             return "mars-xlog opened no appender without a name prefix"
 
         case .invalidCompressionLevel:
-            return "compressionLevel must be in 0...9"
+            return "compressionLevel must be in 0...9 for zlib, 0...22 for zstd"
 
         case .negativeCacheDays:
             return "cacheDays must not be negative"
@@ -96,8 +96,8 @@ public struct XlogConfig {
     /// How the log is compressed; `.zlib` is what the C++ defaults to.
     public var compression: CompressMode = .zlib
 
-    /// `0` keeps the appender's own default (6), `9` is the smallest file over
-    /// the longest compression.
+    /// `0` keeps the appender's own default (6); the ceiling is the one of the
+    /// compressor: `9` for `.zlib`, `22` for `.zstd`.
     public var compressionLevel: Int32 = 0
 
     /// `nil` puts the mmap cache in the log directory.
@@ -106,7 +106,30 @@ public struct XlogConfig {
     /// `0` keeps every file.
     public var cacheDays: Int32 = 0
 
-    /// The only way in: every field but `logDirectory` has a default of its own.
+    /// The four fields an app has at hand when it opens a logger of its own:
+    /// the one an `Xlog` is not opened without, and the three the example on
+    /// `Xlog` names.
+    ///
+    /// - Parameters:
+    ///   - logDirectory: where the log files go.
+    ///   - cacheDirectory: where the mmap cache goes; `nil` puts it in the log
+    ///                     directory.
+    ///   - namePrefix: what every file starts with, and what the appender is
+    ///                 known by.
+    ///   - level: the level the appender is opened at.
+    public init(
+        logDirectory: String,
+        cacheDirectory: String? = nil,
+        namePrefix: String = "xlog",
+        level: LogLevel = .info
+    ) {
+        self.init(logDirectory: logDirectory)
+        self.cacheDirectory = cacheDirectory
+        self.namePrefix = namePrefix
+        self.level = level
+    }
+
+    /// Every field but `logDirectory` at the default it carries beside it.
     public init(logDirectory: String) {
         self.logDirectory = logDirectory
     }
