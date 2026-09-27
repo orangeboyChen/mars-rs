@@ -127,9 +127,12 @@ for mode in zlib zstd; do
             CPP_DIR="$WORK/app-cpp-$tag"
             mkdir -p "$RUST_DIR" "$CPP_DIR"
 
-            # Rust writes, upstream's decoder reads.
-            "$REPO/target/release/examples/xlog_file" "$RUST_DIR" \
-                "$FIX/inputs.bin" "$KEY" > "$WORK/app-rust-$tag.txt"
+            # Rust writes, upstream's decoder reads. `--mode` and `--sync` are
+            # what make this row the row it says it is: the example defaults to
+            # a synchronous zlib appender otherwise.
+            "$REPO/target/release/examples/xlog_file" --mode="$mode" \
+                --sync="$sync" "$RUST_DIR" "$FIX/inputs.bin" "$KEY" \
+                > "$WORK/app-rust-$tag.txt"
             RUST_CPP=ok
             for file in $(cat "$WORK/app-rust-$tag.txt"); do
                 "$OUT/upstream_decode" "$file" "$file.plain"
