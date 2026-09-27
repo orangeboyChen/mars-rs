@@ -26,17 +26,17 @@ cargo add marsrs-xlog     # xlog alone — the logger and nothing else
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen:mars-rs-xlog:0.1.0")  // xlog alone
+implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")  // xlog alone
 ```
 
 ```kotlin [Kotlin Multiplatform]
 // build.gradle.kts of the shared module
-implementation("io.github.orangeboychen:mars-rs-xlog-kmp:0.1.0")
+implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")
 ```
 
 ```text [C]
-mars-rs-<version>-<host>.tar.gz   (Linux, macOS)
-mars-rs-<version>-<host>.zip      (Windows)
+marsrs-<version>-<host>.tar.gz   (Linux, macOS)
+marsrs-<version>-<host>.zip      (Windows)
     include/mars_xlog.h
     include/mars_sdt.h
     include/mars_stn.h

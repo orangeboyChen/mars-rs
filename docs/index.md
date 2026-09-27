@@ -35,13 +35,14 @@ Every release ships a package per platform:
 |---|---|---|
 | Rust | `marsrs` or `marsrs-xlog` | [Rust](/platforms/rust) |
 | iOS / watchOS, Swift | the `MarsRSXlog` SwiftPM product | [SwiftPM](/platforms/swift) |
-| Android, Kotlin or Java | `mars-rs` or `mars-rs-xlog` on JitPack | [Android](/platforms/android) |
-| Kotlin Multiplatform | `mars-rs-kmp` or `mars-rs-xlog-kmp` | [Kotlin Multiplatform](/platforms/kotlin-multiplatform) |
-| anything with a C FFI | the `mars-rs-<version>-<host>` archive | [The C ABI](/platforms/c-abi) |
+| Android, Kotlin or Java | `marsrs` or `xlog` on JitPack | [Android](/platforms/android) |
+| Kotlin Multiplatform | `marsrs-kmp` or `xlog-kmp` | [Kotlin Multiplatform](/platforms/kotlin-multiplatform) |
+| anything with a C FFI | the `marsrs-<version>-<host>` archive | [The C ABI](/platforms/c-abi) |
 | HarmonyOS | `libmars_ffi.so`, built from source today | [HarmonyOS](/platforms/harmonyos) |
 
-`mars-xlog` is the logger alone; `mars-core` (Rust: `marsrs`) adds the STN task
-pipeline and the SDT network diagnosis. An app that only logs takes the first.
+`xlog` is the logger alone; `marsrs` adds the STN task pipeline and the SDT
+network diagnosis — the same pair the crates on crates.io are. An app that only
+logs takes the first.
 
 ## What the rest of these pages are
 

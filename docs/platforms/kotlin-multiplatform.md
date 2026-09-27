@@ -13,12 +13,12 @@ maven {
 }
 
 // build.gradle.kts of the shared module
-implementation("io.github.orangeboychen:mars-rs-xlog-kmp:0.1.0")  // xlog alone
-implementation("io.github.orangeboychen:mars-rs-kmp:0.1.0")       // the whole port
+implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")    // xlog alone
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")  // the whole port
 ```
 
 An app that would rather not authenticate to GitHub Packages takes
-`mars-kmp-maven.zip` of the release instead: unzip it and add
+`marsrs-kmp-maven.zip` of the release instead: unzip it and add
 `maven { url = uri("<dir>") }`.
 
 ## Open, write, flush
@@ -79,7 +79,7 @@ Log.f("login", "…")
 
 ## What compiles
 
-Fourteen Kotlin targets: Android — the AAR carries `libmarsxlog.so` for
+Fourteen Kotlin targets: Android — the AAR carries `libmarsrsxlog.so` for
 `arm64-v8a`, `armeabi-v7a` and `x86_64` — plus `iosArm64`, `iosX64`,
 `iosSimulatorArm64`, `macosX64`, `macosArm64`, `watchosArm64`,
 `watchosDeviceArm64`, `watchosSimulatorArm64`, `tvosArm64`, `tvosSimulatorArm64`,

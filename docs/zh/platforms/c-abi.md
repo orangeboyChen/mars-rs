@@ -1,6 +1,6 @@
 # C ABI
 
-`mars-rs-<version>-<host>.tar.gz`（Linux、macOS）和 `.zip`（Windows）里是
+`marsrs-<version>-<host>.tar.gz`（Linux、macOS）和 `.zip`（Windows）里是
 `marsrs-ffi` 的头文件和库：
 
 ```text

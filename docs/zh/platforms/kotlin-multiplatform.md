@@ -12,11 +12,11 @@ maven {
 }
 
 // 共享模块的 build.gradle.kts
-implementation("io.github.orangeboychen:mars-rs-xlog-kmp:0.1.0")  // 只有 xlog
-implementation("io.github.orangeboychen:mars-rs-kmp:0.1.0")       // 整个端口
+implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")    // 只有 xlog
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")  // 整个端口
 ```
 
-不想为 GitHub Packages 配认证的应用，可以拿 release 里的 `mars-kmp-maven.zip`：
+不想为 GitHub Packages 配认证的应用，可以拿 release 里的 `marsrs-kmp-maven.zip`：
 解压后加 `maven { url = uri("<dir>") }`。
 
 ## 打开、写、flush
@@ -76,7 +76,7 @@ Log.f("login", "…")
 ## 哪些平台
 
 十四个 Kotlin target：Android（AAR 里带 `arm64-v8a`、`armeabi-v7a`、`x86_64` 的
-`libmarsxlog.so`），加上 `iosArm64`、`iosX64`、`iosSimulatorArm64`、`macosX64`、
+`libmarsrsxlog.so`），加上 `iosArm64`、`iosX64`、`iosSimulatorArm64`、`macosX64`、
 `macosArm64`、`watchosArm64`、`watchosDeviceArm64`、`watchosSimulatorArm64`、
 `tvosArm64`、`tvosSimulatorArm64`、`linuxX64`、`linuxArm64`、`mingwX64`。
 
