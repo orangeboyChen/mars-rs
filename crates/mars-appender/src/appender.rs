@@ -557,13 +557,14 @@ impl AppenderInner {
             return written;
         }
 
-        let mut write_success = false;
         let open_success = self.open_log_file(OpenDir::Log);
-        if open_success {
-            write_success = self.write_file_record(data);
-            if !self.is_sync() {
-                self.close_log_file();
-            }
+        // Buffered whether or not the log directory's file opened: with no
+        // file to hand it to, [`Self::write_file_record`] answers `false` and
+        // the record goes to the cache directory below instead of waiting in
+        // the buffer for a file that is not there.
+        let mut write_success = self.write_file_record(data);
+        if open_success && !self.is_sync() {
+            self.close_log_file();
         }
 
         if !write_success {
@@ -749,9 +750,10 @@ impl AppenderInner {
             return true;
         }
         if self.log_file.is_none() {
-            // Nothing to hand it to *yet*. Kept: `__Log2File` opens the cache
-            // file for exactly this, and the batch goes there instead.
-            return false;
+            // Nothing to hand it to *yet*. Kept for one more attempt:
+            // `__Log2File` opens the cache file for exactly this, and the batch
+            // goes there instead.
+            return self.refuse_pending();
         }
 
         let result = {
@@ -791,15 +793,21 @@ impl AppenderInner {
 
                 // Kept for one more attempt — but only one: see
                 // [`Self::pending_refused`].
-                if self.pending_refused {
-                    self.pending.clear();
-                    self.pending_refused = false;
-                } else {
-                    self.pending_refused = true;
-                }
-                false
+                self.refuse_pending()
             }
         }
+    }
+
+    /// Gives [`Self::pending`] up, or one more attempt first: see
+    /// [`Self::pending_refused`]. Answers `false`, whatever it decided.
+    fn refuse_pending(&mut self) -> bool {
+        if self.pending_refused {
+            self.pending.clear();
+            self.pending_refused = false;
+        } else {
+            self.pending_refused = true;
+        }
+        false
     }
 
     /// `XloggerAppender::__WriteFile`.
@@ -826,7 +834,11 @@ impl AppenderInner {
         if self.pending.len() >= LOG_FLUSH_THRESHOLD {
             return self.flush_pending();
         }
-        true
+
+        // Buffered, but not accepted by anything yet when no file is open: the
+        // C++'s `fwrite` cannot say "yes" for bytes nothing has taken either,
+        // and `__Log2File` needs the `no` to try the cache directory.
+        self.log_file.is_some()
     }
 }
 
@@ -1841,6 +1853,46 @@ mod tests {
             "the batch was dropped instead of kept: {text}"
         );
     }
+
+    /// The same, for one record: with a cache directory configured but not
+    /// active (`cache_days == 0`), the log directory's file is what is missing,
+    /// and the record has to be staged in the cache directory rather than wait
+    /// in the buffer for a file that never opens.
+    #[test]
+    fn a_record_the_log_directory_cannot_open_is_staged_in_the_cache_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("cache");
+        let mut cfg = config(tmp.path(), AppenderMode::Sync);
+        cfg.cachedir = Some(cache.clone());
+        fs::create_dir(today_name(tmp.path())).unwrap();
+
+        let appender = Appender::open(cfg, 0, 0).unwrap();
+        // The banner `open` writes has already fallen back to the cache
+        // directory: it left a file behind, and a record that finds one takes
+        // the cache branch of `__Log2File` instead of the fallback — which
+        // finds nothing to flush when the buffer is empty. Both taken away, so
+        // that this record is the one that has to open the cache copy.
+        appender.lock().close_log_file();
+        for entry in fs::read_dir(&cache).unwrap().flatten() {
+            if entry.path().extension().is_some_and(|ext| ext == "xlog") {
+                fs::remove_file(entry.path()).unwrap();
+            }
+        }
+        appender.write(Some(&info(LogLevel::Info)), "staged, not buffered");
+        appender.close();
+
+        let mut text = String::new();
+        for entry in fs::read_dir(&cache).unwrap().flatten() {
+            if entry.path().extension().is_some_and(|ext| ext == "xlog") {
+                text.push_str(&decoded_text(&fs::read(entry.path()).unwrap()));
+            }
+        }
+        assert!(
+            text.contains("staged, not buffered"),
+            "the record waited in the buffer instead: {text}"
+        );
+    }
+
     /// What `__Log2File` does with a batch the log directory refuses: it is
     /// staged in the cache directory, whole — which is what
     /// [`Self::flush_pending`] keeping it is for.
