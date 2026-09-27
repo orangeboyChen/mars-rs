@@ -47,20 +47,25 @@ public struct StnTask {
     public var cgi: String = ""
     /// Whether the task is a send with no answer to wait for.
     public var isSendOnly: Bool = false
-    /// Whether the task waits for the app to be logged in.
-    public var needsAuthed: Bool = false
-    /// Whether the task is weighed against the flow limit.
-    public var limitsFlow: Bool = false
-    /// Whether it is weighed against the frequency limit.
-    public var limitsFrequency: Bool = false
+    /// Whether the task waits for the app to be logged in; `Task::new`'s
+    /// answer, which the app turns off for the one task that goes out before it
+    /// has logged in.
+    public var needsAuthed: Bool = true
+    /// Whether the task is weighed against the flow limit; `Task::new`'s
+    /// answer, and the Kotlin `Task` constructor's.
+    public var limitsFlow: Bool = true
+    /// Whether it is weighed against the frequency limit; likewise.
+    public var limitsFrequency: Bool = true
     /// Whether a task with no network to go out on is ended instead of waiting.
     public var isNetworkStatusSensitive: Bool = false
     /// One of the `Task::CHANNEL_*_STRATEGY` integers.
     public var channelStrategy: Int32 = 0
-    /// One of the `Task::TASK_PRIORITY_*` integers; `3` is the normal one.
-    public var priority: Int32 = 0
-    /// How many tries the task has; a negative one is the net core's own count.
-    public var retryCount: Int32 = 0
+    /// One of the `Task::TASK_PRIORITY_*` integers; `3` — the normal one, and
+    /// the one `Task::new` gives — not `0`, which is the highest.
+    public var priority: Int32 = 3
+    /// How many tries the task has: `-1` is the net core's own count, which is
+    /// what `Task::new` gives, and `0` is a task with no try back at all.
+    public var retryCount: Int32 = -1
     /// How long the server is expected to take, which is added to the timeout.
     public var serverProcessCost: Int32 = 0
     /// How long the whole task may take, retries and all.
@@ -199,16 +204,20 @@ private func fill(
     strings: [UnsafePointer<CChar>?],
     hosts: [UnsafePointer<UnsafePointer<CChar>?>?]
 ) {
-    var cursor = 0
+    var string = 0
     func nextString() -> UnsafePointer<CChar>? {
-        let value = strings[cursor]
-        cursor += 1
+        let value = strings[string]
+        string += 1
         return value
     }
 
+    // Its own counter, and not `string`'s: the lists are a second array of
+    // theirs, five long, so a task whose seven strings have been taken reads
+    // past the end of it — `hosts[7]`, of five — before a host is ever lent.
+    var host = 0
     func nextHosts(_ count: Int) -> MarsStnStrings {
-        let value = hosts[cursor]
-        cursor += 1
+        let value = hosts[host]
+        host += 1
         return MarsStnStrings(items: value, count: UInt32(count))
     }
     lent.cgi = nextString()

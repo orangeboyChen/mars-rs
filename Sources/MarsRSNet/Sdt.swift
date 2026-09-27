@@ -115,6 +115,16 @@ public enum MarsSdt {
         public var received: Int32
         /// Whether what came back was the answer to the noop.
         public var isNoopResponse: Bool
+
+        /// The readings of one noop, which is the only way an app answers
+        /// `Result.tcp`: a public struct's memberwise initializer is internal,
+        /// so without this one the case is one an app can read and never
+        /// write.
+        public init(sent: Int32, received: Int32, isNoopResponse: Bool) {
+            self.sent = sent
+            self.received = received
+            self.isNoopResponse = isNoopResponse
+        }
     }
 
     /// What one probe answered. Every case carries the readings a run of that
@@ -240,10 +250,14 @@ public enum MarsSdt {
 
     /// `SdtLogic.reportSignalDetectResults(String)` — the JSON of everything the
     /// checks have reported since the last call, or `nil` when there was nothing
-    /// to take (or the report does not fit, which `reportBufferLimit` bytes
-    /// never happens with).
+    /// to take, or when a report that does not fit `reportBufferLimit` bytes is
+    /// the one the checks produced.
     ///
-    /// Taking it empties it: the next call reports what happened since.
+    /// Taking it empties it: the next call reports what happened since. A report
+    /// that did not fit is not taken — `mars_sdt_take_report` answers
+    /// `MARS_SDT_ERR_NO_SPACE` and keeps the results, which is what lets the
+    /// retry below ask again with a buffer twice the size and get the diagnosis
+    /// instead of an empty one.
     public static func takeReport() -> String? {
         var size = reportBufferSize
         while size <= reportBufferLimit {
@@ -253,7 +267,9 @@ public enum MarsSdt {
                 return String(cString: buffer)
             }
             // The C ABI answers "no room" and not the size it needs, so the only
-            // way to ask for more is to ask again with more.
+            // way to ask for more is to ask again with more. It keeps the
+            // results it could not hand over, so this retry is not one that
+            // takes an empty report.
             if written != MARS_SDT_ERR_NO_SPACE {
                 return nil
             }

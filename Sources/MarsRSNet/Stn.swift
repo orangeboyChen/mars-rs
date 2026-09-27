@@ -175,16 +175,27 @@ public enum MarsStn {
     /// given.
     public static func setApp(_ ask: @escaping (StnQuestion) -> StnAnswer) {
         let app = AppBox(ask)
-        // The box is the context of every question, and this is what keeps it
-        // alive: the C ABI hands the pointer back with a question and never
-        // gives it back, so an app that replaces another one releases it here.
-        installed = app
+        // The box is the context of every question, and `installed` is what
+        // keeps it alive: the C ABI hands the pointer back with a question and
+        // never gives it back.
+        //
+        // The one before it is held until the swap is over, and not released by
+        // the assignment that replaces it: a question can be in flight while
+        // this runs, and the callback rebuilds the box out of the pointer with
+        // `takeUnretainedValue()`, so a box freed before `mars_stn_set_app`
+        // has put the new context in its place is a question that
+        // dereferences a freed one. Both are locals of this call, so the old
+        // box dies here at the earliest — after the swap.
+        let previous = installed
         mars_stn_set_app(Unmanaged.passUnretained(app).toOpaque()) { ctx, question, answer in
             guard let ctx, let question, let answer else {
                 return
             }
             let asked = Unmanaged<AppBox>.fromOpaque(ctx).takeUnretainedValue()
             answer.pointee = asked.answer(to: question.pointee)
+        }
+        withExtendedLifetime(previous) {
+            installed = app
         }
     }
 
