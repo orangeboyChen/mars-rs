@@ -128,6 +128,18 @@ class MarsRsXlogModule(reactContext: ReactApplicationContext) : ReactContextBase
 
         /** What every `promise.reject` answers with. */
         private const val ERROR = "mars_rs_xlog"
+
+        // `libmarsxlog.so` is loaded here and not by `Xlog`: the AAR's class
+        // loads it in `Xlog.open(isLoadLib = true)` and nowhere else, and what
+        // this module bridges is the *instance* API, which never calls `open`
+        // — so on a process that has opened no process-wide appender,
+        // `newXlogInstance` would be the first native call of the process and
+        // would throw `UnsatisfiedLinkError`. Loading a library the process has
+        // already loaded is a no-op, which is what lets the module sit beside
+        // an app that loads the library itself.
+        init {
+            System.loadLibrary("marsxlog")
+        }
     }
 }
 
