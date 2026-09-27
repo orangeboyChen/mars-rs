@@ -2,7 +2,8 @@ name: Release
 
 # One release for every platform:
 #
-#   * MarsRSXlog.xcframework.zip   -> the binary target of Package.swift (SPM)
+#   * MarsRSXlog.xcframework.zip   -> the xlog binary target of Package.swift
+#   * MarsRSNet.xcframework.zip    -> the net one (the diagnosis and the tasks)
 #   * mars-core.aar              -> JitPack: io.github.orangeboyChen:mars-rs
 #   * mars-xlog.aar              -> JitPack: io.github.orangeboyChen:mars-rs-xlog
 #   * mars-android-native.zip    -> the .so files, for a consumer's own AAR
@@ -63,6 +64,9 @@ permissions:
 
 env:
   XCFRAMEWORK_ZIP: MarsRSXlog.xcframework.zip
+  # the same slices over the other feature set: `mars_sdt_*` and `mars_stn_*`
+  # and no `mars_xlog_*`, so an app that takes both links xlog's once
+  XCFRAMEWORK_NET_ZIP: MarsRSNet.xcframework.zip
   NATIVE_ZIP: mars-android-native.zip
   # the whole port, and xlog alone: the pair the C++ project publishes as
   # `mars-core` and `mars-xlog`
@@ -197,7 +201,7 @@ jobs:
           # A release that is missing an asset stays repairable, though, so
           # "complete" means every one of them.
           SKIP=false
-          ASSETS="$XCFRAMEWORK_ZIP $NATIVE_ZIP $CORE_AAR $XLOG_AAR"
+          ASSETS="$XCFRAMEWORK_ZIP $XCFRAMEWORK_NET_ZIP $NATIVE_ZIP $CORE_AAR $XLOG_AAR"
           # one archive per host of the matrix below, in the shape that host
           # packages it in
           for HOST in x86_64-unknown-linux-gnu:tar.gz aarch64-apple-darwin:tar.gz \
@@ -245,12 +249,14 @@ jobs:
           swift --version 2>/dev/null | head -2
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build the xcframework
+      - name: Build the xcframeworks
         run: scripts/build_xcframework.sh "${{ needs.version.outputs.version }}" dist
       - uses: actions/upload-artifact@v4
         with:
           name: release-apple
-          path: dist/${{ env.XCFRAMEWORK_ZIP }}
+          path: |
+            dist/${{ env.XCFRAMEWORK_ZIP }}
+            dist/${{ env.XCFRAMEWORK_NET_ZIP }}
 
   android:
     needs: version
@@ -393,11 +399,14 @@ jobs:
           merge-multiple: true
           path: dist
 
-      - name: Compute the SPM checksum
+      - name: Compute the SPM checksums
         id: checksum
         run: |
-          CHECKSUM=$(swift package compute-checksum "dist/$XCFRAMEWORK_ZIP")
-          echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          # one per binary target of Package.swift: an artifact is bound to the
+          # checksum of the zip it was published as
+          echo "xlog=$(swift package compute-checksum "dist/$XCFRAMEWORK_ZIP")" >> "$GITHUB_OUTPUT"
+          echo "net=$(swift package compute-checksum "dist/$XCFRAMEWORK_NET_ZIP")" >> "$GITHUB_OUTPUT"
 
       - name: Point Package.swift at this release
         if: needs.version.outputs.is_new == 'true'
@@ -405,7 +414,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.version.outputs.tag }}
-          CHECKSUM: ${{ steps.checksum.outputs.checksum }}
+          CHECKSUM: ${{ steps.checksum.outputs.xlog }}
+          CHECKSUM_NET: ${{ steps.checksum.outputs.net }}
         run: |
           set -euo pipefail
           BRANCH="chore/package-swift-$TAG"
@@ -414,17 +424,37 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$BRANCH"
 
-          # All three of them are the release's, including the name of the
-          # asset: an artifact is named after what it holds, and what it holds
-          # can change — the framework is xlog's, and stays xlog's until
-          # `Stn.swift` and `Sdt.swift` give `MarsRS` one of its own.
-          python3 - "$TAG" "$CHECKSUM" "$XCFRAMEWORK_ZIP" <<'PY'
+          # One url and one checksum per artifact: two binary targets, and a
+          # checksum is bound to the zip it was computed from, so the xlog
+          # framework's is not the net one's. The asset each target names is
+          # matched by the module, which is what does not change when a release
+          # renames what it publishes.
+          python3 - "$TAG" "$CHECKSUM" "$XCFRAMEWORK_ZIP" \
+                     "$CHECKSUM_NET" "$XCFRAMEWORK_NET_ZIP" <<'PY'
           import re, sys
-          tag, checksum, asset = sys.argv[1], sys.argv[2], sys.argv[3]
+
+          tag = sys.argv[1]
+          targets = (
+              ("MarsRSFFI", sys.argv[3], sys.argv[2]),
+              ("MarsRSNetFFI", sys.argv[5], sys.argv[4]),
+          )
+
           src = open('Package.swift').read()
-          src = re.sub(r'releases/download/[^/]+/[^"]+\.zip',
-                       'releases/download/%s/%s' % (tag, asset), src)
-          src = re.sub(r'checksum: "[a-f0-9]+"', 'checksum: "%s"' % checksum, src)
+          for module, asset, checksum in targets:
+              url = 'https://github.com/orangeboyChen/mars-rs/releases/download/%s/%s' % (tag, asset)
+              pattern = re.compile(
+                  r'(name: "%s",)(\s*url: ")[^"]*(",\s*checksum: ")[0-9a-f]+(")' % module
+              )
+              def replacement(matched, url=url, checksum=checksum):
+                  return matched.group(1) + matched.group(2) + url \
+                      + matched.group(3) + checksum + matched.group(4)
+
+              src, count = pattern.subn(replacement, src)
+              if count != 1:
+                  raise SystemExit(
+                      "Package.swift: expected one binary target named %s, found %d"
+                      % (module, count)
+                  )
           open('Package.swift', 'w').write(src)
           PY
 
@@ -443,8 +473,8 @@ jobs:
           | | |
           |---|---|
           | tag | \`$TAG\` |
-          | SPM checksum | \`$CHECKSUM\` |
-          | binary | \`$XCFRAMEWORK_ZIP\` |
+          | $XCFRAMEWORK_ZIP | \`$CHECKSUM\` |
+          | $XCFRAMEWORK_NET_ZIP | \`$CHECKSUM_NET\` |
 
           The release and the \`$TAG\` tag are published from this branch, so SPM
           resolves the new \`Package.swift\` from the tag. Merging only keeps
@@ -607,7 +637,10 @@ jobs:
             echo ".package(url: \"https://github.com/orangeboyChen/mars-rs\", from: \"${TAG#v}\")"
             echo '```'
             echo ""
-            echo "SPM checksum: \`${{ steps.checksum.outputs.checksum }}\`"
+            # one per binary target: the checksum a consumer's `swift package
+            # resolve` checks is the one of the zip it downloads
+            echo "SPM checksum, $XCFRAMEWORK_ZIP: \`${{ steps.checksum.outputs.xlog }}\`"
+            echo "SPM checksum, $XCFRAMEWORK_NET_ZIP: \`${{ steps.checksum.outputs.net }}\`"
             echo ""
             echo "Package.swift PR: ${{ steps.package.outputs.pr || 'not needed, the tag exists already' }}"
             echo ""
