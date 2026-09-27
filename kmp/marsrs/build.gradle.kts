@@ -1,5 +1,5 @@
 // The Kotlin Multiplatform module of the whole port: `marsrs-kmp`, the pair
-// `marsrs-xlog-kmp` is the logging half of, the way the two crates on crates.io
+// `xlog-kmp` is the logging half of, the way the two crates on crates.io
 // are a pair, `mars-core` and `mars-xlog` are the C++ project's, and `MarsRS`
 // and `MarsRSXlog` are the pair `Package.swift` exposes.
 //
@@ -24,7 +24,7 @@ plugins {
     id("maven-publish")
 }
 
-val publishedGroup: String = (findProperty("publishedGroup") as String?) ?: "io.github.orangeboychen"
+val publishedGroup: String = (findProperty("publishedGroup") as String?) ?: "io.github.orangeboychen.marsrs"
 val publishedArtifact: String = (findProperty("publishedArtifact") as String?) ?: "marsrs-kmp"
 val publishedVersion: String = (findProperty("publishedVersion") as String?) ?: "0.0.0"
 

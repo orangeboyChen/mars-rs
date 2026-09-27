@@ -4,19 +4,21 @@ name: Release
 #
 #   * MarsRSXlog.xcframework.zip   -> the xlog binary target of Package.swift
 #   * MarsRSNet.xcframework.zip    -> the net one (the diagnosis and the tasks)
-#   * marsrs.aar                 -> JitPack: io.github.orangeboychen:marsrs
-#   * marsrs-xlog.aar            -> JitPack: io.github.orangeboychen:marsrs-xlog
+#   * marsrs.aar                 -> JitPack: io.github.orangeboychen.marsrs:marsrs
+#   * xlog.aar                   -> JitPack: io.github.orangeboychen.marsrs:xlog
 #   * marsrs-android-native.zip  -> the .so files, for a consumer's own AAR
 #   * marsrs-<version>-<host>.tar.gz / .zip -> the C ABI for Linux/macOS/Windows
 #   * marsrs-kmp-native.zip  -> the archives the Kotlin module is built out of
 #   * marsrs-kmp-maven.zip   -> the Kotlin module itself, as a maven repository
 #   * crates.io: `marsrs` and `marsrs-xlog`, at the version of the tag
 #
-# Everything this port packages itself is `marsrs`, the way the crates are: the
-# two AARs, the archives a consumer downloads and the coordinates they are
-# published under. `mars-core` and `mars-xlog` are the C++ project's pair, and
-# nothing of this port's own borrows either — least of all `core`, which here is
-# the name of a crate no package is published under.
+# Everything this port packages itself is named `marsrs`, the way the crates
+# are: the two AARs, the archives a consumer downloads, and the group of the
+# coordinates — `io.github.orangeboychen.marsrs`, the port — under which the
+# artifact is the piece of it: `marsrs` for the whole port, `xlog` for the
+# logging half. `mars-core` and `mars-xlog` are the C++ project's pair, and
+# nothing of this port's own borrows either — least of all `core`, which here
+# is the name of a crate no package is published under.
 #
 # The steps that outgrew a `run:` block are `.github/scripts/`: no one runs them
 # by hand, and they are of a piece with the workflows that call them. `scripts/`
@@ -120,18 +122,18 @@ env:
   # the whole port, and xlog alone: the pair the crates on crates.io are, and
   # the pair the C++ project publishes as `mars-core` and `mars-xlog`
   MARSRS_AAR: marsrs.aar
-  MARSRS_XLOG_AAR: marsrs-xlog.aar
+  MARSRS_XLOG_AAR: xlog.aar
   # What JitPack publishes the two AARs as; see jitpack.yml. JitPack serves a
   # repository under com.github.<owner>.<repo> whatever the pom's group is, so
   # the build is asked for under both spellings.
-  JITPACK_GROUP: io.github.orangeboychen
+  JITPACK_GROUP: io.github.orangeboychen.marsrs
   JITPACK_ARTIFACT: marsrs
-  JITPACK_ARTIFACT_XLOG: marsrs-xlog
+  JITPACK_ARTIFACT_XLOG: xlog
   # The Kotlin Multiplatform pair, published to GitHub Packages under the same
   # group: the whole port and xlog alone, the same two.
-  KMP_GROUP: io.github.orangeboychen
+  KMP_GROUP: io.github.orangeboychen.marsrs
   KMP_ARTIFACT: marsrs-kmp
-  KMP_ARTIFACT_XLOG: marsrs-xlog-kmp
+  KMP_ARTIFACT_XLOG: xlog-kmp
   NDK_VERSION: 27.1.12297006
   ANDROID_HOME: /usr/local/lib/android/sdk
   ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
@@ -388,12 +390,12 @@ jobs:
         # runner that can execute a mingw binary here.
         run: (cd kmp && ./gradlew --no-daemon :marsrs-xlog:linuxX64Test)
 
-  # The Kotlin Multiplatform release: `marsrs-kmp` and `marsrs-xlog-kmp` as a
+  # The Kotlin Multiplatform release: `marsrs-kmp` and `xlog-kmp` as a
   # maven repository, on GitHub Packages and, as a zip, on the release.
   #
   # One job on macOS and not one per target, because a Kotlin Multiplatform
   # publication is one artifact per target of one module: the module metadata of
-  # `marsrs-xlog-kmp` names all fourteen of them, so a publication that left
+  # `xlog-kmp` names all fourteen of them, so a publication that left
   # one out is a publication Gradle cannot resolve for the platform it forgot.
   # macOS is where all fourteen can be built, and it is the only place an Apple
   # one can.
@@ -470,7 +472,7 @@ jobs:
         # Zipped from the root of the repository and not from the group's
         # directory: a consumer points `maven { url = uri("<dir>") }` at
         # whatever this unpacks to, and Gradle looks for
-        # `io/github/orangeboychen/<artifact>` under it — an archive that starts
+        # `io/github/orangeboychen/marsrs/<artifact>` under it — an archive that
         # at the artifact is a repository of no coordinates at all.
         run: |
           set -euo pipefail
@@ -480,8 +482,8 @@ jobs:
           # the layout is the whole point of the step, so it is checked here and
           # not by whoever unpacks the zip a month from now
           for ARTIFACT in "$KMP_ARTIFACT" "$KMP_ARTIFACT_XLOG"; do
-            unzip -l "$ZIP" | grep -q "io/github/orangeboychen/$ARTIFACT/" \
-              || { echo "::error::$ZIP holds no io/github/orangeboychen/$ARTIFACT"; exit 1; }
+            unzip -l "$ZIP" | grep -q "io/github/orangeboychen/marsrs/$ARTIFACT/" \
+              || { echo "::error::$ZIP holds no io/github/orangeboychen/marsrs/$ARTIFACT"; exit 1; }
           done
       - name: Package the native archives
         run: (cd kmp/native && zip -q -r "$GITHUB_WORKSPACE/dist/$KMP_NATIVE_ZIP" .)

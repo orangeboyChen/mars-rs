@@ -25,7 +25,7 @@ kotlin {
     }
 }
 
-val publishedGroup: String = (findProperty("publishedGroup") as String?) ?: "io.github.orangeboychen"
+val publishedGroup: String = (findProperty("publishedGroup") as String?) ?: "io.github.orangeboychen.marsrs"
 val publishedArtifact: String = (findProperty("publishedArtifact") as String?) ?: "marsrs"
 val publishedVersion: String = (findProperty("publishedVersion") as String?) ?: "0.0.0"
 

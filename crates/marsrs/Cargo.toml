@@ -22,7 +22,7 @@ marsrs-xlog = { workspace = true, optional = true }
 
 # The C++ project publishes `mars-core` (everything) and `mars-xlog` (the
 # logger alone) as two artifacts, and this port does the same for Swift
-# (`MarsRS` / `MarsRSXlog`) and for Kotlin (`marsrs.aar` / `marsrs-xlog.aar`).
+# (`MarsRS` / `MarsRSXlog`) and for Kotlin (`marsrs.aar` / `xlog.aar`).
 # Here the pair is these two crates: this one is the whole port, and an app
 # that only logs takes `marsrs-xlog` and carries none of STN's or SDT's bytes.
 #

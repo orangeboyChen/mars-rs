@@ -380,19 +380,20 @@ are, and the pair the C++ project publishes as `mars-core` and `mars-xlog`:
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen:marsrs:0.1.0")       // the whole port
-implementation("io.github.orangeboychen:marsrs-xlog:0.1.0")  // xlog alone
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")  // the whole port
+implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")    // xlog alone
 ```
 
 | AAR | artifact | what is in it |
 |---|---|---|
 | `marsrs.aar` | `marsrs` | every Kotlin class whose natives `marsrs-jni` exports — `xlog`, `stn`, `sdt`, `app`, `comm` and `BaseEvent`/`Mars` — plus `libmarsrsxlog.so` for `arm64-v8a`, `armeabi-v7a` and `x86_64` |
-| `marsrs-xlog.aar` | `marsrs-xlog` | `xlog.Xlog` — with `XlogConfig`, `LogLevel`, `AppenderMode` and `CompressMode` — and the `xlog.Log` facade over it, plus the same `libmarsrsxlog.so` |
+| `xlog.aar` | `xlog` | `xlog.Xlog` — with `XlogConfig`, `LogLevel`, `AppenderMode` and `CompressMode` — and the `xlog.Log` facade over it, plus the same `libmarsrsxlog.so` |
 
-Take `marsrs` when you want STN or SDT, `marsrs-xlog` when the app only logs;
+Take `marsrs` when you want STN or SDT, `xlog` when the app only logs;
 both carry the whole library, because there is one `.so` and it is not split.
-The Kotlin and Java package is `io.github.orangeboychen.marsrs`, the package
-whose natives `marsrs-jni` exports, so the two are renamed together. The AAR's face
+The group is the Kotlin and Java package, `io.github.orangeboychen.marsrs` —
+the package whose natives `marsrs-jni` exports, so the two are renamed together —
+and the artifact under it is the piece of the port you take. The AAR's face
 is Kotlin — `Xlog`, `Log`, `StnLogic`, `SdtLogic` and the rest — written so that
 an app in Java sees the same statics the C++ project's Java had. A repository is also
 reachable on JitPack as `com.github.<owner>.<repo>`, which is the spelling its
@@ -417,14 +418,14 @@ maven {
 }
 
 // build.gradle.kts of the shared module
-implementation("io.github.orangeboychen:marsrs-kmp:0.1.0")       // the whole port
-implementation("io.github.orangeboychen:marsrs-xlog-kmp:0.1.0")  // xlog alone
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")  // the whole port
+implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")    // xlog alone
 ```
 
 | artifact | what is in it |
 |---|---|
-| `marsrs-kmp` | `marsrs-xlog-kmp`, re-exported — the pair `marsrs`/`marsrs-xlog` are on Android and `MarsRS`/`MarsRSXlog` are in Swift. Its own declarations are six `typealias`es under `io.github.orangeboychen.marsrs`, one per name below: `mars-ffi` is an xlog C ABI today, so the whole port and its logging half are the same module. Taking this coordinate is what lets STN and SDT arrive without a rename. |
-| `marsrs-xlog-kmp` | `Xlog`, `XlogConfig`, `LogLevel` and the `Log` facade, over the JNI bridge on Android and over the C ABI of `mars-ffi` everywhere else |
+| `marsrs-kmp` | `xlog-kmp`, re-exported — the pair `marsrs`/`xlog` are on Android and `MarsRS`/`MarsRSXlog` are in Swift. Its own declarations are six `typealias`es under `io.github.orangeboychen.marsrs`, one per name below: `mars-ffi` is an xlog C ABI today, so the whole port and its logging half are the same module. Taking this coordinate is what lets STN and SDT arrive without a rename. |
+| `xlog-kmp` | `Xlog`, `XlogConfig`, `LogLevel` and the `Log` facade, over the JNI bridge on Android and over the C ABI of `mars-ffi` everywhere else |
 
 Fourteen targets: Android — the AAR carries `libmarsrsxlog.so` for `arm64-v8a`,
 `armeabi-v7a` and `x86_64` — plus `iosArm64`, `iosX64`, `iosSimulatorArm64`,

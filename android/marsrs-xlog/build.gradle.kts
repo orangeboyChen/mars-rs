@@ -1,7 +1,9 @@
 // The xlog-only Android AAR of mars-rs: `libmarsrsxlog.so` (crate `marsrs-jni`)
 // for every ABI, plus the two Kotlin classes of the logging half — `Xlog` and
 // the `Log` facade over it. The whole port is the `marsrs` module; this is the
-// package for an app that only logs, the way `marsrs-xlog` on crates.io is.
+// package for an app that only logs, the way `marsrs-xlog` on crates.io is. It
+// is published as `io.github.orangeboychen.marsrs:xlog` — the group is the
+// port, the artifact the piece of it.
 //
 // Its xlog sources are byte-for-byte `marsrs`'s — the same xlog API over the
 // same `.so`, with the rest of the port left out — so a change to one belongs in
@@ -29,8 +31,8 @@ kotlin {
     }
 }
 
-val publishedGroup: String = (findProperty("publishedGroup") as String?) ?: "io.github.orangeboychen"
-val publishedArtifact: String = (findProperty("publishedArtifact") as String?) ?: "marsrs-xlog"
+val publishedGroup: String = (findProperty("publishedGroup") as String?) ?: "io.github.orangeboychen.marsrs"
+val publishedArtifact: String = (findProperty("publishedArtifact") as String?) ?: "xlog"
 val publishedVersion: String = (findProperty("publishedVersion") as String?) ?: "0.0.0"
 
 android {
@@ -81,7 +83,7 @@ publishing {
 
             pom {
                 packaging = "aar"
-                name.set("marsrs-xlog")
+                name.set("xlog")
                 description.set("Android AAR of the Rust port of Tencent/mars: xlog")
                 url.set("https://github.com/orangeboyChen/mars-rs")
                 licenses {

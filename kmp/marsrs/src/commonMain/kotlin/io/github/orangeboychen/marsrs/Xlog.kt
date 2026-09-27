@@ -3,11 +3,11 @@ package io.github.orangeboychen.marsrs
 /**
  * The surface of the whole port, under the package of the whole port: the names
  * an app that depends on `marsrs-kmp` writes, as opposed to the ones an app
- * that depends on `marsrs-xlog-kmp` writes.
+ * that depends on `xlog-kmp` writes.
  *
  * Every one of them is xlog's today, and each is a `typealias` rather than a
  * second declaration, because `mars-ffi` is an xlog C ABI: xlog is all a
- * Kotlin/Native target can reach, so `marsrs-kmp` is `marsrs-xlog-kmp` under
+ * Kotlin/Native target can reach, so `marsrs-kmp` is `xlog-kmp` under
  * another name and no more. When STN and SDT join the C ABI, their Kotlin is
  * declared here beside these — and an app that took `marsrs-kmp` picks it up
  * without a rename, which is the only reason this module exists.

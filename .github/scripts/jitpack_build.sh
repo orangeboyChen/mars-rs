@@ -10,7 +10,7 @@
 #   TAG                    the tag the release was published as
 #   JITPACK_GROUP          the group the AARs are published under
 #   JITPACK_ARTIFACT       marsrs
-#   JITPACK_ARTIFACT_XLOG  marsrs-xlog
+#   JITPACK_ARTIFACT_XLOG  xlog
 
 set -euo pipefail
 
