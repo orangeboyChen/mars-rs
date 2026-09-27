@@ -64,8 +64,8 @@ let package = Package(
         // `mars_xlog.h` and the module map that names it `MarsRSFFI`.
         .binaryTarget(
             name: "MarsRSFFI",
-            url: "https://github.com/orangeboyChen/mars-rs/releases/download/v0.1.0-alpha.1/MarsRS.xcframework.zip",
-            checksum: "428d086936c04d3ca024ee7dc5b2387d80f5e3b27db5996f80bc97d58f4c4228"
+            url: "https://github.com/orangeboyChen/mars-rs/releases/download/v0.1.0-alpha.2/MarsRS.xcframework.zip",
+            checksum: "076428c37d9532449048eddac02a69b0a0d7a227a7874ca22d981fd5622afa37"
         ),
         // A thin Swift face of the C ABI: a binary target is a module of C
         // symbols only, so this is where the strings and the enums of
