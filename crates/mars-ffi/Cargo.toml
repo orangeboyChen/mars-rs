@@ -18,6 +18,16 @@ mars-appender = { workspace = true }
 # Only needed for `CompressMode`, which `XLogConfig` stores by value.
 mars-buffer = { workspace = true }
 
+# What the C ABI carries, named: the Apple artifact is built `--no-default-features
+# --features xlog`, so it is xlog by construction and not by the accident of what
+# this crate happens to hold today. When STN and SDT get entry points of their
+# own they go behind features of their own, and the xlog build — which spells its
+# set out and never inherits `default` — keeps carrying xlog alone, which is what
+# lets an app that only logs stay off their bytes.
+[features]
+default = ["xlog"]
+xlog = []
+
 [dev-dependencies]
 tempfile = { workspace = true }
 # Used by `tests/ffi_smoke.rs` to inflate the (always compressed) .xlog records.

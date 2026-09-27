@@ -265,9 +265,13 @@ Android build has an `--xlog-only` mode for the same reason — and it is why th
 artifact is named after xlog here and not after the port: `Stn.swift` and
 `Sdt.swift` land in `MarsRS` with a framework of their own, and an app that only
 logs keeps downloading this one. `scripts/build_xcframework.sh` already builds
-`MarsRSXlog.xcframework.zip` under that name, and it fails if a slice ever
-exports anything of the port's beyond `mars_xlog_*`, so the name stays a checked
-promise; `Package.swift` follows at the release that publishes it, which is also
+`MarsRSXlog.xcframework.zip` under that name, and it does not take the crate's
+word for what is in it: it builds `-p mars-ffi --no-default-features --features
+xlog`, so the artifact is the xlog feature set and not whatever the crate
+carries by default — STN and SDT reach the C ABI behind features of their own,
+and a set that is spelled out does not inherit them — and then it fails if a
+slice still exports anything of the port's beyond `mars_xlog_*`, so the name
+stays a checked promise; `Package.swift` follows at the release that publishes it, which is also
 when the C module takes the name — a module is what a consumer imports, so it
 cannot be renamed under one. The tag and the SPM checksum are written into
 `Package.swift` by the release workflow on a `chore/package-swift-<tag>` branch,
