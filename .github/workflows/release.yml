@@ -9,6 +9,11 @@ name: Release
 #   * mars-android-native.zip    -> the .so files, for a consumer's own AAR
 #   * mars-rs-<version>-<host>.tar.gz / .zip -> the C ABI for Linux/macOS/Windows
 #
+# The steps that outgrew a `run:` block are `.github/scripts/`: no one runs them
+# by hand, and they are of a piece with the workflows that call them. `scripts/`
+# keeps what a developer runs to build a package — README's "Building the
+# packages" is those two.
+#
 # Trigger it by hand (Actions -> Release -> Run workflow):
 #
 #   * version: the version, typed out — "1.2.3", "v1.2.3-alpha.1", "0.2.0-beta.2"
@@ -120,10 +125,10 @@ jobs:
           INPUT_BUMP: ${{ inputs.bump }}
           INPUT_CHANNEL: ${{ inputs.channel }}
           INPUT_PRERELEASE: ${{ inputs.prerelease }}
-        # The arithmetic of it is scripts/release_version.sh, which is the one
+        # The arithmetic of it is .github/scripts/release_version.sh, which is the one
         # thing here worth running on its own: `git ls-remote` and
         # `gh release view` are all it needs, and both can be stubbed.
-        run: scripts/release_version.sh
+        run: .github/scripts/release_version.sh
 
   apple:
     needs: version
@@ -161,9 +166,9 @@ jobs:
           java-version: '17'
       # The NDK, and the SDK platform and the build tools the AAR is assembled
       # with. `android-actions/setup-android` is deliberately not used, and why
-      # is written down in scripts/install_android_ndk.sh.
+      # is written down in .github/scripts/install_android_ndk.sh.
       - name: Install the Android SDK components
-        run: scripts/install_android_ndk.sh "platforms;android-34" "build-tools;34.0.0"
+        run: .github/scripts/install_android_ndk.sh "platforms;android-34" "build-tools;34.0.0"
       - uses: Swatinem/rust-cache@v2
       - name: Build the native libraries
         # `RUSTFLAGS` is not exported here on purpose: an exported one replaces
@@ -297,8 +302,8 @@ jobs:
           git switch -c "$BRANCH"
 
           # One url and one checksum per artifact; the rewrite is
-          # scripts/update_package_swift.py.
-          python3 scripts/update_package_swift.py "$TAG" "$CHECKSUM" "$XCFRAMEWORK_ZIP" \
+          # .github/scripts/update_package_swift.py.
+          python3 .github/scripts/update_package_swift.py "$TAG" "$CHECKSUM" "$XCFRAMEWORK_ZIP" \
                      "$CHECKSUM_NET" "$XCFRAMEWORK_NET_ZIP"
 
           git commit -am "chore: point Package.swift at $TAG"
@@ -383,11 +388,11 @@ jobs:
 
       - name: Trigger the JitPack build
         # JitPack builds lazily, so nothing would publish the AAR until a
-        # consumer asks for it. scripts/jitpack_build.sh kicks the build off
+        # consumer asks for it. .github/scripts/jitpack_build.sh kicks the build off
         # once the release assets are online and waits for the answer.
         env:
           TAG: ${{ needs.version.outputs.tag }}
-        run: scripts/jitpack_build.sh
+        run: .github/scripts/jitpack_build.sh
 
       - name: Summary
         env:

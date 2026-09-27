@@ -5,7 +5,7 @@
 # lifted out of the YAML so that it can be read — and run — on its own:
 #
 #   INPUT_BUMP=patch INPUT_CHANNEL=alpha GITHUB_OUTPUT=/dev/null \
-#     scripts/release_version.sh
+#     .github/scripts/release_version.sh
 #
 # with `git` and `gh` on $PATH pointing at a stubbed origin if the answer is
 # wanted without a network.

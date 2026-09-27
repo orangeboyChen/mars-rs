@@ -123,12 +123,12 @@ jobs:
           # both ABIs, in one job: see the comment on the build step
           targets: aarch64-linux-android, armv7-linux-androideabi
       # `android-actions/setup-android` is intentionally not used, and why is
-      # written down in scripts/install_android_ndk.sh: it installs the
+      # written down in .github/scripts/install_android_ndk.sh: it installs the
       # long-removed `tools` SDK package, so its `sdkmanager` call exits
       # non-zero and the job fails before any Rust code is compiled. The SDK
       # (and its `sdkmanager`) that the runner image already provides is enough.
       - name: Install the Android NDK
-        run: scripts/install_android_ndk.sh
+        run: .github/scripts/install_android_ndk.sh
       - uses: Swatinem/rust-cache@v2
       # `zstd-sys` compiles C, so both cc-rs and rustc need the NDK clang. The
       # two of them spell the env var prefixes differently, so the names are

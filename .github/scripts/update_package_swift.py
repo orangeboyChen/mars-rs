@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Point the two binary targets of Package.swift at one release.
 
-    scripts/update_package_swift.py <tag> <checksum> <asset> \
+    .github/scripts/update_package_swift.py <tag> <checksum> <asset> \
                                     <checksum-net> <asset-net>
 
 One url and one checksum per artifact: two binary targets, and a checksum is

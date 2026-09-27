@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install the Android NDK a `cargo build --target <android triple>` needs.
 #
-#   scripts/install_android_ndk.sh ["platforms;android-34" ...]
+#   .github/scripts/install_android_ndk.sh ["platforms;android-34" ...]
 #
 # Every package named on the command line is installed next to the NDK: the
 # cross build of the .so wants nothing but the NDK, while the release's AAR

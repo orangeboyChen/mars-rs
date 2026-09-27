@@ -435,6 +435,10 @@ scripts/build_android.sh dist/native      # <abi>/libmarsxlog.so
 (cd android && ./gradlew :mars-core:assembleRelease :mars-xlog:assembleRelease)
 ```
 
+The scripts that only a workflow runs — resolving the version, installing the
+NDK on a runner, waiting for JitPack, rewriting `Package.swift` — are in
+`.github/scripts/`.
+
 ## License
 
 MIT, like the upstream project — see [LICENSE](LICENSE).
