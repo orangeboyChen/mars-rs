@@ -1,23 +1,21 @@
-# Getting started
+# 快速开始
 
-Three steps on every platform: **open** an appender once when the process or the
-app starts, **write** records through it, and **flush** before you read or upload
-its files.
+每个平台都是三步：进程或 App 启动时**打开**一个 appender，往里**写**记录，读文件或上传前**flush**。
 
-## 1. Add the dependency
+## 1. 加依赖
 
 ::: code-group
 
 ```bash [Rust]
-cargo add marsrs          # the whole port: xlog, stn and sdt
-cargo add marsrs-xlog     # xlog alone — the logger and nothing else
+cargo add marsrs          # 整个端口：xlog、stn、sdt
+cargo add marsrs-xlog     # 只有 xlog —— 日志，别的都没有
 ```
 
 ```swift [SwiftPM]
 // Package.swift
 .package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
 
-// and, in the target that takes it:
+// 在要用的 target 里：
 .product(name: "MarsRSXlog", package: "mars-rs")
 ```
 
@@ -26,26 +24,26 @@ cargo add marsrs-xlog     # xlog alone — the logger and nothing else
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen:mars-rs-xlog:0.1.0")  // xlog alone
+implementation("io.github.orangeboychen:mars-rs-xlog:0.1.0")  // 只有 xlog
 ```
 
 ```kotlin [Kotlin Multiplatform]
-// build.gradle.kts of the shared module
+// 共享模块的 build.gradle.kts
 implementation("io.github.orangeboychen:mars-rs-xlog-kmp:0.1.0")
 ```
 
 ```text [C]
-mars-rs-<version>-<host>.tar.gz   (Linux, macOS)
-mars-rs-<version>-<host>.zip      (Windows)
+mars-rs-<version>-<host>.tar.gz   （Linux、macOS）
+mars-rs-<version>-<host>.zip      （Windows）
     include/mars_xlog.h
     include/mars_sdt.h
     include/mars_stn.h
-    the static and shared libraries of marsrs-ffi
+    marsrs-ffi 的静态库和动态库
 ```
 
 :::
 
-## 2. Open, write, flush
+## 2. 打开、写、flush
 
 ::: code-group
 
@@ -59,7 +57,7 @@ appender_open(config)?;
 
 appender_write(None, "hello from mars");
 
-appender_flush_sync();   // the records are on disk when this returns
+appender_flush_sync();   // 返回时记录已经在磁盘上了
 appender_close();
 ```
 
@@ -77,7 +75,7 @@ log.isConsoleLogEnabled = true
 
 log.info(message: "hello from mars", tag: "startup")
 
-log.flush(sync: true)    // the records are on disk when this returns
+log.flush(sync: true)    // 返回时记录已经在磁盘上了
 ```
 
 ```kotlin [Android]
@@ -92,7 +90,7 @@ xlog.consoleLogEnabled = BuildConfig.DEBUG
 
 xlog.i("startup", "hello from mars")
 
-xlog.flush(sync = true)  // the records are on disk when this returns
+xlog.flush(sync = true)  // 返回时记录已经在磁盘上了
 ```
 
 ```kotlin [Kotlin Multiplatform]
@@ -106,7 +104,7 @@ Xlog.open(
 
 Xlog.write(LogLevel.Info, "startup", "hello from mars")
 
-Xlog.flush(sync = true)  // the records are on disk when this returns
+Xlog.flush(sync = true)  // 返回时记录已经在磁盘上了
 Xlog.close()
 ```
 
@@ -119,27 +117,24 @@ MarsXLogConfig config = {
     .name_prefix = "Ham",
     .compress_mode = MarsCompressZlib,
 };
-if (mars_xlog_open(&config) != MARS_XLOG_OK) { /* see the return code */ }
+if (mars_xlog_open(&config) != MARS_XLOG_OK) { /* 看返回码 */ }
 
 mars_xlog_write(MarsLevelInfo, "startup", __FILE__, __func__, __LINE__, "hello from mars");
 
-mars_xlog_flush_sync();  /* the records are on disk when this returns */
+mars_xlog_flush_sync();  // 返回时记录已经在磁盘上了
 mars_xlog_close();
 ```
 
 :::
 
-## 3. Find the files
+## 3. 文件在哪
 
-An appender writes `<namePrefix>_YYYYMMDD.xlog` into the log directory you gave
-it — `/tmp/mars-log/Ham_20260927.xlog` above. The default mode is async, so a
-record can sit in the cache for a moment: **flush before you read or upload**, and
-again before the process goes away. See [log files](/log-files).
+appender 把日志写进你给的那个目录，名字是 `<namePrefix>_YYYYMMDD.xlog` —— 上面就是
+`/tmp/mars-log/Ham_20260927.xlog`。默认模式是异步，一条记录可能在缓存里待一会儿：
+**读文件、上传、以及进程退出前都要 flush**。见[日志文件](/zh/log-files)。
 
-## Where to go next
+## 接下来
 
-- [Configuration](/configuration) — every option and its default.
-- [Log files](/log-files) — where they are, what they are called, how to read
-  them back.
-- The page of [your platform](/platforms/rust) — the full API, the levels and
-  the modes, and what else the package carries.
+- [配置项](/zh/configuration) —— 每个配置项和它的默认值。
+- [日志文件](/zh/log-files) —— 在哪、叫什么、怎么读回来。
+- [你那个平台](/zh/platforms/rust)的页面 —— 完整 API、级别与模式、包里还有什么。

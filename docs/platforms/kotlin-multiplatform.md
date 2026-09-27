@@ -1,8 +1,9 @@
 # Kotlin Multiplatform
 
 One dependency in `commonMain`, and each platform compiles its own half of it:
-the `androidMain` of the module talks to the JNI bridge of `marsrs-jni`, the
-`nativeMain` of it talks to the C ABI of `marsrs-ffi` through cinterop.
+`androidMain` talks to the JNI bridge, `nativeMain` talks to the C ABI through
+cinterop — so the same calls in shared code write the same `.xlog` on Android,
+iOS, watchOS, tvOS, macOS, Linux and Windows.
 
 ```kotlin
 // settings.gradle.kts
@@ -12,32 +13,85 @@ maven {
 }
 
 // build.gradle.kts of the shared module
-implementation("io.github.orangeboychen:mars-rs-kmp:0.1.0")       // the whole port
 implementation("io.github.orangeboychen:mars-rs-xlog-kmp:0.1.0")  // xlog alone
+implementation("io.github.orangeboychen:mars-rs-kmp:0.1.0")       // the whole port
 ```
 
-| artifact | what is in it |
-|---|---|
-| `mars-rs-kmp` | `mars-rs-xlog-kmp`, re-exported — the pair `mars-rs`/`mars-rs-xlog` are on Android and `marsrs`/`marsrs-xlog` are in Swift. Its own declarations are six `typealias`es under `io.github.orangeboychen.marsrs`, one per name below: `marsrs-ffi` is an xlog C ABI today, so the whole port and its logging half are the same module. Taking this coordinate is what lets STN and SDT arrive without a rename. |
-| `mars-rs-xlog-kmp` | `Xlog`, `XlogConfig`, `LogLevel` and the `Log` facade, over the JNI bridge on Android and over the C ABI of `marsrs-ffi` everywhere else |
-
-Fourteen targets: Android — the AAR carries `libmarsxlog.so` for `arm64-v8a`,
-`armeabi-v7a` and `x86_64` — plus `iosArm64`, `iosX64`, `iosSimulatorArm64`,
-`macosX64`, `macosArm64`, `watchosArm64`, `watchosDeviceArm64`,
-`watchosSimulatorArm64`, `tvosArm64`, `tvosSimulatorArm64`, `linuxX64`,
-`linuxArm64` and `mingwX64`. The two Kotlin targets missing from the list are
-the x86_64 simulators, `watchosX64` and `tvosX64`, and both are missing because
-Rust has no triple for them: `x86_64-apple-watchos-sim` and `x86_64-apple-tvos`
-are not targets `rustup` knows.
-
-Nothing is compiled from Rust when the Kotlin module is built. Neither a
-consumer nor a CI host has the toolchain for thirteen triples, and an Apple
-archive cannot be cross-compiled from Linux at all — so the release builds them
-(`scripts/build_kmp_native.sh`) and publishes `mars-kmp-native.zip`, one
-`libmars_ffi.a` per Kotlin target plus the `.so` files of the JNI bridge, and
-`mars-kmp-maven.zip`, which is the repository itself. An app that would rather
-not authenticate to GitHub Packages takes the second: unzip it and add
+An app that would rather not authenticate to GitHub Packages takes
+`mars-kmp-maven.zip` of the release instead: unzip it and add
 `maven { url = uri("<dir>") }`.
 
-The AARs on JitPack stay the packaging for an app that is Android only; this one
-is for a `commonMain` that compiles for more than one platform.
+## Open, write, flush
+
+```kotlin
+import io.github.orangeboychen.marsrs.xlog.AppenderMode
+import io.github.orangeboychen.marsrs.xlog.LogLevel
+import io.github.orangeboychen.marsrs.xlog.Xlog
+import io.github.orangeboychen.marsrs.xlog.XlogConfig
+
+Xlog.open(
+    XlogConfig(
+        logDir = logDirectory,
+        namePrefix = "Ham",
+        level = LogLevel.Info,
+        mode = AppenderMode.Async,
+    )
+)
+
+Xlog.write(LogLevel.Info, "startup", "cold start in $elapsedMillis ms")
+
+Xlog.flush(sync = true)   // before the app reads or uploads the files
+Xlog.close()
+```
+
+`logDir` is the one option with no default — the rest are on
+[the configuration page](/configuration).
+
+## Writing
+
+`Xlog.write` is one record: a level, a tag and a message, plus the file,
+function and line of the call site when the shared code has them.
+
+```kotlin
+Xlog.write(LogLevel.Debug, "net", "…")
+Xlog.write(LogLevel.Error, "login", "…")
+
+Xlog.write(LogLevel.Debug, "net", "…", file = "Net.kt", function = "fetch", line = 42)
+```
+
+A record below the level the appender was opened at is dropped before anything is
+formatted.
+
+## The `Log` facade
+
+`Log` is the C++ project's facade — `Log.d(tag, message)` and friends over one
+appender — for shared code that would rather write it that way:
+
+```kotlin
+Log.setLevel(LogLevel.Info)
+Log.v("net", "…")
+Log.d("net", "…")
+Log.i("startup", "…")
+Log.w("net", "…")
+Log.e("login", "…")
+Log.f("login", "…")
+```
+
+## What compiles
+
+Fourteen Kotlin targets: Android — the AAR carries `libmarsxlog.so` for
+`arm64-v8a`, `armeabi-v7a` and `x86_64` — plus `iosArm64`, `iosX64`,
+`iosSimulatorArm64`, `macosX64`, `macosArm64`, `watchosArm64`,
+`watchosDeviceArm64`, `watchosSimulatorArm64`, `tvosArm64`, `tvosSimulatorArm64`,
+`linuxX64`, `linuxArm64` and `mingwX64`.
+
+Nothing is compiled from Rust when the shared module is built: each platform
+links the archive the release published for it.
+
+## What is not in it
+
+The surface is the intersection of the two bridges, which is what a `common`
+declaration can only be. The named instances of the C ABI —
+`mars_xlog_new_instance`, `mars_xlog_current_log_path` — and the per-instance
+`Xlog` of Android are not in it; a caller who wants them is a caller of one
+platform, and writes it in that platform's source set.
