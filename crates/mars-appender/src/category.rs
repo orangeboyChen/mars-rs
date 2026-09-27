@@ -170,8 +170,9 @@ struct Registry {
     next: XloggerHandle,
     categories: HashMap<XloggerHandle, XloggerCategory>,
     by_prefix: HashMap<String, XloggerHandle>,
-    /// `<prefix>.mmap3` of every live instance: one-shot recovery reads and
-    /// unlinks that file, so it has to stay away from an instance that owns it.
+    /// `<dir>/<prefix>.mmap3` and the slots next to it: one-shot recovery reads
+    /// and unlinks those files, so it has to stay away from an instance that
+    /// owns one.
     mmap_paths: HashMap<XloggerHandle, PathBuf>,
     /// The prefixes whose appender is being opened right now.
     opening: HashSet<String>,
@@ -318,9 +319,11 @@ pub fn new_xlogger_instance(config: &XLogConfig, level: LogLevel) -> XloggerHand
     category.appender = appender;
     registry.categories.insert(handle, category);
     registry.by_prefix.insert(config.nameprefix.clone(), handle);
-    registry
-        .mmap_paths
-        .insert(handle, crate::appender::mmap_file_path(config));
+    // The slot the instance got, not `<prefix>.mmap3` as such: a second process
+    // using the same prefix holds slot 0 and this one has been given slot 1.
+    if let Some(path) = appender.and_then(crate::instance_cache_path) {
+        registry.mmap_paths.insert(handle, path);
+    }
     drop(registry);
     // the handle is in the table, so whoever was waiting for the prefix finds
     // it now
