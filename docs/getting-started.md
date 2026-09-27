@@ -34,6 +34,15 @@ implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")  // xlog alone
 implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")
 ```
 
+```bash [Flutter]
+flutter pub add marsrs_flutter_xlog        # marsrs_flutter, for the whole port
+```
+
+```bash [React Native]
+npm install marsrs-react-native-xlog       # marsrs-react-native, for the whole port
+cd ios && pod install          # autolinking finds the module
+```
+
 ```text [C]
 marsrs-<version>-<host>.tar.gz   (Linux, macOS)
 marsrs-<version>-<host>.zip      (Windows)
@@ -109,6 +118,36 @@ xlog.i("startup", "hello from mars")
 
 xlog.flush(sync = true)  // the records are on disk when this returns
 xlog.close()
+```
+
+```dart [Flutter]
+final xlog = await Xlog.open(
+    XlogConfig(
+        logDir: "${directory.path}/xlog",
+        namePrefix: "marsrs",
+        level: LogLevel.info,
+    ),
+);
+await xlog.setConsoleLogEnabled(kDebugMode);
+
+await xlog.i("startup", "hello from mars");
+
+await xlog.flush(sync: true);  // the records are on disk when this returns
+await xlog.close();
+```
+
+```ts [React Native]
+const xlog = await Xlog.open({
+    logDir: `${directory}/xlog`,
+    namePrefix: "marsrs",
+    level: LogLevel.info,
+});
+await xlog.setConsoleLogEnabled(__DEV__);
+
+await xlog.i("startup", "hello from mars");
+
+await xlog.flush(true);        // the records are on disk when this returns
+await xlog.close();
 ```
 
 ```c [C]

@@ -32,6 +32,15 @@ implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")  // 只有 xlog
 implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")
 ```
 
+```bash [Flutter]
+flutter pub add marsrs_flutter_xlog          # 要整个端口就 marsrs_flutter
+```
+
+```bash [React Native]
+npm install marsrs-react-native-xlog         # 要整个端口就 marsrs-react-native
+cd ios && pod install          # autolinking 会找到这个模块
+```
+
 ```text [C]
 marsrs-<version>-<host>.tar.gz   （Linux、macOS）
 marsrs-<version>-<host>.zip      （Windows）
@@ -107,6 +116,36 @@ xlog.i("startup", "hello from mars")
 
 xlog.flush(sync = true)  // 返回时记录已经在磁盘上了
 xlog.close()
+```
+
+```dart [Flutter]
+final xlog = await Xlog.open(
+    XlogConfig(
+        logDir: "${directory.path}/xlog",
+        namePrefix: "marsrs",
+        level: LogLevel.info,
+    ),
+);
+await xlog.setConsoleLogEnabled(kDebugMode);
+
+await xlog.i("startup", "hello from mars");
+
+await xlog.flush(sync: true);  // 返回时记录已经在磁盘上了
+await xlog.close();
+```
+
+```ts [React Native]
+const xlog = await Xlog.open({
+    logDir: `${directory}/xlog`,
+    namePrefix: "marsrs",
+    level: LogLevel.info,
+});
+await xlog.setConsoleLogEnabled(__DEV__);
+
+await xlog.i("startup", "hello from mars");
+
+await xlog.flush(true);        // 返回时记录已经在磁盘上了
+await xlog.close();
 ```
 
 ```c [C]

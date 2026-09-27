@@ -29,7 +29,8 @@ features:
 
 ## Pick your platform
 
-Every release ships a package per platform:
+Every release ships a package per platform — except the two that go to a
+registry of their own:
 
 | your app is | take | page |
 |---|---|---|
@@ -37,12 +38,18 @@ Every release ships a package per platform:
 | iOS / watchOS, Swift | the `MarsRSXlog` SwiftPM product | [SwiftPM](/platforms/swift) |
 | Android, Kotlin or Java | `marsrs` or `xlog` on JitPack | [Android](/platforms/android) |
 | Kotlin Multiplatform | `marsrs-kmp` or `xlog-kmp` | [Kotlin Multiplatform](/platforms/kotlin-multiplatform) |
+| Flutter | `marsrs_flutter_xlog` or `marsrs_flutter` | [Flutter](/platforms/flutter) |
+| React Native | `marsrs-react-native-xlog` or `marsrs-react-native` | [React Native](/platforms/react-native) |
 | anything with a C FFI | the `marsrs-<version>-<host>` archive | [The C ABI](/platforms/c-abi) |
 | HarmonyOS | `libmars_ffi.so`, built from source today | [HarmonyOS](/platforms/harmonyos) |
 
 `xlog` is the logger alone; `marsrs` adds the STN task pipeline and the SDT
 network diagnosis — the same pair the crates on crates.io are. An app that only
 logs takes the first.
+
+The Flutter plugin and the React Native module are published to pub.dev and to
+npm, and are not in the release archive; neither registry is being published to
+yet.
 
 ## What the rest of these pages are
 
