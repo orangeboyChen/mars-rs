@@ -29,6 +29,14 @@ jobs:
   wrapper:
     name: gradle wrapper
     runs-on: ubuntu-latest
+    env:
+      # Asked for before any task runs: the Android Gradle Plugin looks for the
+      # SDK while the build is being *configured*, and `wrapper` is a task of a
+      # build that configures all of android/. The runner image ships the SDK;
+      # release.yml names it for the same reason, and a job that runs once a
+      # week should not leave this to the first Monday run to discover.
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - uses: actions/checkout@v4
       # Gradle 9 runs on 17 and up; 21 is the LTS the Kotlin jobs are on.
