@@ -400,7 +400,7 @@ badge prints; the release workflow asks jitpack.io to build the tag under both,
 reports which one answered, and then checks that both AARs resolve.
 
 JitPack has an Android SDK but neither an NDK nor a Rust toolchain, so it
-downloads `mars-android-native.zip` of the same release first — see
+downloads `marsrs-android-native.zip` of the same release first — see
 `jitpack.yml`.
 
 ### Kotlin Multiplatform
@@ -438,9 +438,9 @@ are not targets `rustup` knows.
 Nothing is compiled from Rust when the Kotlin module is built. Neither a
 consumer nor a CI host has the toolchain for thirteen triples, and an Apple
 archive cannot be cross-compiled from Linux at all — so the release builds them
-(`scripts/build_kmp_native.sh`) and publishes `mars-kmp-native.zip`, one
+(`scripts/build_kmp_native.sh`) and publishes `marsrs-kmp-native.zip`, one
 `libmars_ffi.a` per Kotlin target plus the `.so` files of the JNI bridge, and
-`mars-kmp-maven.zip`, which is the repository itself. An app that would rather
+`marsrs-kmp-maven.zip`, which is the repository itself. An app that would rather
 not authenticate to GitHub Packages takes the second: unzip it and add
 `maven { url = uri("<dir>") }`.
 
@@ -497,7 +497,7 @@ site at a time.
 
 ### The C ABI
 
-`mars-rs-<version>-<host>.tar.gz` (Linux, macOS) and `.zip` (Windows) hold
+`marsrs-<version>-<host>.tar.gz` (Linux, macOS) and `.zip` (Windows) hold
 `include/mars_xlog.h`, `include/mars_sdt.h`, `include/mars_stn.h` and the static
 and shared libraries of `marsrs-ffi` — built `--features sdt,stn`, the task
 pipeline and the diagnosis included, which is what the Android `.so` carries —

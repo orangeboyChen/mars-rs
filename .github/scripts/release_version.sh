@@ -147,7 +147,7 @@ ASSETS="$ASSETS $KMP_NATIVE_ZIP $KMP_MAVEN_ZIP"
 # packages it in
 for HOST in x86_64-unknown-linux-gnu:tar.gz aarch64-apple-darwin:tar.gz \
             x86_64-pc-windows-msvc:zip; do
-  ASSETS="$ASSETS mars-rs-$VERSION-${HOST%%:*}.${HOST##*:}"
+  ASSETS="$ASSETS marsrs-$VERSION-${HOST%%:*}.${HOST##*:}"
 done
 if gh release view "$TAG" >/dev/null 2>&1; then
   PUBLISHED=$(gh release view "$TAG" --json assets -q '.assets[].name')

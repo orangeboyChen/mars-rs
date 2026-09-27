@@ -158,7 +158,7 @@ publishing {
     // publish to without a key it does not have — JitPack builds on Linux only,
     // so it cannot produce the Apple klibs, and Maven Central wants a signature
     // this workflow cannot make. A consumer reads it with the repository below
-    // and a token of their own; `mars-kmp-maven.zip` on the release is the same
+    // and a token of their own; `marsrs-kmp-maven.zip` on the release is the same
     // repository for one that would rather not authenticate at all.
     repositories {
         maven {
@@ -208,14 +208,14 @@ afterEvaluate {
     if (!nativeDir.isDirectory) {
         throw GradleException(
             "No native libraries found in $nativeDir. Run scripts/build_kmp_native.sh, " +
-                "or download mars-kmp-native-<version>.zip of the release into it " +
+                "or download marsrs-kmp-native.zip of the release into it " +
                 "(see the 'kmp' job of .github/workflows/release.yml)."
         )
     }
     val abis = androidNativeDir.listFiles()?.filter { it.isDirectory } ?: emptyList()
     if (abis.isEmpty()) {
         throw GradleException(
-            "No native libraries found in $androidNativeDir. Unpack mars-android-native.zip " +
+            "No native libraries found in $androidNativeDir. Unpack marsrs-android-native.zip " +
                 "of the release into it first (see the 'android' job of " +
                 ".github/workflows/release.yml)."
         )
