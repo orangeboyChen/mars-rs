@@ -20,16 +20,23 @@
 //
 //      import MarsRSXlog      // xlog alone, and the same API
 //
-//  Two products over one prebuilt library: `MarsRS` is the port, `MarsRSXlog`
-//  is the logging half of it, the way the Android packages split `mars-rs` and
-//  `mars-rs-xlog`. Nothing is saved by taking the smaller one while both wrap
-//  one xcframework — `mars-ffi` is xlog and nothing else today — but the
-//  import stays honest about what an app uses, and `Stn.swift` / `Sdt.swift`
-//  will land in `MarsRS` and not in `MarsRSXlog`.
+//  Two products over one prebuilt library, and the library is xlog's: the C ABI
+//  is 28 `mars_xlog_*` symbols and nothing else, which is why the artifact is
+//  named after xlog and not after the port — orangeboyChen/mars publishes
+//  `MarsXlog.xcframework` for the same reason, and taking xlog alone is the only
+//  thing its package offers. `MarsRSXlog` is the Swift over it; `MarsRS` is the
+//  umbrella, and `Stn.swift` / `Sdt.swift` land there — with a framework of
+//  their own, so that an app that only logs keeps downloading xlog alone.
 //
-//  The package ships a prebuilt MarsRS.xcframework built by
+//  The package ships a prebuilt xcframework built by
 //  .github/workflows/release.yml (scripts/build_xcframework.sh), so consumers
-//  need neither a Rust toolchain nor an NDK.
+//  need neither a Rust toolchain nor an NDK. The one this points at is still
+//  `MarsRS.xcframework.zip`, because that is the name the tag it resolves was
+//  published under; the release after it publishes
+//  `MarsRSXlog.xcframework.zip`, and the workflow rewrites the name along with
+//  the tag. The C module inside keeps the port's name, `MarsRSFFI`, for the
+//  same reason: renaming it would break the asset every consumer resolves
+//  until a release carries the renamed one.
 //
 //  `Package.swift` is rewritten by that workflow for every release: the
 //  binary target's url and its checksum are the ones of the tag being
@@ -62,6 +69,13 @@ let package = Package(
         // Prebuilt binary: ios-arm64 + ios-arm64_x86_64-simulator +
         // watchos-arm64_arm64_32 + watchos-arm64-simulator, each with
         // `mars_xlog.h` and the module map that names it `MarsRSFFI`.
+        //
+        // What it holds is xlog and nothing else, and that is checked rather
+        // than promised: `scripts/build_xcframework.sh` fails if a slice ever
+        // exports a `mars_stn_*` or a `mars_sdt_*`, because the day it does the
+        // answer is a second framework for `MarsRS` — not a wider promise from
+        // this one, which is what shipping STN and SDT to an app that only logs
+        // would be.
         .binaryTarget(
             name: "MarsRSFFI",
             url: "https://github.com/orangeboyChen/mars-rs/releases/download/v0.1.0-alpha.2/MarsRS.xcframework.zip",
@@ -89,8 +103,10 @@ let package = Package(
             ]
         ),
         // The umbrella: everything the port exposes, so that one import is
-        // enough. It carries no symbols of its own while `mars-ffi` is xlog
-        // only; `Stn.swift` and `Sdt.swift` go here when the C ABI has them.
+        // enough. It carries no binary of its own while `mars-ffi` is xlog
+        // only — it re-exports the xlog one — and `Stn.swift` / `Sdt.swift`
+        // land here with a `MarsRS.xcframework` of their own, so that an app
+        // that only logs keeps importing `MarsRSXlog` and nothing more.
         .target(
             name: "MarsRS",
             dependencies: ["MarsRSXlog"]

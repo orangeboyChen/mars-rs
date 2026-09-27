@@ -2,7 +2,7 @@ name: Release
 
 # One release for every platform:
 #
-#   * MarsRS.xcframework.zip       -> the binary target of Package.swift (SPM)
+#   * MarsRSXlog.xcframework.zip   -> the binary target of Package.swift (SPM)
 #   * mars-core.aar              -> JitPack: io.github.orangeboyChen:mars-rs
 #   * mars-xlog.aar              -> JitPack: io.github.orangeboyChen:mars-rs-xlog
 #   * mars-android-native.zip    -> the .so files, for a consumer's own AAR
@@ -62,7 +62,7 @@ permissions:
   pull-requests: write
 
 env:
-  XCFRAMEWORK_ZIP: MarsRS.xcframework.zip
+  XCFRAMEWORK_ZIP: MarsRSXlog.xcframework.zip
   NATIVE_ZIP: mars-android-native.zip
   # the whole port, and xlog alone: the pair the C++ project publishes as
   # `mars-core` and `mars-xlog`
@@ -408,11 +408,16 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$BRANCH"
 
-          python3 - "$TAG" "$CHECKSUM" <<'PY'
+          # All three of them are the release's, including the name of the
+          # asset: an artifact is named after what it holds, and what it holds
+          # can change — the framework is xlog's, and stays xlog's until
+          # `Stn.swift` and `Sdt.swift` give `MarsRS` one of its own.
+          python3 - "$TAG" "$CHECKSUM" "$XCFRAMEWORK_ZIP" <<'PY'
           import re, sys
-          tag, checksum = sys.argv[1], sys.argv[2]
+          tag, checksum, asset = sys.argv[1], sys.argv[2], sys.argv[3]
           src = open('Package.swift').read()
-          src = re.sub(r'releases/download/[^/]+/', 'releases/download/%s/' % tag, src)
+          src = re.sub(r'releases/download/[^/]+/[^"]+\.zip',
+                       'releases/download/%s/%s' % (tag, asset), src)
           src = re.sub(r'checksum: "[a-f0-9]+"', 'checksum: "%s"' % checksum, src)
           open('Package.swift', 'w').write(src)
           PY

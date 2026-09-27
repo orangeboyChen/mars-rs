@@ -1,26 +1,31 @@
 #!/usr/bin/env bash
 #
-# Builds MarsRS.xcframework.zip: `mars-ffi` as a static library for the iOS
+# Builds MarsRSXlog.xcframework.zip: `mars-ffi` as a static library for the iOS
 # device and simulator and for the watchOS device and simulator, with its
 # header and a module map next to it, which is what Package.swift hands to a
 # Swift app.
 
-# The framework is named after the project, not after xlog: the C ABI is the
-# port's, and everything the port grows into belongs in it. xlog is what it
-# carries today (Sources/MarsRSXlog/Xlog.swift is the Swift of it), not what the
-# framework is.
+# The framework is named after xlog because xlog is what it is: the C ABI is
+# 28 `mars_xlog_*` symbols and nothing else today, and the check at the bottom
+# of this script fails the build the day it is not. That is why the name is not
+# the project's — orangeboyChen/mars publishes `MarsXlog.xcframework` for the
+# same reason, and a consumer who only logs is the only consumer there is — and
+# it is why `MarsRS` can take a framework of its own when `Stn.swift` and
+# `Sdt.swift` land, without this one being renamed out from under anyone.
 #
 #   scripts/build_xcframework.sh 0.1.0 [output-dir]
 #
 # The version is only a name for the zip's directory of origin; the binary is
 # the same whatever it says. Run it from anywhere; it finds the workspace from
-# its own path. The xcframework is left in <output-dir>/MarsRS.xcframework.zip
-# (default: target/xcframework).
+# its own path. The xcframework is left in
+# <output-dir>/MarsRSXlog.xcframework.zip (default: target/xcframework).
 #
 # Why a static library and not a framework bundle: the C++ project ships the
 # same shape (see MarsXlog.xcframework of orangeboyChen/mars) and SwiftPM's
 # binary targets take either. `-headers` is what makes `import MarsRSFFI`
-# resolve in Swift.
+# resolve in Swift — the module keeps the port's name while the artifact takes
+# xlog's, because a module rename is a rename of what every consumer imports
+# and can only travel with the release that publishes it.
 
 set -euo pipefail
 
@@ -42,7 +47,7 @@ case "$out" in
     *) out="$root/$out" ;;
 esac
 
-name=MarsRS.xcframework
+name=MarsRSXlog.xcframework
 header_dir="$root/target/xcframework-build/headers"
 
 # One entry per slice the framework carries, and a slice is one (sdk,
@@ -170,6 +175,21 @@ for slice in "${slices[@]}"; do
         mkdir -p "$(dirname "$slice_lib")"
         lipo -create "${libs[@]}" -output "$slice_lib"
     fi
+    # The framework is called xlog's, so the binary has to be: every name the
+    # port exports is a `mars_xlog_*` and this is what keeps that true. The day
+    # `mars-ffi` exports a `mars_stn_*` or a `mars_sdt_*`, this fails, and the
+    # answer is a second framework for `MarsRS` — not a wider promise from this
+    # one, which is what shipping STN and SDT to an app that only logs would be.
+    # std and the crates the archive carries export plenty of their own symbols;
+    # the question asked here is only about the port's.
+    beyond_xlog="$(nm -gU "$slice_lib" 2>/dev/null |
+        grep -E ' T _mars' | grep -v '_mars_xlog' || true)"
+    if [ -n "$beyond_xlog" ]; then
+        echo "::error::$label exports more than xlog, so MarsRS needs a framework of its own:"
+        echo "$beyond_xlog"
+        exit 1
+    fi
+
     args+=(-library "$slice_lib" -headers "$header_dir")
 done
 
