@@ -20,7 +20,7 @@ name: Docs
 # `actions/configure-pages` can only enable Pages with a token that is not
 # `GITHUB_TOKEN` — so it is a switch in the repository's settings and not a
 # step here. The `base` of the site is `/mars-rs/` either way, and it is written
-# in `docs/.vitepress/config.mts`: a project page is served under
+# in `docs/.vitepress/config.ts`: a project page is served under
 # <owner>.github.io/mars-rs/, and a built site that does not know that resolves
 # `/assets/...` against the root of github.io and comes back 404.
 
@@ -71,6 +71,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Every page prints the date of the commit that last touched it, and
+          # VitePress reads that out of `git log` — one commit per page. A
+          # shallow clone has no history to read, so the date would be missing
+          # on the one run whose date is the one a reader sees.
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -79,6 +85,13 @@ jobs:
       - name: Install
         working-directory: docs
         run: npm ci
+      # The site's config is TypeScript, and `vitepress build` only strips the
+      # types out of it — `tsc` is what reads them. Without this a config that
+      # does not type-check still builds, and a config nobody type-checks is a
+      # config with annotations in it and not a typed one.
+      - name: Type-check the config
+        working-directory: docs
+        run: npm run typecheck
       # `vitepress build` writes into docs/.vitepress/dist and fails the job on
       # a dead link, which is the reason a pull request builds at all: the site
       # is prose in markdown, and the only thing a build proves about prose is
