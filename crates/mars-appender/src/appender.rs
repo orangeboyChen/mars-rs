@@ -25,6 +25,11 @@
 //!   buffers like the C++ now (see [`AppenderInner::pending`]) and flushes a
 //!   little more eagerly: [`Appender::flush_sync`] hands the buffer to the OS
 //!   as well, where the C++ leaves it in the `FILE*`.
+//! * A batch the file refuses is **kept**, not dropped (see
+//!   [`AppenderInner::pending`]), so `__Log2File` can still put it in the cache
+//!   directory and the next flush can try again. The C++ cannot: `fwrite` has
+//!   already consumed its `stdio` buffer by the time it fails, so it can only
+//!   retry with the one record it was handed — one out of every ~4 KiB batch.
 //! * `__DelTimeoutFile` / `__MoveOldFiles` run on delayed threads in the C++.
 //!   The port runs them synchronously inside [`Appender::open`].
 //! * Rotation on `max_file_size` is decided when a log file is *opened* in the
@@ -75,6 +80,15 @@ const TEMP_LOG_SIZE: usize = 16 * 1024;
 /// `fwrite` inherits `FILE*`'s buffer, which is `st_blksize` — 4 KiB on the
 /// file systems this was measured on. Same size, named.
 const LOG_FLUSH_THRESHOLD: usize = 4 * 1024;
+/// What [`AppenderInner::pending`] is allocated with: [`LOG_FLUSH_THRESHOLD`]
+/// plus room for the record that crosses it, so that record copies in without
+/// reallocating (the buffer is flushed *after* the append, like the C++'s
+/// `fwrite`, which copies a record of any size into the same buffer).
+///
+/// It is only where the buffer starts. One drain of a full cache region is far
+/// bigger than this, and a batch is handed to the OS whole, so the buffer grows
+/// to whatever a drain needs — once, and not again.
+const PENDING_CAPACITY: usize = 2 * LOG_FLUSH_THRESHOLD;
 /// `gettimeofday`-free recursion guard threshold (`recursion_count > 10`).
 const MAX_RECURSION: u32 = 10;
 
@@ -342,23 +356,39 @@ struct AppenderInner {
     /// when the file is closed or rotated, and (a little more eagerly) by
     /// [`Appender::flush_sync`].
     ///
-    /// Allocated with room for one record past the threshold, so the record
-    /// that crosses it copies in without reallocating — the buffer is flushed
-    /// *after* the append, like the C++'s `fwrite`, which copies a record of
-    /// any size into the same buffer.
+    /// Allocated with room for one record past the threshold and grown to
+    /// whatever one drain needs: see [`PENDING_CAPACITY`].
+    ///
+    /// A batch the file refuses is **kept** here, not dropped — the C++ cannot
+    /// keep it (`fwrite` has already consumed its buffer, and `ftruncate`
+    /// throws away whatever the kernel took), but the port can, so
+    /// [`Self::log2file`] still has the whole batch to put in the cache
+    /// directory and the next flush gets to try again.
     pending: Vec<u8>,
-    /// How long `log_file` is, as far as this appender is concerned —
-    /// [`Self::pending`] included.
+    /// How much of `log_file` the OS holds — [`Self::pending`] **not**
+    /// included.
     ///
     /// `XloggerAppender::__WriteFile` asks the kernel on every record
     /// (`ftell(_file)`) so that a failed write can roll the file back to where
     /// it started. The port remembers the length instead: this appender is the
     /// only writer of the file it opened — the same invariant `map_region`
     /// argues for the cache file — so the length is what the file held when it
-    /// was opened plus everything written since. That is one `fstat` and one
-    /// `lseek` fewer per record, on the one path where a logger cannot afford
-    /// them: the caller holds the appender's lock for the whole record.
-    log_file_len: u64,
+    /// was opened plus everything handed to the OS since. That is one `fstat`
+    /// and one `lseek` fewer per record, on the one path where a logger cannot
+    /// afford them: the caller holds the appender's lock for the whole record.
+    ///
+    /// Kept apart from [`Self::pending`] so that the two can disagree: a batch
+    /// that failed belongs to no file yet, and the next file that opens — the
+    /// cache directory's, say — takes it from zero.
+    flushed_len: u64,
+    /// Whether [`Self::pending`] has already been refused once.
+    ///
+    /// A batch is held back so that [`Self::log2file`] can put it somewhere
+    /// else and the next flush can try again — but a file that keeps refusing
+    /// writes must not let the logger grow without bound, so a batch that is
+    /// refused a second time is given up on. The C++'s `FILE*` cannot hold a
+    /// refused batch at all.
+    pending_refused: bool,
     /// `openfiletime_`
     open_file_time: i64,
     /// `last_time_`
@@ -527,13 +557,14 @@ impl AppenderInner {
             return written;
         }
 
-        let mut write_success = false;
         let open_success = self.open_log_file(OpenDir::Log);
-        if open_success {
-            write_success = self.write_file_record(data);
-            if !self.is_sync() {
-                self.close_log_file();
-            }
+        // Buffered whether or not the log directory's file opened: with no
+        // file to hand it to, [`Self::write_file_record`] answers `false` and
+        // the record goes to the cache directory below instead of waiting in
+        // the buffer for a file that is not there.
+        let mut write_success = self.write_file_record(data);
+        if open_success && !self.is_sync() {
+            self.close_log_file();
         }
 
         if !write_success {
@@ -541,7 +572,12 @@ impl AppenderInner {
                 self.close_log_file();
             }
             if self.open_log_file(OpenDir::Cache) {
-                write_success = self.write_file_record(data);
+                // The batch the log directory would not take — `data` included,
+                // because [`Self::write_file_record`] left it in
+                // [`Self::pending`] for exactly this. The C++ can only retry
+                // with `data` here: `fwrite` has already consumed the rest.
+                let had_batch = !self.pending.is_empty();
+                write_success = self.flush_pending() && had_batch;
                 if !self.is_sync() {
                     self.close_log_file();
                 }
@@ -636,7 +672,7 @@ impl AppenderInner {
                 .open(&last_file_path)
             {
                 Ok(file) => {
-                    self.log_file_len = file.metadata().map_or(0, |meta| meta.len());
+                    self.flushed_len = file.metadata().map_or(0, |meta| meta.len());
                     self.log_file = Some(file);
                     true
                 }
@@ -667,7 +703,7 @@ impl AppenderInner {
                     return false;
                 }
             };
-            self.log_file_len = file.metadata().map_or(0, |meta| meta.len());
+            self.flushed_len = file.metadata().map_or(0, |meta| meta.len());
             self.log_file = Some(file);
 
             let now_tick = monotonic_millis();
@@ -700,27 +736,26 @@ impl AppenderInner {
         let _ = self.flush_pending();
         self.open_file_time = 0;
         self.log_file = None;
-        self.log_file_len = 0;
+        self.flushed_len = 0;
     }
 
     /// Hands [`Self::pending`] to the OS — the point where the C++'s `FILE*`
     /// buffer is flushed into a `write`.
     ///
-    /// Returns `false` on I/O failure, after truncating back to what the OS
-    /// held and appending an error record (as `__WriteFile` does).
+    /// Returns `false` on I/O failure, after truncating back to [`Self::flushed_len`]
+    /// and appending an error record (as `__WriteFile` does) — and **keeping**
+    /// the batch, so it is neither lost nor written twice: see [`Self::pending`].
     fn flush_pending(&mut self) -> bool {
         if self.pending.is_empty() {
             return true;
         }
         if self.log_file.is_none() {
-            self.pending.clear();
-            return false;
+            // Nothing to hand it to *yet*. Kept for one more attempt:
+            // `__Log2File` opens the cache file for exactly this, and the batch
+            // goes there instead.
+            return self.refuse_pending();
         }
 
-        // What the file holds, so a failure can roll back to it. The C++
-        // `ftell`s before every `fwrite` to get the same number; this is the
-        // length [`Self::write_file_record`] remembers.
-        let before_len = self.log_file_len - self.pending.len() as u64;
         let result = {
             let file = self.log_file.as_mut().expect("checked above");
             file.write_all(&self.pending)
@@ -729,18 +764,18 @@ impl AppenderInner {
 
         match result {
             Ok(()) => {
+                self.flushed_len += self.pending.len() as u64;
                 self.pending.clear();
+                self.pending_refused = false;
                 true
             }
             Err(errno) => {
+                // What the OS held, so the file can be rolled back to it. The
+                // C++ `ftell`s before every `fwrite` for the same number.
                 if let Some(file) = self.log_file.as_mut() {
-                    let _ = file.set_len(before_len);
+                    let _ = file.set_len(self.flushed_len);
                     let _ = file.seek(SeekFrom::End(0));
                 }
-                // The batch is dropped: nothing in it reached the file, and the
-                // C++ cannot roll a `stdio` buffer back either.
-                self.pending.clear();
-                self.log_file_len = before_len;
 
                 self.write_tips2console(&format!("write file error:{errno}"));
 
@@ -753,31 +788,44 @@ impl AppenderInner {
                     .as_mut()
                     .is_some_and(|file| file.write_all(tmp_buff.as_slice()).is_ok());
                 if wrote {
-                    self.log_file_len += err_len as u64;
+                    self.flushed_len += err_len as u64;
                 }
-                false
+
+                // Kept for one more attempt — but only one: see
+                // [`Self::pending_refused`].
+                self.refuse_pending()
             }
         }
+    }
+
+    /// Gives [`Self::pending`] up, or one more attempt first: see
+    /// [`Self::pending_refused`]. Answers `false`, whatever it decided.
+    fn refuse_pending(&mut self) -> bool {
+        if self.pending_refused {
+            self.pending.clear();
+            self.pending_refused = false;
+        } else {
+            self.pending_refused = true;
+        }
+        false
     }
 
     /// `XloggerAppender::__WriteFile`.
     ///
     /// Appends `data` to the file — through [`Self::pending`], so a record
     /// costs a `memcpy` instead of a syscall, which is what the C++'s `fwrite`
-    /// costs. Returns `false` on I/O failure.
+    /// costs. Returns `false` when the batch behind it could not reach the file,
+    /// in which case `data` is still in [`Self::pending`] and no byte of it is
+    /// in any file.
     fn write_file_record(&mut self, data: &[u8]) -> bool {
-        if self.log_file.is_none() {
-            return false;
-        }
-
         self.pending.extend_from_slice(data);
-        self.log_file_len += data.len() as u64;
 
         // Rotation: the C++ only re-computes the split index when the file is
         // (re)opened, so a long-lived sync-mode file never splits. The port
         // closes the file as soon as it grows past the limit, which makes both
         // modes behave the same.
-        if self.max_file_size > 0 && self.log_file_len > self.max_file_size {
+        let len = self.flushed_len + self.pending.len() as u64;
+        if self.max_file_size > 0 && len > self.max_file_size {
             self.close_log_file();
             self.open_file_time = 0;
             return true;
@@ -786,7 +834,11 @@ impl AppenderInner {
         if self.pending.len() >= LOG_FLUSH_THRESHOLD {
             return self.flush_pending();
         }
-        true
+
+        // Buffered, but not accepted by anything yet when no file is open: the
+        // C++'s `fwrite` cannot say "yes" for bytes nothing has taken either,
+        // and `__Log2File` needs the `no` to try the cache directory.
+        self.log_file.is_some()
     }
 }
 
@@ -897,8 +949,9 @@ impl Appender {
             buff,
             scratch: AutoBuffer::new(),
             log_file: None,
-            pending: Vec::with_capacity(2 * LOG_FLUSH_THRESHOLD),
-            log_file_len: 0,
+            pending: Vec::with_capacity(PENDING_CAPACITY),
+            flushed_len: 0,
+            pending_refused: false,
             open_file_time: 0,
             last_time: 0,
             last_tick: 0,
@@ -1059,8 +1112,9 @@ impl Appender {
                 config.compress_level,
             ),
             log_file: None,
-            pending: Vec::with_capacity(2 * LOG_FLUSH_THRESHOLD),
-            log_file_len: 0,
+            pending: Vec::with_capacity(PENDING_CAPACITY),
+            flushed_len: 0,
+            pending_refused: false,
             open_file_time: 0,
             last_time: 0,
             last_tick: 0,
@@ -1232,6 +1286,13 @@ impl Appender {
         let len = format_record(info, log);
 
         let mut guard = self.lock();
+        // Read again, under the lock: `close` may have drained the cache and
+        // stopped the writer thread while this record was being formatted. A
+        // record added after that would sit in the cache with nothing left to
+        // take it to a file, and be dropped when the appender is.
+        if self.shared.flags.log_close.load(Ordering::Acquire) {
+            return;
+        }
         // `write_sync` / `write_async` read the record out of that buffer; no
         // borrow of it is held across the lock, which is what keeps the two
         // apart safe.
@@ -1740,6 +1801,156 @@ mod tests {
             .filter(|n| n.ends_with(".xlog"))
             .collect();
         assert!(staged.is_empty(), "{staged:?}");
+    }
+
+    /// One drain of the cache region is tens of KiB — far more than
+    /// [`PENDING_CAPACITY`] — and it is handed to the OS whole, whatever the
+    /// buffer was allocated with.
+    #[test]
+    fn a_drain_bigger_than_the_buffer_reaches_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Async), 0, 0).unwrap();
+
+        for i in 0..3_000 {
+            appender.write(
+                Some(&info(LogLevel::Info)),
+                &format!("async record {i} padding padding padding"),
+            );
+        }
+        appender.close();
+
+        let bytes = fs::read(today_name(tmp.path())).unwrap();
+        assert!(
+            bytes.len() > PENDING_CAPACITY,
+            "the drain never reached the file: {} bytes",
+            bytes.len()
+        );
+        let text = decoded_text(&bytes);
+        assert!(text.contains("async record 0 "), "{text}");
+    }
+
+    /// The contract above, end to end: the batch is still there after the
+    /// failure, so it reaches the file when there is one again.
+    #[test]
+    fn a_batch_that_fails_to_reach_the_file_is_written_later() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Sync), 0, 0).unwrap();
+
+        appender.write(Some(&info(LogLevel::Info)), "the very first record");
+        let mut guard = appender.lock();
+        // The file goes away under the buffer, which is what a failed write
+        // leaves behind as well.
+        guard.log_file = None;
+        assert!(!guard.flush_pending(), "nothing reached the file");
+        drop(guard);
+
+        appender.write(Some(&info(LogLevel::Info)), "one after the failure");
+        appender.close();
+
+        let text = decoded_text(&fs::read(today_name(tmp.path())).unwrap());
+        assert!(
+            text.contains("the very first record"),
+            "the batch was dropped instead of kept: {text}"
+        );
+    }
+
+    /// The same, for one record: with a cache directory configured but not
+    /// active (`cache_days == 0`), the log directory's file is what is missing,
+    /// and the record has to be staged in the cache directory rather than wait
+    /// in the buffer for a file that never opens.
+    #[test]
+    fn a_record_the_log_directory_cannot_open_is_staged_in_the_cache_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("cache");
+        let mut cfg = config(tmp.path(), AppenderMode::Sync);
+        cfg.cachedir = Some(cache.clone());
+        fs::create_dir(today_name(tmp.path())).unwrap();
+
+        let appender = Appender::open(cfg, 0, 0).unwrap();
+        // The banner `open` writes has already fallen back to the cache
+        // directory: it left a file behind, and a record that finds one takes
+        // the cache branch of `__Log2File` instead of the fallback — which
+        // finds nothing to flush when the buffer is empty. Both taken away, so
+        // that this record is the one that has to open the cache copy.
+        appender.lock().close_log_file();
+        for entry in fs::read_dir(&cache).unwrap().flatten() {
+            if entry.path().extension().is_some_and(|ext| ext == "xlog") {
+                fs::remove_file(entry.path()).unwrap();
+            }
+        }
+        appender.write(Some(&info(LogLevel::Info)), "staged, not buffered");
+        appender.close();
+
+        let mut text = String::new();
+        for entry in fs::read_dir(&cache).unwrap().flatten() {
+            if entry.path().extension().is_some_and(|ext| ext == "xlog") {
+                text.push_str(&decoded_text(&fs::read(entry.path()).unwrap()));
+            }
+        }
+        assert!(
+            text.contains("staged, not buffered"),
+            "the record waited in the buffer instead: {text}"
+        );
+    }
+
+    /// What `__Log2File` does with a batch the log directory refuses: it is
+    /// staged in the cache directory, whole — which is what
+    /// [`Self::flush_pending`] keeping it is for.
+    #[test]
+    fn a_log_directory_that_refuses_a_batch_stages_it_in_the_cache_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("cache");
+        let mut cfg = config(tmp.path(), AppenderMode::Sync);
+        cfg.cachedir = Some(cache.clone());
+
+        // `<logdir>/Mars_<today>.xlog` as a directory: it cannot be opened, so
+        // nothing this appender accepts can reach a file until `__Log2File`
+        // opens the cache directory's copy instead.
+        fs::create_dir(today_name(tmp.path())).unwrap();
+
+        let appender = Appender::open(cfg, 0, 0).unwrap();
+        appender.write(Some(&info(LogLevel::Info)), "the very first record");
+        for i in 0..500 {
+            appender.write(
+                Some(&info(LogLevel::Info)),
+                &format!("record {i} {i:x} {i:o} the quick brown fox"),
+            );
+        }
+        appender.close();
+
+        let mut text = String::new();
+        for entry in fs::read_dir(&cache).unwrap().flatten() {
+            if entry.path().extension().is_some_and(|ext| ext == "xlog") {
+                text.push_str(&decoded_text(&fs::read(entry.path()).unwrap()));
+            }
+        }
+        assert!(
+            text.contains("the very first record"),
+            "the batch was dropped instead of cached: {text}"
+        );
+    }
+
+    /// The contract behind the test above, pinned where an ENOSPC cannot be
+    /// arranged: a flush that cannot reach the file leaves the batch in the
+    /// buffer, so the caller still has it.
+    #[test]
+    fn a_batch_that_fails_to_reach_the_file_is_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Sync), 0, 0).unwrap();
+
+        appender.write(Some(&info(LogLevel::Info)), "kept, not dropped");
+        let mut guard = appender.lock();
+        assert!(!guard.pending.is_empty(), "the record was not buffered");
+        // The file goes away under the buffer, which is what a failed write
+        // leaves behind as well.
+        guard.log_file = None;
+        assert!(!guard.flush_pending(), "nothing reached a file");
+        assert!(
+            !guard.pending.is_empty(),
+            "the batch was dropped with the file"
+        );
+        drop(guard);
+        appender.close();
     }
 
     #[test]
