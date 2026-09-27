@@ -8,10 +8,18 @@
 // The binary target of Package.swift is a static library plus a module map, so
 // what `import MarsRSFFI` gives a caller is the C surface itself: pointers to
 // C strings, `int` modes and a config struct that has to be filled field by
-// field. This file is that surface in Swift — `String`s, enums and a
-// `MarsXlogConfiguration` with defaults — and re-exports the C module, so
-// `mars_xlog_open(&config)` and friends are still reachable from here for
-// whoever prefers them.
+// field. This file is that surface in Swift — `String`s, an `XlogConfig` with
+// defaults and a value an app writes through — and it re-exports the C module,
+// so `mars_xlog_open(&config)` and friends stay reachable for whoever prefers
+// them.
+//
+// The shape is the one the Android `Xlog` has, and the one the C ABI spells with
+// a handle: `Xlog(config)` opens an appender of its own and answers it, and the
+// app writes through what it was given. Nothing here is deprecated, because
+// there is no older Swift API to keep — the process-wide appender
+// `mars_xlog_open` opens is a set of C symbols, and `import MarsRSFFI` reaches
+// them. `currentLogPath` and `currentCachePath` are the exception: they are that
+// appender's, and they say so.
 //
 // Every call is a straight translation of a symbol in the header; nothing here
 // adds behaviour the C ABI does not have.
@@ -21,243 +29,299 @@ import Foundation
 // Re-exported so that `import MarsRSXlog` also gives the C symbols.
 @_exported import MarsRSFFI
 
-/// `TLogLevel`; `.none` is `MARS_LEVEL_NONE`, which the filter understands but
-/// the C enum does not carry.
-public enum MarsXlogLevel: Int32 {
-    case verbose = 0
-    case debug = 1
-    case info = 2
-    case warning = 3
-    case error = 4
-    case fatal = 5
-    case none = 6
-}
-
-/// `TAppenderMode`.
-public enum MarsXlogMode: Int32 {
-    case async = 0
-    case sync = 1
-}
-
-/// `TCompressMode`.
-public enum MarsXlogCompression: Int32 {
-    case zlib = 0
-    case zstd = 1
-}
-
-/// `XLogConfig`, with the defaults the C++ gives the fields it is not told.
+/// An appender of an app's own — build one when the app starts, then write
+/// through it from wherever there is something to say.
 ///
-/// `logDirectory` is the one field that has no default: `mars_xlog_open`
-/// answers `MARS_XLOG_ERR_EMPTY_LOG_DIR` without it.
-public struct MarsXlogConfiguration {
-    /// The level the appender is opened at; `mars_xlog_set_level` after the
-    /// open, which is where the C ABI keeps it.
-    public var level: MarsXlogLevel = .info
-    /// Whether the appender writes on its own thread or on the caller's.
-    public var mode: MarsXlogMode = .async
-    /// Where the log files go: the one field with no default.
-    public var logDirectory: String
-    /// Written verbatim, as the C++ does: no default.
-    public var namePrefix: String = ""
-    /// Empty means the log is written unencrypted.
-    public var publicKey: String = ""
-    /// How the log is compressed; `.zlib` is what the C++ defaults to.
-    public var compression: MarsXlogCompression = .zlib
-    /// `0` keeps the appender's own default (6).
-    public var compressionLevel: Int32 = 0
-    /// `nil` puts the mmap cache in the log directory.
-    public var cacheDirectory: String?
-    /// `0` keeps every file.
-    public var cacheDays: Int32 = 0
+/// ```swift
+/// let log = try Xlog(
+///     XlogConfig(
+///         logDirectory: logDirectory.path,
+///         cacheDirectory: cacheDirectory.path,
+///         namePrefix: "Ham",
+///         level: .info
+///     )
+/// )
+/// log.isConsoleLogEnabled = true
+///
+/// log.info(message: "cold start in \(elapsedMillis) ms", tag: "startup")
+/// log.error(message: "login failed\n\(error)", tag: "login")
+/// ```
+///
+/// A write is a message with a tag beside it, the pair every platform of the
+/// port spells; Swift takes the message first and lets the tag default to
+/// empty, where the Android `xlog.i(tag, message)` asks for both — a Kotlin
+/// default argument is a second overload, and a Swift one is free. Swift adds
+/// what Swift can fill in for itself — `file`, `function` and `line` come from
+/// the call site, because the C ABI carries them and `#file` costs no stack
+/// walk. A record is dropped before anything is formatted when its level is
+/// below [level], and a message that is expensive to build is worth an
+/// `if log.isEnabled(for: .debug)` first.
+///
+/// Two `Xlog`s of one `namePrefix` are one appender: the C ABI answers the
+/// handle it already has, so closing one of them closes what the other writes
+/// through.
+public final class Xlog {
+    /// What every file of this appender starts with, and what it is known by.
+    public let namePrefix: String
 
-    /// The only way in: every field but `logDirectory` has a default of its own.
-    public init(logDirectory: String) {
-        self.logDirectory = logDirectory
-    }
-}
-
-/// A logger instance: `mars_xlog_new_instance` and friends, which own an
-/// appender of their own. Handle `0` is the process-wide one `open` created.
-public struct MarsXlogInstance {
-    /// The handle, as `mars_xlog_new_instance` gave it.
-    public let handle: Int64
-
-    /// Wraps a handle the C ABI has already answered with.
-    public init(handle: Int64) {
-        self.handle = handle
+    /// Whether this appender is still open: `false` after [close()].
+    public var isOpen: Bool {
+        handle != Self.noHandle
     }
 
-    /// `mars_xlog_get_level`, or `nil` for a handle that is not one.
-    public var level: MarsXlogLevel? {
-        MarsXlogLevel(rawValue: mars_xlog_get_level(handle))
+    /// The level of this appender: a record less severe than this is dropped.
+    ///
+    /// Read from the C ABI and not mirrored here, so a level another part of
+    /// the app set is the one this answers with.
+    public var level: LogLevel {
+        get {
+            // `-1` is what `mars_xlog_get_level` answers for a handle that is
+            // not one, and it is `(TLogLevel)-1`, the C++'s "log everything".
+            LogLevel(rawValue: mars_xlog_get_level(handle)) ?? .verbose
+        }
+        set {
+            mars_xlog_set_level_instance(handle, newValue.rawValue)
+        }
     }
 
-    /// `mars_xlog_is_enabled_for`.
-    public func isEnabled(for level: MarsXlogLevel) -> Bool {
+    /// Whether a write reaches the file before it returns: what the
+    /// `XlogConfig` gave, until this says otherwise. The C ABI has no getter
+    /// for it, so this is the last value this side wrote.
+    public var mode: AppenderMode {
+        get {
+            currentMode
+        }
+        set {
+            currentMode = newValue
+            mars_xlog_set_mode_instance(handle, newValue.rawValue)
+        }
+    }
+
+    /// Whether the console prints the log too — off until an app turns it on.
+    public var isConsoleLogEnabled: Bool = false {
+        didSet {
+            mars_xlog_set_console_log_instance(handle, isConsoleLogEnabled ? 1 : 0)
+        }
+    }
+
+    /// How many bytes a log file may reach before it is closed and a new one
+    /// opened; `0` is "never split".
+    public var maxFileSizeBytes: UInt64 = 0 {
+        didSet {
+            mars_xlog_set_max_file_size_instance(handle, maxFileSizeBytes)
+        }
+    }
+
+    /// How many seconds a log file is kept; `0` is the C++'s own ten days.
+    public var maxAliveTimeSeconds: Int64 = 0 {
+        didSet {
+            mars_xlog_set_max_alive_duration_instance(handle, maxAliveTimeSeconds)
+        }
+    }
+
+    /// Whether a record of `level` would be written: what an app asks before it
+    /// builds a message that is expensive to build.
+    public func isEnabled(for level: LogLevel) -> Bool {
         mars_xlog_is_enabled_for(handle, level.rawValue) != 0
     }
 
-    /// `mars_xlog_set_level_instance`.
-    public func setLevel(_ level: MarsXlogLevel) {
-        mars_xlog_set_level_instance(handle, level.rawValue)
+    /// Writes a record of `level`.
+    public func log(
+        _ level: LogLevel,
+        message: String,
+        tag: String = "",
+        file: String = #file,
+        function: String = #function,
+        line: Int32 = #line
+    ) {
+        guard isOpen else {
+            return
+        }
+        // `cTag` and friends: the same four strings as C pointers, which is
+        // what the closure hands back and what the C ABI copies out of.
+        withCStrings(first: tag, second: file, third: function, fourth: message) { cTag, cFile, cFunction, cMessage in
+            mars_xlog_write_instance(handle, level.rawValue, cTag, cFile, cFunction, line, cMessage)
+        }
     }
 
-    /// `mars_xlog_set_mode_instance`.
-    public func setMode(_ mode: MarsXlogMode) {
-        mars_xlog_set_mode_instance(handle, mode.rawValue)
+    /// `LogLevel.verbose`.
+    public func verbose(
+        message: String,
+        tag: String = "",
+        file: String = #file,
+        function: String = #function,
+        line: Int32 = #line
+    ) {
+        log(.verbose, message: message, tag: tag, file: file, function: function, line: line)
     }
 
-    /// `mars_xlog_flush_instance`.
-    public func flush(sync: Bool) {
+    /// `LogLevel.debug`.
+    public func debug(
+        message: String,
+        tag: String = "",
+        file: String = #file,
+        function: String = #function,
+        line: Int32 = #line
+    ) {
+        log(.debug, message: message, tag: tag, file: file, function: function, line: line)
+    }
+
+    /// `LogLevel.info`.
+    public func info(
+        message: String,
+        tag: String = "",
+        file: String = #file,
+        function: String = #function,
+        line: Int32 = #line
+    ) {
+        log(.info, message: message, tag: tag, file: file, function: function, line: line)
+    }
+
+    /// `LogLevel.warning`.
+    public func warning(
+        message: String,
+        tag: String = "",
+        file: String = #file,
+        function: String = #function,
+        line: Int32 = #line
+    ) {
+        log(.warning, message: message, tag: tag, file: file, function: function, line: line)
+    }
+
+    /// `LogLevel.error`.
+    public func error(
+        message: String,
+        tag: String = "",
+        file: String = #file,
+        function: String = #function,
+        line: Int32 = #line
+    ) {
+        log(.error, message: message, tag: tag, file: file, function: function, line: line)
+    }
+
+    /// `LogLevel.fatal`.
+    public func fatal(
+        message: String,
+        tag: String = "",
+        file: String = #file,
+        function: String = #function,
+        line: Int32 = #line
+    ) {
+        log(.fatal, message: message, tag: tag, file: file, function: function, line: line)
+    }
+
+    /// Takes what is in the cache to the log file, and hands the file's own
+    /// buffer to the OS — the last few KiB of a log file are in a `FILE*` until
+    /// this runs, so a reader in another process cannot see them yet.
+    ///
+    /// - Parameter sync: `true` drains on the calling thread, which is what an
+    ///                   app wants before it reads or uploads the files;
+    ///                   `false` asks the writer thread to do it and returns.
+    public func flush(sync: Bool = false) {
+        guard isOpen else {
+            return
+        }
         mars_xlog_flush_instance(handle, sync ? 1 : 0)
     }
 
-    /// `mars_xlog_write_instance`.
-    public func write(
-        _ level: MarsXlogLevel,
-        tag: String = "",
-        file: String = #file,
-        function: String = #function,
-        line: Int32 = #line,
-        message: String
-    ) {
-        withCStrings(tag: tag, file: file, function: function, message: message) { tag, file, function, message in
-            mars_xlog_write_instance(handle, level.rawValue, tag, file, function, line, message)
+    /// Closes this appender: drains what is left and drops it. Writing through
+    /// this `Xlog` afterwards writes nothing, and asking the C ABI for this
+    /// `namePrefix` answers `0`. Safe to call twice.
+    public func close() {
+        guard isOpen else {
+            return
         }
-    }
-}
-
-/// `mars_xlog_open` and the process-wide appender it opens.
-public enum MarsXlog {
-    /// `mars_xlog_open`, then `mars_xlog_set_level` for the configuration's
-    /// level. Returns `MARS_XLOG_OK` or a negative `MARS_XLOG_ERR_*` code.
-    @discardableResult
-    public static func open(_ configuration: MarsXlogConfiguration) -> Int32 {
-        withCStrings(
-            tag: configuration.logDirectory,
-            file: configuration.namePrefix,
-            function: configuration.publicKey,
-            message: configuration.cacheDirectory ?? ""
-        ) { logDir, namePrefix, publicKey, cacheDir in
-            var config = MarsXLogConfig(
-                mode: configuration.mode.rawValue,
-                log_dir: logDir,
-                name_prefix: namePrefix,
-                pub_key: publicKey,
-                compress_mode: configuration.compression.rawValue,
-                compress_level: configuration.compressionLevel,
-                cache_dir: cacheDir,
-                cache_days: configuration.cacheDays
-            )
-            let code = mars_xlog_open(&config)
-            if code == MARS_XLOG_OK {
-                mars_xlog_set_level(configuration.level.rawValue)
-            }
-            return code
+        namePrefix.withCString { prefix in
+            mars_xlog_release_instance(prefix)
         }
+        handle = Self.noHandle
     }
 
-    /// `mars_xlog_close`.
-    public static func close() {
-        mars_xlog_close()
-    }
-
-    /// `mars_xlog_flush` / `mars_xlog_flush_sync`.
-    public static func flush(sync: Bool) {
-        if sync {
-            mars_xlog_flush_sync()
-        } else {
-            mars_xlog_flush()
-        }
-    }
-
-    /// `mars_xlog_set_level`.
-    public static func setLevel(_ level: MarsXlogLevel) {
-        mars_xlog_set_level(level.rawValue)
-    }
-
-    /// `mars_xlog_set_console_log`.
-    public static func setConsoleLogEnabled(_ enabled: Bool) {
-        mars_xlog_set_console_log(enabled ? 1 : 0)
-    }
-
-    /// `mars_xlog_set_max_file_size`; `0` stops splitting the file.
-    public static func setMaxFileSize(_ bytes: UInt64) {
-        mars_xlog_set_max_file_size(bytes)
-    }
-
-    /// `mars_xlog_set_max_alive_duration`.
-    public static func setMaxAliveTime(_ seconds: Int64) {
-        mars_xlog_set_max_alive_duration(seconds)
-    }
-
-    /// `mars_xlog_set_mode`.
-    public static func setMode(_ mode: MarsXlogMode) {
-        mars_xlog_set_mode(mode.rawValue)
-    }
-
-    /// `mars_xlog_write`.
-    public static func write(
-        _ level: MarsXlogLevel,
-        tag: String = "",
-        file: String = #file,
-        function: String = #function,
-        line: Int32 = #line,
-        message: String
-    ) {
-        withCStrings(tag: tag, file: file, function: function, message: message) { tag, file, function, message in
-            mars_xlog_write(level.rawValue, tag, file, function, line, message)
-        }
-    }
-
-    /// `mars_xlog_current_log_path`, or `nil` when there is no open file (or
-    /// the buffer was too small, which 1024 bytes never is).
+    /// The path of the file the *process-wide* appender is writing — the one
+    /// `mars_xlog_open` opens, not the one of an `Xlog` — or `nil` when there is
+    /// no open file (or the buffer was too small, which 1024 bytes never is).
     public static var currentLogPath: String? {
         path(of: mars_xlog_current_log_path)
     }
 
-    /// `mars_xlog_current_log_cache_path`.
+    /// `mars_xlog_current_log_cache_path`: the cache file of the process-wide
+    /// appender. An `Xlog` of its own keeps its cache in its `XlogConfig`'s
+    /// `cacheDirectory ?? logDirectory`.
     public static var currentCachePath: String? {
         path(of: mars_xlog_current_log_cache_path)
     }
 
-    /// `mars_xlog_new_instance` — `nil` when the configuration was refused.
-    public static func instance(_ configuration: MarsXlogConfiguration) -> MarsXlogInstance? {
-        let handle = withCStrings(
-            tag: configuration.logDirectory,
-            file: configuration.namePrefix,
-            function: configuration.publicKey,
-            message: configuration.cacheDirectory ?? ""
-        ) { logDir, namePrefix, publicKey, cacheDir -> Int64 in
-            var config = MarsXLogConfig(
-                mode: configuration.mode.rawValue,
-                log_dir: logDir,
-                name_prefix: namePrefix,
-                pub_key: publicKey,
-                compress_mode: configuration.compression.rawValue,
-                compress_level: configuration.compressionLevel,
-                cache_dir: cacheDir,
-                cache_days: configuration.cacheDays
-            )
-            return mars_xlog_new_instance(&config, configuration.level.rawValue)
+    /// Opens an appender of this `Xlog`'s own: its own log directory, file name
+    /// prefix, key, mode and cache file, all of them `config`'s.
+    ///
+    /// The prefix is what the appender is known by — and what every one of its
+    /// files starts with — so an app that wants two gives them two. Asking for
+    /// a prefix that is already open answers the appender that is open and not
+    /// a second one.
+    ///
+    /// - Parameter config: what to open it with.
+    /// - Throws: `XlogError` when the config is one the C ABI refuses, which is
+    ///           what an empty log directory comes to.
+    public init(_ config: XlogConfig) throws {
+        guard !config.logDirectory.isEmpty else {
+            throw XlogError.emptyLogDirectory
         }
-        return handle == 0 ? nil : MarsXlogInstance(handle: handle)
+        guard !config.namePrefix.isEmpty else {
+            throw XlogError.emptyNamePrefix
+        }
+        guard config.compressionLevel >= 0, config.compressionLevel <= Self.maxCompressionLevel else {
+            throw XlogError.invalidCompressionLevel
+        }
+        guard config.cacheDays >= 0 else {
+            throw XlogError.negativeCacheDays
+        }
+
+        let opened = withCStrings(
+            first: config.logDirectory,
+            second: config.namePrefix,
+            third: config.publicKey,
+            fourth: config.cacheDirectory ?? ""
+        ) { directory, prefix, key, cache -> Int64 in
+            var cConfig = MarsXLogConfig(
+                mode: config.mode.rawValue,
+                log_dir: directory,
+                name_prefix: prefix,
+                pub_key: key,
+                compress_mode: config.compression.rawValue,
+                compress_level: config.compressionLevel,
+                cache_dir: cache,
+                cache_days: config.cacheDays
+            )
+            return mars_xlog_new_instance(&cConfig, config.level.rawValue)
+        }
+        guard opened != Self.noHandle else {
+            throw XlogError.refused
+        }
+
+        self.namePrefix = config.namePrefix
+        self.handle = opened
+        self.currentMode = config.mode
     }
 
-    /// `mars_xlog_get_instance`.
-    public static func instance(named namePrefix: String) -> MarsXlogInstance? {
-        let handle = namePrefix.withCString { mars_xlog_get_instance($0) }
-        return handle == 0 ? nil : MarsXlogInstance(handle: handle)
+    deinit {
+        close()
     }
 
-    /// `mars_xlog_release_instance`.
-    public static func releaseInstance(named namePrefix: String) {
-        namePrefix.withCString { mars_xlog_release_instance($0) }
-    }
+    /// The handle `mars_xlog_new_instance` answered with; `0` once [close()] ran.
+    private var handle: Int64
 
-    /// The buffer `mars_xlog_current_log_path` writes into; a path never fills
-    /// it, and the C ABI answers a length instead of a pointer when it would.
+    /// What [mode] answers while this side is the only one that knows it.
+    private var currentMode: AppenderMode
+
+    /// The buffer the path symbols write into; a path never fills it, and the C
+    /// ABI answers a length instead of a pointer when it would.
     private static let pathBufferSize = 1_024
+
+    /// The handle the C ABI answers for an appender it did not open.
+    private static let noHandle: Int64 = 0
+
+    /// `COMPRESS_LEVEL9`: the hardest the compressors are asked to try.
+    private static let maxCompressionLevel: Int32 = 9
 
     private static func path(of body: (UnsafeMutablePointer<CChar>, UInt32) -> Int32) -> String? {
         var buffer = [CChar](repeating: 0, count: pathBufferSize)
@@ -269,20 +333,20 @@ public enum MarsXlog {
     }
 }
 
-/// The C strings a write needs, valid for the length of the closure: the C ABI
+/// The C strings a call needs, valid for the length of the closure: the C ABI
 /// copies what it needs out of them before it answers.
 private func withCStrings<R>(
-    tag: String,
-    file: String,
-    function: String,
-    message: String,
+    first: String,
+    second: String,
+    third: String,
+    fourth: String,
     body: (UnsafePointer<CChar>, UnsafePointer<CChar>, UnsafePointer<CChar>, UnsafePointer<CChar>) -> R
 ) -> R {
-    tag.withCString { tag in
-        file.withCString { file in
-            function.withCString { function in
-                message.withCString { message in
-                    body(tag, file, function, message)
+    first.withCString { firstPointer in
+        second.withCString { secondPointer in
+            third.withCString { thirdPointer in
+                fourth.withCString { fourthPointer in
+                    body(firstPointer, secondPointer, thirdPointer, fourthPointer)
                 }
             }
         }
