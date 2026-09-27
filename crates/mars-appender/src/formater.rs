@@ -12,8 +12,8 @@
 use std::fmt::{self, Write};
 use std::sync::atomic::{AtomicIsize, Ordering};
 
-use chrono::{Datelike, Local, TimeZone, Timelike};
-use mars_core::PtrBuffer;
+use chrono::{DateTime, Datelike, Timelike};
+use mars_core::{local_time, PtrBuffer};
 
 use crate::config::{LogLevel, XLoggerInfo};
 
@@ -126,6 +126,11 @@ const HEADER_SIZE: usize = 1024;
 /// the same, so a record costs no allocation — the port used to build two
 /// `String`s per record, on the one path a logger has to be able to run even
 /// when the allocator is the thing that is struggling.
+///
+/// The integer overloads below exist because `write!` is not free: a
+/// `{}` of an integer costs ~30 ns of `Formatter` machinery, and one header has
+/// five of them. Writing the digits here — into the same buffer, with the same
+/// truncation — is what keeps the header at the cost of the bytes it writes.
 struct Snprintf<'a> {
     buf: &'a mut [u8],
     len: usize,
@@ -147,7 +152,49 @@ impl<'a> Snprintf<'a> {
         self.buf[self.len..self.len + n].copy_from_slice(&bytes[..n]);
         self.len += n;
     }
+
+    /// `%0*u` — `value` in decimal, padded on the left with `0` to `width`
+    /// digits. A value wider than `width` is written in full, like `printf`.
+    ///
+    /// No `%`: [`clippy::modulo_arithmetic`] is `deny` in this workspace, and
+    /// `value - (value / 10) * 10` is the same digit anyway.
+    fn push_decimal(&mut self, value: u64, width: usize) {
+        // The digits come out backwards; 20 is what `u64::MAX` needs.
+        let mut digits = [0u8; 20];
+        let mut count = 0usize;
+        let mut rest = value;
+        while rest > 0 && count < digits.len() {
+            let digit = usize::try_from(rest - (rest / 10) * 10).unwrap_or(0);
+            digits[count] = DIGITS[digit.min(DIGITS.len() - 1)];
+            rest /= 10;
+            count += 1;
+        }
+        // `0` has no digits of its own, and `printf` still writes one.
+        if count == 0 {
+            digits[0] = DIGITS[0];
+            count = 1;
+        }
+
+        for _ in count..width {
+            self.push(&[DIGITS[0]]);
+        }
+        for index in (0..count).rev() {
+            self.push(&digits[index..index + 1]);
+        }
+    }
+
+    /// `%d` / `%0*d` — [`Self::push_decimal`] with a sign in front of it.
+    fn push_signed(&mut self, value: i64, width: usize) {
+        if value < 0 {
+            self.push(b"-");
+        }
+        self.push_decimal(value.unsigned_abs(), width);
+    }
 }
+
+/// `0`..`9`, so [`Snprintf::push_decimal`] never has to do arithmetic on a
+/// digit.
+const DIGITS: &[u8; 10] = b"0123456789";
 
 impl Write for Snprintf<'_> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
@@ -156,33 +203,92 @@ impl Write for Snprintf<'_> {
     }
 }
 
-/// Formats `timeval` into `out` like the C++ `snprintf`:
+/// `"yyyy-mm-dd +12.75 hh:mm:ss."` — the widest `"%Y-%m-%d %+.1f %H:%M:%S."`
+/// there is, and the buffer is never indexed past what was written.
+const STAMP_TEXT_SIZE: usize = 32;
+
+/// The header's timestamp for one second, up to and including the `.` before
+/// the milliseconds.
+///
+/// Everything but the milliseconds is decided by `tv_sec` alone, so a second
+/// of logging renders it once: the C++ `snprintf`s all of it per record
+/// (`formater.cc`), and so did the port — six integer conversions and a float,
+/// ~60 ns of a ~150 ns header, for an answer that changes once a second.
+#[derive(Clone, Copy)]
+struct LocalStamp {
+    /// The `tv_sec` this was rendered for.
+    secs: i64,
+    /// `"yyyy-mm-dd +z hh:mm:ss."`, not NUL-terminated.
+    text: [u8; STAMP_TEXT_SIZE],
+    /// How much of [`Self::text`] is the timestamp.
+    len: usize,
+}
+
+thread_local! {
+    /// The last second's [`LocalStamp`] on this thread.
+    static LOCAL_STAMP: std::cell::Cell<Option<LocalStamp>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The `"yyyy-mm-dd +z hh:mm:ss."` of `secs`, cached for that second.
+///
+/// The offset comes from [`local_time`], which the day-rollover check and the
+/// crypt hour share — one `localtime` per second for the whole record, which is
+/// what replaces the per-record one the C++ does (`formater.cc:90`).
+fn local_stamp(secs: i64) -> Option<LocalStamp> {
+    LOCAL_STAMP.with(|cell| {
+        if let Some(cached) = cell.get() {
+            if cached.secs == secs {
+                return Some(cached);
+            }
+        }
+
+        let offset = local_time(secs).offset;
+        // `localtime` hands back local fields; `secs + gmtoff` read as UTC *are*
+        // those fields, and `DateTime::from_timestamp` is integer arithmetic
+        // where `Local` is a time-zone lookup — 2 ns against ~90 ns.
+        let local = DateTime::from_timestamp(secs + i64::from(offset), 0)?;
+
+        let mut text = [0u8; STAMP_TEXT_SIZE];
+        let mut out = Snprintf::new(&mut text);
+        out.push_decimal(u64::try_from(local.year()).unwrap_or(0), 0);
+        out.push(b"-");
+        out.push_decimal(u64::from(local.month()), 2);
+        out.push(b"-");
+        out.push_decimal(u64::from(local.day()), 2);
+        out.push(b" ");
+        // The one float in a record, formatted exactly the way the C++ formats
+        // it — an offset changes twice a year, so this line runs twice a year.
+        let _ = write!(out, "{:+.1}", f64::from(offset) / 3600.0);
+        out.push(b" ");
+        out.push_decimal(u64::from(local.hour()), 2);
+        out.push(b":");
+        out.push_decimal(u64::from(local.minute()), 2);
+        out.push(b":");
+        out.push_decimal(u64::from(local.second()), 2);
+        out.push(b".");
+
+        let len = out.len();
+        let fresh = LocalStamp { secs, text, len };
+        cell.set(Some(fresh));
+        Some(fresh)
+    })
+}
+
+/// Formats `timeval` into `out` the way the C++ `snprintf` does:
 /// `"%d-%02d-%02d %+.1f %02d:%02d:%02d.%.3d"` with `tm_gmtoff / 3600.0`.
 ///
 /// Writes nothing when the timestamp cannot be represented, which mirrors the
 /// C++ `char temp_time[64] = {0}` fallback when `tv_sec == 0`.
-fn write_timeval(timeval: (i64, i64), out: &mut dyn Write) {
-    let usec = timeval.1;
-    let nsec = (usec.rem_euclid(1_000_000) * 1_000) as u32;
-    let Some(dt) = Local.timestamp_opt(timeval.0, nsec).single() else {
+fn write_timeval(timeval: (i64, i64), out: &mut Snprintf<'_>) {
+    let Some(stamp) = local_stamp(timeval.0) else {
         return;
     };
 
-    let offset_hours = f64::from(dt.offset().local_minus_utc()) / 3600.0;
-    let millis = usec / 1000;
-
-    let _ = write!(
-        out,
-        "{}-{:02}-{:02} {:+.1} {:02}:{:02}:{:02}.{:03}",
-        dt.year(),
-        dt.month(),
-        dt.day(),
-        offset_hours,
-        dt.hour(),
-        dt.minute(),
-        dt.second(),
-        millis
-    );
+    out.push(&stamp.text[..stamp.len]);
+    // `%.3d` of `tv_usec / 1000`: a negative microsecond count prints its sign
+    // inside the three digits, like the C++ does.
+    out.push_signed(timeval.1 / 1000, 3);
 }
 
 /// `mars::xlog::log_formater`.
@@ -254,13 +360,27 @@ pub fn log_formater(info: Option<&XLoggerInfo>, logbody: Option<&str>, out: &mut
 
         let mut header = [0u8; HEADER_SIZE];
         let mut header = Snprintf::new(&mut header);
-        let _ = write!(header, "[{level}][");
+        // C++: `"[%s][%s][%PRIdMAX, %PRIdMAX%s][%s][%s:%d, %s]["`. Five of
+        // those conversions are integers, and `write!` spent ~150 ns of a
+        // record on them; [`Snprintf`] writes the same bytes by hand.
+        header.push(b"[");
+        header.push(level.as_bytes());
+        header.push(b"][");
         header.push(temp_time);
-        let _ = write!(
-            header,
-            "][{}, {}{}][{}][{}:{}, {}][",
-            info.pid, info.tid, main_thread, tag, filename, info.line, func_name
-        );
+        header.push(b"][");
+        header.push_signed(info.pid, 0);
+        header.push(b", ");
+        header.push_signed(info.tid, 0);
+        header.push(main_thread.as_bytes());
+        header.push(b"][");
+        header.push(tag.as_bytes());
+        header.push(b"][");
+        header.push(filename.as_bytes());
+        header.push(b":");
+        header.push_signed(i64::from(info.line), 0);
+        header.push(b", ");
+        header.push(func_name.as_bytes());
+        header.push(b"][");
 
         // C++ writes through `snprintf(..., 1024, ...)`, so at most 1023 bytes.
         let ret = header.len().min(1023);
