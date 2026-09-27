@@ -16,3 +16,10 @@ kmp/.gradle/
 kmp/build/
 kmp/*/build/
 kmp/local.properties
+
+# the VitePress site: what `npm ci` installs and what `vitepress build` and its
+# dev server write. `docs/package-lock.json` is checked in, so the install is
+# reproducible and this is the only part of the site that is not.
+docs/node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/

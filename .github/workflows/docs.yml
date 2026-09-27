@@ -1,0 +1,112 @@
+name: Docs
+
+# The VitePress site under `docs/`, published to GitHub Pages by the Actions
+# route: `build` uploads the built site as a Pages artefact and `deploy` hands
+# that artefact to `actions/deploy-pages`. No `gh-pages` branch is involved and
+# the run pushes nothing back to the repository — the source of what is served
+# is the artefact of the run that built it, which is why `main` stays the only
+# branch this workflow reads.
+#
+# What decides whether the build runs is `changes` below, and not a `paths:` in
+# `on:`: a run that never starts reports no status at all, so a pull request
+# that touched no documentation would be left with a check that never answers.
+# A *job* that skips does answer, and this is the shape the lint workflows use
+# (see the comment on `changes` in lint-swift.yml). A pull request that touches
+# no documentation still gets a green `Docs`, and it costs one ubuntu job that
+# does nothing but read a diff.
+#
+# One thing has to be true for `deploy` to work, once: Settings → Pages →
+# Source has to be "GitHub Actions". Nothing in this workflow can set it —
+# `actions/configure-pages` can only enable Pages with a token that is not
+# `GITHUB_TOKEN` — so it is a switch in the repository's settings and not a
+# step here. The `base` of the site is `/mars-rs/` either way, and it is written
+# in `docs/.vitepress/config.mts`: a project page is served under
+# <owner>.github.io/mars-rs/, and a built site that does not know that resolves
+# `/assets/...` against the root of github.io and comes back 404.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+# A push supersedes the run it interrupts, so the older one is cancelled. A
+# push to main is never cancelled — every commit of it gets its own green or
+# red.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  changes:
+    name: What changed (Docs)
+    runs-on: ubuntu-latest
+    outputs:
+      needed: ${{ steps.paths.outputs.needed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The diff is against the base of the pull request, which is behind
+          # the tip of the branch it was cut from.
+          fetch-depth: 0
+      - id: paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.after || github.sha }}
+        run: |
+          .github/scripts/changed_paths.sh \
+            'docs/**' '.github/scripts/**' '.github/workflows/docs.yml'
+
+  build:
+    name: Build the site
+    needs: changes
+    if: needs.changes.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - name: Install
+        working-directory: docs
+        run: npm ci
+      # `vitepress build` writes into docs/.vitepress/dist and fails the job on
+      # a dead link, which is the reason a pull request builds at all: the site
+      # is prose in markdown, and the only thing a build proves about prose is
+      # that it is reachable.
+      - name: Build
+        working-directory: docs
+        run: npm run build
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs/.vitepress/dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    # A pull request builds the site and stops: what it wanted to know is
+    # whether the build is green. Only `main` publishes.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      # `actions/deploy-pages` asks for an OIDC token of the run and not for a
+      # secret: there is no deploy key in the repository to leak.
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
