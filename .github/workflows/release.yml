@@ -136,7 +136,7 @@ jobs:
       is_new: ${{ steps.resolve.outputs.is_new }}
       skip: ${{ steps.resolve.outputs.skip }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -160,7 +160,7 @@ jobs:
     env:
       RUSTFLAGS: '-D warnings'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Show build environment
         run: |
           xcodebuild -version
@@ -169,7 +169,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build the xcframeworks
         run: scripts/build_xcframework.sh "${{ needs.version.outputs.version }}" dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-apple
           path: |
@@ -181,9 +181,9 @@ jobs:
     if: needs.version.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -212,7 +212,7 @@ jobs:
           (cd android && ./gradlew --no-daemon :mars-core:assembleRelease :mars-xlog:assembleRelease)
           cp android/mars-core/build/outputs/aar/mars-core-release.aar "dist/$CORE_AAR"
           cp android/mars-xlog/build/outputs/aar/mars-xlog-release.aar "dist/$XLOG_AAR"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-android
           # the three files this module publishes, and not `dist/`: that
@@ -244,7 +244,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             archive: zip
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the C ABI
@@ -279,7 +279,7 @@ jobs:
             tar -czf "dist/mars-rs-$version-$target.tar.gz" -C dist "mars-rs-$version-$target"
             rm -rf "$stage"
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-host-${{ matrix.target }}
           path: dist/
@@ -294,12 +294,12 @@ jobs:
     env:
       RUSTFLAGS: '-D warnings'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the Apple archives
         run: scripts/build_kmp_native.sh dist/kmp-native
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: kmp-native-apple
           path: dist/kmp-native
@@ -311,7 +311,7 @@ jobs:
     env:
       RUSTFLAGS: '-D warnings'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install the cross toolchains
         # `aarch64-linux-gnu-gcc` for the Linux archive of an arm64 machine and
         # `mingw-w64` for the Windows one: `scripts/build_kmp_native.sh` reads
@@ -324,11 +324,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build the Linux and Windows archives
         run: scripts/build_kmp_native.sh dist/kmp-native
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: kmp-native-host
           path: dist/kmp-native
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -353,7 +353,7 @@ jobs:
           "$SDKMANAGER" --install "platforms;android-36" "build-tools;34.0.0"
           echo "sdk.dir=$ANDROID_HOME" > kmp/local.properties
       - name: Collect the JNI libraries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-android
           path: dist
@@ -363,7 +363,7 @@ jobs:
         # Every one of them, for a test of the Linux one: cinterop is
         # commonized, so the klib of a single target cannot be built without the
         # headers of all thirteen being read — see `kmp/gradle.properties`.
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: kmp-native-apple
           path: kmp/native
@@ -390,8 +390,8 @@ jobs:
     if: needs.version.outputs.skip != 'true'
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -417,13 +417,13 @@ jobs:
           "$sdkmanager" --install "platforms;android-36" "build-tools;34.0.0"
           echo "sdk.dir=$android_home" > kmp/local.properties
       - name: Collect the native archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: kmp-native-*
           merge-multiple: true
           path: kmp/native
       - name: Collect the JNI libraries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-android
           path: dist
@@ -473,7 +473,7 @@ jobs:
           done
       - name: Package the native archives
         run: (cd kmp/native && zip -q -r "$GITHUB_WORKSPACE/dist/$KMP_NATIVE_ZIP" .)
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-kmp
           path: |
@@ -487,9 +487,9 @@ jobs:
     # way orangeboyChen/mars does it
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: release-*
           merge-multiple: true

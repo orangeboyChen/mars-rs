@@ -52,7 +52,7 @@ jobs:
     outputs:
       needed: ${{ steps.paths.outputs.needed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The diff is against the base of the pull request, which is behind
           # the tip of the branch it was cut from.
@@ -75,7 +75,7 @@ jobs:
     # Swift runtime the ubuntu image does not carry.
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # A Swift 6 toolchain is what lints the sources, and it changes nothing
       # about what is shipped: `scripts/build_xcframework.sh` compiles no Swift
       # at all (it runs cargo and then `xcodebuild -create-xcframework`), and

@@ -75,7 +75,7 @@ jobs:
     outputs:
       needed: ${{ steps.paths.outputs.needed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The diff is against the base of the pull request, which is behind
           # the tip of the branch it was cut from.
@@ -97,7 +97,7 @@ jobs:
     if: needs.changes.outputs.needed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -145,7 +145,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: needs.changes.outputs.needed == 'true'
       - uses: dtolnay/rust-toolchain@stable
         if: needs.changes.outputs.needed == 'true'
@@ -208,7 +208,7 @@ jobs:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           # both ABIs, in one job: see the comment on the build step
@@ -273,7 +273,7 @@ jobs:
       # a second time.
       OHOS_SDK_CACHE: ${{ github.workspace }}/.ohos-sdk
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: >-
@@ -281,7 +281,7 @@ jobs:
             armv7-unknown-linux-ohos
             x86_64-unknown-linux-ohos
       - name: Cache the OHOS SDK
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .ohos-sdk
           key: ohos-sdk-${{ env.OHOS_SDK_VERSION }}
@@ -296,7 +296,7 @@ jobs:
     if: needs.changes.outputs.needed == 'true'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           # all four, in one job: see the comment on the build step
@@ -335,7 +335,7 @@ jobs:
     if: needs.changes.outputs.needed == 'true' && github.event_name != 'pull_request'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
