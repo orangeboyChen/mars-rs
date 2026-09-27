@@ -21,7 +21,8 @@
  *     mars/sdt/sdt_core.cc          (the `__RunOn` thread that runs the checks)
  *     mars/sdt/src/checkimpl/       (the four probes a check asks)
  *
- * and is the C equivalent of the JNI bridge in mars/sdt/jni/*_Java2C.cc.
+ * and is the C equivalent of the JNI bridge of `mars/sdt`, its
+ * `*_Java2C.cc` pair.
  *
  * The one thing a caller supplies is the network: DNS, TCP, HTTP and ping are
  * four probes this library refuses to open for itself, so they cross the
@@ -44,6 +45,14 @@
 
 #ifndef MARS_SDT_H_
 #define MARS_SDT_H_
+
+/* The symbols this header declares are the ones `#[no_mangle]` exports: plain
+ * C names, and a C++ translation unit that includes this and calls
+ * `mars_sdt_reset()` asks its linker for a mangled one that does not exist.
+ * The guard says what the library already says for itself. */
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* --- return codes ------------------------------------------------------- */
 
@@ -206,5 +215,9 @@ int mars_sdt_run_checks(void* ctx, MarsSdtProbe probe, int network_type);
  */
 int mars_sdt_take_report(char* out, unsigned int len);
 
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 #endif /* MARS_SDT_H_ */

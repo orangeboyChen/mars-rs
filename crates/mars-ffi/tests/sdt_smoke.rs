@@ -10,14 +10,18 @@
 #![cfg(feature = "sdt")]
 
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::thread;
+use std::time::Duration;
 
 use mars_ffi::sdt::{
     mars_sdt_cancel_active_check, mars_sdt_http_netcheck_cgi, mars_sdt_is_checking, mars_sdt_plan,
     mars_sdt_reset, mars_sdt_run_checks, mars_sdt_set_http_netcheck_cgi,
     mars_sdt_start_active_check, mars_sdt_take_report, MarsSdtAnswer, MarsSdtCheck, MarsSdtHosts,
     MarsSdtIpPort, MarsSdtKind, MarsSdtQuery, MARS_SDT_ERR_BUSY, MARS_SDT_ERR_NO_CHECK,
-    MARS_SDT_ERR_NO_PROBE, MARS_SDT_ERR_NO_SPACE, MARS_SDT_ERR_NULL_OUT, MARS_SDT_OK,
+    MARS_SDT_ERR_NO_PROBE, MARS_SDT_ERR_NO_SPACE, MARS_SDT_ERR_NULL_OUT, MARS_SDT_ERR_PANIC,
+    MARS_SDT_OK,
 };
 
 /// `NET_CHECK_BASIC | NET_CHECK_LONG | NET_CHECK_SHORT` of
@@ -64,6 +68,24 @@ fn resolved_ips() -> (*const *const c_char, c_uint) {
     let mut ips = IPS.lock().unwrap_or_else(|e| e.into_inner());
     ips[0] = resolved_ip() as usize;
     (ips.as_ptr() as *const *const c_char, ips.len() as c_uint)
+}
+
+/// The network, as a caller supplies it, only slower: a probe that takes its
+/// time, so that a test can cancel a run *while* it is in flight and not
+/// before it starts.
+///
+/// [`slow_probes`] counts them, because the counter a run thread writes
+/// through `ctx` is the thread's own and not the cancelling thread's to read.
+extern "C" fn slow_probe(ctx: *mut c_void, query: *const MarsSdtQuery, answer: *mut MarsSdtAnswer) {
+    slow_probes().fetch_add(1, Ordering::SeqCst);
+    thread::sleep(Duration::from_millis(50));
+    probe(ctx, query, answer);
+}
+
+/// How many probes [`slow_probe`] has been asked.
+fn slow_probes() -> &'static AtomicUsize {
+    static SLOW: AtomicUsize = AtomicUsize::new(0);
+    &SLOW
 }
 
 /// The network, as a caller supplies it: every probe works, and answers at once.
@@ -356,6 +378,108 @@ fn a_null_probe_is_reported() {
     );
     // The request is still there: nothing ran, so nothing was refused.
     assert_eq!(mars_sdt_is_checking(), 1);
+}
+
+/// A run that is cancelled *while it is asking probes* stops early.
+///
+/// This is the whole reason the cancellation flag does not live behind the
+/// process-wide diagnosis: `mars_sdt_run_checks` holds it from the first probe
+/// to the last, so a flag reached through that lock can only be set before a
+/// run starts or after it has finished and reset itself — never while it is
+/// in flight, which is the only time cancelling means anything.
+#[test]
+fn a_run_in_flight_can_be_cancelled() {
+    let _guard = lock();
+
+    // How many probes a whole run asks, to have something to compare against.
+    mars_sdt_reset();
+    // SAFETY: the hosts of `start` are alive for the call.
+    assert_eq!(unsafe { start(NET_CHECK_ALL) }, MARS_SDT_OK);
+    slow_probes().store(0, Ordering::SeqCst);
+    let whole = Box::leak(Box::new(0usize));
+    // SAFETY: `whole` outlives the run, and `slow_probe` answers with strings
+    // that outlive it too.
+    assert_eq!(
+        unsafe {
+            mars_sdt_run_checks(
+                whole as *mut usize as *mut c_void,
+                Some(slow_probe),
+                NET_WIFI,
+            )
+        },
+        MARS_SDT_OK
+    );
+    let whole = slow_probes().load(Ordering::SeqCst);
+    assert!(whole >= 4, "a whole run asks every check: {whole}");
+
+    // The same run again, cancelled from this thread while it is going.
+    mars_sdt_reset();
+    // SAFETY: the hosts of `start` are alive for the call.
+    assert_eq!(unsafe { start(NET_CHECK_ALL) }, MARS_SDT_OK);
+    slow_probes().store(0, Ordering::SeqCst);
+    let counted = Box::leak(Box::new(0usize));
+    let ctx = counted as *mut usize as usize;
+    let run = thread::spawn(move || {
+        // SAFETY: `counted` outlives the run — it is leaked — and `slow_probe`
+        // answers with strings that outlive it too.
+        unsafe { mars_sdt_run_checks(ctx as *mut c_void, Some(slow_probe), NET_WIFI) }
+    });
+    while slow_probes().load(Ordering::SeqCst) == 0 {
+        thread::sleep(Duration::from_millis(1));
+    }
+    mars_sdt_cancel_active_check();
+    let code = run.join().expect("the run thread did not panic");
+    let asked = slow_probes().load(Ordering::SeqCst);
+
+    assert_ne!(code, MARS_SDT_ERR_PANIC);
+    assert!(
+        asked < whole,
+        "cancelling stopped the run: {asked} probes of {whole}"
+    );
+}
+
+/// A report that did not fit is not taken: the retry a caller makes with a
+/// bigger buffer gets the diagnosis, and not an empty one.
+#[test]
+fn a_report_that_does_not_fit_is_kept() {
+    let _guard = lock();
+    mars_sdt_reset();
+
+    // SAFETY: the hosts of `start` are alive for the call.
+    assert_eq!(unsafe { start(NET_CHECK_ALL) }, MARS_SDT_OK);
+    let mut probes = 0usize;
+    // SAFETY: `probes` outlives the run.
+    assert_eq!(
+        unsafe {
+            mars_sdt_run_checks(
+                &mut probes as *mut usize as *mut c_void,
+                Some(probe),
+                NET_WIFI,
+            )
+        },
+        MARS_SDT_OK
+    );
+
+    // Eight bytes is not a report, and the call says so instead of handing
+    // over nothing and calling it taken.
+    let mut small = vec![0 as c_char; 8];
+    // SAFETY: a valid buffer of eight bytes.
+    assert_eq!(
+        unsafe { mars_sdt_take_report(small.as_mut_ptr(), small.len() as c_uint) },
+        MARS_SDT_ERR_NO_SPACE
+    );
+
+    // So the retry with room gets the whole thing.
+    let mut report = vec![0 as c_char; 4096];
+    // SAFETY: a valid buffer of 4096 bytes.
+    let written = unsafe { mars_sdt_take_report(report.as_mut_ptr(), report.len() as c_uint) };
+    assert!(written > 0);
+    // SAFETY: the call above wrote a NUL-terminated string into `report`.
+    let json = unsafe { CStr::from_ptr(report.as_ptr()) }
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(json.matches("\"detectType\":").count(), 6, "{json}");
 }
 
 #[test]

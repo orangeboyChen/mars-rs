@@ -29,6 +29,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use mars_sdt::checkimpl::{Answer, Ask, PingStatus, Query};
 use mars_sdt::netchecker_profile::CheckResultProfile;
+use mars_sdt::sdt_core::CancelHandle;
 use mars_sdt::{report_json, Callback, CheckIPPort, CheckIPPorts, NetCheckType, SdtLogic};
 
 use crate::cstr;
@@ -239,7 +240,30 @@ fn new_state() -> SdtState {
     let reported = Arc::new(Mutex::new(Vec::new()));
     let mut logic = SdtLogic::new();
     logic.set_callback(Sink(Arc::clone(&reported)));
+    // A new diagnosis is a new core, and a new cancellation flag with it: this
+    // is the one [`mars_sdt_cancel_active_check`] sets, and it has to be the
+    // one the logic the state holds answers to.
+    *cancel()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = logic.cancel_handle();
     SdtState { logic, reported }
+}
+
+/// The cancellation flag of the request in flight, kept *outside* [`state()`].
+///
+/// That is the whole point: [`mars_sdt_run_checks`] holds the process-wide
+/// diagnosis for as long as the checks take — which is exactly when a caller
+/// wants to cancel — so a flag that had to be reached through that lock could
+/// only ever be set before a run started or after it had already finished and
+/// reset itself. [`mars_sdt::CancelHandle`] is shared for the same reason
+/// inside the diagnosis, and this is the copy the boundary keeps of it.
+fn cancel() -> &'static Mutex<CancelHandle> {
+    static CANCEL: OnceLock<Mutex<CancelHandle>> = OnceLock::new();
+    // A flag of its own, and not [`new_state`]'s: that one reaches for this,
+    // so asking it here would be asking the question the answer is made of.
+    // Every state that follows overwrites it with the handle of the core it
+    // holds, which is the one a run of that core reads.
+    CANCEL.get_or_init(|| Mutex::new(CancelHandle::new()))
 }
 
 fn state() -> &'static Mutex<SdtState> {
@@ -344,9 +368,19 @@ pub unsafe extern "C" fn mars_sdt_start_active_check(
 }
 
 /// `CancelActiveCheck` — the check in flight is asked to stop.
+///
+/// It stops a run that is *in* flight, not one that has not started: the flag
+/// this sets is the one [`mars_sdt_run_checks`]' own read, and it is reached
+/// without the lock that run holds, so a caller may cancel from another thread
+/// while the probes are still being asked.
 #[no_mangle]
 pub extern "C" fn mars_sdt_cancel_active_check() {
-    guard((), || with_state(|state| state.logic.cancel_active_check()));
+    guard((), || {
+        cancel()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .cancel()
+    });
 }
 
 /// Whether a check is in flight.
@@ -441,6 +475,10 @@ pub unsafe extern "C" fn mars_sdt_run_checks(
 /// call — the document `SdtLogic.reportSignalDetectResults(String)` gets in the
 /// C++, built by [`mars_sdt::report_json`].
 ///
+/// A report that did not fit is *not* taken: on [`MARS_SDT_ERR_NO_SPACE`] (or
+/// [`MARS_SDT_ERR_NULL_OUT`]) it stays where it was and the next call hands it
+/// over again, which is what makes asking again with a bigger buffer work.
+///
 /// @return the number of bytes written excluding the terminating NUL, or
 /// [`MARS_SDT_ERR_PANIC`], [`MARS_SDT_ERR_NULL_OUT`] or
 /// [`MARS_SDT_ERR_NO_SPACE`].
@@ -462,7 +500,23 @@ pub unsafe extern "C" fn mars_sdt_take_report(out: *mut c_char, len: c_uint) -> 
         let json = report_json(&results);
         // SAFETY: forwarded to `write_str_into`, whose contract the caller
         // upholds (null or `len` writable bytes).
-        unsafe { write_str_into(json.as_bytes(), out, len) }
+        let written = unsafe { write_str_into(json.as_bytes(), out, len) };
+        // Taking the report is what makes the next call report what happened
+        // since — but only once it has been handed over. A report that did not
+        // fit (or had nowhere to go) is put back whole, at the front: the
+        // caller's next call is the retry it is asking for with a bigger
+        // buffer, and a diagnosis that is lost because the first buffer was
+        // 4 KB is one no retry can get back.
+        if written < 0 && !results.is_empty() {
+            with_state(|state| {
+                if let Ok(mut reported) = state.reported.lock() {
+                    let later = std::mem::take(&mut *reported);
+                    *reported = results;
+                    reported.extend(later);
+                }
+            });
+        }
+        written
     })
 }
 
