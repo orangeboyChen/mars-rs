@@ -222,6 +222,41 @@ fn two_cache_directories_share_the_log_directories_lock() {
     }
 }
 
+/// One slot that recovers and one that cannot be read: the failure is what the
+/// caller has to see, or a half-recovered cache looks like a clean one.
+#[test]
+fn a_slot_that_does_not_recover_is_reported_with_the_one_that_did() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("log");
+    let cfg = config(&log);
+    fs::create_dir_all(&log).unwrap();
+
+    // Slot 0, the way a process that died leaves it: one record in a whole
+    // region, and a lock nobody holds.
+    let recovered = log.join("Mars.mmap3");
+    let mut region = vec![0u8; 150 * 1024];
+    let mut buffer = LogBuffer::new(true, None, CompressMode::Zlib, 6);
+    buffer.attach(&mut region);
+    assert!(buffer.write(&mut region, b"the slot that recovers"));
+    fs::write(&recovered, &region).unwrap();
+
+    // Slot 2, unreadable: shorter than a region, which is what a truncated or
+    // half-written cache file looks like.
+    let unreadable = log.join("Mars_2.mmap3");
+    fs::write(&unreadable, b"not a whole cache file").unwrap();
+
+    assert_eq!(
+        appender_oneshot_flush(&cfg),
+        FileIoAction::ReadFailed,
+        "the first slot's success must not hide the second's failure"
+    );
+    assert!(!recovered.exists(), "the slot that recovered must be gone");
+    assert!(unreadable.exists(), "the slot that failed must be kept");
+
+    let text = payload_text(&fs::read(today_log_file(&log)).unwrap());
+    assert!(text.contains("the slot that recovers"), "{text}");
+}
+
 /// The body [`two_processes_keep_every_record`] runs in a second process: open
 /// the same prefix in the same directory and write.
 ///

@@ -447,6 +447,10 @@ pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
     }
 
     let mut action = FileIoAction::Unnecessary;
+    // A failure is remembered on its own: one slot that recovers does not make
+    // a later one that does not a success, and the caller — which is what
+    // decides whether to try again — has to be able to see it.
+    let mut failed: Option<FileIoAction> = None;
     for slot in 0..MAX_CACHE_SLOTS {
         let path = cache_slot_path(&dir, &config.nameprefix, slot);
         if !path.exists() {
@@ -463,15 +467,15 @@ pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
         match appender.treat_mapping_as_file_and_flush(&path) {
             FileIoAction::Success => action = FileIoAction::Success,
             FileIoAction::Unnecessary => {}
-            failed => {
-                if action != FileIoAction::Success {
-                    action = failed;
-                }
+            // Every slot is tried, so any one of them says the same thing to
+            // the caller: something is still unrecovered.
+            other => {
+                failed.get_or_insert(other);
             }
         }
     }
     appender.close();
-    action
+    failed.unwrap_or(action)
 }
 
 /// `mars::xlog::xlogger_appender` / `XloggerAppender::Write`.
