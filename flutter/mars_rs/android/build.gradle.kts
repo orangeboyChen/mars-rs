@@ -1,7 +1,8 @@
-// The Android half of the `mars_rs_xlog` plugin: a method channel over `Xlog`,
-// the Kotlin face of `libmarsxlog.so` in the `mars-rs-xlog` AAR. `mars_rs` is
-// the same plugin over the `mars-rs` AAR — the whole port, which today is the
-// same xlog — and it is the one an app takes when it wants more than logging.
+// The Android half of the `mars_rs` plugin: a method channel over `Xlog`, the
+// Kotlin face of `libmarsxlog.so` in the `mars-rs` AAR — the AAR of the whole
+// port, which today is xlog. `mars_rs_xlog` is the same plugin over
+// `mars-rs-xlog`, the AAR an app that only logs takes, and the AAR is the whole
+// difference between the two.
 //
 // Nothing is compiled from Rust here, and no `.so` is packaged either: the AAR
 // of the release this plugin was packaged for carries them, which is what the
@@ -19,7 +20,7 @@ plugins {
 }
 
 android {
-    namespace = "io.github.orangeboychen.marsrs.xlog.flutter"
+    namespace = "io.github.orangeboychen.marsrs.flutter"
     compileSdk = 36
 
     defaultConfig {
@@ -37,10 +38,10 @@ android {
 repositories {
     google()
     mavenCentral()
-    // `mars-rs-xlog`, the AAR of the release; JitPack is where it is published.
+    // `mars-rs`, the AAR of the release; JitPack is where it is published.
     maven("https://jitpack.io")
 }
 
 dependencies {
-    implementation("io.github.orangeboychen:mars-rs-xlog:0.1.0-alpha.2")
+    implementation("io.github.orangeboychen:mars-rs:0.1.0-alpha.2")
 }

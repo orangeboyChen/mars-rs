@@ -1,12 +1,13 @@
-# mars_rs_xlog
+# mars_rs
 
-The Flutter plugin of the xlog half of [mars-rs](https://github.com/orangeboyChen/mars-rs),
-a Rust implementation of [Tencent/mars](https://github.com/Tencent/mars): it writes
-the `.xlog` the C++ implementation produced, encrypted or plain, zlib- or
-zstd-compressed, sync or async.
+The Flutter plugin of the whole of [mars-rs](https://github.com/orangeboyChen/mars-rs),
+a Rust implementation of [Tencent/mars](https://github.com/Tencent/mars): the
+`.xlog` the C++ implementation produced — encrypted or plain, zlib- or
+zstd-compressed, sync or async — today, and STN and SDT when the C ABI carries
+them.
 
 ```dart
-import 'package:mars_rs_xlog/mars_rs_xlog.dart';
+import 'package:mars_rs/mars_rs.dart';
 
 final config = MarsXlogConfig(
   logDirectory: (await getTemporaryDirectory()).path,
@@ -27,13 +28,13 @@ it was opened with — what `MarsXlogInstance` of the Swift package and
 
 ## Installing it
 
-The release of a tag publishes `mars-rs-flutter-xlog-<version>.tar.gz`; unpack it
-next to the app and depend on the directory:
+The release of a tag publishes `mars-rs-flutter-<version>.tar.gz`; unpack it next
+to the app and depend on the directory:
 
 ```yaml
 dependencies:
-  mars_rs_xlog:
-    path: ../mars_rs_xlog
+  mars_rs:
+    path: ../mars_rs
 ```
 
 | | |
@@ -48,8 +49,8 @@ dependencies:
 The two halves do not get their native the same way, and the difference is the
 ecosystem's, not the port's:
 
-* **Android** depends on the `mars-rs-xlog` AAR of the same version
-  (`io.github.orangeboychen:mars-rs-xlog`) from JitPack — the same coordinate,
+* **Android** depends on the `mars-rs` AAR of the same version
+  (`io.github.orangeboychen:mars-rs`) from JitPack — the same coordinate,
   resolved the same way, as for an app that takes the AAR directly. The `.so`
   files are the AAR's, so nothing is built here and nothing Rust is needed.
 * **iOS** carries `MarsRSXlog.xcframework` with it, in `ios/Frameworks`, and
@@ -61,11 +62,16 @@ Both files arrive with the release and not with this directory: what is checked
 in is the plugin, and `scripts/package_flutter.sh` is what makes a complete
 package out of it.
 
-## Why it is called xlog's
+## Why there are two plugins
 
-The C ABI is 28 `mars_xlog_*` symbols and nothing else, and
-`scripts/build_xcframework.sh` fails the day it is not — the same reason the
-framework and the AAR are called xlog's. The pair's other half is `mars_rs`, the
-whole-port plugin, and STN and SDT land in that one and in nothing here. Take one
-of the two and not both: both carry the same `libmarsxlog.so`, and an app with
-two of it does not build.
+`mars_rs_xlog` is this plugin with the logging half only, and the two are the
+pair the AARs of `android/` are — `mars-rs` and `mars-rs-xlog` — and the pair
+`MarsRS` and `MarsRSXlog` of `Package.swift` are. Today they are the same package
+under two names: the C ABI is 28 `mars_xlog_*` symbols and nothing else, and
+`scripts/build_xcframework.sh` fails the day it is not, so taking this one costs
+exactly what `mars_rs_xlog` costs and the difference between the two is the
+promise, not the bytes. STN and SDT land here and in nothing else, which is what
+an app that wants them is buying.
+
+Take one of the two and not both: both carry the same `libmarsxlog.so`, and an
+app with two of it does not build.

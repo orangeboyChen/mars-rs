@@ -67,6 +67,11 @@ package out of it.
 
 The C ABI is 28 `mars_xlog_*` symbols and nothing else, and
 `scripts/build_xcframework.sh` fails the day it is not — the same reason the
-framework and the AAR are called xlog's. `MarsRS` is the umbrella the whole port
-joins under, and a module of that name lands with the STN and SDT halves of the
-C ABI.
+framework and the AAR are called xlog's. `mars-rs-react-native` is the umbrella
+the whole port joins under: STN and SDT land there and not here, so an app that
+only logs keeps this one and downloads nothing it does not call. Today the two
+are the same module under two names, and taking the umbrella costs exactly what
+this one costs.
+
+Take one of the two and not both: both carry the same `libmarsxlog.so`, and an
+app with two of it does not build.

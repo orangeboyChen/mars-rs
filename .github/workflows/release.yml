@@ -7,13 +7,18 @@ name: Release
 #   * mars-xlog.aar              -> JitPack: io.github.orangeboyChen:mars-rs-xlog
 #   * mars-android-native.zip    -> the .so files, for a consumer's own AAR
 #   * mars-rs-<version>-<host>.tar.gz / .zip -> the C ABI for Linux/macOS/Windows
-#   * mars-rs-flutter-<version>.tar.gz          -> the Flutter plugin
-#   * mars-rs-react-native-xlog-<version>.tgz   -> the React Native module
+#   * mars-rs-flutter-<version>.tar.gz          -> the Flutter plugin, the whole port
+#   * mars-rs-flutter-xlog-<version>.tar.gz     -> the Flutter plugin, xlog alone
+#   * mars-rs-react-native-<version>.tgz        -> the React Native module, the whole port
+#   * mars-rs-react-native-xlog-<version>.tgz   -> the React Native module, xlog alone
 #
-# The last two are packages over what the four above them already are: their
-# Android halves depend on the `mars-rs-xlog` AAR of this release, and their
-# Apple halves carry MarsRSXlog.xcframework with them, because CocoaPods cannot
-# resolve the SwiftPM binary target of Package.swift.
+# The last four are packages over what the four above them already are, and they
+# are two pairs — the pair android/ publishes as `mars-rs` and `mars-rs-xlog`,
+# the pair Package.swift publishes as `MarsRS` and `MarsRSXlog`. Their Android
+# halves depend on the AAR of the same name in this release; their Apple halves
+# carry MarsRSXlog.xcframework with them, because CocoaPods cannot resolve the
+# SwiftPM binary target of Package.swift.
+#
 # Trigger it by hand (Actions -> Release -> Run workflow):
 #
 #   * version: the version, typed out — "1.2.3", "v1.2.3-alpha.1", "0.2.0-beta.2"
@@ -80,11 +85,14 @@ env:
   JITPACK_GROUP: io.github.orangeboychen
   JITPACK_ARTIFACT: mars-rs
   JITPACK_ARTIFACT_XLOG: mars-rs-xlog
-  # The two packages the release publishes alongside them. The React Native
-  # one is named here because `npm pack` names its tarball after the `name` of
-  # react-native/package.json, and the asset has to be the file that wrote.
+  # The two pairs of packages the release publishes alongside them, named the
+  # way the AARs above are: the whole port, and xlog alone. The React Native
+  # names are here because `npm pack` names its tarball after the `name` of a
+  # package.json, and the asset has to be the file that wrote.
   FLUTTER_ARCHIVE: mars-rs-flutter
-  RN_PACKAGE: mars-rs-react-native-xlog
+  FLUTTER_XLOG_ARCHIVE: mars-rs-flutter-xlog
+  RN_PACKAGE: mars-rs-react-native
+  RN_XLOG_PACKAGE: mars-rs-react-native-xlog
   NDK_VERSION: 27.1.12297006
   ANDROID_HOME: /usr/local/lib/android/sdk
   ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
@@ -215,10 +223,11 @@ jobs:
                       x86_64-pc-windows-msvc:zip; do
             ASSETS="$ASSETS mars-rs-$VERSION-${HOST%%:*}.${HOST##*:}"
           done
-          # the Flutter plugin and the React Native module, named the way
-          # scripts/package_flutter.sh and scripts/package_react_native.sh name
-          # what they write
-          ASSETS="$ASSETS $FLUTTER_ARCHIVE-$VERSION.tar.gz $RN_PACKAGE-$VERSION.tgz"
+          # the two Flutter plugins and the two React Native modules, named the
+          # way scripts/package_flutter.sh and scripts/package_react_native.sh
+          # name what they write
+          ASSETS="$ASSETS $FLUTTER_ARCHIVE-$VERSION.tar.gz $FLUTTER_XLOG_ARCHIVE-$VERSION.tar.gz"
+          ASSETS="$ASSETS $RN_PACKAGE-$VERSION.tgz $RN_XLOG_PACKAGE-$VERSION.tgz"
           if gh release view "$TAG" >/dev/null 2>&1; then
             PUBLISHED=$(gh release view "$TAG" --json assets -q '.assets[].name')
             COMPLETE=true
@@ -393,19 +402,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # The framework the plugin's podspec carries: the apple job's own zip and
+      # The framework the plugins' podspecs carry: the apple job's own zip and
       # not a second build of it. CocoaPods cannot resolve the SwiftPM binary
-      # target of Package.swift, so the plugin is published with it inside.
+      # target of Package.swift, so the plugins are published with it inside.
       - uses: actions/download-artifact@v4
         with:
           name: release-apple
           path: dist
-      - name: Package the Flutter plugin
+      # Both plugins of the pair, and not one: `mars_rs` over the `mars-rs` AAR
+      # and `mars_rs_xlog` over `mars-rs-xlog`.
+      - name: Package the Flutter plugins
         run: scripts/package_flutter.sh "${{ needs.version.outputs.version }}" dist
       - uses: actions/upload-artifact@v4
         with:
           name: release-flutter
-          path: dist/${{ env.FLUTTER_ARCHIVE }}-${{ needs.version.outputs.version }}.tar.gz
+          path: dist/${{ env.FLUTTER_ARCHIVE }}*-${{ needs.version.outputs.version }}.tar.gz
 
   react-native:
     needs: [version, apple]
@@ -422,12 +433,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Package the React Native module
+      - name: Package the React Native modules
         run: scripts/package_react_native.sh "${{ needs.version.outputs.version }}" dist
       - uses: actions/upload-artifact@v4
         with:
           name: release-react-native
-          path: dist/${{ env.RN_PACKAGE }}-${{ needs.version.outputs.version }}.tgz
+          path: dist/${{ env.RN_PACKAGE }}*-${{ needs.version.outputs.version }}.tgz
 
   publish:
     needs: [version, apple, android, host, flutter, react-native]
@@ -670,12 +681,17 @@ jobs:
             echo '```'
             echo ""
             echo '```yaml'
-            echo "# mars-rs-flutter-${TAG#v}.tar.gz, unpacked next to the app"
+            echo "# $FLUTTER_ARCHIVE-${TAG#v}.tar.gz, unpacked next to the app"
+            echo "mars_rs:"
+            echo "  path: ../mars_rs"
+            echo "# or $FLUTTER_XLOG_ARCHIVE-${TAG#v}.tar.gz, for an app that only logs"
             echo "mars_rs_xlog:"
             echo "  path: ../mars_rs_xlog"
             echo '```'
             echo ""
             echo '```bash'
             echo "npm install ./$RN_PACKAGE-${TAG#v}.tgz"
+            echo "# or, for an app that only logs"
+            echo "npm install ./$RN_XLOG_PACKAGE-${TAG#v}.tgz"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

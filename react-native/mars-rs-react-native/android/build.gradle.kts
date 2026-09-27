@@ -1,5 +1,8 @@
-// The Android half of `mars-rs-react-native-xlog`: a `ReactPackage` over
-// `Xlog`, the Kotlin face of `libmarsxlog.so` in the `mars-rs-xlog` AAR.
+// The Android half of `mars-rs-react-native`: a `ReactPackage` over `Xlog`, the
+// Kotlin face of `libmarsxlog.so` in the `mars-rs` AAR — the AAR of the whole
+// port, which today is xlog. `mars-rs-react-native-xlog` is the same module over
+// `mars-rs-xlog`, the AAR an app that only logs takes, and the AAR is the whole
+// difference between the two.
 //
 // Nothing is compiled from Rust here, and no `.so` is packaged either: the AAR
 // of the release this module was packaged for carries them, which is what the
@@ -16,7 +19,7 @@ plugins {
 }
 
 android {
-    namespace = "io.github.orangeboychen.marsrs.xlog.reactnative"
+    namespace = "io.github.orangeboychen.marsrs.reactnative"
     compileSdk = 36
 
     defaultConfig {
@@ -34,7 +37,7 @@ android {
 repositories {
     google()
     mavenCentral()
-    // `mars-rs-xlog`, the AAR of the release; JitPack is where it is published.
+    // `mars-rs`, the AAR of the release; JitPack is where it is published.
     maven("https://jitpack.io")
 }
 
@@ -42,5 +45,5 @@ dependencies {
     // `react-android` and not `react-native`: the artifact React Native has
     // published since 0.71, and the one the app's own repository resolves.
     implementation("com.facebook.react:react-android")
-    implementation("io.github.orangeboychen:mars-rs-xlog:0.1.0-alpha.2")
+    implementation("io.github.orangeboychen:mars-rs:0.1.0-alpha.2")
 }

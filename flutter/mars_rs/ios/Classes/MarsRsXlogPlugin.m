@@ -2,7 +2,7 @@
 
 #import "mars_xlog.h"
 
-// The iOS half of the `mars_rs_xlog` plugin: the C ABI of `mars_xlog.h` (crate
+// The iOS half of the `mars_rs` plugin: the C ABI of `mars_xlog.h` (crate
 // `mars-ffi`) behind the six methods of the plugin's channel.
 //
 // Objective-C, and not Swift: what the plugin carries is a static library with
@@ -11,7 +11,7 @@
 // itself. It is the same instance API `MarsXlogInstance` of
 // `Sources/MarsRSXlog/Xlog.swift` is: `mars_xlog_new_instance` and friends.
 //
-// Every field below is one `lib/mars_rs_xlog.dart` sent, and every default is
+// Every field below is one `lib/mars_rs.dart` sent, and every default is
 // the one `mars_xlog.h` documents for the field — `log_dir` is the one with no
 // default, because the appender answers `MARS_XLOG_ERR_EMPTY_LOG_DIR` without
 // it.

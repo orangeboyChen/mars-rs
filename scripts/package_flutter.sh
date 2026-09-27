@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
 #
-# Packages flutter/mars_rs_xlog as <asset-dir>/mars-rs-flutter-<version>.tar.gz:
-# the plugin of a release, complete with the two things a consumer cannot
-# resolve for itself.
+# Packages the pair of Flutter plugins — flutter/mars_rs and
+# flutter/mars_rs_xlog — as <asset-dir>/mars-rs-flutter-<version>.tar.gz and
+# <asset-dir>/mars-rs-flutter-xlog-<version>.tar.gz: the plugins of a release,
+# complete with the two things a consumer cannot resolve for itself.
 #
 #   scripts/package_flutter.sh <version> <asset-dir>
 #
 # <asset-dir> is where release.yml downloaded the apple job's artifact to — the
 # directory MarsRSXlog.xcframework.zip is in. Nothing is built here, and nothing
 # Rust is needed: the framework is the apple job's, and the AAR the Android half
-# depends on is JitPack's.
+# of each plugin depends on is JitPack's.
 #
-# What it stamps and what it copies:
+# The two are the pair android/ publishes as `mars-rs` and `mars-rs-xlog`, and
+# they are two directories rather than one shared tree because a plugin that
+# took the other's sources would take all of them, which is what the xlog one
+# exists not to do. So what there is to stamp, this script stamps twice:
 #
 #   * `version:` of pubspec.yaml and `s.version` of the podspec — the version of
 #     the release;
-#   * the `mars-rs-xlog` coordinate of android/build.gradle.kts — the AAR of
-#     this release, and not the one the file was written against;
+#   * the AAR coordinate of android/build.gradle.kts — `mars-rs` for the whole
+#     port and `mars-rs-xlog` for the xlog half, at the version of this release
+#     and not at the one the file was written against;
 #   * MarsRSXlog.xcframework into ios/Frameworks, because CocoaPods cannot
 #     resolve the SwiftPM binary target of Package.swift;
 #   * mars_xlog.h into ios/include, out of crates/mars-ffi/include rather than
@@ -47,23 +52,30 @@ zip="$assets/$framework.zip"
 test -f "$zip" || { echo "::error::$zip is missing, nothing to package"; exit 1; }
 
 out="$root/dist"
-pkg="flutter/mars_rs_xlog"
 mkdir -p "$out"
 
-rm -rf "$pkg/ios/Frameworks" "$pkg/ios/include"
-mkdir -p "$pkg/ios/Frameworks" "$pkg/ios/include"
-unzip -q "$zip" -d "$pkg/ios/Frameworks"
-test -d "$pkg/ios/Frameworks/$framework" || { echo "::error::$zip held no $framework"; exit 1; }
-cp crates/mars-ffi/include/mars_xlog.h "$pkg/ios/include/"
-# The licence of the port, which the podspec names.
-cp LICENSE "$pkg/LICENSE"
+# <directory> <AAR> <archive>: the pair, whole port first. The only thing either
+# argument changes is which AAR the Android half of the plugin resolves.
+package_one() {
+    local pkg="$1" aar="$2" archive="$3"
+    # The plugin's own directory, and the name the archive holds it under.
+    local name="${pkg##*/}"
 
-python3 - "$version" <<'PY'
+    rm -rf "$pkg/ios/Frameworks" "$pkg/ios/include"
+    mkdir -p "$pkg/ios/Frameworks" "$pkg/ios/include"
+    unzip -q "$zip" -d "$pkg/ios/Frameworks"
+    test -d "$pkg/ios/Frameworks/$framework" || { echo "::error::$zip held no $framework"; exit 1; }
+    cp crates/mars-ffi/include/mars_xlog.h "$pkg/ios/include/"
+    # The licence of the port, which the podspec names.
+    cp LICENSE "$pkg/LICENSE"
+
+    python3 - "$version" "$pkg" "$aar" <<'PY'
 import re
 import sys
 
-version = sys.argv[1]
-prefix = "flutter/mars_rs_xlog/"
+version, pkg, aar = sys.argv[1], sys.argv[2], sys.argv[3]
+prefix = pkg + "/"
+name = pkg.rsplit("/", 1)[-1]
 
 # The version of the package itself: pub's, and the podspec's, which CocoaPods
 # reads on its own because there is no pub to ask.
@@ -73,7 +85,7 @@ src, n = re.subn(r"^version: .*$", "version: %s" % version, src, count=1, flags=
 assert n == 1, "pubspec.yaml has no version to stamp"
 open(path, "w").write(src)
 
-path = prefix + "ios/mars_rs_xlog.podspec"
+path = prefix + "ios/%s.podspec" % name
 src = open(path).read()
 src, n = re.subn(r"s\.version\s+= '[^']*'", "s.version          = '%s'" % version, src, count=1)
 assert n == 1, "the podspec has no version to stamp"
@@ -82,12 +94,19 @@ open(path, "w").write(src)
 # The AAR of this release, which the Android half resolves from JitPack.
 path = prefix + "android/build.gradle.kts"
 src = open(path).read()
-src, n = re.subn(r"mars-rs-xlog:[^\"]*", "mars-rs-xlog:%s" % version, src)
+src, n = re.subn(
+    r'"io\.github\.orangeboychen:mars-rs(?:-xlog)?:[^"]*"',
+    '"io.github.orangeboychen:%s:%s"' % (aar, version),
+    src,
+    count=1,
+)
 assert n == 1, "android/build.gradle.kts has no AAR coordinate to stamp"
 open(path, "w").write(src)
 PY
 
-archive="$out/mars-rs-flutter-$version.tar.gz"
-rm -f "$archive"
-tar -czf "$archive" -C flutter mars_rs_xlog
-ls -l "$archive"
+    tar -czf "$out/$archive-$version.tar.gz" -C flutter "$name"
+    ls -l "$out/$archive-$version.tar.gz"
+}
+
+package_one flutter/mars_rs mars-rs mars-rs-flutter
+package_one flutter/mars_rs_xlog mars-rs-xlog mars-rs-flutter-xlog

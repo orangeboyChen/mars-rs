@@ -80,8 +80,9 @@ jobs:
       # style, the 120-column line and the end-of-file rules.
       #
       # Three directories and not one: the AARs of android/, and the Android
-      # half of the Flutter plugin and of the React Native module. The iOS
-      # halves are Objective-C against `mars_xlog.h`, which neither gate reads.
+      # half of the two Flutter plugins and of the two React Native modules.
+      # The iOS halves are Objective-C against `mars_xlog.h`, which neither gate
+      # reads.
       - run: |
           ./ktlint --relative \
             'android/**/*.kt' 'android/**/*.kts' \
@@ -104,8 +105,12 @@ jobs:
             "https://github.com/detekt/detekt/releases/download/v${DETEKT_VERSION}/detekt-cli-${DETEKT_VERSION}-all.jar"
       # `--build-upon-default-config`: detekt.yml names only what differs from
       # detekt's own defaults, and its `build.maxIssues: 0` is what fails the job.
+      #
+      # The roots and not the directories above them: detekt's
+      # `InvalidPackageDeclaration` reads a file's place in the tree, so it has
+      # to be pointed at what is under `src/main/kotlin` and not at the package.
       - run: |
           java -jar detekt-cli-all.jar \
-            --input android/mars-core/src/main/kotlin,android/mars-xlog/src/main/kotlin,flutter/mars_rs_xlog/android/src/main/kotlin,react-native/android/src/main/kotlin \
+            --input android/mars-core/src/main/kotlin,android/mars-xlog/src/main/kotlin,flutter/mars_rs/android/src/main/kotlin,flutter/mars_rs_xlog/android/src/main/kotlin,react-native/mars-rs-react-native/android/src/main/kotlin,react-native/mars-rs-react-native-xlog/android/src/main/kotlin \
             --config detekt.yml \
             --build-upon-default-config

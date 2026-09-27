@@ -1,8 +1,11 @@
-// The Android half of `mars-rs-react-native-xlog`: the six methods of the
+// The Android half of `mars-rs-react-native`: the six methods of the
 // `MarsRsXlog` native module, each of them a straight call of a member of
-// `Xlog` — the Kotlin face of `libmarsxlog.so` in the `mars-rs-xlog` AAR.
+// `Xlog` — the Kotlin face of `libmarsxlog.so` in the `mars-rs` AAR, the AAR of
+// the whole port, which today is xlog. `mars-rs-react-native-xlog` is the same
+// module over `mars-rs-xlog`, the AAR an app that only logs takes, and the AAR
+// is the whole difference between the two.
 //
-// `Xlog` is the same class `android/mars-xlog` publishes, so what this file is
+// `Xlog` is the same class `android/mars-core` publishes, so what this file is
 // is a bridge over an API that already exists, and the API it bridges is the
 // instance one: `Xlog.open` opens the *process-wide* appender with the
 // compression and the cache the C++'s Java hard-codes, which is why
@@ -14,7 +17,7 @@
 // Every key is one `src/index.ts` sent, and every number is the one
 // `mars_xlog.h` gives a level, a mode and a compression.
 
-package io.github.orangeboychen.marsrs.xlog.reactnative
+package io.github.orangeboychen.marsrs.reactnative
 
 import android.os.Looper
 import android.os.Process

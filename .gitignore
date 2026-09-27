@@ -9,12 +9,18 @@ android/local.properties
 /dist
 
 # what scripts/package_flutter.sh and scripts/package_react_native.sh put in the
-# two packages before they are packaged: the xcframework of the release and the
+# four packages before they are packaged: the xcframework of the release and the
 # C ABI's own header, neither of which is checked in. The checked-in package is
 # the one without them; the published one is the one with.
+flutter/mars_rs/ios/Frameworks/
+flutter/mars_rs/ios/include/
+flutter/mars_rs/LICENSE
 flutter/mars_rs_xlog/ios/Frameworks/
 flutter/mars_rs_xlog/ios/include/
 flutter/mars_rs_xlog/LICENSE
-react-native/ios/Frameworks/
-react-native/ios/include/
-react-native/LICENSE
+react-native/mars-rs-react-native/ios/Frameworks/
+react-native/mars-rs-react-native/ios/include/
+react-native/mars-rs-react-native/LICENSE
+react-native/mars-rs-react-native-xlog/ios/Frameworks/
+react-native/mars-rs-react-native-xlog/ios/include/
+react-native/mars-rs-react-native-xlog/LICENSE

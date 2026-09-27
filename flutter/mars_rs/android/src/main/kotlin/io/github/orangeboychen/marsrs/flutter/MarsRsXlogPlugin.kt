@@ -1,11 +1,11 @@
-// The Android half of the `mars_rs_xlog` plugin: the six methods of the
-// plugin's channel, each of them a straight call of a member of `Xlog` — the
-// Kotlin face of `libmarsxlog.so` in the `mars-rs-xlog` AAR. `mars_rs` is the
-// whole-port plugin, over the `mars-rs` AAR, and this file is byte-for-byte its
-// Kotlin: xlog is the whole C ABI today, so the two are one package under two
-// names, and they diverge the day STN and SDT land — there, and not here.
+// The Android half of the `mars_rs` plugin: the six methods of the plugin's
+// channel, each of them a straight call of a member of `Xlog` — the Kotlin face
+// of `libmarsxlog.so` in the `mars-rs` AAR, the AAR of the whole port. The
+// xlog-only plugin is `mars_rs_xlog`, and this file is byte-for-byte its Kotlin:
+// xlog is the whole C ABI today, so the two plugins are one package under two
+// names and they diverge the day STN and SDT land — here, and not there.
 //
-// `Xlog` is the same class `android/mars-xlog` publishes, so what this file is
+// `Xlog` is the same class `android/mars-core` publishes, so what this file is
 // is a channel over an API that already exists, and the API it is a channel over
 // is the instance one: `Xlog.open` opens the *process-wide* appender with the
 // compression and the cache the C++'s Java hard-codes, which is why
@@ -14,10 +14,10 @@
 // `Sources/MarsRSXlog/Xlog.swift` is, so the Dart surface and the Swift one
 // come out the same shape.
 //
-// Every `call.argument` is the field `lib/mars_rs_xlog.dart` put there, and the
+// Every `call.argument` is the field `lib/mars_rs.dart` put there, and the
 // numbers are the ones `mars_xlog.h` gives a level, a mode and a compression.
 
-package io.github.orangeboychen.marsrs.xlog.flutter
+package io.github.orangeboychen.marsrs.flutter
 
 import android.os.Looper
 import android.os.Process
@@ -28,7 +28,7 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import io.github.orangeboychen.marsrs.xlog.Xlog
 
-/** The Android half of `mars_rs_xlog`. */
+/** The Android half of `mars_rs`: the whole port, which today is xlog. */
 class MarsRsXlogPlugin :
     FlutterPlugin,
     MethodCallHandler {
