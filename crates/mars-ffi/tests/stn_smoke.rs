@@ -101,11 +101,16 @@ extern "C" fn ask(ctx: *mut c_void, question: *const MarsStnQuestion, answer: *m
             ..MarsStnAnswer::default()
         },
         MarsStnQuestionKind::OnNewDns => {
-            let ips = [leaked("1.2.3.4").as_ptr()];
+            // The addresses are read after this callback has returned, so they
+            // cannot live on this frame: they are held in a static, as
+            // integers because a static that holds raw pointers is not `Sync`,
+            // which a static has to be.
+            static IPS: OnceLock<[usize; 1]> = OnceLock::new();
+            let ips = IPS.get_or_init(|| [leaked("1.2.3.4").as_ptr() as usize]);
             MarsStnAnswer {
                 kind: MarsStnAnswerKind::Ips,
-                ips: ips.as_ptr(),
-                ip_count: 1,
+                ips: ips.as_ptr() as *const *const c_char,
+                ip_count: ips.len() as c_uint,
                 ..MarsStnAnswer::default()
             }
         }

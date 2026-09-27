@@ -456,8 +456,15 @@ impl Default for MarsStnQuestion {
 ///
 /// Every field is read for the [`MarsStnAnswerKind`] in `kind` and left alone
 /// for the others, so a caller fills in the one it answered and leaves the rest
-/// zero. The strings and buffers the answer points at are owned by the caller
-/// and are read before the ask returns, and never afterwards.
+/// zero.
+///
+/// The strings and buffers the answer points at are the caller's, and they are
+/// read *after* the ask has returned: the port copies them there, there being
+/// nowhere to copy from while the callback is still running. So they have to
+/// stay alive until the caller is asked again, and not merely until the ask
+/// returns — an answer made of stack buffers is one whose buffers are gone by
+/// the time it is read. Give them static or heap storage, the way
+/// `tests/stn_smoke.rs` and the Swift of `MarsStn` do.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MarsStnAnswer {
@@ -560,6 +567,10 @@ fn with_logic<R>(f: impl FnOnce(&mut StnLogic) -> R) -> R {
 /// process-wide logic, so `ask` must not call another `mars_stn_*`: it would
 /// wait for the lock this call is holding. Everything a question carries is in
 /// the question itself.
+///
+/// What an answer points at is the caller's, and it is read *after* `ask` has
+/// returned, so it has to stay alive until `ask` is called again — not merely
+/// until the ask returns: see [`MarsStnAnswer`].
 #[no_mangle]
 pub unsafe extern "C" fn mars_stn_set_app(ctx: *mut c_void, ask: MarsStnAsk) {
     guard((), || {
@@ -915,8 +926,11 @@ impl StnApp for CApp {
         });
         match answer.kind {
             // SAFETY: `answer.ips` is what the caller wrote, and by
-            // `mars_stn_set_app`'s contract its strings are alive until the ask
-            // returns — which it has.
+            // `mars_stn_set_app`'s contract its strings are alive until the
+            // caller is asked again — which is now, this being the read the
+            // question was asked for. (Not "until the ask returns": the port
+            // copies after the callback has returned, because there is
+            // nothing to copy from while it is still running.)
             MarsStnAnswerKind::Ips => unsafe { strings_from_c(answer.ips, answer.ip_count) },
             // The platform's own resolver, which is `App`'s own answer.
             _ => Vec::new(),
@@ -956,8 +970,9 @@ impl StnApp for CApp {
             ..Default::default()
         });
         match answer.kind {
-            // SAFETY: `answer.bytes` is what the caller wrote, alive until the
-            // ask returns — which it has.
+            // SAFETY: `answer.bytes` is what the caller wrote, alive until
+            // the caller is asked again — which is now, this being the read
+            // the question was asked for.
             MarsStnAnswerKind::Encoded => {
                 Ok(unsafe { bytes_from_c(answer.bytes, answer.byte_count) })
             }
@@ -1086,7 +1101,8 @@ impl StnApp for CApp {
         match answer.kind {
             MarsStnAnswerKind::Identified => {
                 // SAFETY: `answer.bytes` and `answer.hash` are what the caller
-                // wrote, alive until the ask returns — which it has.
+                // wrote, alive until the caller is asked again — which is
+                // now, this being the read the question was asked for.
                 let (bytes, hash) = unsafe {
                     (
                         bytes_from_c(answer.bytes, answer.byte_count),

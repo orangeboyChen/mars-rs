@@ -20,7 +20,8 @@
  *     mars/stn/stn_logic.cc         (the `StnManager` the Java2C calls reach)
  *     mars/stn/src/net_core.cc      (what runs a task: the queues, the links)
  *
- * and is the C equivalent of the JNI bridge in mars/stn/jni/*_Java2C.cc.
+ * and is the C equivalent of the JNI bridge of `mars/stn`, its
+ * `*_Java2C.cc` pair.
  *
  * The one thing a caller supplies is the app: eighteen questions STN asks while
  * it runs a task — is the caller logged in, what does this task send, how is the
@@ -46,6 +47,14 @@
 
 #ifndef MARS_STN_H_
 #define MARS_STN_H_
+
+/* The symbols this header declares are the ones `#[no_mangle]` exports: plain
+ * C names, and a C++ translation unit that includes this and calls
+ * `mars_stn_start_task()` asks its linker for a mangled one that does not
+ * exist. The guard says what the library already says for itself. */
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* --- return codes ------------------------------------------------------- */
 
@@ -234,8 +243,15 @@ typedef struct {
 /**
  * What the caller answered. Every field is read for the `kind` in it and left
  * alone for the others, so a caller fills in the one it answered and leaves the
- * rest zero. The strings and buffers it points at are owned by the caller and
- * are read before the ask returns, and never afterwards.
+ * rest zero.
+ *
+ * The strings and buffers it points at are the caller's, and they are read
+ * *after* the ask has returned: the port copies them there, because there is
+ * nowhere to copy them from while the callback is still running. So they have
+ * to stay alive until the caller is asked again, and not merely until the ask
+ * returns — an answer made of stack buffers is one whose buffers are gone by
+ * the time it is read. Give them static or heap storage, the way
+ * `tests/stn_smoke.rs` and the Swift of `MarsStn` do.
  */
 typedef struct {
     MarsStnAnswerKind kind;
@@ -256,6 +272,8 @@ typedef struct {
 /**
  * The app STN asks: one question in, one answer out, and `ctx` — what the
  * caller handed to `mars_stn_set_app` — handed back with every one.
+ *
+ * What the answer points at has to outlive the call: see `MarsStnAnswer`.
  *
  * `NULL` is an app that answers nothing, which gets STN's own answers.
  */
@@ -352,5 +370,9 @@ unsigned short mars_stn_gen_sequence_id(void);
 /** `TrigNooping` — a noop on the default long link, and a heartbeat of 0. */
 void mars_stn_trig_nooping(void);
 
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 #endif /* MARS_STN_H_ */
