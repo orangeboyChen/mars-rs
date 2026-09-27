@@ -44,6 +44,18 @@
 //! * On a write error the C++ appends a record through `log_buff_`; the port
 //!   does the same but reports the failure on the console only.
 //!
+//! # Where the port does not do what the C++ does
+//!
+//! The C++ mmaps `<prefix>.mmap3` whatever else is doing, so two processes —
+//! or two copies of the C++ linked into one — write through the same 150 KiB
+//! region with their own idea of its length: records are lost, and each flush
+//! either writes what the other buffered or clears it before the other gets
+//! there. The port gives every writer a cache file of its own
+//! (`<prefix>.mmap3`, then `<prefix>_1.mmap3` …) and takes the prefix's
+//! `<prefix>.lock` around the steps that move more than one file, so a log two
+//! writers share is still complete: every record of both, in a file that still
+//! decodes end to end.
+//!
 //! Everything else has a counterpart: the per-prefix instance table lives in
 //! [`category`], and the hex dump of a binary blob in [`xlogger_memory_dump`]
 //! (and its file-writing sibling [`xlogger_dump`]).
@@ -143,6 +155,15 @@ fn lock_instances() -> MutexGuard<'static, Instances> {
 /// clone instead of a reference.
 fn instance(id: AppenderId) -> Option<Arc<Appender>> {
     lock_instances().map.get(&id).cloned()
+}
+
+/// The cache file an instance claimed, if any.
+///
+/// Which slot an instance got is decided by [`appender::claim_cache_slot`] at
+/// open time and is not a function of the config alone — another process can
+/// hold slot 0 — so the path has to be read back from the appender.
+fn instance_cache_path(id: AppenderId) -> Option<PathBuf> {
+    instance(id).and_then(|appender| appender.claimed_cache_path())
 }
 
 /// Opens an appender that is *not* the process-wide default.
@@ -376,25 +397,28 @@ pub fn appender_get_current_log_cache_path() -> Option<PathBuf> {
 
 /// `mars::xlog::appender_oneshot_flush`.
 ///
-/// Drains an existing cache file (`<cachedir or logdir>/<prefix>.mmap3`) into
-/// the log file without starting the appender — the "another process died with
-/// a full cache" recovery path.
+/// Drains the cache files no writer owns any more into the log file without
+/// starting the appender — the "another process died with a full cache"
+/// recovery path.
+///
+/// Which ones those are is the whole difficulty: a process that was killed
+/// leaves exactly the file a running one has, and the C++ cannot tell them
+/// apart, so it drains `<prefix>.mmap3` whatever else is doing — including a
+/// second process that is mid-write, whose every later record then lands in an
+/// unlinked inode. The port gives each writer a slot of its own and holds an
+/// advisory lock on it for as long as the writer lives, so "no writer owns it"
+/// is something that can actually be answered — by trying to take that lock.
 pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
+    use crate::appender::{
+        cache_dir, cache_slot_path, dir_lock_path, mmap_file_path, MAX_CACHE_SLOTS,
+    };
+
     if config.logdir.as_os_str().is_empty() {
         return FileIoAction::OpenFailed;
     }
-    // This is the "another process died with a full cache" recovery path. Run
-    // it while an appender is open for the same directory and it reads that
-    // cache file mid-write and then unlinks it, so every record the live
-    // appender buffers afterwards lands in an unnamed inode and is lost. The
-    // instances matter as much as the process-wide appender: each of them owns
-    // a `<prefix>.mmap3` of its own.
-    if appender_get_current_log_path().is_some()
-        || crate::category::instance_owns_mmap_path(&crate::appender::mmap_file_path(config))
-    {
-        return FileIoAction::Unnecessary;
-    }
 
+    let dir = cache_dir(config).to_path_buf();
+    let lock_path = dir_lock_path(&dir, &config.nameprefix);
     let Ok(appender) = Appender::oneshot(
         config,
         MAX_FILE_SIZE.load(Ordering::Relaxed),
@@ -403,7 +427,44 @@ pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
         return FileIoAction::OpenFailed;
     };
 
-    let action = appender.treat_mapping_as_file_and_flush();
+    // Without a lock a live cache file cannot be told from a dead one, so all
+    // that is left is the C++'s own behaviour: the single fixed name, drained
+    // only when no appender of this process is using it.
+    if !crate::sys::lock_excludes(&lock_path) {
+        if appender_get_current_log_path().is_some()
+            || crate::category::instance_owns_mmap_path(&mmap_file_path(config))
+        {
+            return FileIoAction::Unnecessary;
+        }
+        let action = appender.treat_mapping_as_file_and_flush(&mmap_file_path(config));
+        appender.close();
+        return action;
+    }
+
+    let mut action = FileIoAction::Unnecessary;
+    for slot in 0..MAX_CACHE_SLOTS {
+        let path = cache_slot_path(&dir, &config.nameprefix, slot);
+        if !path.exists() {
+            continue;
+        }
+        // Held for the whole drain and the unlink that follows it: the lock is
+        // what says the slot is a dead writer's, and it has to still be ours
+        // when the file goes away.
+        let Some(_claim) = crate::appender::claim_dead_cache_slot(&path) else {
+            // A live writer still owns it — in another process, or in another
+            // copy of this crate in this one.
+            continue;
+        };
+        match appender.treat_mapping_as_file_and_flush(&path) {
+            FileIoAction::Success => action = FileIoAction::Success,
+            FileIoAction::Unnecessary => {}
+            failed => {
+                if action != FileIoAction::Success {
+                    action = failed;
+                }
+            }
+        }
+    }
     appender.close();
     action
 }

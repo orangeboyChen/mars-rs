@@ -11,6 +11,7 @@
 //! off in this module — the rest of the crate stays `#![deny(unsafe_code)]`.
 #![allow(unsafe_code)]
 
+use std::fs::File;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -208,6 +209,134 @@ pub fn available_space(path: &Path) -> Option<u64> {
     space_info(path).map(|(_capacity, _free, available)| available)
 }
 
+/// Takes the exclusive advisory lock on `file`, waiting for it.
+///
+/// `false` when this platform has no advisory locking at all. The lock is
+/// released when `file` is dropped — including when the process dies, which is
+/// the property the appender relies on: a lock no longer held is how the next
+/// start tells a cache file some *other* process is still writing through from
+/// one a dead process left behind.
+pub fn lock_exclusive(file: &File) -> bool {
+    lock(file, false)
+}
+
+/// [`lock_exclusive`] without the waiting: `false` when somebody else holds the
+/// lock, which the caller reads as "that file is still in use".
+pub fn try_lock_exclusive(file: &File) -> bool {
+    lock(file, true)
+}
+
+/// Whether two handles of `path` opened independently really exclude each
+/// other here.
+///
+/// `flock` and `LockFileEx` are advisory and per open file description, so the
+/// same process can own the same file twice through two `open()`s — that is
+/// what lets two copies of this crate in one process contend. Not every
+/// filesystem implements them, though (some FUSE and FAT mounts answer "locked"
+/// without ever denying anybody), and believing a lock that excludes nobody
+/// would be worse than knowing: the caller falls back to the unprotected
+/// behaviour the C++ has.
+///
+/// The answer is probed rather than assumed, by locking `path` twice.
+pub fn lock_excludes(path: &Path) -> bool {
+    let Ok(first) = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+    else {
+        return false;
+    };
+    if !try_lock_exclusive(&first) {
+        return false;
+    }
+    let Ok(second) = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+    else {
+        return false;
+    };
+    // A second, independent handle must not be able to take the same lock.
+    !try_lock_exclusive(&second)
+}
+
+/// `flock(fd, LOCK_EX[ | LOCK_NB])` / `LockFileEx(..., LOCKFILE_EXCLUSIVE_LOCK
+/// [, LOCKFILE_FAIL_IMMEDIATELY])`.
+fn lock(file: &File, non_blocking: bool) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+
+        let operation = if non_blocking {
+            libc::LOCK_EX | libc::LOCK_NB
+        } else {
+            libc::LOCK_EX
+        };
+        // SAFETY: `flock` needs only a valid descriptor, which `File` is.
+        0 == unsafe { libc::flock(file.as_raw_fd(), operation) }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+
+        /// `LOCKFILE_FAIL_IMMEDIATELY` / `LOCKFILE_EXCLUSIVE_LOCK`.
+        const FAIL_IMMEDIATELY: u32 = 0x1;
+        const EXCLUSIVE: u32 = 0x2;
+
+        /// `OVERLAPPED`: only the offset and the event are read, and both are
+        /// zero here — the range locked is `[0, 1)`, which is enough to make
+        /// two holders exclude each other without locking any real byte (the
+        /// file is a lock, it has none).
+        #[repr(C)]
+        struct Overlapped {
+            internal: usize,
+            internal_high: usize,
+            offset: u32,
+            offset_high: u32,
+            event: usize,
+        }
+
+        extern "system" {
+            fn LockFileEx(
+                file: *mut core::ffi::c_void,
+                flags: u32,
+                reserved: u32,
+                bytes_low: u32,
+                bytes_high: u32,
+                overlapped: *mut Overlapped,
+            ) -> i32;
+        }
+
+        let flags = if non_blocking {
+            EXCLUSIVE | FAIL_IMMEDIATELY
+        } else {
+            EXCLUSIVE
+        };
+        let mut overlapped = Overlapped {
+            internal: 0,
+            internal_high: 0,
+            offset: 0,
+            offset_high: 0,
+            event: 0,
+        };
+        // SAFETY: `file` is a valid handle and `overlapped` is a live,
+        // correctly sized `OVERLAPPED` (zeroed, which is what the call wants).
+        let ok = unsafe { LockFileEx(file.as_raw_handle(), flags, 0, 1, 0, &mut overlapped) };
+        ok != 0
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (file, non_blocking);
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,5 +369,62 @@ mod tests {
             available_space(Path::new("/definitely/not/here/xlog")),
             None
         );
+    }
+
+    /// Two handles of one file, opened separately, must exclude each other:
+    /// that is what lets two processes — and two copies of this crate in one
+    /// process — each keep a cache file of their own.
+    #[test]
+    fn an_exclusive_lock_denies_a_second_independent_handle() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Mars.lock");
+        let first = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        assert!(try_lock_exclusive(&first), "the first taker must win");
+
+        let second = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        assert!(!try_lock_exclusive(&second), "a second handle must lose");
+
+        // … and it is released when the winner is dropped, so the next start
+        // can claim the file a dead process left behind.
+        drop(first);
+        assert!(try_lock_exclusive(&second));
+    }
+
+    #[test]
+    fn lock_excludes_answers_about_the_file_it_is_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Mars.lock");
+        assert!(
+            lock_excludes(&path),
+            "advisory locking is what the cache slots are built on"
+        );
+        // The probe must not leave the file behind in a locked state.
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        assert!(try_lock_exclusive(&file));
+    }
+
+    #[test]
+    fn a_lock_on_a_missing_directory_cannot_be_taken() {
+        assert!(!lock_excludes(Path::new(
+            "/definitely/not/here/xlog/Mars.lock"
+        )));
     }
 }

@@ -707,13 +707,13 @@ pub unsafe extern "C" fn mars_xlog_current_log_cache_path(out: *mut c_uchar, len
     })
 }
 
-/// `mars::xlog::appender_oneshot_flush` — drains an `<prefix>.mmap3` that
-/// another process left behind, without opening an appender.
+/// `mars::xlog::appender_oneshot_flush` — drains the cache files another
+/// process left behind, without opening an appender.
 ///
-/// This is the "another process died with a full cache" recovery path, and it
-/// refuses to run for a directory an appender of this process already owns
-/// ([`MARS_XLOG_OK`] plus `kActionUnnecessary`): reading that cache file
-/// mid-write and unlinking it loses every record the live appender buffers
+/// This is the "another process died with a full cache" recovery path. It
+/// walks `<prefix>.mmap3` and the `<prefix>_<n>.mmap3` slots next to it and
+/// leaves the ones a live writer still holds alone: reading a cache file
+/// mid-write and unlinking it loses every record that writer buffers
 /// afterwards.
 ///
 /// @return the `TFileIOAction` the recovery ended in — one of

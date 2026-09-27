@@ -42,6 +42,17 @@
 //! * `LogBuffer` in this workspace is state-only, so the mmap (or the heap
 //!   fallback when mmap fails) lives in [`Region`] and is handed to the buffer
 //!   on every call.
+//! * The C++ mmaps `<prefix>.mmap3` whatever else is doing, so two processes
+//!   — or two copies of the C++ linked into one — write through the same 150
+//!   KiB region with their own idea of its length, their own compressor and
+//!   their own flush: records are lost, and each flush either writes what the
+//!   other buffered or clears it before the other gets there. The port gives
+//!   every writer a cache file of its own (`CacheSlot`, claimed by `O_EXCL`
+//!   and held for the appender's lifetime) and takes the prefix's `<prefix>.lock` around the steps that move more than one file, so
+//!   a log two writers share is still complete. Where the filesystem's
+//!   advisory locking excludes nobody the C++ behaviour — one shared cache
+//!   file, unprotected — is all there is, and that is what the port falls back
+//!   to rather than trusting a lock that locks nobody.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -62,6 +73,7 @@ use crate::file_util::{
     move_old_files, now_secs, same_local_day, LOG_EXT, MMAP_EXT, SECONDS_PER_DAY,
 };
 use crate::formater::log_formater;
+use crate::sys;
 
 /// `boost::filesystem::space(...).available >= 1 GiB` in the C++.
 const MIN_FREE_SPACE: u64 = 1024 * 1024 * 1024;
@@ -211,7 +223,8 @@ impl Region {
 /// This is the only `unsafe` in the crate: `memmap2`'s mapping constructors are
 /// `unsafe` because the caller must guarantee the file is not truncated or
 /// mutated behind the mapping. That is exactly what the appender guarantees —
-/// the cache file is only ever written through this mapping until `close()`.
+/// the cache file is the claimed slot's, only ever written through this
+/// mapping, and nobody else truncates it: see `claim_cache_slot`.
 ///
 /// The crate denies `unsafe_code` outright, so this is the one place that says
 /// otherwise: the mapping cannot be made without `unsafe`, and the invariant
@@ -219,15 +232,15 @@ impl Region {
 #[allow(unsafe_code)]
 fn map_region(file: &File) -> std::io::Result<memmap2::MmapMut> {
     // SAFETY: the invariant memmap2 needs is that nobody truncates or resizes
-    // the file while the mapping is alive. Two things hold here: the appender
-    // is the only writer of `<prefix>.mmap3` and it only ever writes through
-    // this mapping, and the mapping keeps the file alive on its own — the
-    // `File` it was created from is dropped at the end of `open_region()`, so
-    // the mapping, not the handle, is what pins the inode. What is *not*
-    // guaranteed is protection against an outside process (or the C++ xlog
-    // still linked into the same app during migration) truncating the file:
-    // that would turn every later touch of the mapping into SIGBUS. Opening
-    // the same cache file from two implementations at once is unsupported.
+    // the file while the mapping is alive. The slot the file belongs to was
+    // claimed for this appender alone (`claim_cache_slot`), and within it the
+    // region is only ever written through this mapping; the mapping keeps the
+    // inode alive on its own, so it is not the `File` that pins it. What is
+    // *not* guaranteed is protection against an outside process — or the C++
+    // xlog still linked into the same app during migration — truncating the
+    // file: that would turn every later touch of the mapping into SIGBUS.
+    // Opening the same cache file from two implementations at once is
+    // unsupported.
     unsafe {
         memmap2::MmapOptions::new()
             .len(BUFFER_BLOCK_LENGTH)
@@ -235,9 +248,10 @@ fn map_region(file: &File) -> std::io::Result<memmap2::MmapMut> {
     }
 }
 
-/// Zeroes the cache file. Only needed when there is no mapping: with one,
-/// `LogBuffer::flush` and `close()` clear the bytes in place, and the file
-/// follows the mapping.
+/// Zeroes the cache file of a slot this appender owns.
+///
+/// Only needed when there is no mapping: with one, `LogBuffer::flush` and
+/// `close()` clear the bytes in place, and the file follows the mapping.
 fn clear_cache_file(path: &Path) {
     // Truncate to zero and *keep* it at zero: `set_len` back to the block size
     // would build the same sparse hole that the pre-allocation below exists to
@@ -248,19 +262,12 @@ fn clear_cache_file(path: &Path) {
     }
 }
 
-/// Opens (creating if needed) and maps the cache file; falls back to a heap
-/// region on any error. Returns `(region, use_mmap)`.
-fn open_region(path: &Path) -> (Region, bool) {
-    let Ok(mut file) = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
-    else {
-        return (Region::heap(), false);
-    };
-
+/// Opens (creating if needed) and maps the claimed cache file; falls back to a
+/// heap region on any error. Returns `(region, use_mmap)`.
+///
+/// The file is the caller's own slot, so nothing else resizes it while this
+/// runs — which is what lets the mapping be pre-allocated here at all.
+fn open_region(file: &mut File, path: &Path) -> (Region, bool) {
     // `ftruncate` records a size without reserving blocks; the first store
     // into the mapping is what allocates. On a filesystem that does not
     // reserve on truncate (ext4, f2fs, FAT — the Android targets) a full disk
@@ -285,7 +292,7 @@ fn open_region(path: &Path) -> (Region, bool) {
         }
     }
 
-    match map_region(&file) {
+    match map_region(file) {
         Ok(mmap) => (Region::Mmap(mmap), true),
         // mmap is unavailable (sandbox, low memory, some OEM kernels). Fall
         // back to a heap region, but take the on-disk contents with us:
@@ -296,13 +303,141 @@ fn open_region(path: &Path) -> (Region, bool) {
     }
 }
 
-/// `"<cachedir or logdir>/<nameprefix>.mmap3"`.
-pub(crate) fn mmap_file_path(config: &XLogConfig) -> PathBuf {
-    let dir = config
+/// The directory `<prefix>.mmap3` (and `<prefix>.lock`) live in: the configured
+/// cache directory, or the log directory when there is none.
+pub(crate) fn cache_dir(config: &XLogConfig) -> &Path {
+    config
         .cachedir
         .as_deref()
-        .unwrap_or(config.logdir.as_path());
-    dir.join(format!("{}.{MMAP_EXT}", config.nameprefix))
+        .unwrap_or(config.logdir.as_path())
+}
+
+/// `<dir>/<prefix>.mmap3` — what `appender.cc` calls `mmap_file_path`, i.e.
+/// the first of the slots `claim_cache_slot` hands out.
+pub(crate) fn mmap_file_path(config: &XLogConfig) -> PathBuf {
+    cache_slot_path(cache_dir(config), &config.nameprefix, 0)
+}
+
+/// `<dir>/<prefix>.lock` — the lock the operations that span several files of
+/// one prefix are taken under.
+///
+/// It is a sibling of the cache files and, like them, outside everything the
+/// sweep and the log-file discovery look at: `del_timeout_file` only removes
+/// `.xlog` files and `YYYYMMDD` directories, and
+/// [`file_util::get_file_names_by_prefix`] only matches `.xlog`.
+pub(crate) fn dir_lock_path(dir: &Path, prefix: &str) -> PathBuf {
+    dir.join(format!("{prefix}.lock"))
+}
+
+/// `<dir>/<prefix>.mmap3` for slot `0`, `<dir>/<prefix>_<n>.mmap3` after that.
+pub(crate) fn cache_slot_path(dir: &Path, prefix: &str, slot: usize) -> PathBuf {
+    if slot == 0 {
+        dir.join(format!("{prefix}.{MMAP_EXT}"))
+    } else {
+        dir.join(format!("{prefix}_{slot}.{MMAP_EXT}"))
+    }
+}
+
+/// How many cache files one prefix may have in one directory at once.
+///
+/// Eight live writers of one prefix is already far past anything real — an
+/// Android app with a `:push` process and a React Native module that linked
+/// its own copy of the crate uses two — and a bounded number is what keeps a
+/// directory that cannot be locked from filling with them.
+pub(crate) const MAX_CACHE_SLOTS: usize = 8;
+
+/// The cache file this appender owns: `<prefix>[_<n>].mmap3`.
+///
+/// The C++ mmaps `<prefix>.mmap3` whatever else is doing, so a second process
+/// (or a second copy of the C++ in one process) writes through the *same* 150
+/// KiB region with its own idea of the length, its own compressor and its own
+/// flush: records are lost, and each flush either writes what the other
+/// buffered or clears it before the other gets there. The cache is not a file
+/// to be shared, it is the buffer itself, so the port gives every writer its
+/// own and claims it:
+///
+/// * `O_EXCL` decides who owns a slot — atomic across processes and across
+///   copies of this crate in one process, which is the case the C++ cannot
+///   tell apart either;
+/// * the lock held on it for the appender's lifetime is what a later
+///   [`crate::appender_oneshot_flush`] reads to tell a slot a *dead* process
+///   left behind from one a live writer is still using. Nothing else can: a
+///   process that was killed leaves exactly the file a running one has.
+struct CacheSlot {
+    path: PathBuf,
+    /// Held open for as long as the appender lives. Dropping it — including
+    /// when the process dies — is what releases the lock.
+    file: File,
+}
+
+/// Opens `<dir>/<prefix>.lock` and takes it, waiting until it is free.
+///
+/// The lock goes when the returned file is dropped, so the caller only has to
+/// keep it alive for as long as the section it guards — a `let` binding is
+/// enough, and a process that dies releases it too.
+fn acquire_dir_lock(path: Option<&Path>) -> Option<File> {
+    let path = path?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .ok()?;
+    sys::lock_exclusive(&file).then_some(file)
+}
+
+/// Claims the cache file no other writer holds, or `None` when every slot is
+/// taken.
+///
+/// `locking` is what `sys::lock_excludes` answered for this directory.
+fn claim_cache_slot(dir: &Path, prefix: &str, locking: bool) -> Option<CacheSlot> {
+    if !locking {
+        // Without a lock a live slot cannot be told from a dead one, so the
+        // only safe thing left is the C++'s single fixed name, shared exactly
+        // as the C++ shares it.
+        let path = cache_slot_path(dir, prefix, 0);
+        return File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .ok()
+            .map(|file| CacheSlot { path, file });
+    }
+
+    for slot in 0..MAX_CACHE_SLOTS {
+        let path = cache_slot_path(dir, prefix, slot);
+        let file = match File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            // Whoever creates a slot owns it.
+            Ok(file) => Some(file),
+            // Already there: either a writer that is gone left it — and an
+            // unheld lock is what says so — or a live one owns it, in which
+            // case the lock is denied and the next slot is tried.
+            Err(_) => File::options().read(true).write(true).open(&path).ok(),
+        };
+        let Some(file) = file else { continue };
+        if sys::try_lock_exclusive(&file) {
+            return Some(CacheSlot { path, file });
+        }
+    }
+    None
+}
+
+/// Opens `path` and takes its lock, which is what proves the slot belongs to a
+/// writer that is gone.
+///
+/// `None` when a live writer still holds it — and, just as much, when this
+/// filesystem's locking excludes nobody, where the answer would be a guess.
+pub(crate) fn claim_dead_cache_slot(path: &Path) -> Option<File> {
+    let file = File::options().read(true).write(true).open(path).ok()?;
+    sys::try_lock_exclusive(&file).then_some(file)
 }
 
 /// The OS thread id of the calling thread (`sys::thread_id`).
@@ -365,7 +500,7 @@ struct AppenderInner {
     /// [`Self::log2file`] still has the whole batch to put in the cache
     /// directory and the next flush gets to try again.
     pending: Vec<u8>,
-    /// How much of `log_file` the OS holds — [`Self::pending`] **not**
+    /// How much of `log_file` the OS holds — `Self::pending` **not**
     /// included.
     ///
     /// `XloggerAppender::__WriteFile` asks the kernel on every record
@@ -377,11 +512,11 @@ struct AppenderInner {
     /// and one `lseek` fewer per record, on the one path where a logger cannot
     /// afford them: the caller holds the appender's lock for the whole record.
     ///
-    /// Kept apart from [`Self::pending`] so that the two can disagree: a batch
+    /// Kept apart from `Self::pending` so that the two can disagree: a batch
     /// that failed belongs to no file yet, and the next file that opens — the
     /// cache directory's, say — takes it from zero.
     flushed_len: u64,
-    /// Whether [`Self::pending`] has already been refused once.
+    /// Whether `Self::pending` has already been refused once.
     ///
     /// A batch is held back so that [`Self::log2file`] can put it somewhere
     /// else and the next flush can try again — but a file that keeps refusing
@@ -403,17 +538,47 @@ struct AppenderInner {
     max_alive_time: i64,
     /// Channel to the async writer thread (replaces `cond_buffer_async_`).
     tx: Option<SyncSender<Msg>>,
-    /// Whether the cache region is backed by the mmap file.
     /// Whether the region is the mmap'd cache file (`true`) or a heap buffer.
     use_mmap: bool,
-    /// Whether this appender owns `<prefix>.mmap3`. `Appender::oneshot` works
-    /// on a file left behind by another process and must never clear it.
-    owns_cache: bool,
+    /// The cache file this appender owns: see `CacheSlot`.
+    ///
+    /// `None` for `Appender::oneshot`, which works on a file left behind by
+    /// another process and must never clear it, and for an appender that could
+    /// not claim a slot of its own at all.
+    cache: Option<CacheSlot>,
+    /// `<dir>/<prefix>.lock`, taken around the operations that move more than
+    /// one file: see `Self::with_dir_lock`. `None` when advisory locking
+    /// excludes nobody in this directory, where those operations run
+    /// unprotected — the way the C++ runs them.
+    dir_lock: Option<PathBuf>,
 }
 
 impl AppenderInner {
     fn is_sync(&self) -> bool {
         self.config.mode == AppenderMode::Sync
+    }
+
+    /// The cache file this appender owns, if it claimed one.
+    fn cache_path(&self) -> Option<PathBuf> {
+        self.cache.as_ref().map(|slot| slot.path.clone())
+    }
+
+    /// Runs `f` with `<dir>/<prefix>.lock` held.
+    ///
+    /// Every operation below moves more than one file of one prefix: a batch
+    /// must reach the log file whole, a cache file must be read, appended to
+    /// the log and then removed without another writer doing the same in
+    /// between, and the expiry sweep must not race a write. With two processes
+    /// (or two copies of this crate in one) writing the same prefix, each of
+    /// those is a race that loses or duplicates records.
+    ///
+    /// A caller must not already hold the lock: `flock` is per open file
+    /// description, so a second `open()` of the same lock file waits for the
+    /// first, and a nested caller would wait for itself. The locked sections
+    /// call `Self::flush_pending_locked` instead.
+    fn with_dir_lock<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let _guard = acquire_dir_lock(self.dir_lock.as_deref());
+        f(self)
     }
 
     /// `cond_buffer_async_.notifyAll()`
@@ -545,15 +710,29 @@ impl AppenderInner {
             }
 
             let log_path = self.log_file_path(tv);
-            // `__AppendFile` reads the file this appender has been writing, so
-            // the buffer has to reach it first.
-            let flushed = self.flush_pending();
-            if flushed && append_file(&cache_path, &log_path) {
-                if self.is_sync() {
-                    self.close_log_file();
+            // The cache file is the only copy of these records, so reading it,
+            // appending it to the log and removing it is one step: a writer
+            // that found it still there would append the same records a second
+            // time. The handle is closed first because Windows cannot unlink a
+            // file somebody still holds open.
+            let moved = self.with_dir_lock(|me| {
+                // `__AppendFile` reads the file this appender has been writing,
+                // so the buffer has to reach it first — the unlocked half,
+                // because the lock is already held here.
+                if !me.flush_pending_locked() {
+                    return false;
+                }
+                me.close_log_file_locked();
+                if !append_file(&cache_path, &log_path) {
+                    return false;
                 }
                 let _ = fs::remove_file(&cache_path);
-            }
+                true
+            });
+            // `written` is the answer, not `moved`: the record reached the
+            // cache file, and a move that failed leaves it there for the next
+            // one rather than losing it.
+            let _ = moved;
             return written;
         }
 
@@ -574,7 +753,7 @@ impl AppenderInner {
             if self.open_log_file(OpenDir::Cache) {
                 // The batch the log directory would not take — `data` included,
                 // because [`Self::write_file_record`] left it in
-                // [`Self::pending`] for exactly this. The C++ can only retry
+                // `Self::pending` for exactly this. The C++ can only retry
                 // with `data` here: `fwrite` has already consumed the rest.
                 let had_batch = !self.pending.is_empty();
                 write_success = self.flush_pending() && had_batch;
@@ -668,6 +847,7 @@ impl AppenderInner {
             let last_file_path = self.last_file_path.clone();
             match OpenOptions::new()
                 .create(true)
+                .truncate(false)
                 .append(true)
                 .open(&last_file_path)
             {
@@ -689,6 +869,7 @@ impl AppenderInner {
         } else {
             let file = match OpenOptions::new()
                 .create(true)
+                .truncate(false)
                 .append(true)
                 .open(&logfilepath)
             {
@@ -734,27 +915,53 @@ impl AppenderInner {
     fn close_log_file(&mut self) {
         // `fclose` of the C++: whatever is still buffered goes out first.
         let _ = self.flush_pending();
+        self.forget_log_file();
+    }
+
+    /// [`Self::close_log_file`] for a caller that already holds the directory
+    /// lock: `Self::flush_pending` would wait for the lock this caller holds
+    /// itself, because `flock` is per open file description and a second
+    /// `open()` of the same lock file waits for the first.
+    fn close_log_file_locked(&mut self) {
+        let _ = self.flush_pending_locked();
+        self.forget_log_file();
+    }
+
+    fn forget_log_file(&mut self) {
         self.open_file_time = 0;
         self.log_file = None;
         self.flushed_len = 0;
     }
 
-    /// Hands [`Self::pending`] to the OS — the point where the C++'s `FILE*`
+    /// Hands `Self::pending` to the OS — the point where the C++'s `FILE*`
     /// buffer is flushed into a `write`.
     ///
-    /// Returns `false` on I/O failure, after truncating back to [`Self::flushed_len`]
+    /// Returns `false` on I/O failure, after truncating back to `Self::flushed_len`
     /// and appending an error record (as `__WriteFile` does) — and **keeping**
-    /// the batch, so it is neither lost nor written twice: see [`Self::pending`].
+    /// the batch, so it is neither lost nor written twice: see `Self::pending`.
     fn flush_pending(&mut self) -> bool {
         if self.pending.is_empty() {
             return true;
         }
+        self.with_dir_lock(Self::flush_pending_locked)
+    }
+
+    /// `Self::flush_pending` with the directory lock already held.
+    fn flush_pending_locked(&mut self) -> bool {
         if self.log_file.is_none() {
-            // Nothing to hand it to *yet*. Kept for one more attempt:
-            // `__Log2File` opens the cache file for exactly this, and the batch
-            // goes there instead.
             return self.refuse_pending();
         }
+
+        // Where the file ends, asked here rather than remembered in
+        // `Self::flushed_len`: another writer may have appended since this
+        // appender last looked, and rolling back to a length that is not the
+        // file's would cut off what they wrote. The C++ `ftell`s before every
+        // `fwrite` for the same number; this is one `lseek` per batch.
+        let start = self
+            .log_file
+            .as_mut()
+            .and_then(|file| file.seek(SeekFrom::End(0)).ok())
+            .unwrap_or(self.flushed_len);
 
         let result = {
             let file = self.log_file.as_mut().expect("checked above");
@@ -764,7 +971,7 @@ impl AppenderInner {
 
         match result {
             Ok(()) => {
-                self.flushed_len += self.pending.len() as u64;
+                self.flushed_len = start + self.pending.len() as u64;
                 self.pending.clear();
                 self.pending_refused = false;
                 true
@@ -773,7 +980,7 @@ impl AppenderInner {
                 // What the OS held, so the file can be rolled back to it. The
                 // C++ `ftell`s before every `fwrite` for the same number.
                 if let Some(file) = self.log_file.as_mut() {
-                    let _ = file.set_len(self.flushed_len);
+                    let _ = file.set_len(start);
                     let _ = file.seek(SeekFrom::End(0));
                 }
 
@@ -798,7 +1005,7 @@ impl AppenderInner {
         }
     }
 
-    /// Gives [`Self::pending`] up, or one more attempt first: see
+    /// Gives `Self::pending` up, or one more attempt first: see
     /// [`Self::pending_refused`]. Answers `false`, whatever it decided.
     fn refuse_pending(&mut self) -> bool {
         if self.pending_refused {
@@ -812,10 +1019,10 @@ impl AppenderInner {
 
     /// `XloggerAppender::__WriteFile`.
     ///
-    /// Appends `data` to the file — through [`Self::pending`], so a record
+    /// Appends `data` to the file — through `Self::pending`, so a record
     /// costs a `memcpy` instead of a syscall, which is what the C++'s `fwrite`
     /// costs. Returns `false` when the batch behind it could not reach the file,
-    /// in which case `data` is still in [`Self::pending`] and no byte of it is
+    /// in which case `data` is still in `Self::pending` and no byte of it is
     /// in any file.
     fn write_file_record(&mut self, data: &[u8]) -> bool {
         self.pending.extend_from_slice(data);
@@ -924,15 +1131,32 @@ impl Appender {
         };
 
         // The C++ runs these on 2-3 minute delayed threads; the port prunes at
-        // open time so the directory is clean by the time `open` returns.
-        if let Some(dir) = &cachedir {
-            del_timeout_file(dir, alive_time);
-            move_old_files(dir, &config.logdir, &config.nameprefix, config.cache_days);
+        // open time so the directory is clean by the time `open` returns. It is
+        // held under the prefix's lock because it reads, moves and removes
+        // whole files: two processes opening at once would otherwise both move
+        // the same cache file into the log.
+        let dir = cache_dir(&config).to_path_buf();
+        let lock_path = dir_lock_path(&dir, &config.nameprefix);
+        let locking = sys::lock_excludes(&lock_path);
+        let dir_lock = locking.then_some(lock_path);
+        {
+            let _guard = acquire_dir_lock(dir_lock.as_deref());
+            if let Some(cache) = &cachedir {
+                del_timeout_file(cache, alive_time);
+                move_old_files(cache, &config.logdir, &config.nameprefix, config.cache_days);
+            }
+            del_timeout_file(&config.logdir, alive_time);
         }
-        del_timeout_file(&config.logdir, alive_time);
 
-        let mmap_path = mmap_file_path(&config);
-        let (mut region, use_mmap) = open_region(&mmap_path);
+        // A cache file of this appender's own: see `CacheSlot`.
+        let mut cache = claim_cache_slot(&dir, &config.nameprefix, locking);
+        let (mut region, use_mmap) = match cache.as_mut() {
+            Some(slot) => open_region(&mut slot.file, &slot.path),
+            // Every slot is taken by a live writer. Nothing is corrupted by
+            // logging without a cache — only the records a crash would have
+            // left in one are lost.
+            None => (Region::heap(), false),
+        };
 
         let mut buff = LogBuffer::new(
             true,
@@ -960,7 +1184,8 @@ impl Appender {
             max_alive_time: alive_time,
             tx: None,
             use_mmap,
-            owns_cache: true,
+            cache,
+            dir_lock,
         };
 
         let appender = Appender {
@@ -978,12 +1203,15 @@ impl Appender {
         let mut leftover = AutoBuffer::new();
         appender.lock().flush_buffer(&mut leftover);
 
-        // Without a mapping nothing ever writes the region back, so the file
-        // still holds what was just drained and the next start would append it
-        // again — once per start, forever. (With a mapping, `flush_buffer`
-        // zeroes it in place.)
+        // Anything a previous run of this appender left in its own cache file.
+        // A slot with no mapping keeps what was just drained, and the next start
+        // would append it again — once per start, forever. (With a mapping,
+        // `flush_buffer` zeroes it in place.)
         if !use_mmap {
-            clear_cache_file(&mmap_path);
+            let path = appender.lock().cache_path();
+            if let Some(path) = path {
+                clear_cache_file(&path);
+            }
         }
 
         if appender.lock().config.mode == AppenderMode::Async {
@@ -1123,7 +1351,8 @@ impl Appender {
             max_alive_time: alive_time,
             tx: None,
             use_mmap: false,
-            owns_cache: false,
+            cache: None,
+            dir_lock: None,
         };
 
         Ok(Appender {
@@ -1140,20 +1369,25 @@ impl Appender {
         })
     }
 
-    /// `XloggerAppender::TreatMappingAsFileAndFlush`.
-    pub(crate) fn treat_mapping_as_file_and_flush(&self) -> crate::config::FileIoAction {
+    /// `XloggerAppender::TreatMappingAsFileAndFlush` of one cache file.
+    ///
+    /// `path` is a slot a dead writer left behind: [`crate::appender_oneshot_flush`]
+    /// only calls this for one whose lock nobody holds.
+    pub(crate) fn treat_mapping_as_file_and_flush(
+        &self,
+        path: &Path,
+    ) -> crate::config::FileIoAction {
         use crate::config::FileIoAction;
 
         let config = self.lock().config.clone();
-        let mmap_path = mmap_file_path(&config);
 
-        if !mmap_path.exists() {
+        if !path.exists() {
             return FileIoAction::Unnecessary;
         }
 
         // Read the whole cache file into a heap region.
         let mut data = vec![0u8; BUFFER_BLOCK_LENGTH];
-        let Ok(mut file) = File::open(&mmap_path) else {
+        let Ok(mut file) = File::open(path) else {
             return FileIoAction::OpenFailed;
         };
         if file.read_exact(&mut data).is_err() {
@@ -1199,7 +1433,7 @@ impl Appender {
             return FileIoAction::WriteFailed;
         }
 
-        match fs::remove_file(&mmap_path) {
+        match fs::remove_file(path) {
             Ok(()) => FileIoAction::Success,
             Err(_) => FileIoAction::RemoveFailed,
         }
@@ -1348,17 +1582,15 @@ impl Appender {
         // the same records again.
         let (use_mmap, owns_cache, path) = {
             let guard = self.lock();
-            (
-                guard.use_mmap,
-                guard.owns_cache,
-                mmap_file_path(&guard.config),
-            )
+            (guard.use_mmap, guard.cache.is_some(), guard.cache_path())
         };
         // Only the owner of the cache file may clear it: `Appender::oneshot`
         // works on another process's file and must leave it alone when it
         // cannot drain or remove it.
         if !use_mmap && owns_cache {
-            clear_cache_file(&path);
+            if let Some(path) = path {
+                clear_cache_file(&path);
+            }
         }
         let mark = mark_info();
         // `__DATE__` / `__TIME__` again: the twin of the open banner, so the
@@ -1448,6 +1680,15 @@ impl Appender {
     /// `XloggerAppender::GetCurrentLogCachePath`.
     pub(crate) fn current_log_cache_path(&self) -> Option<PathBuf> {
         self.lock().config.cachedir.clone()
+    }
+
+    /// The cache file this appender claimed — see `CacheSlot`. `None` when it
+    /// writes without one, which is what every slot being taken leaves.
+    ///
+    /// Not to be confused with `AppenderInner::cache_file_path`, which is the
+    /// day's log file *inside the cache directory*.
+    pub(crate) fn claimed_cache_path(&self) -> Option<PathBuf> {
+        self.lock().cache_path()
     }
 
     /// `Some(self)` when this appender writes to `_logdir` — used by the free
@@ -1567,6 +1808,7 @@ mod tests {
     use crate::config::{AppenderMode, FileIoAction, XLogConfig};
     use mars_buffer::CompressMode;
     use mars_crypt::{magic, LogCrypt, HEADER_LEN, TAILER_LEN};
+    use std::collections::HashSet;
 
     /// Inflates a raw-DEFLATE body; returns `None` when the sibling crate's
     /// buffer did not compress the payload.
@@ -1895,7 +2137,7 @@ mod tests {
 
     /// What `__Log2File` does with a batch the log directory refuses: it is
     /// staged in the cache directory, whole — which is what
-    /// [`Self::flush_pending`] keeping it is for.
+    /// `Self::flush_pending` keeping it is for.
     #[test]
     fn a_log_directory_that_refuses_a_batch_stages_it_in_the_cache_directory() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2046,11 +2288,76 @@ mod tests {
         fs::create_dir(&log_file).unwrap();
 
         let appender = Appender::oneshot(&config(tmp.path(), AppenderMode::Sync), 0, 0).unwrap();
-        let action = appender.treat_mapping_as_file_and_flush();
+        let action = appender.treat_mapping_as_file_and_flush(&mmap_path);
         appender.close();
 
         assert_eq!(action, FileIoAction::WriteFailed);
         assert!(mmap_path.exists(), "the cache is the only copy left");
+    }
+
+    /// Two writers of one prefix in one directory: what two processes — or two
+    /// copies of this crate linked into one, which is the case `flock` per open
+    /// file description covers and a process-wide singleton cannot — look like.
+    ///
+    /// Each must get a cache file of its own, and every record of both must
+    /// reach the log.
+    #[test]
+    fn two_writers_of_one_prefix_claim_two_cache_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // The claim is built on advisory locking; where it excludes nobody the
+        // C++ behaviour (one shared cache file) is all there is.
+        if !sys::lock_excludes(&dir_lock_path(dir, "Mars")) {
+            return;
+        }
+
+        let first = Appender::open(config(dir, AppenderMode::Sync), 0, 0).unwrap();
+        let second = Appender::open(config(dir, AppenderMode::Sync), 0, 0).unwrap();
+        let first_path = first.claimed_cache_path().expect("no slot for the first");
+        let second_path = second.claimed_cache_path().expect("no slot for the second");
+        assert_ne!(first_path, second_path, "both mmapped the same cache file");
+        assert!(first_path.exists() && second_path.exists());
+
+        for i in 0..64 {
+            first.write(Some(&info(LogLevel::Info)), &format!("first {i:03}"));
+            second.write(Some(&info(LogLevel::Info)), &format!("second {i:03}"));
+        }
+        first.close();
+        second.close();
+
+        let text = decoded_text(&fs::read(today_name(dir)).unwrap());
+        for i in 0..64 {
+            assert!(text.contains(&format!("first {i:03}")), "{text}");
+            assert!(text.contains(&format!("second {i:03}")), "{text}");
+        }
+    }
+
+    /// Past the last slot a writer still logs: it just has nowhere to keep the
+    /// records a crash would have left in a cache file.
+    #[test]
+    fn every_slot_taken_leaves_the_next_writer_without_a_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        if !sys::lock_excludes(&dir_lock_path(dir, "Mars")) {
+            return;
+        }
+
+        let holders: Vec<Appender> = (0..MAX_CACHE_SLOTS)
+            .map(|_| Appender::open(config(dir, AppenderMode::Sync), 0, 0).unwrap())
+            .collect();
+        let claimed: HashSet<PathBuf> = holders
+            .iter()
+            .map(|a| a.claimed_cache_path().expect("a slot each"))
+            .collect();
+        assert_eq!(claimed.len(), MAX_CACHE_SLOTS, "{claimed:?}");
+
+        let next = Appender::open(config(dir, AppenderMode::Sync), 0, 0).unwrap();
+        assert_eq!(next.claimed_cache_path(), None);
+        next.write(Some(&info(LogLevel::Info)), "no cache of my own");
+        next.close();
+
+        let text = decoded_text(&fs::read(today_name(dir)).unwrap());
+        assert!(text.contains("no cache of my own"), "{text}");
     }
 
     #[test]

@@ -216,10 +216,12 @@ void mars_xlog_set_max_file_size_instance(long long instance, unsigned long long
 void mars_xlog_set_max_alive_duration_instance(long long instance, long long seconds);
 
 /**
- * Replaces `mars::xlog::appender_oneshot_flush()`: drains an `<prefix>.mmap3`
- * another process left behind, without opening an appender. It refuses to run
- * for a directory an appender of this process already owns, and then answers
- * MARS_XLOG_ACTION_UNNECESSARY.
+ * Replaces `mars::xlog::appender_oneshot_flush()`: drains the
+ * `<prefix>[_<n>].mmap3` cache files another process left behind, without
+ * opening an appender. The ones a live writer of this process — or of any
+ * other — still holds are left alone, so it answers
+ * MARS_XLOG_ACTION_UNNECESSARY when there is nothing of a dead process's to
+ * recover.
  *
  * @return one of the MARS_XLOG_ACTION_* values (0..7), or a negative
  *         MARS_XLOG_ERR_* code when `config` is unusable.
