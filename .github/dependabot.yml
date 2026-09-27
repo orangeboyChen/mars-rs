@@ -1,0 +1,93 @@
+# Dependabot: one pull request per ecosystem, once a week.
+#
+#   cargo          — Cargo.toml and Cargo.lock of the workspace
+#   github-actions — every `uses:` of .github/workflows
+#   gradle         — the Android Gradle Plugin of android/build.gradle.kts and
+#                    the Gradle version of android/gradle/wrapper
+#
+# A pull request Dependabot raises is a pull request like any other, so it is
+# the gate rust.yml and lint.yml run on a hand-written branch: rustfmt, clippy
+# with `-D warnings`, the test suite on Linux/macOS/Windows in debug and in
+# release, the release build, the Android and Apple cross builds, 90 % of the
+# lines measured, `cargo doc`, and then swiftlint, ktlint and detekt. A
+# dependency that lands a new warning, or a lint, fails here and not in a
+# release.
+#
+# `swift` is deliberately not listed: Package.swift carries no package
+# dependency. Its binary target is a url and a checksum, and both are written
+# by .github/workflows/release.yml for every release — the one place in this
+# repository that knows them, and one Dependabot has no business guessing at.
+#
+# The Gradle wrapper is not listed either, and not because it is left out:
+# `gradle-wrapper.properties` is read as a dependency of its own by the
+# `gradle` entry below, which is what makes gradle-9.8.0 updatable at all.
+
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    # The requirements of Cargo.toml are short on purpose — `memmap2 = "0.9"`
+    # and not `"0.9.5"` — and this is what keeps them that way: a release
+    # already inside the range leaves the manifest alone and moves Cargo.lock,
+    # and a release outside of it (memmap2 0.10) is the only thing that
+    # rewrites the line.
+    versioning-strategy: increase-if-necessary
+    # One pull request a week and not one per crate: minor and patch travel
+    # together, while a major stays a pull request of its own, because a major
+    # is what does not compile. Security updates are never grouped — they are
+    # not subject to a group, and not to the limit below either.
+    groups:
+      cargo-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: 'deps(cargo)'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # One pull request for all of them: an action is a `uses:` line, there is
+    # nothing in the tree that names a version twice, and a v4 -> v5 of
+    # checkout wants the same reading as a v2 -> v3 of rust-cache.
+    groups:
+      github-actions:
+        patterns:
+          - '*'
+    commit-message:
+      prefix: 'deps(actions)'
+
+  - package-ecosystem: gradle
+    directory: /android
+    schedule:
+      interval: weekly
+    # AGP 9.4.1 is declared in the `plugins` block of android/build.gradle.kts,
+    # and it is published on Google's Maven and on the plugin portal, not on
+    # Maven Central — where com.android.tools.build:gradle stopped being
+    # published. Neither is a repository Dependabot asks by default, so the
+    # version of the plugin is only resolvable once both are named at the
+    # bottom of this file and pointed at here.
+    registries:
+      - maven-google
+      - gradle-plugin-portal
+    commit-message:
+      prefix: 'deps(gradle)'
+
+# Nothing here is private: the two repositories are the public ones
+# android/settings.gradle.kts already resolves against (`google()` and
+# `gradlePluginPortal()`), written out because a version is only looked up in
+# a repository that is named.
+registries:
+  maven-google:
+    type: maven-repository
+    url: https://dl.google.com/dl/android/maven2/
+  gradle-plugin-portal:
+    type: maven-repository
+    url: https://plugins.gradle.org/m2/
