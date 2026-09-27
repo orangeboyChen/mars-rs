@@ -77,6 +77,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --release --all-targets
+      # The set the Apple net framework is built with: the diagnosis and the
+      # task pipeline, and not xlog. Nothing else asks for it — `--all-features`
+      # is every one of them, and the tests take the two net ones one at a time —
+      # so it is spelled out here.
+      - run: cargo build --release -p mars-ffi --no-default-features --features sdt,stn
 
   android:
     name: build (${{ matrix.target }})
