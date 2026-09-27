@@ -309,7 +309,14 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: release-android
-          path: dist/
+          # the three files this module publishes, and not `dist/`: that
+          # directory also holds dist/native, the .so tree that
+          # mars-android-native.zip is zipped from, and a directory is not
+          # something the release can be given
+          path: |
+            dist/${{ env.NATIVE_ZIP }}
+            dist/${{ env.CORE_AAR }}
+            dist/${{ env.XLOG_AAR }}
 
   host:
     needs: version
@@ -450,11 +457,22 @@ jobs:
           PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
           cd dist
+          # assets, and only assets: the uploads API answers "is a directory"
+          # for anything that is not a file, and a glob cannot tell the two
+          # apart, so whatever is in dist is filtered here
+          ASSETS=()
+          for ARTIFACT in *; do
+            if [ -f "$ARTIFACT" ]; then
+              ASSETS+=("$ARTIFACT")
+            else
+              echo "::warning::$ARTIFACT in dist is not a file, it is not published"
+            fi
+          done
           if gh release view "$TAG" >/dev/null 2>&1; then
             # publish every asset once, never overwrite: the SPM checksum in
             # Package.swift is bound to the zip that was published for the tag
             PUBLISHED=$(gh release view "$TAG" --json assets -q '.assets[].name')
-            for ARTIFACT in *; do
+            for ARTIFACT in "${ASSETS[@]}"; do
               if grep -qx "$ARTIFACT" <<< "$PUBLISHED"; then
                 echo "skip $ARTIFACT, it is already published for $TAG"
               else
@@ -465,7 +483,7 @@ jobs:
             FLAGS=()
             [ "$PRERELEASE" = true ] && FLAGS+=(--prerelease)
             gh release create "$TAG" --target "$SHA" --title "$TAG" --generate-notes \
-              "${FLAGS[@]}" *
+              "${FLAGS[@]}" "${ASSETS[@]}"
           fi
 
       - name: Create the git tag
