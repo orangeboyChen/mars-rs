@@ -85,7 +85,6 @@ pub use error::{
     MARS_XLOG_ERR_NULL_CONFIG, MARS_XLOG_ERR_NULL_OUT, MARS_XLOG_ERR_PANIC, MARS_XLOG_OK,
 };
 
-#[cfg(feature = "xlog")]
 use std::panic::{self, AssertUnwindSafe};
 
 /// Runs `f` with a panic barrier around it.
@@ -98,7 +97,10 @@ use std::panic::{self, AssertUnwindSafe};
 /// `void` ones). Note that the *default* panic hook still prints the panic to
 /// stderr, which is intentional: it is the only diagnostics channel a host
 /// process (e.g. the JVM) gives us.
-#[cfg(feature = "xlog")]
+///
+/// Ungated: it is the barrier every entry point of this crate crosses, xlog's
+/// included but not only theirs — the diagnosis' and the task pipeline's are
+/// built without `xlog` for the Apple net framework.
 pub(crate) fn guard<T>(fallback: T, f: impl FnOnce() -> T) -> T {
     // `AssertUnwindSafe` is sound here: the closures only touch interior-mutable
     // process state (atomics + the appender's own locks) and no panic can leave
