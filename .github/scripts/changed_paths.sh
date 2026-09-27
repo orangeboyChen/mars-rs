@@ -41,8 +41,12 @@ case "$BASE_SHA" in
 esac
 
 # The base of a pull request is a commit of the repository it was opened
-# against, which a fork's clone does not carry: ask for it before giving up.
-git fetch --no-tags --depth=1 origin "$BASE_SHA" 2>/dev/null || true
+# against, which a fork's clone does not carry: ask for it, but only when it is
+# missing — a `--depth=1` fetch of a commit the clone already has would draw a
+# shallow boundary the merge base of the diff below may sit behind.
+if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+  git fetch --no-tags --depth=1 origin "$BASE_SHA" 2>/dev/null || true
+fi
 
 changed=$(mktemp)
 trap 'rm -f "$changed"' EXIT
