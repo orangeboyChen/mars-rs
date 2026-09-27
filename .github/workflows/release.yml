@@ -724,16 +724,45 @@ jobs:
             exit 0
           fi
 
+          # The status of a version of a crate on crates.io: 200 is "it is
+          # there", 404 is "it is not", and both are answers about the version.
+          # `curl -f` folds every other status into the same false branch as a
+          # 404 — a rate limit, an outage, a token that expired or lost its
+          # scope — and 404 is the branch that publishes, which is not a thing
+          # crates.io lets anyone do twice over one version. So the status is
+          # what is read here, and those two are the only two acted on.
+          crate_status() {
+            curl -sS -o /dev/null -w '%{http_code}' -A "$CRATES_IO_UA" \
+              "https://crates.io/api/v1/crates/$1/$VERSION"
+          }
+
           # Dependency order, and the two crates a caller takes last: crates.io
           # resolves a dependency out of the registry, so a crate is only
           # publishable once the crates it names are on it.
           for CRATE in marsrs-core marsrs-comm marsrs-crypt marsrs-buffer \
                        marsrs-appender marsrs-sdt marsrs-stn marsrs-xlog marsrs; do
-            if curl -sSfA "$CRATES_IO_UA" \
-                "https://crates.io/api/v1/crates/$CRATE/$VERSION" > /dev/null; then
-              echo "$CRATE $VERSION is already on crates.io"
-              continue
-            fi
+            # Asked up to five times, because a 429 or a 5xx is crates.io being
+            # busy and not a fact about the version: ten seconds, then again.
+            for _ in 1 2 3 4 5; do
+              status="$(crate_status "$CRATE")"
+              case "$status" in
+                429|5[0-9][0-9]) sleep 10; continue ;;
+              esac
+              break
+            done
+
+            case "$status" in
+              200)
+                echo "$CRATE $VERSION is already on crates.io"
+                continue
+                ;;
+              404)
+                ;;
+              *)
+                echo "::error::crates.io answered $status for $CRATE $VERSION; whether it is up is unknown, so it is not published over"
+                exit 1
+                ;;
+            esac
 
             # The version is the tag's and the tag is this release's, so the
             # checkout carries an edit `cargo publish` would otherwise refuse.
@@ -741,10 +770,12 @@ jobs:
 
             # crates.io's index is not its database: a publish is visible to
             # the next `cargo publish` only once the index has caught up, and a
-            # dependency that has not is "no matching package".
+            # dependency that has not is "no matching package". Anything but a
+            # 200 is "not yet" here — the index that answers 404, and an answer
+            # this job could not read — and either way the publish that follows
+            # is what decides, and says so.
             for _ in $(seq 1 60); do
-              curl -sSfA "$CRATES_IO_UA" \
-                "https://crates.io/api/v1/crates/$CRATE/$VERSION" > /dev/null && break
+              [ "$(crate_status "$CRATE")" = 200 ] && break
               sleep 5
             done
           done
