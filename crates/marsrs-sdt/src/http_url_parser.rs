@@ -33,16 +33,24 @@ fn trim(s: &str) -> &str {
     &s[start..end]
 }
 
-/// `atoi` and the C++'s `(uint16_t)` cast: the digits at the front of `text`,
-/// truncated to sixteen bits, and `0` when there are none — which the parser
+/// `atoi` and the C++'s `(uint16_t)` cast: the number at the front of `text`,
+/// truncated to sixteen bits, and `0` when there is none — which the parser
 /// turns into [`DEFAULT_PORT`].
+///
+/// The sign counts, because the C++'s is a cast and not a check: a port of `-1`
+/// is `65535` there, and here, and not a port that did not read.
 fn atoi(text: &str) -> u16 {
-    let digits: String = text
+    let text = text.trim_start_matches(|char: char| char.is_ascii_whitespace());
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let digits: String = digits
         .chars()
-        .skip_while(|char| char.is_ascii_whitespace())
         .take_while(|char| char.is_ascii_digit())
         .collect();
-    digits.parse::<u64>().unwrap_or(0) as u16
+    let value = digits.parse::<i64>().unwrap_or(0);
+    (if negative { -value } else { value }) as u16
 }
 
 /// `HttpUrlParser` — one URL, split into the three things an HTTP check needs.
