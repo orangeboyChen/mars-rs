@@ -317,6 +317,14 @@ pub struct MarsStnCgiProfile {
     pub start_read_packet_time: u64,
     /// When the last of it came back.
     pub read_packet_finished_time: u64,
+    /// When the app was handed the task to write its request.
+    pub start_encode_packet_time: u64,
+    /// When the request came back.
+    pub encode_packet_finished_time: u64,
+    /// When the app was handed the answer.
+    pub start_decode_packet_time: u64,
+    /// When it was done reading it.
+    pub decode_packet_finished_time: u64,
     /// One of the `Task::CHANNEL_*` values.
     pub channel_type: i32,
     /// One of the `Task::TRANSPORT_PROTOCOL*` values.
@@ -1512,6 +1520,10 @@ impl ProfileView {
             send_packet_finished_time: profile.send_packet_finished_time,
             start_read_packet_time: profile.start_read_packet_time,
             read_packet_finished_time: profile.read_packet_finished_time,
+            start_encode_packet_time: profile.start_encode_packet_time,
+            encode_packet_finished_time: profile.encode_packet_finished_time,
+            start_decode_packet_time: profile.start_decode_packet_time,
+            decode_packet_finished_time: profile.decode_packet_finished_time,
             channel_type: profile.channel_type,
             transport_protocol: profile.transport_protocol,
             rtt: profile.rtt,

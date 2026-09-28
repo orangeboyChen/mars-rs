@@ -240,6 +240,10 @@ fn connect() -> ConnectProfile {
     profile.send_request_cost = 6;
     profile.start_read_packet_time = 150;
     profile.read_packet_finished_time = 190;
+    profile.start_encode_packet_time = 120;
+    profile.encode_packet_finished_time = 125;
+    profile.start_decode_packet_time = 195;
+    profile.decode_packet_finished_time = 200;
     profile.conn_rtt = 40;
     profile
 }
@@ -265,6 +269,12 @@ fn a_task_that_ended_is_reported_with_the_connect_it_ran_on() {
     assert_eq!(cgi.start_send_packet_time, 140);
     assert_eq!(cgi.send_packet_finished_time, 146, "start plus the cost");
     assert_eq!(cgi.read_packet_finished_time, 190);
+    // and when the app had the task in its own hands, which is the pair the
+    // C++ takes off the run's transfer profile and not off the link
+    assert_eq!(cgi.start_encode_packet_time, 120);
+    assert_eq!(cgi.encode_packet_finished_time, 125);
+    assert_eq!(cgi.start_decode_packet_time, 195);
+    assert_eq!(cgi.decode_packet_finished_time, 200);
     assert_eq!(cgi.channel_type, Task::CHANNEL_SHORT);
     assert_eq!(cgi.rtt, 40);
     assert_eq!(cgi.nettype, "wifi");

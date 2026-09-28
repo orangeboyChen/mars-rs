@@ -185,9 +185,9 @@ pub trait App: Send {
 /// all: a tls handshake that never finished has no start either, and the app is
 /// told when the *write* finished, which the C++ keeps as a start and a cost.
 ///
-/// Not ported: the tls-handshake and the encode/decode readings. The port's
-/// [`ConnectProfile`] does not carry them, because nothing in the port writes
-/// them — they come with the host's own encoder and decoder.
+/// Not ported: the two tls-handshake readings. The port's [`ConnectProfile`]
+/// keeps only whether a handshake succeeded and whether it mismatched, and
+/// never when one began — they come with the tls the port does not open.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CgiProfile {
     /// `start_time` — when the run began.
@@ -205,6 +205,15 @@ pub struct CgiProfile {
     pub start_read_packet_time: u64,
     /// `read_packet_finished_time` — when the last of it came back.
     pub read_packet_finished_time: u64,
+    /// `start_encode_packet_time` — when the app was handed the task to write
+    /// its request.
+    pub start_encode_packet_time: u64,
+    /// `encode_packet_finished_time` — when the request came back.
+    pub encode_packet_finished_time: u64,
+    /// `start_decode_packet_time` — when the app was handed the answer.
+    pub start_decode_packet_time: u64,
+    /// `decode_packet_finished_time` — when it was done reading it.
+    pub decode_packet_finished_time: u64,
     /// `channel_type` — one of the `Task::CHANNEL_*` values.
     pub channel_type: i32,
     /// `transport_protocol` — one of the `Task::TRANSPORT_PROTOCOL*` values.
@@ -228,6 +237,10 @@ impl CgiProfile {
             send_packet_finished_time: profile.start_send_packet_time + profile.send_request_cost,
             start_read_packet_time: profile.start_read_packet_time,
             read_packet_finished_time: profile.read_packet_finished_time,
+            start_encode_packet_time: profile.start_encode_packet_time,
+            encode_packet_finished_time: profile.encode_packet_finished_time,
+            start_decode_packet_time: profile.start_decode_packet_time,
+            decode_packet_finished_time: profile.decode_packet_finished_time,
             channel_type: profile.channel_type,
             transport_protocol: profile.transport_protocol,
             rtt: profile.conn_rtt,

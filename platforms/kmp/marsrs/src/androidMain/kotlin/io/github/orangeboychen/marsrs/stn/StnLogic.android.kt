@@ -330,6 +330,18 @@ public actual object StnLogic {
         var readPacketFinishedTime: Long = 0
 
         @JvmField
+        var startEncodePacketTime: Long = 0
+
+        @JvmField
+        var encodePacketFinishedTime: Long = 0
+
+        @JvmField
+        var startDecodePacketTime: Long = 0
+
+        @JvmField
+        var decodePacketFinishedTime: Long = 0
+
+        @JvmField
         var rtt: Long = 0
 
         @JvmField
@@ -367,6 +379,10 @@ public actual object StnLogic {
             sendPacketFinishedTime = 0,
             startReadPacketTime = startReadPacketTime,
             readPacketFinishedTime = readPacketFinishedTime,
+            startEncodePacketTime = startEncodePacketTime,
+            encodePacketFinishedTime = encodePacketFinishedTime,
+            startDecodePacketTime = startDecodePacketTime,
+            decodePacketFinishedTime = decodePacketFinishedTime,
             rtt = rtt,
             channelType = channelType,
             protocolType = protocolType,

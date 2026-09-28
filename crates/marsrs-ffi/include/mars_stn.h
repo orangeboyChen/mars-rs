@@ -179,6 +179,10 @@ typedef struct {
     unsigned long long send_packet_finished_time;
     unsigned long long start_read_packet_time;
     unsigned long long read_packet_finished_time;
+    unsigned long long start_encode_packet_time;
+    unsigned long long encode_packet_finished_time;
+    unsigned long long start_decode_packet_time;
+    unsigned long long decode_packet_finished_time;
     int channel_type;
     int transport_protocol;
     unsigned int rtt;

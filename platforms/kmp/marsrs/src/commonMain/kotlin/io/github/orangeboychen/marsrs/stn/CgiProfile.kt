@@ -4,7 +4,7 @@ package io.github.orangeboychen.marsrs.stn
  * The connect a task ran on, as the app's report wants it: every reading is a
  * `gettickcount()`.
  *
- * Two of the eleven are ones only one of the two bridges fills in, and they
+ * Two of the fifteen are ones only one of the two bridges fills in, and they
  * stay at their start on the other: [sendPacketFinishedTime] is the C ABI's
  * alone — `mars_stn.h` carries it and the C++'s Java `CgiProfile` has no field
  * for it — and [netType] is the C ABI's alone for the same reason. Every other
@@ -25,6 +25,14 @@ public class CgiProfile internal constructor(
     public val startReadPacketTime: Long,
     /** When the last of the answer came back. */
     public val readPacketFinishedTime: Long,
+    /** When the app was handed the task to write its request. */
+    public val startEncodePacketTime: Long,
+    /** When the request came back. */
+    public val encodePacketFinishedTime: Long,
+    /** When the app was handed the answer. */
+    public val startDecodePacketTime: Long,
+    /** When it was done reading it. */
+    public val decodePacketFinishedTime: Long,
     /** How long the pair that won took to answer. */
     public val rtt: Long,
     /** The link the task went out on: one of [Task.E_SHORT], [Task.E_LONG] and [Task.E_BOTH]. */

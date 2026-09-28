@@ -1437,6 +1437,22 @@ fn cgi_profile<'a>(env: &mut Env<'a>, profile: &CgiProfile) -> Option<JObject<'a
             jni_str!("readPacketFinishedTime"),
             profile.read_packet_finished_time as i64,
         ),
+        (
+            jni_str!("startEncodePacketTime"),
+            profile.start_encode_packet_time as i64,
+        ),
+        (
+            jni_str!("encodePacketFinishedTime"),
+            profile.encode_packet_finished_time as i64,
+        ),
+        (
+            jni_str!("startDecodePacketTime"),
+            profile.start_decode_packet_time as i64,
+        ),
+        (
+            jni_str!("decodePacketFinishedTime"),
+            profile.decode_packet_finished_time as i64,
+        ),
         (jni_str!("rtt"), profile.rtt as i64),
     ] {
         let _ = env.set_field(&object, name, jni_sig!("J"), JValue::Long(value));
