@@ -20,7 +20,7 @@
 
 Pod::Spec.new do |s|
   s.name         = 'MarsRS'
-  s.version      = '0.1.0'
+  s.version      = '0.1.0-alpha.3'
   s.summary      = 'mars-rs: the Rust port of Mars — xlog and the net half, in one module.'
   s.description  = <<-DESC
                    mars-rs is the Rust port of Mars, the cross-platform

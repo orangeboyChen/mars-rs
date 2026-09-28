@@ -116,8 +116,8 @@ let package = Package(
         // would be.
         .binaryTarget(
             name: "MarsRSFFI",
-            url: "https://github.com/orangeboyChen/mars-rs/releases/download/v0.1.0-alpha.2/MarsRS.xcframework.zip",
-            checksum: "076428c37d9532449048eddac02a69b0a0d7a227a7874ca22d981fd5622afa37"
+            url: "https://github.com/orangeboyChen/mars-rs/releases/download/v0.1.0-alpha.3/marsrs-xlog.xcframework.zip",
+            checksum: "bf80759153364056ec70461017d967f59a682701b0a74c4a53f42e78ca31bc31"
         ),
         // A thin Swift face of the C ABI: a binary target is a module of C
         // symbols only, so this is where the strings and the enums of
@@ -177,7 +177,7 @@ let package = Package(
         .binaryTarget(
             name: "MarsRSNetFFI",
             url: "https://github.com/orangeboyChen/mars-rs/releases/download/v0.1.0-alpha.3/marsrs-net.xcframework.zip",
-            checksum: "0000000000000000000000000000000000000000000000000000000000000000"
+            checksum: "8910a092bad8317109bb72e6ef2626bcedb680983534c91ce9aced0da043dcfa"
         ),
         // The Swift over the net half's C ABI: `MarsSdt`, `MarsStn`, and the
         // `StnTask` / `StnQuestion` / `StnAnswer` they are made of.

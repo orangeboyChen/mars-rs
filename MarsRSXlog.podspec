@@ -38,7 +38,7 @@
 
 Pod::Spec.new do |s|
   s.name         = 'MarsRSXlog'
-  s.version      = '0.1.0'
+  s.version      = '0.1.0-alpha.3'
   s.summary      = 'xlog, the logging half of mars-rs: the Mars logger in Rust.'
   s.description  = <<-DESC
                    mars-rs is the Rust port of Mars, the cross-platform
@@ -51,7 +51,7 @@ Pod::Spec.new do |s|
   s.homepage     = 'https://github.com/orangeboyChen/mars-rs'
   s.license      = { :type => 'MIT', :file => 'LICENSE' }
   s.author       = { 'orangeboyChen' => 'https://github.com/orangeboyChen' }
-  s.source       = { :http => 'https://github.com/orangeboyChen/mars-rs/releases/download/v0.1.0/marsrs-cocoapods-xlog-0.1.0.zip' }
+  s.source       = { :http => 'https://github.com/orangeboyChen/mars-rs/releases/download/v0.1.0-alpha.3/marsrs-cocoapods-xlog-0.1.0-alpha.3.zip' }
   # What Package.swift declares, and what the four slices of the framework are
   # built at.
   s.platforms    = { :ios => '12.0', :watchos => '10.0' }
