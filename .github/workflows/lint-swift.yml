@@ -120,8 +120,11 @@ jobs:
   # download the release asset first. What the script does instead is write
   # module maps over `crates/marsrs-ffi/include` — a C module is all a Swift
   # file takes from either target — and emit every Swift module of the package
-  # for three triples: iOS 12 on arm64, and watchOS 10 on `arm64_32` and on
-  # `arm64`.
+  # for six destinations: iOS 12 on device arm64 and on both simulator
+  # architectures, arm64 and x86_64, and watchOS 10 on the two architectures
+  # of a watch and on the simulator. A device triple compiles no
+  # `targetEnvironment(simulator)` and no `arch(x86_64)` branch at all, which
+  # is why the simulators are in the list and not left to the release.
   #
   # Which is the question a pull request was not asked: the release compiles
   # the Swift when it builds the xcframework, so the first compile of a change

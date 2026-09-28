@@ -28,9 +28,14 @@
 # slice of any SDK is linked here — and it is what lets the umbrella module,
 # which imports the other two, be compiled after them.
 #
-# Three triples, the three Package.swift's `platforms` promise: iOS 12 on
-# arm64, and watchOS 10 on the two architectures of a watch, `arm64_32` and
-# `arm64`.
+# Six triples: one per destination the two frameworks carry a slice for, at
+# the deployment target Package.swift declares for its platform. A device
+# triple is not enough, because a `#if targetEnvironment(simulator)`, a
+# `#if arch(x86_64)` or a symbol the simulator's SDK answers differently are
+# compiled by a simulator triple and by nothing else — and the iOS simulator
+# is two architectures, arm64 and x86_64, which is why its slice is lipo'd
+# out of both. A watchOS simulator is arm64 only, and nothing asks for the
+# x86_64 one.
 
 set -euo pipefail
 
@@ -61,11 +66,16 @@ MAP
 # umbrella, and it imports the other two.
 modules=(MarsRSXlog MarsRSNet MarsRS)
 # <sdk>:<triple>, and the triple carries the deployment target the package
-# declares — the version a symbol's availability is read against.
+# declares — the version a symbol's availability is read against. The four
+# destinations are the `slices` of scripts/build_xcframework.sh, the ones an
+# app that takes the xcframework builds for.
 platforms=(
   "iphoneos:arm64-apple-ios12.0"
+  "iphonesimulator:arm64-apple-ios12.0-simulator"
+  "iphonesimulator:x86_64-apple-ios12.0-simulator"
   "watchos:arm64_32-apple-watchos10.0"
   "watchos:arm64-apple-watchos10.0"
+  "watchsimulator:arm64-apple-watchos10.0-simulator"
 )
 
 for platform in "${platforms[@]}"; do
