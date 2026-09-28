@@ -20,8 +20,8 @@
 //! The two the C++'s Java declares are two because the C++ needs no more: a
 //! diagnosis there is started from inside the C++, by threads that are its own
 //! and sockets that are its own. The port has neither, so Java starts the
-//! diagnosis ([`start_active_check_impl`]) and answers the four probes of it
-//! ([`run_checks_java_impl`]) — and asks the two questions that go with
+//! diagnosis ([`sdt::start_active_check_impl`]) and answers the four probes of
+//! it ([`sdt::run_checks_java_impl`]) — and asks the two questions that go with
 //! running one by hand: whether a check is in flight, and what it is going to
 //! do. Those are the `external`s the port's `SdtLogic` declares beside the
 //! C++'s two.
@@ -214,8 +214,9 @@ pub fn run_active_check_with_net_info_impl(ask: &mut Ask) -> Vec<CheckResultProf
 
 /// [`run_active_check_impl`] with the probes asked of Java: the four checks
 /// want a socket, and the port opens none, so the app's `SdtLogic.IProbe` is
-/// what they reach — [`crate::jni_bridge::ask_probe`] carries one [`Query`] the
-/// way and its [`Answer`] back.
+/// what they reach — [`crate::jni_bridge`] carries a query of the check to
+/// Java and comes back with what that probe made of it, through the [`Ask`]
+/// this call builds over it.
 ///
 /// This is the `__RunOn` thread of the C++, run on the thread that called it:
 /// it holds the process-wide diagnosis until every probe has answered, so a
