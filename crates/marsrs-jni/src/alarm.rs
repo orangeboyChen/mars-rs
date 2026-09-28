@@ -91,7 +91,7 @@ pub fn alarm_reset_impl() -> usize {
     })
 }
 
-/// How many alarms are waiting, and whether one of them is `id`.
+/// Whether `id` is still waiting: `false` for an id that was never started.
 pub fn alarm_is_waiting_impl(id: i64) -> bool {
     with_state(|state| state.waiting.contains_key(&id))
 }

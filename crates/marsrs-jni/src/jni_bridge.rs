@@ -82,11 +82,12 @@ where
 
 /// The VM the library was loaded into.
 ///
-/// Every other call in this file goes Java -> Rust, but two of them go the
-/// other way: `SdtLogic.reportSignalDetectResults` is a static *Java* method
-/// the native side calls when a diagnosis finishes, and calling it needs a VM
-/// to attach a thread to. `System.loadLibrary` calls `JNI_OnLoad`, which is
-/// where this is set.
+/// Every other call in this file goes Java -> Rust, but the ones that ask a
+/// question go the other way, and so does the one report at the end of a
+/// diagnosis: `SdtLogic.reportSignalDetectResults` is a static *Java* method
+/// the native side calls when a diagnosis finishes. Calling any of them needs
+/// a VM to attach a thread to. `System.loadLibrary` calls `JNI_OnLoad`, which
+/// is where this is set.
 static VM: OnceLock<JavaVM> = OnceLock::new();
 
 /// `JNI_OnLoad` — `System.loadLibrary` calls it, and it is the only place the
@@ -913,9 +914,9 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_clearTas
 /// as one pass the host's loop makes.
 ///
 /// The C++ runs this on a thread of its own; this port has none, so it is the
-/// app's loop that calls it — `StnLogic.dueTime` is how long it may wait.
-/// Declared by no Java of
-/// the C++'s, because the C++ has no need of one: its own thread is the caller.
+/// app's loop that calls it — `StnLogic.dueTime` is how long it may wait. The
+/// C++'s Java declares no such method, because there its own thread is the
+/// caller.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_runPending<'local>(
     _env: EnvUnowned<'local>,
@@ -999,7 +1000,8 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_genTaskI
     guard(|| gen_task_id_impl() as jint)
 }
 
-/// `StnLogic.genSequenceId` — declared by the C++ but not by the Java class.
+/// `StnLogic.genSequenceId` — a call the port has and the C++'s Java class does
+/// not declare.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_genSequenceId<'local>(
     _env: EnvUnowned<'local>,
@@ -1008,7 +1010,8 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_genSeque
     guard(|| gen_sequence_id_impl() as jint)
 }
 
-/// `StnLogic.trigNooping` — declared by the C++ but not by the Java class.
+/// `StnLogic.trigNooping` — a call the port has and the C++'s Java class does
+/// not declare.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_trigNooping<'local>(
     _env: EnvUnowned<'local>,
@@ -1349,8 +1352,9 @@ fn strings_of(env: &mut Env<'_>, called: jni::errors::Result<JValueOwned>) -> Ve
     string_array(env, &array)
 }
 
-/// An `int[]` Java writes an answer into — the C++'s `env->NewIntArray`, which
-/// is two ints wide for `req2Buf` and one everywhere else.
+/// An `int[]` Java writes an answer into — the C++'s `env->NewIntArray`: two
+/// ints wide for `req2Buf`, which reads the error code at `0`, one for every
+/// other caller, and as wide as the plan for `SdtLogic.plan`.
 fn int_out<'a>(env: &mut Env<'a>, len: i32) -> Option<JIntArray<'a>> {
     env.new_int_array(len.max(0) as usize).ok()
 }
@@ -1956,8 +1960,9 @@ const ASK_HOST_SIG: MethodSignature =
 const ASK_TCP_SIG: MethodSignature =
     jni_sig!("(Ljava/lang/String;II)Lio/github/orangeboychen/marsrs/sdt/SdtLogic$Answer;");
 
-/// The `SdtLogic.Probe` integers: which probe a query is, which is the `probe`
-/// field of `SdtLogic.Answer` on its way back.
+/// The `SdtLogic.Probe` integers: what `SdtLogic.Answer.probe` is read against,
+/// and not what a query asks with — a query calls one of the `SdtLogic.Ask*`
+/// methods instead.
 const PROBE_DNS: i32 = 1;
 const PROBE_TCP: i32 = 2;
 const PROBE_HTTP: i32 = 3;

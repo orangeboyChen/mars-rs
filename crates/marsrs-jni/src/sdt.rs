@@ -267,14 +267,8 @@ pub fn take_delivered_impl() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// `SdtManagerJniCallback::ReportNetCheckResult()` — hands a finished diagnosis
-/// over: the JSON [`marsrs_sdt::report_json`] builds goes to Java, and a copy
-/// stays here for the host ([`take_delivered_impl`]) and for the tests, which
-/// have no JVM to hand it to.
-///
-/// This is the call the C++ makes from inside `ReportNetCheckResult`, so a
-/// diagnosis that ends is never just buffered: it reaches the app's
-/// `SdtLogic.ICallBack` (or is recorded, when there is no JVM yet).
+/// `SdtManagerJniCallback::ReportNetCheckResult()` — the document a finished
+/// diagnosis is handed over as: the JSON [`marsrs_sdt::report_json`] builds.
 ///
 /// The document itself is [`marsrs_sdt`]'s: the fields are
 /// [`CheckResultProfile`]'s, and the C ABI hands the same one over, so both

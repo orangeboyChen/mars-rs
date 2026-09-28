@@ -404,7 +404,6 @@ mod tests {
         statistics.data(1, 1);
         assert!(gettickcount() >= statistics.last_report_time);
 
-        // `default()` is `new()`
         let statistics = TrafficStatistics::default();
         assert!(statistics.last_report_time <= gettickcount());
     }
