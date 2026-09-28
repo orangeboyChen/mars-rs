@@ -4,9 +4,24 @@
 //! failed) and the last ten of those are kept in a sliding window. Enough good
 //! packages in a row make the status `Excellent`, too many failures make it
 //! `Bad`; the C++ picks the first-package timeout of the next task from it.
+//!
+//! One of them answers for the whole process, and not one per queue: the
+//! C++'s `NetCore` owns it and hands the *same* one to the short-link and the
+//! long-link queue (`mars/stn/src/net_core.cc:85,217`), so a package that
+//! went out on one of them is what the other computes its timeouts from. A
+//! [`DynamicTimeout`] is therefore a handle, and a clone of one is another
+//! handle on the same judgement rather than a copy of it.
+
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::config::*;
 use marsrs_comm::tickcount::gettickcount;
+
+/// A lock another thread panicked in: the window is a handful of counters, so
+/// the reading in it is taken as it is.
+fn poisoned(poisoned: PoisonError<MutexGuard<'_, Window>>) -> MutexGuard<'_, Window> {
+    poisoned.into_inner()
+}
 
 /// How good the network looks from the last ten packages: the C++ picks the
 /// first-package timeout from it, and `Excellent` is what buys a shorter one.
@@ -90,8 +105,15 @@ impl TaskTag {
 /// five-minute expiry of the sliding window is testable without waiting;
 /// [`DynamicTimeout::record`] is the `CgiTaskStatistic()` of the C++ against
 /// [`gettickcount`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DynamicTimeout {
+    window: Arc<Mutex<Window>>,
+}
+
+/// What the C++'s `DynamicTimeout` holds, and the port's [`DynamicTimeout`]
+/// shares: one window per process, and not one per queue.
+#[derive(Debug, Clone)]
+struct Window {
     status: DynamicTimeoutStatus,
     continuous_good_count: u32,
     latest_bigpkg_goodtime: u64,
@@ -101,15 +123,8 @@ pub struct DynamicTimeout {
     pos: usize,
 }
 
-impl Default for DynamicTimeout {
+impl Default for Window {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl DynamicTimeout {
-    /// `DynamicTimeout()`.
-    pub fn new() -> Self {
         Self {
             status: DynamicTimeoutStatus::Evaluating,
             continuous_good_count: 0,
@@ -119,46 +134,62 @@ impl DynamicTimeout {
             pos: 0,
         }
     }
+}
+
+impl DynamicTimeout {
+    /// `DynamicTimeout()` — a window of its own. [`NetCore`](crate::NetCore)
+    /// makes one and hands it to both of its queues, which is what makes the
+    /// network's judgement one the whole core shares.
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// `DynamicTimeout::CgiTaskStatistic(cgi, total_size, cost_time)`.
-    pub fn record(&mut self, network: NetworkKind, total_size: u32, cost_time: u64) {
+    pub fn record(&self, network: NetworkKind, total_size: u32, cost_time: u64) {
         self.record_at(network, total_size, cost_time, gettickcount())
     }
 
     /// `CgiTaskStatistic()` against an explicit tick count.
-    pub fn record_at(&mut self, network: NetworkKind, total_size: u32, cost_time: u64, now: u64) {
-        self.status_switch(TaskTag::of(network, total_size, cost_time), now);
+    pub fn record_at(&self, network: NetworkKind, total_size: u32, cost_time: u64, now: u64) {
+        self.window
+            .lock()
+            .unwrap_or_else(poisoned)
+            .switch(TaskTag::of(network, total_size, cost_time), now);
     }
 
     /// `DynamicTimeout::GetStatus()`.
     pub fn status(&self) -> DynamicTimeoutStatus {
-        self.status
+        self.window.lock().unwrap_or_else(poisoned).status
     }
 
     /// How many packages in a row met their budget: one that only finished, or
     /// failed, puts it back to zero, and it only counts while the status is
     /// still `Evaluating`.
     pub fn continuous_good_count(&self) -> u32 {
-        self.continuous_good_count
+        self.window
+            .lock()
+            .unwrap_or_else(poisoned)
+            .continuous_good_count
     }
 
     /// How many of the last ten packages came in at all: six or fewer call the
     /// network bad, and more than that bring it back out of it.
     pub fn normal_count(&self) -> usize {
-        self.history.iter().filter(|ok| **ok).count()
+        self.window.lock().unwrap_or_else(poisoned).normal_count()
     }
 
     /// `DynamicTimeout::ResetStatus()`.
-    pub fn reset(&mut self) {
-        self.status = DynamicTimeoutStatus::Evaluating;
-        self.continuous_good_count = 0;
-        self.latest_bigpkg_goodtime = 0;
-        self.history = [true; 10];
-        self.fncount_latest_modify_time = 0;
-        self.pos = 0;
+    pub fn reset(&self) {
+        *self.window.lock().unwrap_or_else(poisoned) = Window::default();
+    }
+}
+
+impl Window {
+    fn normal_count(&self) -> usize {
+        self.history.iter().filter(|ok| **ok).count()
     }
 
-    fn status_switch(&mut self, tag: TaskTag, now: u64) {
+    fn switch(&mut self, tag: TaskTag, now: u64) {
         if self.fncount_latest_modify_time == 0
             || now.saturating_sub(self.fncount_latest_modify_time) > DYN_TIME_COUNT_EXPIRE_TIME
         {
@@ -208,7 +239,7 @@ impl DynamicTimeout {
             }
         }
 
-        let normal_count = self.history.iter().filter(|ok| **ok).count();
+        let normal_count = self.normal_count();
         match self.status {
             DynamicTimeoutStatus::Evaluating => {
                 if self.continuous_good_count >= DYN_TIME_MAX_CONTINUOUS_EXCELLENT_COUNT
