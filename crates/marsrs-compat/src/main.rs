@@ -3,7 +3,7 @@
 //! ```text
 //! xlog-compat encode --mode=zlib --compress=1 --sync=0 --pubkey=<hex> \
 //!     --records=records.bin --out=a.xlog
-//! xlog-compat decode --privkey=<hex> --in=a.xlog --out=a.plain
+//! xlog-compat decode [--privkey=<hex>] --in=a.xlog --out=a.plain
 //! ```
 
 use std::process::ExitCode;
@@ -16,7 +16,7 @@ fn main() -> ExitCode {
         eprintln!(
             "usage: xlog-compat encode --mode=zlib|zstd [--compress=1] [--sync=0] \
              [--pubkey=HEX] --records=PATH --out=PATH\n       \
-             xlog-compat decode --privkey=HEX --in=PATH --out=PATH"
+             xlog-compat decode [--privkey=HEX] --in=PATH --out=PATH"
         );
         return ExitCode::FAILURE;
     };

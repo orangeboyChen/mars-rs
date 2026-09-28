@@ -73,7 +73,8 @@ fn every_golden_file_decodes_to_the_original_input() {
     for case in manifest()["cases"].as_array().unwrap() {
         let name = case["name"].as_str().unwrap();
         let bytes = std::fs::read(dir.join(case["file"].as_str().unwrap())).unwrap();
-        let decoded = decode_records(&bytes, &key).unwrap_or_else(|err| panic!("{name}: {err}"));
+        let decoded =
+            decode_records(&bytes, Some(&key)).unwrap_or_else(|err| panic!("{name}: {err}"));
         assert_eq!(decoded, expected, "{name}: decoded text drifted");
     }
 }
@@ -99,10 +100,36 @@ fn rust_encoded_crypt_records_round_trip_through_the_decoder() {
         encode(&opts(&dir.join("inputs.bin"), &out, case)).unwrap();
 
         let encoded = std::fs::read(&out).unwrap();
-        let decoded = decode_records(&encoded, &key)
+        let decoded = decode_records(&encoded, Some(&key))
             .unwrap_or_else(|err| panic!("{name}: decoding our own crypt file failed: {err}"));
         assert_eq!(decoded, expected, "{name}: crypt round trip drifted");
     }
+}
+
+/// A file written with no server key is read with no private key. Upstream
+/// reads its `PRIV_KEY` only where a record is encrypted
+/// (`decode_log_file.c:437`), so asking for one to read a file that was
+/// written without one is the C++ that this used to insist on.
+#[test]
+fn a_file_written_with_no_key_is_decoded_with_none() {
+    let _guard = serial();
+    let dir = fixtures();
+    let expected = std::fs::read(dir.join("expected.bin")).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+
+    let case = manifest()["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["crypt"].as_i64().unwrap() == 0)
+        .expect("the manifest holds a case written with no key")
+        .clone();
+    let out = tmp.path().join("nocrypt.xlog");
+    encode(&opts(&dir.join("inputs.bin"), &out, &case)).unwrap();
+
+    let encoded = std::fs::read(&out).unwrap();
+    let decoded = decode_records(&encoded, None).expect("a no-crypt file needs no key");
+    assert_eq!(decoded, expected, "a no-crypt file decoded without a key");
 }
 
 #[test]
