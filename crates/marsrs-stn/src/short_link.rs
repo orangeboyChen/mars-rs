@@ -675,9 +675,14 @@ impl ShortLink {
         // hands it the nat64-mapped address of the proxy separately; the port
         // hands it the whole [`ProxyInfo`] instead, so mapping it is the
         // operator's.
-        if use_proxy && (proxy.kind == ProxyType::HttpTunnel || proxy.kind == ProxyType::Socks5) {
-            self.profile.ip_type = IpSourceType::Proxy;
-        }
+        //
+        // The C++ marks the profile `kIPSourceProxy` here (`shortlink.cc:363`)
+        // and overwrites it with the first pair's own source type twenty lines
+        // later (`shortlink.cc:410-414`), which is before the keep-alive cache
+        // is asked — so the profile carries the pair, and a task that asked to
+        // be kept does look in the pool even behind a tunnel. Writing it and
+        // overwriting it is not a thing the port has to do twice: it leaves
+        // the pair's own source type alone.
         // the proxy the operator is given is the one dns named, not the host the
         // app told it about
         let connect_proxy = match &proxy_ip {
@@ -2067,6 +2072,34 @@ mod tests {
             link.profile().ip_type,
             IpSourceType::Dns,
             "the C++ marks the profile as going through a proxy, and then overwrites it with the pair that won"
+        );
+    }
+
+    #[test]
+    fn a_task_that_asked_to_be_kept_looks_in_the_pool_behind_a_tunnel() {
+        // a tunnel is connected *through*, and the C++ still asks the
+        // keep-alive cache: its `kIPSourceProxy` is overwritten with the
+        // pair's own source type before the check (`shortlink.cc:410-414`)
+        let mut task = task();
+        task.headers
+            .insert("Connection".to_string(), "Keep-Alive".to_string());
+        let seen = Seen::default();
+        let mut link = link_for(&seen, task, true);
+        link.set_proxy(|_| ProxyInfo::new(ProxyType::Socks5, "", "10.0.0.1", 8080, "", ""));
+        link.set_cache_socket({
+            let seen = seen.clone();
+            move |item| {
+                seen.cached.lock().unwrap().push(item.clone());
+                Some(SocketFd(9))
+            }
+        });
+
+        assert_eq!(link.connect_at(1000), Ok(SocketFd(9)));
+        assert!(link.profile().is_reused_fd);
+        assert_eq!(seen.cached.lock().unwrap().len(), 1, "the pool was asked");
+        assert!(
+            seen.addresses.lock().unwrap().is_empty(),
+            "a reused socket is not connected"
         );
     }
 
