@@ -77,20 +77,33 @@ trap 'rm -rf "$project"' EXIT
 
 cp -R "$module"/. "$project/marsrs-xlog/"
 
-# The project root: an app with one module in it, and no entry — an
-# `app.json5`/`AppScope` is what an app that is installed needs, and a HAR
-# build of one module is not that.
+# The project root. A project-level `oh-package.json5` is a smaller thing than
+# a module's: ohpm's schema for it requires `modelVersion` and nothing else, and
+# the `name`, `version` and `main` a HAR carries are fields of the module below,
+# not of the project around it.
 cat > "$project/oh-package.json5" <<JSON5
 {
   "modelVersion": "$model_version",
-  "name": "marsrs-harmonyos-xlog-project",
-  "version": "1.0.0",
   "description": "The project hvigor needs around the module. Written by scripts/assemble_harmony_har.sh, and not a file of the repository.",
-  "main": "",
-  "author": "",
-  "license": "MIT",
   "dependencies": {},
   "devDependencies": {}
+}
+JSON5
+
+# `AppScope/app.json5`: hvigor's model of a project reads it whether or not the
+# build is of an app, and there is no way to tell it that this project has no
+# entry — a `--mode module` build of one module is refused without it. The
+# bundle name is never installed under, and never signed into a HAP: it is the
+# name of a project that exists for one `assembleHar` and is then deleted.
+mkdir -p "$project/AppScope"
+cat > "$project/AppScope/app.json5" <<JSON5
+{
+  "app": {
+    "bundleName": "io.github.orangeboychen.marsrs.assemble",
+    "vendor": "mars-rs",
+    "versionCode": 1000000,
+    "versionName": "1.0.0"
+  }
 }
 JSON5
 
