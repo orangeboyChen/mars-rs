@@ -229,14 +229,23 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      # Gradle's downloads, and Kotlin/Native's: the ~1 GB toolchain
-      # `kotlin-native` unpacks into `~/.konan`.
+      # Kotlin/Native's compiler: the ~1 GB toolchain `kotlin-native` unpacks
+      # into `~/.konan`, cached apart from Gradle's own because what changes it
+      # is the Kotlin version and not the release it is asked for.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle/libs.versions.toml') }}
+          restore-keys: konan-${{ runner.os }}-
+      # Gradle's own: the wrapper, and the dependencies of the module. This is
+      # the job that rebuilds the Kotlin module out of the archives a release
+      # has already published, which is what a build cache would pay for — and
+      # `platforms/kmp/gradle.properties` says why it is not switched on.
       - uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-            ~/.konan
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle.properties', '**/gradle/libs.versions.toml', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
       - name: Install the Android SDK components
