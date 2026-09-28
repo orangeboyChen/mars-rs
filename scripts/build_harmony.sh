@@ -151,7 +151,13 @@ for entry in "${abis[@]}"; do
 -C link-arg=-Wl,--exclude-libs,libunwind.a"
 
     echo "building marsrs-ffi for $target ($abi)"
-    cargo build --release -p marsrs-ffi --target "$target"
+    # `--features sdt,stn` on top of the default `xlog`, the way the host
+    # archive of the release builds it: a HarmonyOS app reaches the C ABI
+    # through NAPI of its own, and the three `mars_*.h` it is given name the
+    # task pipeline and the diagnosis too. A `.so` without them would be the
+    # one archive of the C ABI in the release that cannot do what its own
+    # headers declare.
+    cargo build --release -p marsrs-ffi --target "$target" --features sdt,stn
 
     mkdir -p "$out/$abi"
     cp "target/$target/release/libmars_ffi.so" "$out/$abi/libmars_ffi.so"
