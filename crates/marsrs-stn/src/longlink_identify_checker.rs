@@ -138,7 +138,8 @@ impl IdentifyBuffer {
 /// response and the hash it handed out.
 pub type OnIdentifyResponse = dyn FnMut(&str, &[u8], &[u8]) -> bool + Send;
 
-/// `LongLinkIdentifyChecker`.
+/// One long link's identify check: the app is asked for the buffer before the
+/// link is trusted, and for its verdict on the answer the server sent back.
 pub struct LongLinkIdentifyChecker {
     /// `channel_id_`
     channel_id: String,
