@@ -83,9 +83,70 @@ PY
 # token that expired or lost its scope — and 404 is the branch that publishes,
 # which is not a thing crates.io lets anyone do twice over one version. So the
 # status is what is read here, and those two are the only two acted on.
+#
+# `000` for a `curl` that came back with no answer at all, and not a failure of
+# the script: this is called inside a command substitution, where a command that
+# fails is a `set -e` that ends the run — and a run ended by one is a release
+# red over a connection that would have come back on the second ask. `--max-time`
+# is what keeps a request that never answers from being one that holds the job
+# until the workflow's own timeout does.
 crate_status() {
-    curl -sS -o /dev/null -w '%{http_code}' -A "$CRATES_IO_UA" \
-        "https://crates.io/api/v1/crates/$1/$version"
+    local status
+    # `%{http_code}` is `000` for a `curl` that got no answer, which is the
+    # status wanted of it here; what the `||` is for is its exit status, which
+    # `set -e` would end the run on from inside the substitution this is called
+    # in. Assigned and not echoed beside it: a `curl` that fails writes its
+    # `000` and *then* fails, so an `echo` would put two of them there.
+    status="$(curl -sS -o /dev/null -w '%{http_code}' -A "$CRATES_IO_UA" \
+        --max-time 30 "https://crates.io/api/v1/crates/$1/$version")" || status=000
+    printf '%s' "$status"
+}
+
+# Where a crate sits in the sparse index: the name lower-cased, under the
+# first two letters of it over the next two — `marsrs-crypt` is
+# `ma/rs/marsrs-crypt`. A name of one, two or three letters gets a directory
+# of its own; none of this port's is that short, but the rule is the index's
+# and not this script's.
+index_path() {
+    local name
+    # The index lower-cases a name: a crate can be published with capitals in
+    # it, and the file it is found under is the lower-cased one. `tr` and not
+    # `${name,,}`, which is a bash 4 expansion and a bad substitution on the
+    # 3.2 a macOS still ships.
+    name="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    case "${#name}" in
+        1) echo "1/$name" ;;
+        2) echo "2/$name" ;;
+        3) echo "3/${name:0:1}/$name" ;;
+        *) echo "${name:0:2}/${name:2:2}/$name" ;;
+    esac
+}
+
+# Whether `cargo` can resolve <crate> <version> — the question the publish of
+# the crate that depends on this one asks. `cargo` reads the sparse index and
+# not the api above, and the index is a copy of crates.io's database that lags
+# behind it: a version the api answers 200 for and the index has not is a
+# "no matching package named <crate> found, location searched: crates.io
+# index" in the next `cargo publish` of the run.
+index_has() {
+    local body
+    # Fetched whole, and not piped into a `grep`: one that matches stops
+    # reading at the line it matched, `curl` is left writing into a pipe
+    # nobody is reading, and the SIGPIPE it dies of is — under the `pipefail`
+    # this script asks for — a "this version is not in the index" that ends
+    # the run over a version that is in it. The index of a crate of nine
+    # versions is small enough for `curl` to finish first; one of a hundred
+    # is not, and that is what a crate becomes.
+    body="$(curl -sS -A "$CRATES_IO_UA" --max-time 30 \
+        "https://index.crates.io/$(index_path "$1")")" || return 1
+    # `case` and not a `grep`: a glob is literal in everything but `*?[]`,
+    # none of which a version holds, and the quotes either side of the field
+    # are what keep the match to the `vers` of the crate — the requirement of
+    # a dependency on that same version sits under `"req"`.
+    case "$body" in
+        *"\"vers\":\"$version\""*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # Dependency order, and the two crates a caller takes last: crates.io resolves a
@@ -94,11 +155,13 @@ crate_status() {
 for CRATE in marsrs-core marsrs-comm marsrs-crypt marsrs-buffer \
              marsrs-appender marsrs-sdt marsrs-stn marsrs-xlog marsrs; do
     # Asked up to five times, because a 429 or a 5xx is crates.io being busy
-    # and not a fact about the version: ten seconds, then again.
+    # and not a fact about the version: ten seconds, then again. A `000` is
+    # asked again for the same reason — it is no answer at all, and an answer
+    # is what a publish is decided on.
     for _ in 1 2 3 4 5; do
         status="$(crate_status "$CRATE")"
         case "$status" in
-            429|5[0-9][0-9]) sleep 10; continue ;;
+            000|429|5[0-9][0-9]) sleep 10; continue ;;
         esac
         break
     done
@@ -106,9 +169,15 @@ for CRATE in marsrs-core marsrs-comm marsrs-crypt marsrs-buffer \
     case "$status" in
         200)
             echo "$CRATE $version is already on crates.io"
-            continue
             ;;
         404)
+            # The version is the release's and the checkout is the tag's, so the
+            # tree carries an edit `cargo publish` would otherwise refuse.
+            cargo publish -p "$CRATE" --allow-dirty
+            ;;
+        000)
+            echo "::error::crates.io answered none of the five asks about $CRATE $version; whether it is up is unknown, so it is not published over"
+            exit 1
             ;;
         *)
             echo "::error::crates.io answered $status for $CRATE $version; whether it is up is unknown, so it is not published over"
@@ -116,17 +185,28 @@ for CRATE in marsrs-core marsrs-comm marsrs-crypt marsrs-buffer \
             ;;
     esac
 
-    # The version is the release's and the checkout is the tag's, so the tree
-    # carries an edit `cargo publish` would otherwise refuse.
-    cargo publish -p "$CRATE" --allow-dirty
-
-    # crates.io's index is not its database: a publish is visible to the next
-    # `cargo publish` only once the index has caught up, and a dependency that
-    # has not is "no matching package". Anything but a 200 is "not yet" here —
-    # the index that answers 404, and an answer this job could not read — and
-    # either way the publish that follows is what decides, and says so.
-    for _ in $(seq 1 60); do
-        [ "$(crate_status "$CRATE")" = 200 ] && break
+    # What is waited for is the index and not the api: crates.io's index is a
+    # second, cached copy of its database, and it is the one `cargo` resolves
+    # out of, so an api that answers 200 while the index still answers 404 is a
+    # wait that ends early and a "no matching package" in the crate published
+    # next — which is what a release of these nine ended red on.
+    #
+    # Ten minutes, and not five: a crate the index has never seen is the
+    # slowest case it has, and the release this job is the last step of is out
+    # and tagged by now, so waiting is cheaper than a red step that publish.yml
+    # has to be asked to run again.
+    #
+    # What is asked again at the end is the answer the loop reached and not the
+    # index: a probe that fails is a transient one — a DNS, a TLS, a 5xx — and
+    # the loop has 119 more of them to spend, whereas one that fails here would
+    # end the run over a version that was already seen.
+    in_index=false
+    for _ in $(seq 1 120); do
+        if index_has "$CRATE"; then in_index=true; break; fi
         sleep 5
     done
+    if [ "$in_index" != true ]; then
+        echo "::error::$CRATE $version is on crates.io but not in its index after ten minutes; the crates that depend on it cannot resolve it, so they are not published"
+        exit 1
+    fi
 done
