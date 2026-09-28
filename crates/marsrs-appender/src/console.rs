@@ -19,6 +19,13 @@ use crate::formater::{extract_file_name, extract_function_name, LEVEL_STRINGS};
 /// offers instead is the sink itself: a record and its info, handed over
 /// unformatted so that the app decides what a console record looks like on
 /// the platform it is running on.
+///
+/// A sink is the app's own code, and the app's own code may log — a logging
+/// adapter that routes every record back through xlog is the ordinary shape
+/// of one. Such a record is not handed back to the sink: it takes the
+/// built-in stderr line, and the recursion guard of `Appender::write` makes
+/// it the one recursive-call diagnostic, so the two of them do not call one
+/// another until the stack goes.
 pub type ConsoleFun = fn(&XLoggerInfo, &str);
 
 /// `sg_console_fun` of `mars/xlog/objc/objc_console.mm` — the sink every
@@ -32,10 +39,42 @@ static CONSOLE_FUN: RwLock<Option<ConsoleFun>> = RwLock::new(None);
 /// default sink is one an app wants to replace; the port's default sink is
 /// stderr on every platform, so there is no platform on which an app has more
 /// reason to replace it than on another.
+///
+/// A sink is not handed a record the sink itself wrote: a record it logs on
+/// the way through takes the built-in stderr line instead. See [`ConsoleFun`].
 pub fn set_console_fun(fun: Option<ConsoleFun>) {
     *CONSOLE_FUN
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = fun;
+}
+
+// Whether this thread is inside the sink already: a record logged from inside
+// it is not the sink's to have, so [`enter_sink`] answers [`None`] for one.
+thread_local! {
+    static IN_SINK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks the thread as inside the sink, and takes the mark away again on the
+/// way out — a sink that panicked included, or one panic would leave the
+/// thread's sink switched off for good.
+struct InSink;
+
+impl Drop for InSink {
+    fn drop(&mut self) {
+        let _ = IN_SINK.try_with(|cell| cell.set(false));
+    }
+}
+
+/// Takes the thread into the sink: [`None`] when it is in there already, which
+/// is a record the sink itself is writing.
+fn enter_sink() -> Option<InSink> {
+    IN_SINK.with(|cell| {
+        if cell.replace(true) {
+            None
+        } else {
+            Some(InSink)
+        }
+    })
 }
 
 /// The sink [`set_console_fun`] was last given, if it was given one.
@@ -49,15 +88,18 @@ pub fn get_console_fun() -> Option<ConsoleFun> {
 ///
 /// Does nothing when `_info` is `None` (the C++ returns early on
 /// `NULL == _info`). A sink an app set takes the record from here, unformatted:
-/// the built-in stderr line is only the default.
+/// the built-in stderr line is only the default, and it is the one a record
+/// written *from inside* the sink gets, whether a sink was set or not.
 pub(crate) fn console_log(info: Option<&XLoggerInfo>, log: &str) {
     let Some(info) = info else {
         return;
     };
 
-    if let Some(fun) = get_console_fun() {
-        fun(info, log);
-        return;
+    if let Some(_in_sink) = enter_sink() {
+        if let Some(fun) = get_console_fun() {
+            fun(info, log);
+            return;
+        }
     }
 
     let level = LEVEL_STRINGS[info.level as usize];

@@ -2227,6 +2227,7 @@ mod tests {
     use marsrs_buffer::CompressMode;
     use marsrs_crypt::{magic, LogCrypt, HEADER_LEN, TAILER_LEN};
     use std::collections::HashSet;
+    use std::sync::atomic::AtomicUsize;
 
     /// A trace record — one an app marked with
     /// `XLogger::ForwardToSysTrace` — is echoed only where the C++ echoes
@@ -3396,6 +3397,50 @@ mod tests {
                 "{mode:?}: 3 console records allocated {console_count} times"
             );
         }
+    }
+
+    /// A sink of the app's own is not handed a record the sink itself wrote.
+    ///
+    /// An adapter that routes everything back through xlog is the ordinary
+    /// shape of one, and the path it takes is short: `Appender::write` echoes
+    /// a record to the console *before* it puts its own recursion counter up,
+    /// so a sink that logs is running again before there is anything to stop
+    /// it, and the two of them call one another until the stack goes. What a
+    /// record from inside the sink comes to now is the built-in line, and
+    /// then the one recursive-call diagnostic.
+    #[test]
+    fn a_sink_that_logs_from_inside_itself_is_not_asked_again() {
+        let _guard = crate::test_lock::serial();
+        let tmp = tempfile::tempdir().unwrap();
+        crate::appender_open(config(tmp.path(), AppenderMode::Sync)).unwrap();
+        crate::appender_set_console_log(true);
+
+        // The sink is one process-wide static, and so is the appender: both
+        // are taken away again on the way out, a panic in between included,
+        // or every later test of this binary writes through them.
+        struct NoSink;
+        impl Drop for NoSink {
+            fn drop(&mut self) {
+                crate::set_console_fun(None);
+                crate::appender_close();
+            }
+        }
+        let _no_sink = NoSink;
+
+        static ASKED: AtomicUsize = AtomicUsize::new(0);
+        fn log_from_inside(_info: &XLoggerInfo, log: &str) {
+            ASKED.fetch_add(1, Ordering::Relaxed);
+            if log == "from the app" {
+                crate::appender_write(Some(&info(LogLevel::Info)), "from the sink");
+            }
+        }
+        crate::set_console_fun(Some(log_from_inside));
+
+        crate::appender_write(Some(&info(LogLevel::Info)), "from the app");
+
+        // Asked once and not twice: the record the sink wrote reached the
+        // console on its way through and was not handed back to the sink.
+        assert_eq!(ASKED.load(Ordering::Relaxed), 1);
     }
 
     #[test]
