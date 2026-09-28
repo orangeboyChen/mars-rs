@@ -570,6 +570,13 @@ struct AppenderInner {
     open_file_day: (i32, u32, u32),
     /// `last_time_`
     last_time: i64,
+    /// The second the records about to be written carry — the newest record's
+    /// own `timeval`, and not the second the write happens in.
+    ///
+    /// It is what dates the file they land in: see [`Self::write_time`]. `None`
+    /// when nothing has been logged yet through this appender, or when the
+    /// record carried no time of its own.
+    write_sec: Option<i64>,
     /// `last_tick_` (monotonic milliseconds)
     last_tick: u64,
     /// `last_file_path_`
@@ -614,6 +621,22 @@ impl AppenderInner {
     /// The cache file this appender owns, if it claimed one.
     fn cache_path(&self) -> Option<PathBuf> {
         self.cache.as_ref().map(|slot| slot.path.clone())
+    }
+
+    /// The second a write should date the file it lands in.
+    ///
+    /// The records', and not the clock's: in async mode a block waits in the
+    /// cache until it is big enough or the writer thread next wakes, so the two
+    /// can be minutes — or hours — apart, and a block produced on one day and
+    /// drained on the next used to be written into the next day's file, where
+    /// the file's date and the timestamps of the records inside it disagree.
+    ///
+    /// The C++ has nowhere to get the record's time from at this point — it
+    /// closed the file after the previous write, so `openfiletime_` is 0 and
+    /// `__MakeLogFileName` has to ask `gettimeofday` — but the port is handed
+    /// the record's own `timeval` and can answer it.
+    fn write_time(&self) -> i64 {
+        self.write_sec.unwrap_or_else(now_secs)
     }
 
     /// Runs `f` with the log's lock held.
@@ -681,6 +704,13 @@ impl AppenderInner {
     fn buffer_drained(&mut self) {
         let region = self.region.as_mut_slice();
         self.buff.drained(region);
+        // The block is gone, so the second that dated it goes with it: the next
+        // file is named after the next record that carries one. Without this, a
+        // write that carries no time of its own — the tips, and the banner
+        // `close` writes — is filed under the day of a block that is already in
+        // a file, which is the very disagreement [`Self::write_time`] exists to
+        // prevent.
+        self.write_sec = None;
     }
 
     /// Drains the cache region into the log and gives it up — in that order.
@@ -804,12 +834,18 @@ impl AppenderInner {
             return false;
         }
 
+        // One clock reading for the whole of `__Log2File`: the cache file's
+        // name, the log file's name and the day the roll-over check asks about
+        // all come from this one second. Reading it again per path is how a
+        // record could be dated by one second and filed under another.
+        let tv = self.write_time();
+
         // The paths are built from `self` where they are used instead of being
         // cloned up front: __Log2File runs once per record, and three
         // `PathBuf`/`String` clones per record were three allocations the C++
         // never makes — it passes `const char*` around.
         if self.config.cachedir.is_none() {
-            if self.open_log_file(OpenDir::Log) {
+            if self.open_log_file(OpenDir::Log, tv) {
                 let mut written = self.write_file_record(data);
                 if !self.is_sync() {
                     written |= self.closed_after_a_failed_write();
@@ -818,12 +854,10 @@ impl AppenderInner {
             }
             return false;
         }
-
-        let tv = now_secs();
         let cache_path = self.cache_file_path(tv);
         let cache_logs = self.cache_logs();
 
-        if (cache_logs || cache_path.exists()) && self.open_log_file(OpenDir::Cache) {
+        if (cache_logs || cache_path.exists()) && self.open_log_file(OpenDir::Cache, tv) {
             let mut written = self.write_file_record(data);
             if !self.is_sync() {
                 written |= self.closed_after_a_failed_write();
@@ -860,7 +894,7 @@ impl AppenderInner {
             return written;
         }
 
-        let open_success = self.open_log_file(OpenDir::Log);
+        let open_success = self.open_log_file(OpenDir::Log, tv);
         // Buffered whether or not the log directory's file opened: with no
         // file to hand it to, [`Self::write_file_record`] answers `false` and
         // the record goes to the cache directory below instead of waiting in
@@ -874,7 +908,7 @@ impl AppenderInner {
             if open_success && self.is_sync() {
                 self.close_log_file();
             }
-            if self.open_log_file(OpenDir::Cache) {
+            if self.open_log_file(OpenDir::Cache, tv) {
                 // The batch the log directory would not take — `data` included,
                 // because [`Self::write_file_record`] left it in
                 // `Self::pending` for exactly this. The C++ can only retry
@@ -946,12 +980,22 @@ impl AppenderInner {
     /// to clone it out of `self` before it can hand `self` over mutably:
     /// `__Log2File` runs per record, and the clone was one of the allocations
     /// that made the port slower than the C++ it mirrors.
-    fn open_log_file(&mut self, dir: OpenDir) -> bool {
+    fn open_log_file(&mut self, dir: OpenDir, tv: i64) -> bool {
         if self.config.logdir.as_os_str().is_empty() {
             return false;
         }
 
-        let now_time = now_secs();
+        // `tv` is the second the records being written carry, and not the clock:
+        // see [`Self::write_time`]. The file's name and the day the roll-over
+        // check asks about both come from it, so a block that crossed midnight
+        // is filed under the day it was produced and the timestamps inside it
+        // agree with the file's date.
+        let now_time = tv;
+        // ... except here, where what is asked is whether the *clock* jumped
+        // backwards. A record's own second may legitimately be behind the one
+        // this file was opened with — the tips written around a drain are newer
+        // than the block — and that is not a clock jump.
+        let wall_time = now_secs();
 
         if self.log_file.is_some() {
             if self.open_file_day == local_time(now_time).date {
@@ -967,7 +1011,7 @@ impl AppenderInner {
             OpenDir::Cache => self.cache_file_path(now_time),
         };
 
-        if now_time < self.last_time {
+        if wall_time < self.last_time {
             // The clock jumped backwards: keep using the previous file.
             let last_file_path = self.last_file_path.clone();
             match OpenOptions::new()
@@ -1014,14 +1058,14 @@ impl AppenderInner {
 
             let now_tick = monotonic_millis();
             let tick_diff = now_tick.saturating_sub(self.last_tick);
-            if self.last_time != 0 && (now_time - self.last_time) > (tick_diff / 1000) as i64 + 300
+            if self.last_time != 0 && (wall_time - self.last_time) > (tick_diff / 1000) as i64 + 300
             {
                 let msg = format!(
                     "[F][ last log file:{} from {} to {}, time_diff:{}, tick_diff:{}\n",
                     self.last_file_path.display(),
                     format_local_timestamp(self.last_time),
-                    format_local_timestamp(now_time),
-                    now_time - self.last_time,
+                    format_local_timestamp(wall_time),
+                    wall_time - self.last_time,
                     tick_diff
                 );
                 let mut tmp_buff = AutoBuffer::new();
@@ -1031,7 +1075,7 @@ impl AppenderInner {
 
             self.last_file_path = logfilepath;
             self.last_tick = now_tick;
-            self.last_time = now_time;
+            self.last_time = wall_time;
             true
         }
     }
@@ -1382,6 +1426,7 @@ impl Appender {
             open_file_time: 0,
             open_file_day: NO_DAY,
             last_time: 0,
+            write_sec: None,
             last_tick: 0,
             last_file_path: PathBuf::new(),
             max_file_size,
@@ -1579,6 +1624,7 @@ impl Appender {
             open_file_time: 0,
             open_file_day: NO_DAY,
             last_time: 0,
+            write_sec: None,
             last_tick: 0,
             last_file_path: PathBuf::new(),
             max_file_size,
@@ -1735,12 +1781,29 @@ impl Appender {
         if self.shared.flags.log_close.load(Ordering::Acquire) {
             return;
         }
+        // The record's own second, which is what dates the file it lands in:
+        // see [`AppenderInner::write_time`]. `None` when the record carries none
+        // of its own — the tips, and the banner `close` writes — and then the
+        // file is named after the clock.
+        let sec = info.map(|info| info.timeval.0).filter(|sec| *sec > 0);
         // `write_sync` / `write_async` read the record out of that buffer; no
         // borrow of it is held across the lock, which is what keeps the two
         // apart safe.
         if guard.config.mode == AppenderMode::Sync {
+            // Every record is filed as it is logged, so this one's own second is
+            // the whole story — including the `None` of a record that carries
+            // none: an undated record is dated by the clock, and the second of
+            // the record before it must not stay behind and file it under that
+            // record's day, which is another day's file as soon as the two are
+            // written either side of midnight.
+            guard.write_sec = sec;
             guard.write_sync(len);
         } else {
+            // A block is filed whole, and the day it is filed under is the day of
+            // the records it holds.
+            if sec.is_some() {
+                guard.write_sec = sec;
+            }
             guard.write_async(info, len);
         }
     }
@@ -2206,6 +2269,142 @@ mod tests {
         assert!(text.contains("async payload"), "{text}");
     }
 
+    /// A block that waits in the cache across midnight lands in the day it was
+    /// produced, and not in the day it is drained, so that the file's date and
+    /// the timestamps of the records inside it agree.
+    #[test]
+    fn a_block_is_filed_under_the_day_its_records_carry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Async), 0, 0).unwrap();
+
+        // Three days back, so no hour of a day boundary is needed for the two
+        // names to differ.
+        let day = now_secs() - 3 * SECONDS_PER_DAY;
+        let name = |dir: &Path, tv: i64| {
+            let prefix = crate::file_util::make_log_file_name_prefix(tv, "Mars");
+            dir.join(format!("{prefix}.xlog"))
+        };
+
+        let info = XLoggerInfo {
+            timeval: (day, 0),
+            ..info(LogLevel::Info)
+        };
+        appender.write(Some(&info), "written before the drain");
+        appender.close();
+
+        let filed = name(tmp.path(), day);
+        assert!(filed.exists(), "{filed:?} missing");
+        let text = decoded_text(&fs::read(&filed).unwrap());
+        assert!(text.contains("written before the drain"), "{text}");
+        // The drain itself happened today, and the file is not named after it.
+        assert!(
+            !name(tmp.path(), now_secs()).exists(),
+            "the block went to today's file instead of its own"
+        );
+    }
+
+    /// The same second dates every path of one `__Log2File`, so a record cannot
+    /// be named by one day and filed under another.
+    #[test]
+    fn a_record_with_no_time_of_its_own_is_filed_under_the_clock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Sync), 0, 0).unwrap();
+
+        // `XLoggerInfo::default()` carries `timeval: (0, 0)`, which is what an
+        // appender that is only handed tips sees.
+        appender.write(None, "no timeval on this one");
+        appender.close();
+
+        let path = today_name(tmp.path());
+        assert!(path.exists(), "{path:?} missing");
+        let text = decoded_text(&fs::read(&path).unwrap());
+        assert!(text.contains("no timeval on this one"), "{text}");
+    }
+
+    /// A block's second dates that block and nothing after it.
+    ///
+    /// Once the block has been written out the buffer is empty again, so the
+    /// next file is named after the next record that carries a time of its own.
+    /// A write that carries none — the tips, and the banner `close` writes — is
+    /// filed under the clock, and not under the day of a block that is already
+    /// in a file.
+    #[test]
+    fn a_write_after_the_drain_is_filed_under_the_clock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Async), 0, 0).unwrap();
+
+        let day = now_secs() - 3 * SECONDS_PER_DAY;
+        let name = |dir: &Path, tv: i64| {
+            let prefix = crate::file_util::make_log_file_name_prefix(tv, "Mars");
+            dir.join(format!("{prefix}.xlog"))
+        };
+
+        let info = XLoggerInfo {
+            timeval: (day, 0),
+            ..info(LogLevel::Info)
+        };
+        appender.write(Some(&info), "written before the drain");
+        // The block reaches its own day's file and the buffer is empty again.
+        appender.flush_sync();
+        // `write_tips2file` is a write with no time of its own.
+        appender.write_tips2file("a tip with no time of its own");
+        appender.close();
+
+        let filed = name(tmp.path(), day);
+        assert!(filed.exists(), "{filed:?} missing");
+        let text = decoded_text(&fs::read(&filed).unwrap());
+        assert!(text.contains("written before the drain"), "{text}");
+        assert!(!text.contains("a tip with no time of its own"), "{text}");
+
+        let today = name(tmp.path(), now_secs());
+        assert!(
+            today.exists(),
+            "{today:?} missing: the tip was filed under the drained block's day"
+        );
+        let text = decoded_text(&fs::read(&today).unwrap());
+        assert!(text.contains("a tip with no time of its own"), "{text}");
+    }
+
+    /// Sync mode writes every record to its own file, so a record that carries no
+    /// time of its own is filed under the clock: the second of the record before
+    /// it has no business dating a record that is not that record.
+    #[test]
+    fn an_undated_record_is_filed_under_the_clock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Sync), 0, 0).unwrap();
+
+        let day = now_secs() - 3 * SECONDS_PER_DAY;
+        let name = |dir: &Path, tv: i64| {
+            let prefix = crate::file_util::make_log_file_name_prefix(tv, "Mars");
+            dir.join(format!("{prefix}.xlog"))
+        };
+
+        let info = XLoggerInfo {
+            timeval: (day, 0),
+            ..info(LogLevel::Info)
+        };
+        appender.write(Some(&info), "written on that day");
+        appender.write(None, "a record with no time of its own");
+        appender.close();
+
+        let filed = name(tmp.path(), day);
+        assert!(filed.exists(), "{filed:?} missing");
+        let text = decoded_text(&fs::read(&filed).unwrap());
+        assert!(text.contains("written on that day"), "{text}");
+        assert!(
+            !text.contains("a record with no time of its own"),
+            "the undated record was filed under the record before it: {text}"
+        );
+
+        let today = name(tmp.path(), now_secs());
+        assert!(
+            today.exists(),
+            "{today:?} missing: the undated record went to the day before"
+        );
+        let text = decoded_text(&fs::read(&today).unwrap());
+        assert!(text.contains("a record with no time of its own"), "{text}");
+    }
+
     #[test]
     fn async_close_flushes_pending_records() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2339,7 +2538,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let appender = Appender::open(config(tmp.path(), AppenderMode::Async), 0, 0).unwrap();
         let mut guard = appender.lock();
-        assert!(guard.open_log_file(OpenDir::Log));
+        assert!(guard.open_log_file(OpenDir::Log, now_secs()));
         // The file goes away under the buffer, which is what a failed write
         // leaves behind as well: the batch stays, for one more attempt.
         let file = guard.log_file.take().expect("opened above");
@@ -2370,7 +2569,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let appender = Appender::open(config(tmp.path(), AppenderMode::Async), 0, 0).unwrap();
         let mut guard = appender.lock();
-        assert!(guard.open_log_file(OpenDir::Log));
+        assert!(guard.open_log_file(OpenDir::Log, now_secs()));
         let file = guard.log_file.take().expect("opened above");
         // The attempt the batch is kept for has already been spent, so this one
         // gives it up rather than writing it.
