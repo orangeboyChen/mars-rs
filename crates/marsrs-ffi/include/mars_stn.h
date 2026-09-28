@@ -62,6 +62,7 @@ extern "C" {
 #define MARS_STN_ERR_PANIC (-1)    /* a Rust panic was caught at the boundary */
 #define MARS_STN_ERR_NULL_TASK (-2) /* `mars_stn_start_task` got no task      */
 #define MARS_STN_ERR_REFUSED (-3)  /* the queues would not take the task      */
+#define MARS_STN_ERR_NO_DUE (-4)   /* `mars_stn_due_time`: nothing is waiting */
 
 /* --- the eighteen questions, and their answers --------------------------- */
 
@@ -342,6 +343,36 @@ void mars_stn_touch_tasks(void);
 
 /** `ClearTask` — every task that is out is thrown away. */
 void mars_stn_clear_tasks(void);
+
+/**
+ * What the C++'s message queue thread would have done: the follow-ups, one at a
+ * time in the order they were posted, and then one pass of everything the two
+ * queues and the zombies only do when they are asked — a task's first-package
+ * timeout is one of those things, and a zombie that is started again is
+ * another.
+ *
+ * The C++ runs this on threads of its own; this port has none, so it is the
+ * host's loop that calls it, and `mars_stn_due_time` is how long it may wait.
+ * A task that is
+ * started and never drained sits in its queue until the process ends, which is
+ * why the two are one pair: the header that declares `mars_stn_start_task` and
+ * none of these leaves a caller a pipeline it can fill and never empty.
+ */
+void mars_stn_run_pending(void);
+
+/**
+ * `NetCore::GetNextHeartbeatTime` — how long the host's loop may wait before it
+ * calls `mars_stn_run_pending` again: the soonest of the two queues, the zombie
+ * check and the timing sync's alarm, as milliseconds left. Not as the
+ * `gettickcount()` those are measured in, which is a reading of a clock this
+ * library keeps to itself and no caller can subtract from.
+ *
+ * @return that many milliseconds — 0 is a pass that is already due, which a
+ *         follow-up waiting in the queue is — or MARS_STN_ERR_NO_DUE when there
+ *         is nothing to wait for — no task is out, no zombie is being checked,
+ *         no alarm is armed — or MARS_STN_ERR_PANIC.
+ */
+long long mars_stn_due_time(void);
 
 /** `MakesureLongLinkConnected` — 1 when there was a default link to connect. */
 int mars_stn_makesure_longlink_connected(void);

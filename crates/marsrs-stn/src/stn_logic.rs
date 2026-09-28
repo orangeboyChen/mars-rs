@@ -335,10 +335,38 @@ impl StnLogic {
         }
     }
 
-    /// `NetCore::GetNextHeartbeatTime` / the C++'s message queue thread: when
-    /// the host's run loop is to wake, and what it is to do when it does.
+    /// `NetCore::GetNextHeartbeatTime` — when the net core next has something to
+    /// do, as a `gettickcount()`, which is a reading of a clock the caller of
+    /// this crate shares and a caller across an ABI does not.
     pub fn due_time(&mut self) -> Option<u64> {
         self.core.as_mut().and_then(NetCore::due_time)
+    }
+
+    /// The same, with the reading handed in.
+    pub fn due_time_at(&mut self, now: u64) -> Option<u64> {
+        self.core.as_mut().and_then(|core| core.due_time_at(now))
+    }
+
+    /// How long, in milliseconds, the host's run loop may wait before it has to
+    /// call [`StnLogic::run_pending`] again: [`StnLogic::due_time`] read against
+    /// the clock that tick is measured in.
+    ///
+    /// `Some(0)` is a pass that is due now — a follow-up is waiting, or an alarm
+    /// has already gone off — and `None` is nothing to wait for at all, which is
+    /// the one case in which a host may sleep without a timer. This is the
+    /// number every bridge hands across the ABI, because a tick is only a delay
+    /// to a caller that can read the same clock: `gettickcount()`'s origin is
+    /// this process's, so a tick carried into C, Swift or Kotlin is a number
+    /// that grows with the age of the process and not a duration anybody can
+    /// schedule on.
+    pub fn due_delay(&mut self) -> Option<u64> {
+        let now = gettickcount();
+        self.due_delay_at(now)
+    }
+
+    /// The same, with the reading handed in.
+    pub fn due_delay_at(&mut self, now: u64) -> Option<u64> {
+        self.due_time_at(now).map(|due| due.saturating_sub(now))
     }
 
     /// Whether there is a follow-up waiting, which is the C++'s message queue
@@ -963,6 +991,29 @@ mod tests {
         assert!(!logic.has_task(7));
         assert!(!logic.stop_task(7));
         assert_eq!(asked_of(&asked), Vec::<String>::new());
+    }
+
+    /// A tick is only a delay to a caller that can read the clock it is measured
+    /// in, which is why [`StnLogic::due_delay`] exists and why the bridges hand
+    /// that one across the ABI: `gettickcount()`'s origin is this process's, so
+    /// the tick itself means nothing on the other side.
+    #[test]
+    fn what_the_host_waits_on_is_a_delay_and_not_a_tick() {
+        let (mut logic, _asked) = logic();
+        let now = 1_000;
+
+        let due = logic.due_time_at(now).expect("the heartbeat is due");
+        assert!(due > now, "the alarm is ahead of the reading");
+        assert_eq!(
+            logic.due_delay_at(now),
+            Some(due - now),
+            "and the delay is how far ahead"
+        );
+
+        // An alarm that has gone off is a pass that is due now, which is not
+        // the same answer as nothing to wait for.
+        assert_eq!(logic.due_delay_at(due), Some(0));
+        assert_eq!(logic.due_delay_at(due + 1), Some(0));
     }
 
     #[test]

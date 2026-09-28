@@ -37,12 +37,12 @@ use crate::baseevent::{
 };
 use crate::sdt::{get_load_libraries_impl as sdt_libraries, set_http_netcheck_cgi_impl};
 use crate::stn::{
-    clear_task_impl, gen_sequence_id_impl, gen_task_id_impl, get_load_libraries_impl,
-    has_task_impl, keep_signalling_impl, makesure_longlink_connected_impl, redo_task_impl,
-    reset_and_init_encoder_version_impl, reset_impl, set_backup_ips_impl, set_client_version_impl,
-    set_debug_ip_impl, set_longlink_svr_addr_impl, set_shortlink_svr_addr_impl,
-    set_signalling_strategy_impl, start_task_impl, stop_signalling_impl, stop_task_impl,
-    touch_tasks_impl, trig_nooping_impl,
+    clear_task_impl, due_time_impl, gen_sequence_id_impl, gen_task_id_impl,
+    get_load_libraries_impl, has_task_impl, keep_signalling_impl, makesure_longlink_connected_impl,
+    redo_task_impl, reset_and_init_encoder_version_impl, reset_impl, run_pending_impl,
+    set_backup_ips_impl, set_client_version_impl, set_debug_ip_impl, set_longlink_svr_addr_impl,
+    set_shortlink_svr_addr_impl, set_signalling_strategy_impl, start_task_impl,
+    stop_signalling_impl, stop_task_impl, touch_tasks_impl, trig_nooping_impl,
 };
 
 use crate::{
@@ -901,6 +901,33 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_clearTas
     guard(|| {
         clear_task_impl();
     })
+}
+
+/// `StnLogic.runPending` — what the C++'s message queue thread would have done,
+/// as one pass the host's loop makes.
+///
+/// The C++ runs this on a thread of its own; this port has none, so it is the
+/// app's loop that calls it — `StnLogic.dueTime` is how long it may wait.
+/// Declared by no Java of
+/// the C++'s, because the C++ has no need of one: its own thread is the caller.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_runPending<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) {
+    guard(run_pending_impl)
+}
+
+/// `StnLogic.dueTime` — how long the app's loop may wait before it calls
+/// `StnLogic.runPending` again, in milliseconds, `0` for a pass that is already
+/// due and `-1` for nothing to wait for. Not a `gettickcount()`, whose origin is
+/// this process's and means nothing to the JVM.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_dueTime<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jlong {
+    guard(|| due_time_impl().map_or(-1, |due| due as jlong))
 }
 
 /// `StnLogic.makesureLongLinkConnected`.

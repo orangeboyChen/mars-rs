@@ -9,7 +9,8 @@
 use std::fs;
 
 use mars_ffi::stn::{
-    MARS_STN_ERR_NULL_TASK, MARS_STN_ERR_PANIC, MARS_STN_ERR_REFUSED, MARS_STN_OK,
+    MARS_STN_ERR_NO_DUE, MARS_STN_ERR_NULL_TASK, MARS_STN_ERR_PANIC, MARS_STN_ERR_REFUSED,
+    MARS_STN_OK,
 };
 
 fn header() -> String {
@@ -34,6 +35,8 @@ fn header_declares_every_exported_symbol() {
         "mars_stn_redo_tasks",
         "mars_stn_touch_tasks",
         "mars_stn_clear_tasks",
+        "mars_stn_run_pending",
+        "mars_stn_due_time",
         "mars_stn_makesure_longlink_connected",
         "mars_stn_set_signalling_strategy",
         "mars_stn_keep_signalling",
@@ -186,6 +189,7 @@ fn error_codes_match_the_header_defines() {
         ("MARS_STN_ERR_PANIC", MARS_STN_ERR_PANIC),
         ("MARS_STN_ERR_NULL_TASK", MARS_STN_ERR_NULL_TASK),
         ("MARS_STN_ERR_REFUSED", MARS_STN_ERR_REFUSED),
+        ("MARS_STN_ERR_NO_DUE", MARS_STN_ERR_NO_DUE as i32),
     ] {
         let needle = format!("{name} (-{n})", n = value.abs());
         let zero = format!("{name} 0");

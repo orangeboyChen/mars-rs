@@ -16,8 +16,8 @@ use std::sync::{Arc, Mutex};
 
 use marsrs_stn::longlink_task_manager::Response as LongAnswer;
 use marsrs_stn::net_source::NO_NET;
-use marsrs_stn::shortlink_task_manager::Response as ShortAnswer;
-use marsrs_stn::task_profile::TaskFailHandleType;
+use marsrs_stn::shortlink_task_manager::{Response as ShortAnswer, RETRY_INTERNAL};
+use marsrs_stn::task_profile::{TaskFailHandleType, LONG_FIRST_PKG_TIMEOUT};
 use marsrs_stn::{
     CallFrom, ConnectProfile, DisconnectInternalCode, ErrCmdType, LongLinkEncoder, LongLinkStatus,
     LonglinkConfig, NetCore, NetStatus, RespHandle, RunId, Task, DEFAULT_LONGLINK_NAME,
@@ -606,6 +606,28 @@ fn a_short_link_error_the_app_is_asked_about_is_a_retry() {
     assert_eq!(app.sent().len(), 2);
 }
 
+/// The alarm a host sleeps on belongs to what is out, not to what a queue
+/// already asked for. A follow-up is posted by a queue that could not do its
+/// own work while it was running — a retry, a long link that failed — and
+/// nothing arms an alarm for it, so a host that waits for the next one reports
+/// the error whenever that one happens to go off.
+#[test]
+fn a_follow_up_that_is_waiting_is_due_at_the_reading_the_host_has() {
+    let mut app = App::new();
+    app.answer_with(0, TaskFailHandleType::SessionTimeout);
+    app.start(7);
+    assert_eq!(app.answered_short(7), Some(RespHandle::Deferred));
+    assert_eq!(app.core.pending_count(), 1);
+
+    // and not at the retry interval, nor at the timing sync's alarm: both of
+    // those are later than the reading the host is asking about
+    assert_eq!(app.core.due_time_at(START), Some(START));
+
+    // a host that drains it has nothing to wait for but the alarms again
+    app.run_pending();
+    assert!(app.core.due_time_at(START).is_none_or(|due| due > START));
+}
+
 #[test]
 fn a_task_the_network_cannot_take_is_not_started() {
     let mut app = App::new();
@@ -676,4 +698,43 @@ fn an_encoder_the_app_set_is_the_one_every_link_is_made_with() {
     assert!(link.is_some());
     assert!(core.long_link_meta("second").is_some());
     assert_eq!(core.longlink().channels().len(), 2);
+}
+
+/// What the host drains is not the follow-ups alone. A task that answered
+/// nothing has no follow-up waiting on it — nothing posted one — so a pass that
+/// only drained them would leave it in its queue until the process ended. What
+/// ends it is the queue's own loop, and [`NetCore::due_time`] is the tick the
+/// host is to make the pass at.
+#[test]
+fn a_pass_the_host_makes_at_the_due_tick_times_a_task_out() {
+    let mut app = App::new();
+    app.bring_up(MAIN, LongLinkStatus::Connected);
+    app.start(7);
+    assert!(app.core.longlink().on_send_at(START, 7));
+    assert_eq!(app.sent().len(), 1);
+
+    let Some(due) = app.core.due_time() else {
+        panic!("a task that is out is waiting on its first package")
+    };
+    assert!(due > START, "and not on a tick that has already gone");
+    app.core.run_pending_at(due);
+
+    assert_eq!(
+        app.long_err(),
+        vec![(
+            ErrCmdType::NetMsgXp,
+            LONG_FIRST_PKG_TIMEOUT,
+            "1.1.1.1".to_string(),
+            8080
+        )],
+        "the queue read its first-package timeout and told the app about it"
+    );
+    assert_eq!(
+        app.core.due_time(),
+        Some(due + RETRY_INTERNAL),
+        "and the try that is left waits out the retry interval"
+    );
+
+    app.core.run_pending_at(due + RETRY_INTERNAL);
+    assert_eq!(app.sent().len(), 2, "and then the task goes out again");
 }

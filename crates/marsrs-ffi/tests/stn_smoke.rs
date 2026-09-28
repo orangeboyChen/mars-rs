@@ -12,15 +12,16 @@ use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_ffi::stn::{
-    mars_stn_clear_tasks, mars_stn_gen_sequence_id, mars_stn_gen_task_id, mars_stn_has_task,
-    mars_stn_keep_signalling, mars_stn_makesure_longlink_connected, mars_stn_redo_tasks,
-    mars_stn_reset, mars_stn_reset_and_init_encoder_version, mars_stn_set_app,
-    mars_stn_set_backup_ips, mars_stn_set_client_version, mars_stn_set_debug_ip,
-    mars_stn_set_longlink_svr_addr, mars_stn_set_shortlink_svr_addr,
+    mars_stn_clear_tasks, mars_stn_due_time, mars_stn_gen_sequence_id, mars_stn_gen_task_id,
+    mars_stn_has_task, mars_stn_keep_signalling, mars_stn_makesure_longlink_connected,
+    mars_stn_redo_tasks, mars_stn_reset, mars_stn_reset_and_init_encoder_version,
+    mars_stn_run_pending, mars_stn_set_app, mars_stn_set_backup_ips, mars_stn_set_client_version,
+    mars_stn_set_debug_ip, mars_stn_set_longlink_svr_addr, mars_stn_set_shortlink_svr_addr,
     mars_stn_set_signalling_strategy, mars_stn_start_task, mars_stn_stop_signalling,
     mars_stn_stop_task, mars_stn_touch_tasks, mars_stn_trig_nooping, MarsStnAnswer,
     MarsStnAnswerKind, MarsStnQuestion, MarsStnQuestionKind, MarsStnStrings, MarsStnTask,
-    MARS_STN_ERR_NULL_TASK, MARS_STN_ERR_REFUSED, MARS_STN_OK,
+    MARS_STN_ERR_NO_DUE, MARS_STN_ERR_NULL_TASK, MARS_STN_ERR_PANIC, MARS_STN_ERR_REFUSED,
+    MARS_STN_OK,
 };
 use marsrs_stn::task_profile::{LOCAL_CHANNEL_SELECT, LOCAL_RESET};
 use marsrs_stn::ErrCmdType;
@@ -325,4 +326,45 @@ fn the_ids_the_caller_asks_for_are_new_every_time() {
         draws.iter().any(|id| *id != draws[0]),
         "eight draws were the same one: {draws:?}"
     );
+}
+
+/// The two symbols a host's loop is made of, which are the reason a task a C
+/// caller starts is not one that sits in its queue forever: `mars_stn_due_time`
+/// says when, and `mars_stn_run_pending` does the pass.
+#[test]
+fn the_hosts_loop_is_a_pair_the_header_declares() {
+    let _guard = lock();
+    mars_stn_reset();
+    set_app();
+
+    // A pass over a core with nothing in it is one that says nothing.
+    mars_stn_run_pending();
+    assert_eq!(said(), vec![]);
+
+    assert_eq!(start(7, CHANNEL_ALL), MARS_STN_OK);
+
+    // There is a wait to be had, and it is not one of the two errors: the
+    // timing sync arms an alarm of its own the moment the core is made, and a
+    // task that is out is waiting on its first package besides.
+    let due = mars_stn_due_time();
+    assert_ne!(due, MARS_STN_ERR_NO_DUE);
+    assert_ne!(due, MARS_STN_ERR_PANIC.into());
+
+    // What it answers is the wait that is left and not the tick the alarm is
+    // armed at: a tick is measured from an origin a C caller cannot read, so it
+    // would grow with the age of the process instead of running down.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let later = mars_stn_due_time();
+    assert!(
+        later < due,
+        "the wait ran down instead of growing: {due} then {later}"
+    );
+
+    // A pass made before that tick has come is one that leaves the task alone:
+    // what would end it is the tick, not the call.
+    mars_stn_run_pending();
+    assert_eq!(mars_stn_has_task(7), 1);
+
+    mars_stn_clear_tasks();
+    assert_eq!(mars_stn_has_task(7), 0);
 }

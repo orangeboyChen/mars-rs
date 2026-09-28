@@ -313,6 +313,38 @@ public enum MarsStn {
         mars_stn_set_client_version(version)
     }
 
+    /// `NetCore::GetNextHeartbeatTime` — how long the app's loop may wait before
+    /// it calls [`runPending`] again: the soonest of the two queues, the zombie
+    /// check and the timing sync's alarm, as milliseconds left, and `0` for a
+    /// pass that is already due.
+    ///
+    /// `nil` is an error the C ABI answered with — [`MARS_STN_ERR_NO_DUE`] for a
+    /// core with nothing to wait for, [`MARS_STN_ERR_PANIC`] for a panic — and
+    /// not a delay, which is never negative.
+    ///
+    /// A task that is out is always waiting on something, so this is not a
+    /// heartbeat an app may ignore: a task that is started and never drained
+    /// sits in its queue until the process ends.
+    public static var dueTime: UInt64? {
+        let due = mars_stn_due_time()
+        return due < 0 ? nil : UInt64(due)
+    }
+
+    /// What the C++'s message queue thread would have done: the follow-ups, one
+    /// at a time in the order they were posted, and then one pass of everything
+    /// the two queues and the zombies only do when they are asked — a task's
+    /// first-package timeout is one of those, and a zombie started again is
+    /// another.
+    ///
+    /// The C++ runs this on threads of its own; this port has none, so it is the
+    /// app's loop that calls it, and [`dueTime`] is how long it may wait. The
+    /// two are one pair:
+    /// `MarsStn` that let an app start a task and not drain it would be a
+    /// pipeline an app can fill and never empty.
+    public static func runPending() {
+        mars_stn_run_pending()
+    }
+
     /// `GenTaskID` — one counter for the whole process.
     public static func generateTaskID() -> UInt32 {
         mars_stn_gen_task_id()
