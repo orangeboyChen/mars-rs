@@ -131,8 +131,16 @@ the path is a thing the app asks of the directory it gave, and
 [the log files page](/log-files) is what names it.
 
 Neither [the task pipeline](/stn) nor [the network diagnosis](/sdt) is in it: no
-`StnLogic`, no `SdtLogic`, no task and no check. The C ABI the plugin is built
-over carries both, and the two AARs and frameworks it resolves carry both, so
-what is missing is the Dart — it lands in `marsrs_flutter` and nowhere else. An
-app that needs a task today starts it from the platform side of its own plugin,
-or waits for the call to land.
+`StnLogic`, no `SdtLogic`, no task and no check. What is missing is the Dart — the
+C ABI the plugin is built over carries both, see
+[the C ABI](/platforms/c-abi#the-task-pipeline). The native side it resolves does
+not carry the same thing on both platforms, though:
+
+| | what the plugin resolves | so a task today |
+|---|---|---|
+| Android | `io.github.orangeboychen.marsrs:marsrs` — the whole-port AAR, STN and SDT in it | the app's own Android code can start one, and a channel of its own can carry it to the Dart |
+| iOS | `marsrs-xlog.xcframework` and `mars_xlog.h` — the logger, and nothing else | no: `MarsRSNet` is not vendored, so there is no `MarsStn` and no `MarsSdt` to link |
+
+Which is why "start it from the platform side" is half an answer: it is one on
+Android, and on iOS the net framework and the two net headers would have to be
+packaged beside the xlog ones before it is one there.

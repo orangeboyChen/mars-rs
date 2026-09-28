@@ -131,6 +131,13 @@ if (xlog.isLoggable(LogLevel.debug)) {
 ](/zh/log-files)页才是写它的地方。
 
 [任务链路](/zh/stn)和[网络诊断](/zh/sdt)都不在里面：没有 `StnLogic`、没有 `SdtLogic`、
-没有任务、也没有检查。这个模块盖在上面的那个 C ABI 带着这两半，它解析到的那两个 AAR 和
-framework 也带着，所以缺的是 TypeScript —— 它落在 `marsrs-react-native` 里，别处没有。
-今天要起一个任务的 App，从自己那个模块的平台侧起它，或者等这个调用落下来。
+没有任务、也没有检查。缺的是 TypeScript —— 这个模块盖在上面的那个 C ABI 带着这两半，见
+[C ABI](/zh/platforms/c-abi#任务链路)。但它解析到的原生侧，在两个平台上带的不是同一个东西：
+
+| | 模块解析到什么 | 所以今天的任务 |
+|---|---|---|
+| Android | `io.github.orangeboychen.marsrs:marsrs` —— 整个移植的 AAR，STN 和 SDT 都在里面 | App 自己的 Android 代码能起一个，再用自己的 TurboModule 把它带到 JS |
+| iOS | `marsrs-xlog.xcframework` 和 `mars_xlog.h` —— 只有日志，别的都没有 | 不行：`MarsRSNet` 没有被 vendored，所以没有 `MarsStn`、也没有 `MarsSdt` 可以链 |
+
+所以"从平台侧起它"今天是个只对一半的答案：Android 上算，iOS 上要等 net 那个 framework 和
+两个 net 头文件被打包到 xlog 那些旁边才算。
