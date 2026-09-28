@@ -11,10 +11,11 @@ use std::time::{Duration, Instant};
 
 use marsrs_comm::message_queue::{
     broadcast_message, cancel_message, cancel_message_by_handler, cancel_message_by_handler_title,
-    create_message_queue, destroy_message_queue, found_message, get_def_message_queue,
-    install_async_handler, install_message_handler, install_message_handler as install,
-    pending_message_count, post_message, post_message_at_first, singleton_message, wait_message,
-    Message, MessageHandler, MessageTiming, MessageTitle, RunLoop, NULL_POST,
+    create_message_queue, destroy_message_queue, faster_message, found_message,
+    get_def_message_queue, install_async_handler, install_message_handler,
+    install_message_handler as install, pending_message_count, post_message, post_message_at_first,
+    singleton_message, wait_message, Message, MessageHandler, MessageTiming, MessageTitle, RunLoop,
+    NULL_POST,
 };
 
 #[test]
@@ -548,5 +549,114 @@ fn a_periodic_message_can_ask_for_itself_while_it_runs() {
     );
     assert_eq!(replaced, post);
     runner.join().unwrap();
+    destroy_message_queue(queue);
+}
+
+/// `replace` has to reach the *next* run even when it is asked for while the
+/// message is being dispatched — which is the only moment an app has to replace
+/// its own periodic message. Writing through the payload's lock instead needs
+/// `try_lock` (a `Mutex` is not reentrant and the dispatcher holds it), and a
+/// `try_lock` that fails drops the replacement on the floor: the handler kept
+/// being handed the payload it had just replaced, forever.
+#[test]
+fn replacing_a_periodic_message_while_it_runs_reaches_the_next_run() {
+    let queue = create_message_queue();
+    let handler_slot = Arc::new(Mutex::new(None));
+    let slot = Arc::clone(&handler_slot);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    let handler = install(
+        move |message: &mut Message| {
+            let payload = message
+                .body1
+                .as_ref()
+                .and_then(|body| body.downcast_ref::<String>())
+                .cloned()
+                .unwrap_or_default();
+            sink.lock().unwrap().push(payload.clone());
+            if payload == "first" {
+                let handler = slot.lock().unwrap().unwrap();
+                singleton_message(
+                    true,
+                    &handler,
+                    Message::new(MessageTitle(7), "tick").with_body1(String::from("second")),
+                );
+            }
+        },
+        false,
+        queue,
+    );
+    *handler_slot.lock().unwrap() = Some(handler);
+
+    post_message(
+        &handler,
+        Message::new(MessageTitle(7), "tick").with_body1(String::from("first")),
+        MessageTiming::Period {
+            after: 0,
+            period: 10,
+        },
+    );
+
+    // Several turns rather than one: what is being checked is the run that
+    // comes after the replacement, and a periodic message is due every 10 ms.
+    for _ in 0..20 {
+        RunLoop::dispatch_timeout(queue, Duration::from_millis(50));
+        if seen.lock().unwrap().len() >= 2 {
+            break;
+        }
+    }
+
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.first().map(String::as_str), Some("first"), "{seen:?}");
+    assert!(
+        seen.iter().any(|payload| payload == "second"),
+        "the replacement never reached a run: {seen:?}"
+    );
+    cancel_message_by_handler(&handler);
+    destroy_message_queue(queue);
+}
+
+/// `FasterMessage` is handed a handler, and upstream posts it to that handler
+/// (`MessageWrapper(_handlerid, ...)`, `comm/messagequeue/message_queue.cc`).
+/// Posted as a broadcast it ran every handler that had asked for broadcasts
+/// and not the one it was addressed to, which is how one disappeared.
+#[test]
+fn a_faster_message_runs_the_handler_it_was_addressed_to() {
+    let queue = create_message_queue();
+    let addressed = Arc::new(AtomicUsize::new(0));
+    let broadcasts = Arc::new(AtomicUsize::new(0));
+    let addressed_counter = Arc::clone(&addressed);
+    let broadcast_counter = Arc::clone(&broadcasts);
+
+    let target = install(
+        move |_| {
+            addressed_counter.fetch_add(1, Ordering::SeqCst);
+        },
+        false,
+        queue,
+    );
+    // a bystander that takes broadcasts, and would run if this were one
+    let _bystander = install(
+        move |_| {
+            broadcast_counter.fetch_add(1, Ordering::SeqCst);
+        },
+        true,
+        queue,
+    );
+
+    let post = faster_message(&target, Message::new(MessageTitle(11), "faster"));
+    assert!(found_message(&post));
+    assert!(RunLoop::dispatch_timeout(queue, Duration::from_millis(200)));
+
+    assert_eq!(
+        addressed.load(Ordering::SeqCst),
+        1,
+        "the handler it was addressed to never ran"
+    );
+    assert_eq!(
+        broadcasts.load(Ordering::SeqCst),
+        0,
+        "it was posted as a broadcast"
+    );
     destroy_message_queue(queue);
 }

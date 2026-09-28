@@ -401,28 +401,31 @@ pub fn post_message_at_first(handler: &MessageHandler, message: Message) -> Mess
 pub fn singleton_message(replace: bool, handler: &MessageHandler, message: Message) -> MessagePost {
     let title = message.title;
     if let Some(queue) = queue(handler.queue) {
-        let state = queue.lock();
-        // The title is matched on the queue entry and the payload is only
-        // locked to replace it, never to look at it: a periodic message is
-        // still in the queue while it runs — the C++ hands the very same
-        // `Message` to the handlers — and the dispatcher holds its lock. A
-        // `Mutex` is not reentrant, so a handler asking for its own message
-        // would stop the queue thread for good.
+        let mut state = queue.lock();
+        // The title is matched on the queue entry, and the payload is never
+        // locked: a periodic message is still in the queue while it runs — the
+        // dispatcher re-arms it before it calls the handlers and holds the
+        // message's lock for as long as they do — and a `Mutex` is not
+        // reentrant, so a handler asking for its own message would stop the
+        // queue thread for good.
         if let Some(index) = state
             .messages
             .iter()
             .position(|m| m.post.reg.seq == handler.seq && m.title == title)
         {
             if replace {
-                let pending = Arc::clone(&state.messages[index].message);
-                // `try_lock`, for the same reason: a message that is being
-                // dispatched right now is left alone rather than waited for.
-                let locked = pending.try_lock();
-                if let Ok(mut pending) = locked {
-                    pending.body1 = message.body1;
-                    pending.body2 = message.body2;
-                    pending.invoke = message.invoke;
-                }
+                // A new `Message` behind a new `Arc`, which is what the C++
+                // does when it drops the pending wrapper and posts a fresh one:
+                // whatever the replacement was asked for is what the next
+                // dispatch hands to the handlers, and a dispatch that is
+                // already under way keeps the copy it took.
+                //
+                // Writing through the lock instead needs `try_lock` for the
+                // reason above, and a `try_lock` that fails drops the payload on
+                // the floor: a handler that replaced its own periodic message
+                // — the one case where the lock is always held — silently kept
+                // logging the old one.
+                state.messages[index].message = Arc::new(Mutex::new(message));
             }
             return state.messages[index].post;
         }
@@ -440,15 +443,16 @@ pub fn broadcast_message(
     post_message(&MessageHandler { queue: id, seq: 0 }, message, timing)
 }
 
-/// `MessageQueue::FasterMessage` — a broadcast message that jumps the queue.
+/// `MessageQueue::FasterMessage` — the message jumps the queue.
+///
+/// It is addressed to `handler`, and not broadcast: upstream builds its wrapper
+/// from the `_handlerid` it is handed (`MessageWrapper(_handlerid, ...)` in
+/// `comm/messagequeue/message_queue.cc`) and only `BroadcastMessage` posts with
+/// `seq == 0`. Posting this one as a broadcast ran every handler that had asked
+/// for broadcasts and *not* the one it was addressed to, so a `FasterMessage`
+/// disappeared instead of being delivered.
 pub fn faster_message(handler: &MessageHandler, message: Message) -> MessagePost {
-    post_message_at_first(
-        &MessageHandler {
-            queue: handler.queue,
-            seq: 0,
-        },
-        message,
-    )
+    post_message_at_first(handler, message)
 }
 
 /// `MessageQueue::CancelMessage(post)`.
