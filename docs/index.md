@@ -10,9 +10,6 @@ hero:
       text: Get started
       link: /getting-started
     - theme: alt
-      text: Configuration
-      link: /configuration
-    - theme: alt
       text: On GitHub
       link: https://github.com/orangeboyChen/mars-rs
 
@@ -30,56 +27,3 @@ features:
   - title: No threads but yours
     details: "Neither half runs on a thread of its own, so what would have been a thread is a call the host makes — `run_pending()` and `due_time()`, `runChecks` and its probes."
 ---
-
-These pages are the documentation of the port: the logger, every platform it
-ships to, and — on [the task pipeline](/stn) and [the diagnosis](/sdt) — the half
-that talks to a server. Not every package carries that half: the Flutter and
-React Native ones carry the logger under both names today.
-
-## Pick your platform
-
-Every release ships a package per platform — except the two that go to a
-registry of their own:
-
-| your app is | take | page |
-|---|---|---|
-| Rust | `marsrs` or `marsrs-xlog` | [Rust](/platforms/rust) |
-| iOS / watchOS, Swift | the `MarsRSXlog` SwiftPM product | [SwiftPM](/platforms/swift) |
-| iOS / watchOS, Swift or Objective-C | the `MarsRSXlog` pod | [CocoaPods](/platforms/cocoapods) |
-| Android, Kotlin or Java | `marsrs` or `xlog` on JitPack | [Android](/platforms/android) |
-| Kotlin Multiplatform | `marsrs-kmp` or `xlog-kmp` | [Kotlin Multiplatform](/platforms/kotlin-multiplatform) |
-| Flutter | `marsrs_xlog` or `marsrs` | [Flutter](/platforms/flutter) |
-| React Native | `marsrs-react-native-xlog` or `marsrs-react-native` | [React Native](/platforms/react-native) |
-| anything with a C FFI | the `marsrs-<version>-<host>` archive | [The C ABI](/platforms/c-abi) |
-| HarmonyOS | `marsrs-harmonyos-xlog`, or the three `.so` of `marsrs-harmony-<version>.tar.gz` | [HarmonyOS](/platforms/harmonyos) |
-
-`xlog` is the logger alone; `marsrs` adds the STN task pipeline and the SDT
-network diagnosis — the same pair the crates on crates.io are. An app that only
-logs takes the first, and the same split is the one every platform makes:
-`MarsRSXlog` or `MarsRSNet` on Apple, `xlog` or `marsrs` on JitPack,
-`xlog-kmp` or `marsrs-kmp` for a shared Kotlin module.
-
-The Flutter plugin and the React Native module are on pub.dev and on npm:
-`flutter pub add` and `npm install` take the newest version there. The HarmonyOS
-package is a HAR a release carries: ohpm is not being published to yet.
-
-## The half that is not the logger
-
-Two pages, one per half, and each of them says which platforms carry it:
-
-- [The task pipeline (STN)](/stn) — a task is queued, sent on the short link or
-  the long link, retried, timed out and reported, and the app answers the
-  questions STN asks while it runs.
-- [The network diagnosis (SDT)](/sdt) — ping, DNS, TCP and HTTP against the hosts
-  of the two links, and a JSON report of what each one found.
-
-## What the rest of these pages are
-
-- [Getting started](/getting-started) — the dependency and a running example
-  for each platform.
-- [Configuration](/configuration) — every option, its default, and what it is
-  called on each platform.
-- [Log files](/log-files) — where they land, what they are called, when to
-  flush, and how to read them back.
-- [Migrating from mars](/migrating-from-mars) — the same three pieces under the
-  names this port spells them, one chapter per piece.
