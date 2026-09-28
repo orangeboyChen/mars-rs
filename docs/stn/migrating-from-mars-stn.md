@@ -36,7 +36,20 @@ while (due >= 0) {
 }
 ```
 
+```kotlin [Kotlin Multiplatform]
+var due = StnLogic.dueTime()                  // null is "nothing to wait for"
+while (due != null) {
+    wait(due)                                 // the app's own: `common` Kotlin has no sleep
+    StnLogic.runPending()
+    due = StnLogic.dueTime()
+}
+```
+
 :::
+
+In a shared Kotlin module the wait is the app's own too: `common` Kotlin carries
+no sleep of its own, so `wait` above is an `expect` the app writes —
+`Thread.sleep(due)` on Android and `usleep(due * 1000)` on the native targets.
 
 A task that is started and never drained stays in its queue — `has_task` answers
 `true` for one that is going nowhere.
@@ -63,13 +76,19 @@ DNS ahead of the connect, the retry, the timeout, and the report at the end.
 | `mars::stn::MarkMainLonglink_ext` | `stn.mark_main_longlink(name)` | `StnLogic.markMainLonglink(name)` | `MarsStn.markMainLongLink(name)` | `mars_stn_mark_main_longlink(name)` |
 | the queue's thread | `stn.run_pending()` | `StnLogic.runPending()` | `MarsStn.runPending()` | `mars_stn_run_pending()` |
 
+In a shared Kotlin module these are `StnLogic`'s as well, and the names are the
+Android ones but for the app: `StnLogic.setApp { question -> … }` takes one
+closure and not an `ICallBack`, and `dueTime()` answers `null` where the Android
+one answers `-1`.
+
 ## The questions
 
 The eighteen questions the C++ asks as virtuals of `mars::stn::Callback` are one
-`App` trait in Rust, one `ICallBack` in Kotlin and one closure in Swift, and each
-of them has a default for every question the app does not answer — except
-Android's, which is the plain interface the C++ project's Java declared, so the
-object is the app's to finish.
+shape per platform: an `App` trait in Rust, an `ICallBack` on Android, an `ask`
+closure in a shared Kotlin module, a closure in Swift, and one callback in C.
+Each has a default for every question the app does not answer — except Android's,
+which is the plain interface the C++ project's Java declared, so the object is
+the app's to finish.
 
 The names are the ones the C++ used: `req2Buf` for the bytes a task sends,
 `buf2Resp` for the answer, `onTaskEnd` for the end, `onPush` for what the server
