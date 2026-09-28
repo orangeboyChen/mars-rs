@@ -27,6 +27,10 @@ features:
     details: 每个文件 zlib 或 zstd 压缩，给了公钥就按 ECDH + AES-GCM 加密每条记录，还可以按大小或时间关掉旧文件、开新文件。
 ---
 
+这几页是 xlog 的文档：日志库，以及它发到的每个平台。STN 与 SDT 诊断目前还没有自己的
+页面，也不是每个包都带它们 —— Kotlin Multiplatform、Flutter 和 React Native 的两个包
+今天都只有日志库。
+
 ## 选你的平台
 
 每个 release 都按平台发包 —— 只有两个是发到自己的 registry 上的：
@@ -41,7 +45,7 @@ features:
 | Flutter | `marsrs_flutter_xlog` / `marsrs_flutter` | [Flutter](/zh/platforms/flutter) |
 | React Native | `marsrs-react-native-xlog` / `marsrs-react-native` | [React Native](/zh/platforms/react-native) |
 | 任何能调 C 的语言 | `marsrs-<version>-<host>` 压缩包 | [C ABI](/zh/platforms/c-abi) |
-| HarmonyOS | `libmars_ffi.so`，目前要自己编译 | [HarmonyOS](/zh/platforms/harmonyos) |
+| HarmonyOS | `marsrs-harmony-<version>.tar.gz` 里的三个 `.so` | [HarmonyOS](/zh/platforms/harmonyos) |
 
 `xlog` 只有日志；`marsrs` 再加上 STN 任务链路和 SDT 网络诊断 —— 和 crates.io 上那两个 crate 是同一对。只打日志的 App 用前者。
 

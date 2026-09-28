@@ -1,25 +1,68 @@
 # mars, in Rust
 
-Rust implementation of [Tencent/mars](https://github.com/Tencent/mars): the
-**xlog** logging pipeline, the **STN** task model and the **SDT** network
-diagnosis. What its logger writes is the `.xlog` the C++ implementation writes —
-same framing, same compression, same encryption — so the tooling that already
-reads mars logs reads these.
+Rust implementation of [Tencent/mars](https://github.com/Tencent/mars), the
+mobile library WeChat runs on. It is the same three pieces the C++ project is:
+
+| piece | what it is |
+|---|---|
+| **xlog** | the logging pipeline — a logger that writes off the thread that called it |
+| **STN** | the task model: a request with a channel, a timeout and a retry behind it |
+| **SDT** | the network diagnosis: the probes that say which end a connection broke at |
+
+One Rust core writes all three, and a package per platform hands that core to an
+app that is not Rust. What the logger writes is the `.xlog` the C++
+implementation writes — same framing, same compression, same encryption — so the
+decoders that came with upstream, and any tooling built on them, read these files
+without a conversion step.
 
 **Documentation** — [English](https://orangeboychen.github.io/mars-rs/) ·
-[简体中文](https://orangeboychen.github.io/mars-rs/zh/)
+[简体中文](https://orangeboychen.github.io/mars-rs/zh/) — install, configure,
+write, and read the files back. Those pages are the xlog documentation: STN and
+SDT have no pages of their own yet, and not every package carries them either —
+[where it runs](#where-it-runs) says which do.
 
-## Install
+## Where it runs
+
+| your app is | what you take | where it comes from |
+|---|---|---|
+| Rust | `marsrs` / `marsrs-xlog` | [crates.io](https://crates.io) |
+| iOS 12+, watchOS 10+, Swift or Objective-C | the `MarsRSXlog` product or pod | SwiftPM or CocoaPods, from this repository |
+| Android, Kotlin or Java | `xlog` / `marsrs` | [JitPack](https://jitpack.io) |
+| Kotlin Multiplatform | `xlog-kmp` / `marsrs-kmp` | GitHub Packages, or the release's `marsrs-kmp-maven.zip` |
+| Flutter | `marsrs_flutter_xlog` / `marsrs_flutter` | the release tarball — pub.dev is not switched on yet |
+| React Native 0.74+ | `marsrs-react-native-xlog` / `marsrs-react-native` | the release tarball — npm is not switched on yet |
+| anything with a C FFI | the `marsrs-<version>-<host>` archive | the release: Linux, macOS and Windows hosts |
+| HarmonyOS | the three `.so` of `marsrs-harmony-<version>.tar.gz` | the release |
+
+The Kotlin Multiplatform package is the widest of them: the same calls in shared
+code write the same file on Android, iOS, watchOS, tvOS, macOS, Linux and
+Windows, each platform compiling the half that reaches this core — JNI on
+Android, cinterop over the C ABI everywhere else. HarmonyOS is the one platform
+with no package: a release hands it the three `.so` and the header and nothing
+else, and an app drops them into its module and reaches them through NAPI of its
+own. `scripts/build_harmony.sh <dir>` builds the same three from source.
+
+Every release also ships the `xlog` CLI, which writes and reads those files from
+a shell — `cargo install marsrs-xlog`.
+
+## Use it
+
+Two ways in, and the difference is how much of the port you take: **xlog alone**,
+or **the whole port** — xlog, STN and SDT. An app that only logs takes the first;
+the pair is the same one the crates on crates.io are. Three of the packages carry
+the logger under both names today — `marsrs-kmp`, `marsrs_flutter` and
+`marsrs-react-native` have no STN or SDT surface yet, so on those three the
+choice is one of name and not of contents.
 
 ```bash
-cargo add marsrs          # the whole port: xlog, stn and sdt
-cargo add marsrs-xlog     # xlog alone — the logger and nothing else
+cargo add marsrs-xlog    # xlog alone — the logger and nothing else
+cargo add marsrs         # the whole port: + STN, SDT
 ```
 
 ```swift
 // Package.swift
 .package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
-.product(name: "MarsRSXlog", package: "mars-rs")
+.product(name: "MarsRSXlog", package: "mars-rs")   // or "MarsRS", for both halves
 ```
 
 ```ruby
@@ -28,24 +71,17 @@ pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/m
 ```
 
 ```kotlin
-// build.gradle.kts — settings.gradle.kts: maven { url = uri("https://jitpack.io") }
-implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")   // xlog alone
-```
+// settings.gradle.kts: maven { url = uri("https://jitpack.io") }
+implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")    // xlog alone
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")  // + STN, SDT
 
-```kotlin
 // build.gradle.kts of a Kotlin Multiplatform shared module
 implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")
 ```
 
-Every release ships a package per platform — a C ABI archive, a HarmonyOS build
-and the `xlog` CLI, which reads and writes those files from a shell
-(`cargo install marsrs-xlog`); see
-[getting started](https://orangeboychen.github.io/mars-rs/getting-started).
-
-## Use it
-
-Open an appender once when the app starts, write through it, and flush before you
-read or upload its files:
+Then the same three steps on every platform: open an appender once when the app
+starts, write through it, and flush before you read or upload its files.
 
 ```rust
 use marsrs::xlog::{appender_close, appender_flush_sync, appender_open, appender_write, XLogConfig};
@@ -57,7 +93,7 @@ appender_open(config)?;
 
 appender_write(None, "hello from mars");
 
-appender_flush_sync();
+appender_flush_sync();   // the records are on disk when this returns
 appender_close();
 ```
 
@@ -71,14 +107,15 @@ val xlog = Xlog.open(
 )
 xlog.i("startup", "cold start in $elapsedMillis ms")
 
-xlog.flush(sync = true)
+xlog.flush(sync = true)  // before the app reads or uploads the files
 ```
 
 The file is `<logDir>/<namePrefix>_YYYYMMDD.xlog` — `marsrs_20260927.xlog` above.
 The default mode is async, so a record can sit in the cache for a moment: flush
-before the file is read or uploaded, and again before the process goes away.
-Every option, and its name on each platform, is on
-[the configuration page](https://orangeboychen.github.io/mars-rs/configuration).
+before the file is read or uploaded. Every option, and its name on each platform,
+is on [the configuration page](https://orangeboychen.github.io/mars-rs/configuration);
+what has to happen when the app goes away is on
+[log files](https://orangeboychen.github.io/mars-rs/log-files).
 
 ## License
 

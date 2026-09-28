@@ -1,14 +1,19 @@
 # HarmonyOS
 
-还没有 HarmonyOS 的包，也没有 ArkTS 封装：HarmonyOS 应用要自己为 OpenHarmony target
-编译 C ABI，再通过 NAPI 调它。
+还没有 HarmonyOS 的包，也没有 ArkTS 封装：HarmonyOS 应用带上 release 里那三个
+`libmars_ffi.so`，再通过自己的 NAPI 调 C ABI。
 
-```bash
-scripts/build_harmony.sh dist/harmony   # <abi>/libmars_ffi.so
+```text
+marsrs-harmony-<version>.tar.gz
+marsrs-harmony-<version>/
+    arm64-v8a/libmars_ffi.so       aarch64-unknown-linux-ohos
+    armeabi-v7a/libmars_ffi.so     armv7-unknown-linux-ohos
+    x86_64/libmars_ffi.so          x86_64-unknown-linux-ohos
+    include/mars_xlog.h
 ```
 
-这会构建 `aarch64-unknown-linux-ohos`、`armv7-unknown-linux-ohos`、
-`x86_64-unknown-linux-ohos` —— SDK 用公开的 OpenHarmony 那份，没设 `OHOS_SDK_HOME`
+`scripts/build_harmony.sh <dir>` 从源码构建的也是这三个 —— release 就是跑它，
+没有 release 的 commit 也用它。SDK 用公开的 OpenHarmony 那份，没设 `OHOS_SDK_HOME`
 时脚本自己下载。
 
 ## 应用里怎么用

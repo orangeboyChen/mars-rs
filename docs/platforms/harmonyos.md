@@ -1,15 +1,21 @@
 # HarmonyOS
 
-There is no HarmonyOS package yet, and no ArkTS wrapper: a HarmonyOS app builds
-the C ABI for the OpenHarmony targets and reaches it through NAPI itself.
+There is no HarmonyOS package, and no ArkTS wrapper: a HarmonyOS app carries the
+three `libmars_ffi.so` of a release and reaches the C ABI through NAPI of its own.
 
-```bash
-scripts/build_harmony.sh dist/harmony   # <abi>/libmars_ffi.so
+```text
+marsrs-harmony-<version>.tar.gz
+marsrs-harmony-<version>/
+    arm64-v8a/libmars_ffi.so       aarch64-unknown-linux-ohos
+    armeabi-v7a/libmars_ffi.so     armv7-unknown-linux-ohos
+    x86_64/libmars_ffi.so          x86_64-unknown-linux-ohos
+    include/mars_xlog.h
 ```
 
-That builds `aarch64-unknown-linux-ohos`, `armv7-unknown-linux-ohos` and
-`x86_64-unknown-linux-ohos` — the SDK is the public OpenHarmony one, which the
-script downloads when `OHOS_SDK_HOME` is not set.
+The same three are what `scripts/build_harmony.sh <dir>` builds from source —
+which is what a release runs, and the way to get them out of a commit that has
+none. The SDK is the public OpenHarmony one, and the script downloads it when
+`OHOS_SDK_HOME` is not set.
 
 ## From an app
 
