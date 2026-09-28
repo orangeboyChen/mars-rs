@@ -292,16 +292,30 @@ impl LogBuffer {
         true
     }
 
-    /// `LogBaseBuffer::Flush(AutoBuffer& _buff)`.
+    /// `LogBaseBuffer::Flush(AutoBuffer& _buff)` — the half that copies.
     ///
-    /// Stamps the current hour into the header, appends the tailer byte, copies
-    /// the whole region into `out` and then clears the region. Returns the
-    /// number of bytes appended to `out` (`0` when the buffer was empty).
+    /// Stamps the current hour into the header and copies the block into `out`,
+    /// tailer byte included. It does **not** clear the region: see
+    /// [`LogBuffer::drained`].
+    ///
+    /// Returns the number of bytes appended to `out` (`0` when the buffer was
+    /// empty).
+    ///
+    /// # Why the region is not cleared here
+    ///
+    /// The C++ runs `__Flush(); _buff.Write(...); __Clear();` and only then
+    /// hands `_buff` to `__Log2File`, so from `__Clear` until the write has
+    /// happened the records exist in memory and nowhere else: a process that is
+    /// killed in that window loses the whole block. The region is the durable
+    /// copy — it is the mmap'd cache file — so the port keeps it until
+    /// [`LogBuffer::drained`] says the bytes reached a file. A block whose write
+    /// failed is then still there for the next drain instead of gone.
+    ///
+    /// Nothing here changes the region's length or the compression stream, so a
+    /// drain can be repeated: `flush` copies the same bytes again and a
+    /// [`LogBuffer::write`] in between appends to the block that is still there
+    /// rather than to a stale copy of it.
     pub fn flush(&mut self, region: &mut [u8], out: &mut AutoBuffer) -> usize {
-        // `LogZlibBuffer::Flush` / `LogZstdBuffer::Flush`: `deflateEnd` /
-        // `ZSTD_e_end` — the stream is re-created by the next `__Reset()`.
-        self.compressor = None;
-
         if LogCrypt::get_log_len(region) == 0 {
             self.clear(region);
             return 0;
@@ -309,21 +323,35 @@ impl LogBuffer {
 
         // `__Flush()`
         LogCrypt::update_log_hour(region);
-        if self.length + TAILER_LEN <= region.len() {
-            LogCrypt::set_tailer_info(
-                &mut region[self.length..self.length + TAILER_LEN],
-                self.magic_end,
-            );
-            self.length += TAILER_LEN;
-        }
 
         let flush_len = self.length;
         out.write(&region[..flush_len]);
 
-        // `__Clear()`
-        self.clear(region);
+        // The tailer goes into `out` and not into the region. It is what ends a
+        // block, and a block that is still waiting for a file has to stay
+        // exactly as it was so that the next drain can copy it again — with the
+        // tailer written into the region, a later `write` would append behind
+        // it and leave a stray `kMagicEnd` in the middle of the payload.
+        if flush_len + TAILER_LEN <= region.len() {
+            out.write(&[self.magic_end]);
+            flush_len + TAILER_LEN
+        } else {
+            flush_len
+        }
+    }
 
-        flush_len
+    /// `__Clear()` — the other half of [`LogBuffer::flush`], and only for the
+    /// bytes it handed out that have reached a file.
+    ///
+    /// Ends the compression stream (`deflateEnd` / `ZSTD_e_end`, which the C++
+    /// does at the top of `Flush`) and zeroes the region, which is what lets the
+    /// next [`LogBuffer::write`] start a block of its own.
+    ///
+    /// Not calling this after a drain that failed is the whole point: the block
+    /// stays in the region and the next drain writes it.
+    pub fn drained(&mut self, region: &mut [u8]) {
+        self.compressor = None;
+        self.clear(region);
     }
 
     /// `LogBaseBuffer::__Reset()`.
@@ -415,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn flush_emits_record_and_clears_region() {
+    fn flush_emits_a_record_and_keeps_the_region_until_it_is_drained() {
         let mut region = vec![0u8; REGION_LEN];
         let mut buf = LogBuffer::new(false, None, CompressMode::Zlib, 6);
         let hour = local_hour();
@@ -428,8 +456,15 @@ mod tests {
 
         assert_eq!(n, HEADER_LEN + 8 + TAILER_LEN);
         assert_eq!(out.len(), n);
-        assert_eq!(buf.len(), 0);
-        assert!(region.iter().all(|&b| b == 0), "region must be zeroed");
+        // Not cleared: the region is the durable copy of these records, and
+        // `drained` is what may give it up. A second `flush` therefore copies
+        // the very same bytes — which is what a write that failed needs.
+        assert_eq!(buf.len(), HEADER_LEN + 8);
+        assert_eq!(LogCrypt::get_log_len(&region), 8);
+
+        let mut again = AutoBuffer::new();
+        assert_eq!(buf.flush(&mut region, &mut again), n);
+        assert_eq!(again.as_slice(), out.as_slice(), "a retry is idempotent");
 
         let data = out.as_slice().to_vec();
         assert_eq!(data[0], magic::ASYNC_NOCRYPT_ZLIB_START);
@@ -438,6 +473,42 @@ mod tests {
         assert_eq!(LogCrypt::get_log_len(&data), 8);
         assert_eq!(&data[HEADER_LEN..HEADER_LEN + 8], b"one\ntwo\n");
         assert_eq!(data[n - 1], magic::END, "tailer");
+
+        // ... and only now.
+        buf.drained(&mut region);
+        assert_eq!(buf.len(), 0);
+        assert!(region.iter().all(|&b| b == 0), "region must be zeroed");
+    }
+
+    /// A record written after a drain that did not reach a file joins the block
+    /// that is still there, rather than starting a second one behind a tailer
+    /// byte.
+    #[test]
+    fn a_record_written_after_an_unwritten_drain_joins_the_same_block() {
+        let mut region = vec![0u8; REGION_LEN];
+        let mut buf = LogBuffer::new(false, None, CompressMode::Zlib, 6);
+
+        assert!(buf.write(&mut region, b"one\n"));
+
+        let mut failed = AutoBuffer::new();
+        assert_eq!(
+            buf.flush(&mut region, &mut failed),
+            HEADER_LEN + 4 + TAILER_LEN
+        );
+        // `failed` is dropped without reaching a file: no `drained`.
+
+        assert!(buf.write(&mut region, b"two\n"));
+
+        let mut out = AutoBuffer::new();
+        let n = buf.flush(&mut region, &mut out);
+        assert_eq!(n, HEADER_LEN + 8 + TAILER_LEN);
+        assert_eq!(LogCrypt::get_log_len(out.as_slice()), 8);
+        assert_eq!(
+            &out.as_slice()[HEADER_LEN..HEADER_LEN + 8],
+            b"one\ntwo\n",
+            "the tailer of the failed drain must not sit inside the payload"
+        );
+        assert_eq!(out.as_slice()[n - 1], magic::END);
     }
 
     #[test]
@@ -657,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn flush_starts_a_fresh_stream_for_the_next_record() {
+    fn drained_starts_a_fresh_stream_for_the_next_block() {
         let mut region = vec![0u8; REGION_LEN];
         let mut buf = LogBuffer::new(true, None, CompressMode::Zstd, 3);
 
@@ -668,6 +739,9 @@ mod tests {
             let mut out = AutoBuffer::new();
             let n = buf.flush(&mut region, &mut out);
             let data = out.as_slice().to_vec();
+            // The block has reached a file, so the stream may be dropped: the
+            // next round opens a frame of its own instead of continuing this one.
+            buf.drained(&mut region);
             let body = &data[HEADER_LEN..n - TAILER_LEN];
             assert_eq!(zstd_decode(body, 1 << 10), payload);
             assert_eq!(LogCrypt::get_log_len(&data) as usize, body.len());
