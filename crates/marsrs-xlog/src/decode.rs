@@ -170,7 +170,14 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
                 offset = next;
                 blocks += 1;
             }
-            Err(Failure::Fatal(reason)) => break Some(reason),
+            // The C reads the sequence and writes its marker before it tries
+            // the body, so a record the walk ends on still names the hole
+            // standing in front of it: what was read before the record that
+            // ended it includes that marker.
+            Err(Failure::Fatal(reason)) => {
+                mark_missing_seq(&mut plain, data, offset, &mut lastseq);
+                break Some(reason);
+            }
         }
     };
 

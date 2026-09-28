@@ -265,6 +265,29 @@ fn a_file_with_no_record_in_it_says_so() {
     assert!(err.reason.contains("bad magic"), "{err:?}");
 }
 
+/// A record the walk ends on still counts as read far enough to number: the C
+/// reads the sequence and writes the hole in front of it before it tries the
+/// body, so a record no key was given for is not a reason to lose the hole.
+#[test]
+fn the_record_that_ends_the_walk_is_numbered_too() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&async_record(1, b"a\n"));
+    // Numbered 3, so that 2 is the hole between the two of them, and encrypted:
+    // what the walk is given no private key for, and so what ends it.
+    bytes.extend_from_slice(&record_with_seq(
+        magic::ASYNC_ZLIB_START,
+        &[0; CLIENT_PUBKEY_LEN],
+        3,
+        b"\x00",
+    ));
+
+    let err = marsrs_xlog::decode_records(&bytes, None).expect_err("no key was given");
+    let text = String::from_utf8_lossy(&err.recovered);
+
+    assert!(err.reason.contains("no private key"), "{err:?}");
+    assert!(text.contains("a\n"), "{text}");
+    assert!(text.contains("log seq:2-2 is missing"), "{text}");
+}
 /// A record whose body will not inflate is a record that is there: the marker
 /// stands in for its text and the walk goes on at the one behind it.
 #[test]
