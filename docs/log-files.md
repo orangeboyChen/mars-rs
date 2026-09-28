@@ -143,6 +143,12 @@ without it. `xlog encode` is the other half: it writes a `.xlog` out of one
 record per line of its input, and encrypts it when it is given the public key
 of that pair with `--pubkey`.
 
+A file that is not whole still reads. A record that cannot be read — a block a
+process killed between two writes never finished, a byte that went wrong on its
+way to wherever the file was copied — is skipped, and the span it took is marked
+in the output where that record's text would have been, so the records behind
+the damage are in what the CLI writes out and not lost with it.
+
 The [CLI](/cli) page is the whole command line — installing it, making that pair,
 reading a file back and writing one. `xlog help` prints the same thing in a
 terminal, and [configuration](/configuration#compression-and-encryption) says
