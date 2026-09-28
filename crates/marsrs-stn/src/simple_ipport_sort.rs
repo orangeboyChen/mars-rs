@@ -78,17 +78,20 @@ pub enum IpSourceType {
 /// `IPPortItem` of `mars/stn/stn.h` — one candidate to connect to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IpPortItem {
-    /// `str_ip`
+    /// `str_ip` — the address, which with the port below is what the history
+    /// is kept against.
     pub ip: String,
-    /// `port`
+    /// `port` — and the port: a pair is one of these two, so the same ip on
+    /// two ports is two histories.
     pub port: u16,
-    /// `source_type`
+    /// `source_type` — where the pair came from.
     pub source_type: IpSourceType,
     /// `str_host` — the host the ip was resolved from.
     pub host: String,
     /// `transport_protocol` — one of the `Task::kTransportProtocol*`.
     pub transport_protocol: i32,
-    /// `from_source`
+    /// `from_source` — which of the C++'s sources the pair came out of, which
+    /// is nothing the sort here asks about.
     pub from_source: u32,
 }
 
@@ -118,18 +121,19 @@ impl IpPortItem {
 /// do not agree — see [`SimpleIpPortSort::load_records`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordItem {
-    /// `ip`
+    /// `ip` — the pair the record is about, which is what a ban is looked up
+    /// by.
     pub ip: String,
-    /// `port`
+    /// `port` — and its port.
     pub port: u16,
-    /// `historyresult`
     pub history_result: u64,
 }
 
 /// `<record>` — what was learned on one network.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Record {
-    /// `netinfo`
+    /// `netinfo` — the label of the network it was learned on, which is the
+    /// only record [`SimpleIpPortSort::init_history_to_banned_list`] reads.
     pub net_info: String,
     /// `time` — the unix second the record was written at. [`None`] is a
     /// record without the attribute, which `__RemoveTimeoutXml` drops.
@@ -142,9 +146,11 @@ pub struct Record {
 /// readings the last attempt on it was written down at.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BanItem {
-    /// `ip`
+    /// `ip` — the pair the ban is against: an ip and a port together, so the
+    /// same ip on two ports is two bans.
     pub ip: String,
-    /// `port`
+    /// `port` — the other half of the pair, which is what a ban is looked up
+    /// by alongside the ip above.
     pub port: u16,
     /// `records` — the last eight attempts, `1` for a failure.
     pub records: u8,
@@ -175,13 +181,21 @@ const NEVER_SPAN: u64 = 2_000_000_000;
 /// `kNoNet`.
 pub type NetLabel = dyn FnMut() -> Option<String> + Send;
 
-/// `SimpleIPPortSort`.
+/// Which ip/port pair a task is tried on first: the history of what failed
+/// decides the order, and [`BAN_FAIL_COUNT`] failures in it take a pair out
+/// for [`BAN_TIME`].
+///
+/// None of it touches a file. The `ipportrecords2.xml` the C++ reads and
+/// writes is the host's, so the records come in through
+/// [`SimpleIpPortSort::load_records`] and go back out through
+/// [`SimpleIpPortSort::save_records`].
 pub struct SimpleIpPortSort {
     /// `recordsxml_` — the `<record>`s, in the order they were written in.
     records: Vec<Record>,
-    /// `_ban_fail_list_`
+    /// `_ban_fail_list_` — the pairs that have a history, which is the only
+    /// thing that can ban one or move it in front.
     ban_fail_list: Vec<BanItem>,
-    /// `_server_bans_`
+    /// `_server_bans_` — the ips `AddServerBan` took out, and when it did.
     server_bans: HashMap<String, u64>,
     net_label: Option<Box<NetLabel>>,
     random: Box<Random>,
@@ -247,7 +261,9 @@ impl SimpleIpPortSort {
         }
     }
 
-    /// `getCurrNetLabel`.
+    /// `getCurrNetLabel` — the network every record is kept under, and the one
+    /// [`SimpleIpPortSort::init_history_to_banned_list`] rebuilds the ban list
+    /// from. [`None`] is `kNoNet`, which is also what an unset one answers.
     pub fn set_net_label(&mut self, net_label: impl FnMut() -> Option<String> + Send + 'static) {
         self.net_label = Some(Box::new(net_label));
     }
@@ -267,7 +283,8 @@ impl SimpleIpPortSort {
         &self.records
     }
 
-    /// `_ban_fail_list_`.
+    /// `_ban_fail_list_` — the pairs with a history, and the readings their
+    /// last attempt was written down at.
     pub fn ban_list(&self) -> &[BanItem] {
         &self.ban_fail_list
     }
@@ -500,7 +517,8 @@ impl SimpleIpPortSort {
         }
     }
 
-    /// `rand()`.
+    /// `rand()` — a number in `0..bound`, which the shuffle and the pick
+    /// between the two queues both ask for.
     fn random(&mut self, bound: usize) -> usize {
         (self.random)(bound)
     }
