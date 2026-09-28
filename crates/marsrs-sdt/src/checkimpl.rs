@@ -150,8 +150,15 @@ pub enum Answer {
         /// `GetPingStatus`, when there is a status to get.
         status: Option<PingStatus>,
     },
-    /// Nobody answered: a host with no network to probe with, which every
-    /// check reads as a failure.
+    /// Nobody answered: no probe was made at all, because the host has nothing
+    /// to make one with.
+    ///
+    /// A check that has no answer to read reads this as a failure — the host
+    /// could not resolve, could not connect — with one exception, and it is the
+    /// C++'s own: `PingChecker::StartDoCheck` answers `-1` for a platform with
+    /// no ping (`#if defined(ANDROID) || defined(__APPLE__)`), which is a check
+    /// that did not run and not one that failed, so [`Answer::Nothing`] to a
+    /// [`Query::Ping`] records no profile and ends no run.
     #[default]
     Nothing,
 }
