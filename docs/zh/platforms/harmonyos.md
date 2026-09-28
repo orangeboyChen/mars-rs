@@ -116,14 +116,14 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 
 ## 开着的时候
 
-| 要什么 | 怎么写 |
+| 作用 | 怎么写 |
 |---|---|
 | 改级别 | `xlog.level = LogLevel.Warning` |
 | 把级别读回来 | `xlog.level` |
 | 切异步 / 同步 | `xlog.mode = AppenderMode.Sync` |
 | 同时打到控制台 | `xlog.consoleLogEnabled = true` |
 | 到某个大小换文件 | `xlog.maxFileSizeBytes = 8 * 1024 * 1024` |
-| 到某个天数丢文件 | `xlog.maxAliveTimeSeconds = 10 * 24 * 3600` |
+| 超过这个秒数就删文件 | `xlog.maxAliveTimeSeconds = 10 * 24 * 3600` |
 | 还开着吗 | `xlog.isOpen` |
 | 把缓存倒进文件 | `xlog.flush(true)` |
 

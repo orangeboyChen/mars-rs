@@ -30,11 +30,11 @@ Flutter 插件和 React Native 模块今天就只有日志：两个都不认识�
 TypeScript 认识之前也不会认识 —— 见 [Flutter](/zh/platforms/flutter#里面没有什么)和
 [React Native](/zh/platforms/react-native#里面没有什么)。
 
-::: warning socket 是你自己的，这个端口一个都不开
-这个端口里的一条链路是连接的**模型**，不是连接本身：`ShortLink` 和 `LongLink` 建起来时
+::: warning socket 是你自己的，这个移植一个都不开
+这个移植里的一条链路是连接的**模型**，不是连接本身：`ShortLink` 和 `LongLink` 建起来时
 没有 `SocketOperator` —— 也就是 C++ 里 `socketOperator_` 的那个 trait —— 而没有它的链路，
 对一个任务开头的那次连接回答 `SocketFd::INVALID`，于是任务以一次 socket 错误
-（`ErrCmdType::Socket`）结束，而不是真的发出去。这个端口里没有任何一处实现那个 trait：
+（`ErrCmdType::Socket`）结束，而不是真的发出去。这个移植里没有任何一处实现那个 trait：
 树里每个 `impl SocketOperator` 都是测试用的，C、JNI、Swift 和 Kotlin 的绑定也都不装，所以
 除 Rust 之外，今天还没有放 socket 的地方。
 
@@ -72,8 +72,7 @@ Android 上是十三个：JNI 桥自己回答的那五个 —— 两个网络错
 **2. 发起一个任务。** `start_task` 接过去，挑一条链路，然后立刻返回：任务跑在队列上，
 不在调用它的线程上。
 
-**3. 驱动队列。** 这是这个端口唯一一处要求调用方做、而 C++ 不做的事。C++ 用自己的线程跑
-队列和长连接；这个端口里面没有线程，所以本该是一个线程的地方，是宿主的一次调用 ——
+**3. 驱动队列。** 这个移植里面没有线程，所以本该是一个线程的地方，是宿主的一次调用 ——
 `run_pending()`，以及告诉你这一趟最多还能等多久的 `due_time()`。一个发起了却从没被排空的
 任务，会一直待在它的队列里。
 
@@ -286,8 +285,7 @@ while (due >= 0) {
 
 ::: warning 没有谁替你驱动队列
 `run_pending` / `due_time` —— 上面每一种写法里 —— 是把任务从它的队列里挪出去的东西，
-而这里的任何平台都不会用自己的线程去调它：C++ 有一个 message-queue 线程和一个 `__RunOn`
-线程，这个端口两个都没有。每个带着 STN 的平台都把这一对露出来，所以这个循环要由应用
+而这里的任何平台都不会用自己的线程去调它：这个移植一个都没有。每个带着 STN 的平台都把这一对露出来，所以这个循环要由应用
 自己写；一个发起了却从没被排空的任务会一直坐在它的队列里，直到进程结束 —— 对一个哪儿
 也去不了的任务，`has_task` 照样回答 `true`。
 

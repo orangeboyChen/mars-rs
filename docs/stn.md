@@ -82,11 +82,10 @@ limit and the DNS profile — never reach the app there.
 **2. Start a task.** `start_task` takes it, picks a link and returns at once: the
 task runs on the queue, not on the calling thread.
 
-**3. Drive the queue.** This is the one thing this port asks of the caller that
-the C++ did not. The C++ runs the queues and the long links on threads of its
-own; this port has no threads in it, so what would have been a thread is a call
-the host makes — `run_pending()`, and `due_time()` to know how long it may wait
-before making it. A task that is started and never drained stays in its queue.
+**3. Drive the queue.** This port has no threads in it, so what would have been
+a thread is a call the host makes — `run_pending()`, and `due_time()` to know how
+long it may wait before making it. A task that is started and never drained stays
+in its queue.
 
 ::: code-group
 
@@ -302,10 +301,9 @@ while (due >= 0) {
 
 ::: warning Nothing drives the queue for you
 `run_pending` / `due_time` — in every spelling above — is what moves a task out
-of its queue, and no platform here calls it on a thread of its own: the C++ has
-a message-queue thread and a `__RunOn` thread, and this port has neither. Every
-platform that carries STN exposes the pair, so the loop is the app's to write,
-and a task that is started and never drained sits in its queue until the process
+of its queue, and no platform here calls it on a thread of its own — this port
+has none to call it on. Every platform that carries STN exposes the pair, so the
+loop is the app's to write, and a task that is started and never drained sits in its queue until the process
 ends — `has_task` answers `true` for a task that is going nowhere.
 
 `due_time` — in every spelling above — is how long the host may wait until the
