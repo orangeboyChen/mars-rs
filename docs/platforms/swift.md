@@ -168,7 +168,8 @@ task, how a task ends, and what a long link asks of an app.
 import MarsRSNet
 
 MarsSdt.setHTTPNetCheckCGI("http://example.com/netcheck")
-MarsSdt.startActiveCheck(longLink: longLink, shortLink: [], mode: 0, timeout: 10_000)
+MarsSdt.startActiveCheck(longLink: longLink, shortLink: [], mode: 1 | 2, timeout: 10_000)
+// 1 | 2 is NET_CHECK_BASIC | NET_CHECK_LONG: ping and dns, then tcp. `0` is no checks.
 
 MarsSdt.runChecks(networkType: 1) { query in
     switch query.probe {

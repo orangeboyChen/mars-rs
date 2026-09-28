@@ -168,6 +168,7 @@ App 做什么。
 ## 网络诊断
 
 ```kotlin
+import io.github.orangeboychen.marsrs.sdt.CheckMode
 import io.github.orangeboychen.marsrs.sdt.Link
 import io.github.orangeboychen.marsrs.sdt.ProbeAnswer
 import io.github.orangeboychen.marsrs.sdt.SdtLogic
@@ -177,7 +178,7 @@ SdtLogic.setHttpNetcheckCGI("http://example.com/netcheck")
 SdtLogic.startActiveCheck(
     arrayOf(Link("default", arrayOf("1.2.3.4"), intArrayOf(80))),
     emptyArray(),
-    0,      // 模式
+    CheckMode.K_BASIC or CheckMode.K_LONG, // ping 和 dns，然后 tcp
     10_000, // 超时
 )
 SdtLogic.runChecks(
@@ -193,7 +194,8 @@ SdtLogic.runChecks(
             ProbeAnswer.Ping(errorCode = 0, rtt = 20, lossRate = 0f, averageRTT = 18f)
     },
 )
-SdtLogic.takeReport()?.let { send(it) }   // 只回答一次，然后清空
+// 报告已经送到上面的回调了；`takeReport()` 是拿到它的另一条路 —— 给不装回调的应用用 ——
+// 一份文档，不是两份
 ```
 
 四个探针是 App 的：这个移植不持有任何 socket，所以一次检查是向交给 `runChecks` 的那个

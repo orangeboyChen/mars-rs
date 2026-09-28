@@ -181,6 +181,7 @@ task, how a task ends, and what a long link asks of an app.
 ## The network diagnosis
 
 ```kotlin
+import io.github.orangeboychen.marsrs.sdt.CheckMode
 import io.github.orangeboychen.marsrs.sdt.Link
 import io.github.orangeboychen.marsrs.sdt.ProbeAnswer
 import io.github.orangeboychen.marsrs.sdt.SdtLogic
@@ -190,7 +191,7 @@ SdtLogic.setHttpNetcheckCGI("http://example.com/netcheck")
 SdtLogic.startActiveCheck(
     arrayOf(Link("default", arrayOf("1.2.3.4"), intArrayOf(80))),
     emptyArray(),
-    0,      // the mode
+    CheckMode.K_BASIC or CheckMode.K_LONG, // ping and dns, then tcp
     10_000, // the timeout
 )
 SdtLogic.runChecks(
@@ -206,7 +207,8 @@ SdtLogic.runChecks(
             ProbeAnswer.Ping(errorCode = 0, rtt = 20, lossRate = 0f, averageRTT = 18f)
     },
 )
-SdtLogic.takeReport()?.let { send(it) }   // answers it once, and empties it
+// the report has already gone to the callback above; `takeReport()` is the other
+// way to get it, for an app that installs no callback — one document, not two
 ```
 
 The four probes are the app's: this port owns no sockets, so a check is asked of

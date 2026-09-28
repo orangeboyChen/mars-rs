@@ -135,13 +135,13 @@ task, how a task ends, and what a long link asks of an app.
 ## The network diagnosis
 
 ```rust
-use marsrs::sdt::{report_json, Ask, CheckIPPort, CheckIPPorts, SdtLogic};
+use marsrs::sdt::{report_json, Ask, CheckIPPort, CheckIPPorts, SdtLogic, NET_CHECK_BASIC, NET_CHECK_LONG};
 
 let mut sdt = SdtLogic::new();
 sdt.set_http_netcheck_cgi("http://example.com/netcheck");
 let mut longlink = CheckIPPorts::new();
 longlink.insert("default".to_owned(), vec![CheckIPPort::new("1.2.3.4", 80)]);
-sdt.start_active_check(&longlink, &CheckIPPorts::new(), 0, 10_000);
+sdt.start_active_check(&longlink, &CheckIPPorts::new(), NET_CHECK_BASIC | NET_CHECK_LONG, 10_000);
 
 let results = sdt.run_checks(&mut Ask::new(probe), 1 /* comm::getNetInfo() */);
 println!("{}", report_json(&results));

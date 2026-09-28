@@ -146,7 +146,8 @@ while MarsStn.dueTime != nil {      // 没有哪个线程自己排空这个队�
 import MarsRSNet
 
 MarsSdt.setHTTPNetCheckCGI("http://example.com/netcheck")
-MarsSdt.startActiveCheck(longLink: longLink, shortLink: [], mode: 0, timeout: 10_000)
+MarsSdt.startActiveCheck(longLink: longLink, shortLink: [], mode: 1 | 2, timeout: 10_000)
+// 1 | 2 是 NET_CHECK_BASIC | NET_CHECK_LONG：ping 和 dns，然后 tcp。`0` 是一项都不查。
 
 MarsSdt.runChecks(networkType: 1) { query in
     switch query.probe {

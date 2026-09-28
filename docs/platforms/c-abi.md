@@ -127,7 +127,8 @@ task, how a task ends, and what a long link asks of an app.
 MarsSdtIpPort port = { "1.2.3.4", 80 };
 MarsSdtHosts longlink[] = { { "default", &port, 1 } };
 mars_sdt_set_http_netcheck_cgi("http://example.com/netcheck");
-mars_sdt_start_active_check(longlink, 1, NULL, 0, 0, 10000);
+mars_sdt_start_active_check(longlink, 1, NULL, 0, 1 | 2, 10000);
+/* 1 | 2 is NET_CHECK_BASIC | NET_CHECK_LONG: ping and dns, then tcp. 0 is no checks. */
 mars_sdt_run_checks(NULL, probe, 1);   /* one probe at a time, on the calling thread */
 
 char buffer[4096];

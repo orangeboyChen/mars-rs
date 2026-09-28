@@ -50,16 +50,18 @@ timeout. Nothing is probed yet: the call only writes the plan.
 order, on the calling thread. In the C++ this is the `__RunOn` thread; this port
 has no threads, so it is a call the host makes.
 
-**3. Take the report**, and send it wherever your logs go. Taking it empties it:
-the next call reports what happened since. On Android and in the shared Kotlin
-the report is handed to the `ICallBack` you installed as well, so an app that
-would rather be told than ask is.
+**3. Take the report**, and send it wherever your logs go — or install an
+`ICallBack` and let the run hand it to you instead. The two carry the same
+document, so an app uses one of them: on Android and in the shared Kotlin a run
+hands the report to the callback *and* keeps it for a `takeReport()` that comes
+later, so an app that does both sends the same diagnosis twice. Taking it empties
+it: the next call reports what happened since.
 
 ::: code-group
 
 ```rust [Rust]
 use marsrs::sdt::checkimpl::{Answer, Ask, Query};
-use marsrs::sdt::{report_json, CheckIPPort, CheckIPPorts, SdtLogic};
+use marsrs::sdt::{report_json, CheckIPPort, CheckIPPorts, SdtLogic, NET_CHECK_BASIC, NET_CHECK_LONG};
 
 let mut sdt = SdtLogic::new();
 sdt.set_http_netcheck_cgi("http://example.com/netcheck");
@@ -68,7 +70,8 @@ sdt.set_http_netcheck_cgi("http://example.com/netcheck");
 let mut longlink = CheckIPPorts::new();
 longlink.insert("default".to_owned(), vec![CheckIPPort::new("1.2.3.4", 80)]);
 let shortlink = CheckIPPorts::new();
-sdt.start_active_check(&longlink, &shortlink, 0, 10_000); // mode, timeout ms
+// the mode is the checks to run: ping and dns, then tcp. `0` is none of them.
+sdt.start_active_check(&longlink, &shortlink, NET_CHECK_BASIC | NET_CHECK_LONG, 10_000);
 
 // 2. the plan, over the network `ask` answers with
 let mut ask = Ask::new(|query| match query {
@@ -94,7 +97,8 @@ let longLink = [MarsSdt.Link(
     ports: [MarsSdt.HostPort(host: "1.2.3.4", port: 80)]
 )]
 MarsSdt.setHTTPNetCheckCGI("http://example.com/netcheck")
-MarsSdt.startActiveCheck(longLink: longLink, shortLink: [], mode: 0, timeout: 10_000)
+// 1 | 2 is NET_CHECK_BASIC | NET_CHECK_LONG: ping and dns, then tcp
+MarsSdt.startActiveCheck(longLink: longLink, shortLink: [], mode: 1 | 2, timeout: 10_000)
 
 // 2. the plan, over the network `probe` answers with
 MarsSdt.runChecks(networkType: 1) { query in
@@ -119,10 +123,15 @@ SdtLogic.setCallBack(object : SdtLogic.ICallBack {
     override fun reportSignalDetectResults(resultsJson: String?) { send(resultsJson) }
 })
 
-// 1. the hosts of the two links
+// 1. the hosts of the two links, and the mode: ping and dns, then tcp
 val longLink = arrayOf(SdtLogic.Link("default", arrayOf("1.2.3.4"), intArrayOf(80)))
 SdtLogic.setHttpNetcheckCGI("http://example.com/netcheck")
-SdtLogic.startActiveCheck(longLink, emptyArray(), 0, 10_000)
+SdtLogic.startActiveCheck(
+    longLink,
+    emptyArray(),
+    SdtLogic.CheckMode.K_BASIC or SdtLogic.CheckMode.K_LONG,
+    10_000,
+)
 
 // 2. the plan, over the network `probe` answers with
 SdtLogic.runChecks(
@@ -139,22 +148,21 @@ SdtLogic.runChecks(
     },
 )
 
-// 3. the report — `takeReport()` answers it once and empties it
-SdtLogic.takeReport()?.let { send(it) }
+// 3. nothing: `runChecks` has already handed the report to the callback above.
+//    `takeReport()` is the other way to get it — for an app that installs no
+//    callback — and asking for it as well as being told is being sent it twice.
 ```
 
 ```kotlin [Kotlin Multiplatform]
+import io.github.orangeboychen.marsrs.sdt.CheckMode
 import io.github.orangeboychen.marsrs.sdt.Link
 import io.github.orangeboychen.marsrs.sdt.ProbeAnswer
 import io.github.orangeboychen.marsrs.sdt.SdtLogic
 
-// 0. where the report goes
-SdtLogic.setCallBack { resultsJson -> send(resultsJson) }
-
-// 1. the hosts of the two links
+// 1. the hosts of the two links, and the mode: ping and dns, then tcp
 val longLink = arrayOf(Link("default", arrayOf("1.2.3.4"), intArrayOf(80)))
 SdtLogic.setHttpNetcheckCGI("http://example.com/netcheck")
-SdtLogic.startActiveCheck(longLink, emptyArray(), 0, 10_000)
+SdtLogic.startActiveCheck(longLink, emptyArray(), CheckMode.K_BASIC or CheckMode.K_LONG, 10_000)
 
 // 2. the plan, over the network `probe` answers with
 SdtLogic.runChecks(
@@ -171,7 +179,8 @@ SdtLogic.runChecks(
     },
 )
 
-// 3. the report
+// 3. the report, asked for rather than handed over: this one installs no
+//    callback, so `takeReport()` is what has it — one document, once
 SdtLogic.takeReport()?.let { send(it) }
 ```
 
@@ -182,7 +191,8 @@ SdtLogic.takeReport()?.let { send(it) }
 MarsSdtIpPort port = { "1.2.3.4", 80 };
 MarsSdtHosts longlink[] = { { "default", &port, 1 } };
 mars_sdt_set_http_netcheck_cgi("http://example.com/netcheck");
-mars_sdt_start_active_check(longlink, 1, NULL, 0, 0, 10000);
+/* 1 | 2 is NET_CHECK_BASIC | NET_CHECK_LONG: ping and dns, then tcp */
+mars_sdt_start_active_check(longlink, 1, NULL, 0, 1 | 2, 10000);
 
 /* 2. the plan, over the network `probe` answers with */
 static void probe(void *ctx, const MarsSdtQuery *q, MarsSdtAnswer *a) {
@@ -224,9 +234,20 @@ shared Kotlin as `Check`s and Android as the integers themselves — and the
 integers of the plan are the `detectType` of every entry of the report, so one
 vocabulary names both.
 
-The bits the mode is made of are `CheckMode.K_BASIC`, `K_LONG` and `K_SHORT` in
-the shared Kotlin, `NET_CHECK_*` in the C++ and in the Rust, and plain integers
-in the C ABI; `0` is a diagnosis of everything.
+The bits the mode is made of:
+
+| the bit | Rust | shared Kotlin, Android | Swift, C | what it puts in the plan |
+|---|---|---|---|---|
+| `NET_CHECK_BASIC` | `NET_CHECK_BASIC` | `CheckMode.K_BASIC` | `1` | a ping and a dns check — the two the C++ starts with |
+| `NET_CHECK_LONG` | `NET_CHECK_LONG` | `K_LONG` | `2` | a tcp check: a noop out to the long link's hosts |
+| `NET_CHECK_SHORT` | `NET_CHECK_SHORT` | `K_SHORT` | `4` | an http check: the net-check CGI, and the short link's hosts |
+
+They OR together — `NET_CHECK_BASIC | NET_CHECK_LONG` is a run of three checks —
+and `0` is **no checks at all**: the plan is empty, the run asks no probe and the
+report is `{"details":[]}`. It is not "run everything", which is `1 | 2 | 4`.
+`NET_CHECK_SHORT` is the one that needs its hosts: that bit with a `shortLink` of
+nothing is a plan of an http check with nothing to check — and a run whose report
+says nothing about the short link.
 
 ## The report
 

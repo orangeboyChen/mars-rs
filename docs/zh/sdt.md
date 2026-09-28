@@ -45,15 +45,16 @@ Dart 和 TypeScript 能发起之前也不能 —— 见 [Flutter](/zh/platforms/
 **2. 跑**这个计划，你的探针就是在这里被问到 —— 每项检查一次，按顺序，在调用线程上。
 C++ 里这是 `__RunOn` 线程；这个端口没有线程，所以它是宿主的一次调用。
 
-**3. 取报告**，送到你的日志去的地方。取走就把它清空了：下一次调用报的是这之后发生的事。
-在 Android 和共享 Kotlin 上，报告也会交给你装的那个 `ICallBack`，所以宁愿被通知、不愿
-自己去问的应用也行。
+**3. 取报告**，送到你的日志去的地方 —— 或者装一个 `ICallBack`，让这次跑把它递给你。两者
+拿到的是同一份文档，所以应用只用其中一个：在 Android 和共享 Kotlin 上，一次跑会把报告交给
+回调，*同时*留着给之后来的 `takeReport()`，所以两个都用就是把同一次诊断送了两次。取走就把
+它清空了：下一次调用报的是这之后发生的事。
 
 ::: code-group
 
 ```rust [Rust]
 use marsrs::sdt::checkimpl::{Answer, Ask, Query};
-use marsrs::sdt::{report_json, CheckIPPort, CheckIPPorts, SdtLogic};
+use marsrs::sdt::{report_json, CheckIPPort, CheckIPPorts, SdtLogic, NET_CHECK_BASIC, NET_CHECK_LONG};
 
 let mut sdt = SdtLogic::new();
 sdt.set_http_netcheck_cgi("http://example.com/netcheck");
@@ -62,7 +63,8 @@ sdt.set_http_netcheck_cgi("http://example.com/netcheck");
 let mut longlink = CheckIPPorts::new();
 longlink.insert("default".to_owned(), vec![CheckIPPort::new("1.2.3.4", 80)]);
 let shortlink = CheckIPPorts::new();
-sdt.start_active_check(&longlink, &shortlink, 0, 10_000); // mode、超时（毫秒）
+// mode 是要跑哪些检查：ping 和 dns，然后 tcp。`0` 是一样都不跑。
+sdt.start_active_check(&longlink, &shortlink, NET_CHECK_BASIC | NET_CHECK_LONG, 10_000);
 
 // 2. 计划，跑在 `ask` 回答的那个网络上
 let mut ask = Ask::new(|query| match query {
@@ -88,7 +90,8 @@ let longLink = [MarsSdt.Link(
     ports: [MarsSdt.HostPort(host: "1.2.3.4", port: 80)]
 )]
 MarsSdt.setHTTPNetCheckCGI("http://example.com/netcheck")
-MarsSdt.startActiveCheck(longLink: longLink, shortLink: [], mode: 0, timeout: 10_000)
+// 1 | 2 是 NET_CHECK_BASIC | NET_CHECK_LONG：ping 和 dns，然后 tcp
+MarsSdt.startActiveCheck(longLink: longLink, shortLink: [], mode: 1 | 2, timeout: 10_000)
 
 // 2. 计划，跑在 `probe` 回答的那个网络上
 MarsSdt.runChecks(networkType: 1) { query in
@@ -113,10 +116,15 @@ SdtLogic.setCallBack(object : SdtLogic.ICallBack {
     override fun reportSignalDetectResults(resultsJson: String?) { send(resultsJson) }
 })
 
-// 1. 两条链路的 hosts
+// 1. 两条链路的 hosts，以及 mode：ping 和 dns，然后 tcp
 val longLink = arrayOf(SdtLogic.Link("default", arrayOf("1.2.3.4"), intArrayOf(80)))
 SdtLogic.setHttpNetcheckCGI("http://example.com/netcheck")
-SdtLogic.startActiveCheck(longLink, emptyArray(), 0, 10_000)
+SdtLogic.startActiveCheck(
+    longLink,
+    emptyArray(),
+    SdtLogic.CheckMode.K_BASIC or SdtLogic.CheckMode.K_LONG,
+    10_000,
+)
 
 // 2. 计划，跑在 `probe` 回答的那个网络上
 SdtLogic.runChecks(
@@ -133,22 +141,20 @@ SdtLogic.runChecks(
     },
 )
 
-// 3. 报告 —— `takeReport()` 回答一次，并把它清空
-SdtLogic.takeReport()?.let { send(it) }
+// 3. 不用做什么：上面的 `runChecks` 已经把报告交给回调了。`takeReport()` 是拿到它的另一
+//    条路 —— 给不装回调的应用用 —— 既被通知又自己去问，是同一次诊断被送了两次。
 ```
 
 ```kotlin [Kotlin Multiplatform]
+import io.github.orangeboychen.marsrs.sdt.CheckMode
 import io.github.orangeboychen.marsrs.sdt.Link
 import io.github.orangeboychen.marsrs.sdt.ProbeAnswer
 import io.github.orangeboychen.marsrs.sdt.SdtLogic
 
-// 0. 报告送到哪
-SdtLogic.setCallBack { resultsJson -> send(resultsJson) }
-
-// 1. 两条链路的 hosts
+// 1. 两条链路的 hosts，以及 mode：ping 和 dns，然后 tcp
 val longLink = arrayOf(Link("default", arrayOf("1.2.3.4"), intArrayOf(80)))
 SdtLogic.setHttpNetcheckCGI("http://example.com/netcheck")
-SdtLogic.startActiveCheck(longLink, emptyArray(), 0, 10_000)
+SdtLogic.startActiveCheck(longLink, emptyArray(), CheckMode.K_BASIC or CheckMode.K_LONG, 10_000)
 
 // 2. 计划，跑在 `probe` 回答的那个网络上
 SdtLogic.runChecks(
@@ -165,7 +171,8 @@ SdtLogic.runChecks(
     },
 )
 
-// 3. 报告
+// 3. 报告，是自己来要的而不是被递过来的：这个例子没装回调，`takeReport()` 才是有它的
+//    那个 —— 一份文档，一次
 SdtLogic.takeReport()?.let { send(it) }
 ```
 
@@ -176,7 +183,8 @@ SdtLogic.takeReport()?.let { send(it) }
 MarsSdtIpPort port = { "1.2.3.4", 80 };
 MarsSdtHosts longlink[] = { { "default", &port, 1 } };
 mars_sdt_set_http_netcheck_cgi("http://example.com/netcheck");
-mars_sdt_start_active_check(longlink, 1, NULL, 0, 0, 10000);
+/* 1 | 2 是 NET_CHECK_BASIC | NET_CHECK_LONG：ping 和 dns，然后 tcp */
+mars_sdt_start_active_check(longlink, 1, NULL, 0, 1 | 2, 10000);
 
 /* 2. 计划，跑在 `probe` 回答的那个网络上 */
 static void probe(void *ctx, const MarsSdtQuery *q, MarsSdtAnswer *a) {
@@ -216,8 +224,18 @@ if (mars_sdt_take_report(buffer, sizeof buffer) >= 0) { send(buffer); }
 （C）按检查将要跑的顺序把计划交回来 —— 共享 Kotlin 是 `Check`，Android 是那些整数本身 ——
 而计划里的整数就是报告每一行里的 `detectType`，所以两边用的是同一套词。
 
-构成 mode 的那些位：共享 Kotlin 里是 `CheckMode.K_BASIC`、`K_LONG` 和 `K_SHORT`，C++ 和
-Rust 里是 `NET_CHECK_*`，C ABI 里是普通整数；`0` 是一次什么都查的诊断。
+构成 mode 的那些位：
+
+| 哪一位 | Rust | 共享 Kotlin、Android | Swift、C | 它往计划里放什么 |
+|---|---|---|---|---|
+| `NET_CHECK_BASIC` | `NET_CHECK_BASIC` | `CheckMode.K_BASIC` | `1` | 一次 ping 和一次 dns 检查 —— C++ 开头的那两项 |
+| `NET_CHECK_LONG` | `NET_CHECK_LONG` | `K_LONG` | `2` | 一次 tcp 检查：往长连 hosts 发一个 noop |
+| `NET_CHECK_SHORT` | `NET_CHECK_SHORT` | `K_SHORT` | `4` | 一次 http 检查：net-check CGI，以及短连的 hosts |
+
+它们按位或在一起 —— `NET_CHECK_BASIC | NET_CHECK_LONG` 是三项检查的一次跑 —— 而 `0` 是
+**一项都不查**：计划是空的，跑的时候一个探针都不问，报告是 `{"details":[]}`。它不是"全查"，
+全查是 `1 | 2 | 4`。`NET_CHECK_SHORT` 是唯一需要自己 hosts 的那一位：这一位配上空的
+`shortLink`，是一次没有东西可查的 http 检查。
 
 ## 报告
 

@@ -178,7 +178,7 @@ SdtLogic.setHttpNetcheckCGI("http://example.com/netcheck")
 SdtLogic.startActiveCheck(
     arrayOf(SdtLogic.Link("default", arrayOf("1.2.3.4"), intArrayOf(80))),
     emptyArray(),
-    0,      // the mode
+    SdtLogic.CheckMode.K_BASIC or SdtLogic.CheckMode.K_LONG, // ping and dns, then tcp
     10_000, // the timeout
 )
 SdtLogic.runChecks(1, object : SdtLogic.IProbe {
@@ -191,7 +191,8 @@ SdtLogic.runChecks(1, object : SdtLogic.IProbe {
     override fun ping(host: String, timeoutSec: Int) =
         SdtLogic.Answer.ping(errorCode = 0, rtt = 20, lossRate = 0f, averageRTT = 18f)
 })
-SdtLogic.takeReport()?.let { send(it) }   // answers it once, and empties it
+// the report has already gone to the callback above; `takeReport()` is the other
+// way to get it, for an app that installs no callback — one document, not two
 ```
 
 The four probes are the app's: this port owns no sockets, so a check is asked of
