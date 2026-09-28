@@ -1,10 +1,12 @@
 # Flutter
 
 Two plugins, one API: `marsrs_flutter_xlog` for an app that only logs, and
-`marsrs_flutter` for the whole port — which today is the same thing, because the
-C ABI is 28 `mars_xlog_*` symbols and nothing else. STN and SDT land in
-`marsrs_flutter` and in nothing else. Take one of the two, not both: both carry
-the same native library, and an app with two of it does not build.
+`marsrs_flutter` for the whole port — which today is the same thing, because what
+the plugin exposes is the logger. STN and SDT land in `marsrs_flutter` and in
+nothing else: the C ABI behind both carries them — see
+[the C ABI](/platforms/c-abi#the-task-pipeline) — but neither is in the Dart
+yet. Take one of the two, not both: both carry the same native library, and an
+app with two of it does not build.
 
 ## Install
 
@@ -127,3 +129,18 @@ to name, and the C++ writes an empty one too. Where the current file is is not
 answered — no `mars_xlog_current_log_path` and no `Xlog.currentLogPath` — because
 the path is a thing the app asks of the directory it gave, and
 [the log files page](/log-files) is what names it.
+
+Neither [the task pipeline](/stn) nor [the network diagnosis](/sdt) is in it: no
+`StnLogic`, no `SdtLogic`, no task and no check. What is missing is the Dart — the
+C ABI the plugin is built over carries both, see
+[the C ABI](/platforms/c-abi#the-task-pipeline). The native side it resolves does
+not carry the same thing on both platforms, though:
+
+| | what the plugin resolves | so a task today |
+|---|---|---|
+| Android | `io.github.orangeboychen.marsrs:marsrs` — the whole-port AAR, STN and SDT in it | the app's own Android code can start one, and a channel of its own can carry it to the Dart |
+| iOS | `marsrs-xlog.xcframework` and `mars_xlog.h` — the logger, and nothing else | no: `MarsRSNet` is not vendored, so there is no `MarsStn` and no `MarsSdt` to link |
+
+Which is why "start it from the platform side" is half an answer: it is one on
+Android, and on iOS the net framework and the two net headers would have to be
+packaged beside the xlog ones before it is one there.

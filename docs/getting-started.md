@@ -191,3 +191,5 @@ Nothing has to be called when the app goes away — see [log files](/log-files).
   them back.
 - The page of [your platform](/platforms/rust) — the full API, the levels and
   the modes, and what else the package carries.
+- [The task pipeline](/stn) and [the network diagnosis](/sdt) — the half of the
+  port that is not the logger, for the platforms that carry it.

@@ -127,3 +127,63 @@ app killed out of the background is told nothing, so there is no later place a
 cache file, and the next `Xlog` of the same `namePrefix` drains them into its log
 file when it opens — but the file of the session that is ending is complete only
 once this has run. See [log files](/log-files#when-the-app-goes-away).
+## The task pipeline
+
+`MarsRSNet` carries the half of the port that talks to a server: `MarsStn` is
+one `enum` of statics over the `mars_stn_*` of the C ABI.
+
+```swift
+import MarsRSNet
+
+MarsStn.setApp { question in        // one closure answers the eighteen questions
+    switch question.kind {
+    case .req2Buf:  return .encoded(try! encode(question.task!))
+    case .buf2Resp: handle(question.body); return .decoded(errorCode: 0, handle: .normal)
+    case .onTaskEnd: return .ended(errorCode: 0)
+    default:        return .nothing
+    }
+}
+
+var task = StnTask(channelSelect: .short)
+task.taskID = MarsStn.generateTaskID()
+task.cgi = "/cgi-bin/hello"
+MarsStn.start(task)
+
+while MarsStn.dueTime != nil {      // nothing drains the queue on a thread of its own
+    MarsStn.runPending()
+}
+```
+
+`MarsStn.dueTime` is how long the pass may wait, in milliseconds — `0` is one
+that is already due — and `MarsStn.runPending()` is the pass: the C++ runs them on
+a message-queue thread and this port has none, so the loop is the app's. A task
+that is started and never drained stays in its queue.
+
+[The task pipeline](/stn) is the whole of it — the two links, the fields of a
+task, how a task ends, and what a long link asks of an app.
+
+## The network diagnosis
+
+```swift
+import MarsRSNet
+
+MarsSdt.setHTTPNetCheckCGI("http://example.com/netcheck")
+MarsSdt.startActiveCheck(longLink: longLink, shortLink: [], mode: 1 | 2, timeout: 10_000)
+// 1 | 2 is NET_CHECK_BASIC | NET_CHECK_LONG: ping and dns, then tcp. `0` is no checks.
+
+MarsSdt.runChecks(networkType: 1) { query in
+    switch query.probe {
+    case .dns:  return .dns(errorCode: 0, rtt: 12, addresses: ["1.2.3.4"])
+    case .ping: return .ping(errorCode: 0, rtt: 20, lossRate: 0, averageRTT: 18)
+    default:    return .nothing
+    }
+}
+
+if let report = MarsSdt.takeReport() { send(report) }
+```
+
+The four probes are the app's — this port owns no sockets, so a check is asked of
+the closure you hand to `runChecks`, one at a time, on the calling thread.
+
+[The network diagnosis](/sdt) is the whole of it: the mode, the plan, and the
+JSON of the report.

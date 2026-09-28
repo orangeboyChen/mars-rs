@@ -14,7 +14,7 @@ under the same names:
 | pod | what you get |
 |---|---|
 | `MarsRSXlog` | the logger: `Xlog`, `XlogConfig`, `LogLevel`, `AppenderMode`, `CompressMode` |
-| `MarsRSNet` | the STN task pipeline and the SDT network diagnosis |
+| `MarsRSNet` | [the task pipeline](/stn) and [the network diagnosis](/sdt): `MarsStn`, `MarsSdt`, `StnTask`, `StnQuestion`, `StnAnswer` |
 | `MarsRS` | both halves, re-exported |
 
 `:podspec` is the point of the line. The pods are not on a spec repo — a release

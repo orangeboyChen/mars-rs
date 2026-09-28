@@ -99,3 +99,50 @@ let (begin, end) = get_period_logs(std::path::Path::new("marsrs_20260927.xlog"),
 ```
 
 `LogBuffer` 就是解码器；见[日志文件](/zh/log-files)。
+
+## 任务链路
+
+```rust
+use marsrs::stn::{gen_task_id, App, StnLogic, Task};
+
+let mut stn = StnLogic::new();
+stn.set_callback(MyApp);   // 一个 App 回答那十八个问题
+stn.create();              // 建出 net core；在这之前别的都用不了
+
+let mut task = Task::new(gen_task_id(), 100);
+task.cgi = "/cgi-bin/hello".to_owned();
+stn.start_task(task);
+
+// 这个移植没有线程：队列由谁调用谁来排空
+while let Some(wait) = stn.due_delay() {   // 这一趟还能等多久，毫秒
+    std::thread::sleep(std::time::Duration::from_millis(wait));
+    stn.run_pending();
+}
+```
+
+`marsrs::stn` 是这个移植里跟服务器说话的那半：一个任务走短连接或长连接出去，会被重试、
+超时、上报，而 App 回答 STN 跑的过程中问的那十八个问题 —— 每个都有默认实现，所以 App
+只写它关心的那几个。
+
+[任务链路](/zh/stn)是它的全部 —— 两条连接、一个任务的各个字段、任务怎么结束、长连接
+要 App 做什么。
+
+## 网络诊断
+
+```rust
+use marsrs::sdt::{report_json, Ask, CheckIPPort, CheckIPPorts, SdtLogic, NET_CHECK_BASIC, NET_CHECK_LONG};
+
+let mut sdt = SdtLogic::new();
+sdt.set_http_netcheck_cgi("http://example.com/netcheck");
+let mut longlink = CheckIPPorts::new();
+longlink.insert("default".to_owned(), vec![CheckIPPort::new("1.2.3.4", 80)]);
+sdt.start_active_check(&longlink, &CheckIPPorts::new(), NET_CHECK_BASIC | NET_CHECK_LONG, 10_000);
+
+let results = sdt.run_checks(&mut Ask::new(probe), 1 /* comm::getNetInfo() */);
+println!("{}", report_json(&results));
+```
+
+四个探针 —— ping、dns、tcp、http —— 是 App 的：这个移植不持有任何 socket，所以
+`run_checks` 是向交给它的那个 `Ask` 一个一个地问，都在调用的线程上。
+
+[网络诊断](/zh/sdt)是它的全部：那个模式、那份计划、以及报告的那份 JSON。

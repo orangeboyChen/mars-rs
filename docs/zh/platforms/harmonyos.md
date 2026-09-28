@@ -38,3 +38,30 @@ marsrs-harmony-<version>/
    `write(level, tag, message)`，日志要的就这么点 —— 再从 ArkTS 调它们。
 
 [C ABI](/zh/platforms/c-abi)那页都适用：配置、级别、实例和错误码是同一批符号。
+
+## mars 的另一半
+
+`libmars_ffi.so` 是整个移植，不只是日志那半：`build_harmony.sh` 在默认的 `xlog` 之上
+带着 `sdt,stn` 两个 feature 构建 `marsrs-ffi`，而脚本在库旁边写出的头文件是
+`mars_xlog.h`、`mars_sdt.h`、`mars_stn.h` 三个都有。所以 HarmonyOS 应用可以通过它为
+日志写的那个 NAPI 封装，跑一个任务、或者做一次诊断：
+
+```c
+#include <mars_stn.h>
+
+mars_stn_set_app(NULL, ask);          /* 那十八个问题，一个回调回答 */
+mars_stn_start_task(&task);
+
+/* 回答是这一趟还能等多少毫秒 */
+long long due = mars_stn_due_time();
+while (due >= 0) {                    /* 这个移植没有线程：App 自己排空队列 */
+    usleep(due * 1000);
+    mars_stn_run_pending();
+    due = mars_stn_due_time();
+}
+```
+
+两半都没有 ArkTS 封装，各自要 App 做什么在那两页上：[任务链路](/zh/stn)和
+[网络诊断](/zh/sdt)。那里没有一样东西是 HarmonyOS 自己的 —— 是[C ABI
+那页](/zh/platforms/c-abi)为 Linux、macOS、Windows 发布的同一个 C ABI，也是
+`MarsRSNet`、Android 那两个 AAR 和 `marsrs-kmp` 写在它上面的那个。

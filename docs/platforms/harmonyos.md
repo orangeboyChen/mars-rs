@@ -42,3 +42,32 @@ none. The SDK is the public OpenHarmony one, and the script downloads it when
 
 Everything on [the C ABI page](/platforms/c-abi) applies: the config, the levels,
 the instances and the error codes are the same symbols.
+
+## The mars half
+
+`libmars_ffi.so` is the whole port and not the logger alone: `build_harmony.sh`
+builds `marsrs-ffi` with the `sdt,stn` features on top of the default `xlog`, and
+what the script writes next to the library is all three of `mars_xlog.h`,
+`mars_sdt.h` and `mars_stn.h`. So a HarmonyOS app can run a task, or a
+diagnosis, through the same NAPI shim it writes for the logger:
+
+```c
+#include <mars_stn.h>
+
+mars_stn_set_app(NULL, ask);          /* the eighteen questions, as one callback */
+mars_stn_start_task(&task);
+
+/* the answer is how many milliseconds the pass may wait */
+long long due = mars_stn_due_time();
+while (due >= 0) {                    /* no threads in the port: the app drains the queues */
+    usleep(due * 1000);
+    mars_stn_run_pending();
+    due = mars_stn_due_time();
+}
+```
+
+There is no ArkTS wrapper for either half, and the two pages say what each one
+asks of an app: [the task pipeline](/stn) and [the network diagnosis](/sdt).
+Nothing there is HarmonyOS's own — it is the same C ABI
+[its page](/platforms/c-abi) publishes for Linux, macOS and Windows, and the one
+`MarsRSNet`, the Android AARs and `marsrs-kmp` are written over.

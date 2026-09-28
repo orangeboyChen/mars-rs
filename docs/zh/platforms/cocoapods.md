@@ -13,7 +13,7 @@ pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/m
 | pod | 拿到什么 |
 |---|---|
 | `MarsRSXlog` | 日志：`Xlog`、`XlogConfig`、`LogLevel`、`AppenderMode`、`CompressMode` |
-| `MarsRSNet` | STN 任务链路和 SDT 网络诊断 |
+| `MarsRSNet` | [任务链路](/zh/stn)和[网络诊断](/zh/sdt)：`MarsStn`、`MarsSdt`、`StnTask`、`StnQuestion`、`StnAnswer` |
 | `MarsRS` | 两半都重新导出 |
 
 这一行的关键是 `:podspec`。这些 pod 不在任何 spec repo 上 —— 一次 release 发布的是

@@ -84,3 +84,62 @@ if (mars_xlog_current_log_path(path, sizeof path) == MARS_XLOG_OK) {
 `config` 是 `NULL`、mode 或压缩器不是合法值、`log_dir` 是空的、appender 拒绝了配置、
 输出缓冲区太小、还没有打开的文件。`MARS_XLOG_ERR_PANIC` 是在边界上捕获到的 Rust
 panic —— C ABI 里不会有任何东西 unwind 进 C。
+
+## 任务链路
+
+`mars_stn.h` 是这个移植里跟服务器说话的那半，也是同一个库：不用多链接什么，也不用多
+打开什么。
+
+```c
+#include <mars_stn.h>
+
+mars_stn_set_app(NULL, ask);          /* 一个回调回答那十八个问题 */
+
+MarsStnTask task;
+memset(&task, 0, sizeof task);
+task.taskid = mars_stn_gen_task_id();
+task.channel_select = 0x3;            /* 两条连接 */
+task.cgi = "/cgi-bin/hello";
+mars_stn_start_task(&task);
+
+/* 这个移植没有线程：队列由谁调用谁来排空 —— 而回答是这一趟还能等多少毫秒，
+   MARS_STN_ERR_NO_DUE 是"没有可等的东西" */
+long long due = mars_stn_due_time();
+while (due >= 0) {
+    usleep(due * 1000);
+    mars_stn_run_pending();
+    due = mars_stn_due_time();
+}
+```
+
+[任务链路](/zh/stn)是它的全部 —— 两条连接、一个任务的各个字段、任务怎么结束、长连接要
+App 做什么。
+
+## 网络诊断
+
+```c
+#include <mars_sdt.h>
+
+MarsSdtIpPort port = { "1.2.3.4", 80 };
+MarsSdtHosts longlink[] = { { "default", &port, 1 } };
+mars_sdt_set_http_netcheck_cgi("http://example.com/netcheck");
+mars_sdt_start_active_check(longlink, 1, NULL, 0, 1 | 2, 10000);
+/* 1 | 2 是 NET_CHECK_BASIC | NET_CHECK_LONG：ping 和 dns，然后 tcp。0 是一项都不查。 */
+mars_sdt_run_checks(NULL, probe, 1);   /* 一次一个探针，在调用的线程上 */
+
+char buffer[4096];
+if (mars_sdt_take_report(buffer, sizeof buffer) >= 0) { send(buffer); }
+```
+
+四个探针 —— ping、dns、tcp、http —— 是调用方的：这个移植不持有任何 socket，所以
+`mars_sdt_run_checks` 是向交给它的那个 `MarsSdtProbe` 问。
+
+[网络诊断](/zh/sdt)是它的全部：那个模式、那份计划、以及报告的那份 JSON。
+
+## 两部分的错误码
+
+两个头文件里每个返回 `int` 的调用，要么返回 `MARS_STN_OK` / `MARS_SDT_OK`（0），要么返回
+负的 `MARS_STN_ERR_*` / `MARS_SDT_ERR_*` —— 一个 `NULL` 参数、缓冲区太小、队列没收下这个
+任务、报告装不下 —— 而 `MARS_STN_ERR_PANIC` / `MARS_SDT_ERR_PANIC` 是在边界上捕获到的
+Rust panic。C ABI 里不会有任何东西 unwind 进 C；一次报告没装进缓冲区里的诊断会留着它的
+结果，所以换一个更大的再来问一次的调用方，拿到的是那份诊断而不是一个空的。
