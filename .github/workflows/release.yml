@@ -604,7 +604,20 @@ jobs:
         # can execute: `linuxX64`. It is the only check the Linux linker flags of
         # `mars_ffi.def` ever get, and the Windows ones get none — there is no
         # runner that can execute a mingw binary here.
-        run: (cd platforms/kmp && ./gradlew --no-daemon :marsrs-xlog:linuxX64Test)
+        #
+        # `enableKlibsCrossCompilation=false`, for the ten Apple targets this
+        # host has no toolchain for: cinterop needs the one of the target, so
+        # without the flag Gradle asks for each of them and answers itself
+        # seventeen times, over a log whose only question is whether `linuxX64`
+        # links. Asked here and not written into `gradle.properties`, because
+        # the `kmp` job on macOS publishes the klibs of the Linux and Windows
+        # targets — that *is* the cross-compilation this forbids.
+        #
+        # `ignoreDisabledTargets` is deliberately not asked for: which targets
+        # were disabled is the one line that would say so if `linuxX64` itself
+        # were, and a test that silently skips is a green job that proved
+        # nothing.
+        run: (cd platforms/kmp && ./gradlew --no-daemon -Pkotlin.native.enableKlibsCrossCompilation=false :marsrs-xlog:linuxX64Test)
 
   # The Kotlin Multiplatform release: `marsrs-kmp` and `xlog-kmp` as a
   # maven repository, on GitHub Packages and, as a zip, on the release.
