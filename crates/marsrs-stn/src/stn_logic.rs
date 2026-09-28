@@ -42,7 +42,7 @@ use marsrs_comm::tickcount::gettickcount;
 
 use crate::net_core::{IsForeground, LastForegroundChangeTime, NetCore};
 use crate::signalling_keeper::set_strategy;
-use crate::stn_callback_bridge::{App, StnCallbackBridge};
+use crate::stn_callback_bridge::{App, DnsProfile, StnCallbackBridge};
 use crate::{xorshift, LongLink, LongLinkEncoder, LongLinkStatus, LonglinkConfig, NetStatus, Task};
 
 /// `kReservedTaskIDStart` — the id the counter is put back to `1` at, so a
@@ -694,6 +694,13 @@ impl StnLogic {
             .set_new_dns(move |host, is_longlink, extra| {
                 locked(&wired).on_new_dns(host, is_longlink, extra)
             });
+        // how the question went, which the app is told about so it can keep a
+        // history of the hosts it asked for
+        let wired = Arc::clone(bridge);
+        core.net_source()
+            .set_report_dns_profile(move |profile: &DnsProfile| {
+                locked(&wired).report_dns_profile(profile)
+            });
         let wired = Arc::clone(bridge);
         core.netcheck()
             .set_request_short_link_hosts(move || locked(&wired).net_check_shortlink_hosts());
@@ -774,6 +781,13 @@ mod tests {
         ) -> Vec<String> {
             self.asked.lock().unwrap().push(format!("newdns {host}"));
             vec!["10.0.0.1".to_string()]
+        }
+
+        fn report_dns_profile(&mut self, profile: &DnsProfile) {
+            self.asked
+                .lock()
+                .unwrap()
+                .push(format!("dns {} {:?}", profile.host, profile.dnstype));
         }
 
         fn net_check_shortlink_hosts(&mut self) -> Vec<String> {
@@ -940,7 +954,13 @@ mod tests {
 
         assert_eq!(
             asked_of(&asked),
-            vec!["newdns long.host".to_string(), "sync".to_string()]
+            vec![
+                "newdns long.host".to_string(),
+                // the question it answered is reported back to it, which is
+                // what the C++'s `ReportDnsProfileFunc` is for
+                "dns long.host NewDns".to_string(),
+                "sync".to_string()
+            ]
         );
     }
 
@@ -1046,6 +1066,24 @@ mod tests {
         assert_eq!(
             core.net_source().backup_ips("short.host"),
             vec!["9.9.9.9".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_dns_question_the_app_answered_comes_back_to_it() {
+        let (mut logic, asked) = logic();
+        logic.set_longlink_svr_addr("long.host", vec![80], "");
+        let items = logic
+            .net_core()
+            .expect("no core")
+            .net_source()
+            .get_longlink_items(&LonglinkConfig::new("main"));
+        assert!(!items.is_empty(), "the app's dns answers one ip");
+
+        let asked = asked_of(&asked);
+        assert!(
+            asked.contains(&"dns long.host NewDns".to_string()),
+            "how the question went is the app's to keep: {asked:?}"
         );
     }
 

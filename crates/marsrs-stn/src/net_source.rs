@@ -16,13 +16,14 @@
 //! The dns, the network, and whether the app is in the foreground are three
 //! callbacks here ([`NewDns`], [`Dns`], [`NetInfo`], [`IsActive`]) — the port
 //! has no socket and no platform — and the `rand()` that shuffles the backup
-//! pairs is a fourth ([`crate::Random`]). What the C++ does with files
+//! pairs is a fourth ([`crate::Random`]). A fifth goes the other way: how a
+//! dns question went is reported back ([`ReportDnsProfile`]), which is what an
+//! app keeps a history of its own hosts with. What the C++ does with files
 //! (`ipportrecords2.xml`) is [`SimpleIpPortSort::load_records`] and
 //! [`SimpleIpPortSort::save_records`], which the host calls.
 //!
 //! What the C++ keeps as function objects and manager hooks is left out: the
-//! dns profile report (`ReportDnsProfileFunc`), the quic/ipv6 policy of the
-//! app, and `OnNewDns` beyond the callback. Two of the C++'s own stubs are
+//! quic/ipv6 policy of the app, and `OnNewDns` beyond the callback. Two of the C++'s own stubs are
 //! kept as stubs: [`NetSource::longlink_speed_test_ips`] answers an empty list
 //! where the C++ answers `true` and fills nothing in, and
 //! [`NetSource::report_longlink_speed_test_result`] does nothing.
@@ -30,6 +31,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::simple_ipport_sort::{IpPortItem, IpSourceType, SimpleIpPortSort};
+use crate::stn_callback_bridge::{DnsProfile, DnsType};
 use crate::task::Task;
 use crate::Random;
 use marsrs_comm::shuffle::random_shuffle;
@@ -110,6 +112,9 @@ pub type IsActive = dyn FnMut() -> bool + Send;
 /// `getNetInfo()` — one of the `kNoNet` / `kWifi` / `kMobile` / `kOtherNet`
 /// values; unset answers [`NO_NET`], which is what makes a report do nothing.
 pub type NetInfo = dyn FnMut() -> i32 + Send;
+/// `ReportDnsProfileFunc` — what the app is told about a dns question once it
+/// has come back. Unset reports nothing, the way the C++ warns and goes on.
+pub type ReportDnsProfile = dyn FnMut(&DnsProfile) + Send;
 
 /// `__MakeIPPorts(...)` — what one host is asked for, which is the same three
 /// things every call hands over: how many pairs the list may hold once the host
@@ -243,6 +248,7 @@ pub struct NetSource {
     dns: Option<Box<Dns>>,
     is_active: Option<Box<IsActive>>,
     net_info: Option<Box<NetInfo>>,
+    report_dns: Option<Box<ReportDnsProfile>>,
     random: Box<Random>,
 }
 
@@ -291,6 +297,7 @@ impl NetSource {
             dns: None,
             is_active: None,
             net_info: None,
+            report_dns: None,
             random: Box::new(crate::xorshift(now)),
         }
     }
@@ -316,6 +323,14 @@ impl NetSource {
     /// `getNetInfo()`.
     pub fn set_net_info(&mut self, net_info: impl FnMut() -> i32 + Send + 'static) {
         self.net_info = Some(Box::new(net_info));
+    }
+
+    /// `ReportDnsProfileFunc` — where a dns question is reported once it has
+    /// come back, which is what an app keeps a history of its own hosts with.
+    /// A host's backup pass asks the fallback behind the app's back, and the
+    /// C++ reports nothing of that one either.
+    pub fn set_report_dns_profile(&mut self, report_dns: impl FnMut(&DnsProfile) + Send + 'static) {
+        self.report_dns = Some(Box::new(report_dns));
     }
 
     /// `getCurrNetLabel` — which network the history is kept for, which is what
@@ -913,10 +928,31 @@ impl NetSource {
                 Some(new_dns) => new_dns(host, is_longlink, extra),
                 None => Vec::new(),
             };
+            // `ReportDnsProfileFunc`: the app is told how the question went
+            // whether or not it came back with anything, because a host no dns
+            // knows is the one it most wants to hear about. The end is the
+            // clock's own reading, which is the cost it is measuring; the
+            // start is the tick this list was asked for at.
+            let mut profile = DnsProfile::new_at(now, host);
+            profile.end_time = gettickcount();
+            if ips.is_empty() {
+                profile.failed();
+            }
+            self.report_dns(profile);
+
             let source = if ips.is_empty() {
+                // the fallback is a second question, and so a second report:
+                // the C++ starts the profile's clock over for it
+                let mut profile = DnsProfile::new_at(gettickcount(), host);
+                profile.dnstype = DnsType::Dns;
                 if let Some(dns) = self.dns.as_mut() {
                     ips = dns(host);
                 }
+                profile.end_time = gettickcount();
+                if ips.is_empty() {
+                    profile.failed();
+                }
+                self.report_dns(profile);
                 IpSourceType::Dns
             } else {
                 IpSourceType::NewDns
@@ -1009,6 +1045,14 @@ impl NetSource {
             None => NO_NET,
         }
     }
+
+    /// `ReportDnsProfileFunc` — the one way a [`DnsProfile`] leaves here,
+    /// which is nowhere at all while no app is listening.
+    fn report_dns(&mut self, profile: DnsProfile) {
+        if let Some(report_dns) = self.report_dns.as_mut() {
+            report_dns(&profile);
+        }
+    }
 }
 
 impl std::fmt::Debug for NetSource {
@@ -1032,6 +1076,8 @@ impl std::fmt::Debug for NetSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::task_profile::ErrCmdType;
+    use std::sync::{Arc, Mutex};
 
     /// A `NetSource` with two long-link hosts, two ports, a short link, and a
     /// dns that answers one ip per host. The app is in the foreground.
@@ -1171,6 +1217,96 @@ mod tests {
                 .iter()
                 .any(|item| item.source_type == IpSourceType::Backup),
             "and what it answered is the backup list of the host from then on"
+        );
+    }
+
+    /// `ReportDnsProfileFunc` — what the app was told about the questions a
+    /// source asked, in the order it asked them.
+    fn dns_reports(source: &mut NetSource) -> Arc<Mutex<Vec<DnsProfile>>> {
+        let profiles = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&profiles);
+        source.set_report_dns_profile(move |profile| {
+            seen.lock().unwrap().push(profile.clone());
+        });
+        profiles
+    }
+
+    #[test]
+    fn a_dns_question_is_reported_once_it_has_come_back() {
+        let mut source = a_source();
+        let profiles = dns_reports(&mut source);
+        let items = source.get_longlink_items(&LonglinkConfig::new("main"));
+        assert!(!items.is_empty(), "both hosts have a dns that answers");
+
+        let profiles = profiles.lock().unwrap();
+        let hosts: Vec<&str> = profiles
+            .iter()
+            .map(|profile| profile.host.as_str())
+            .collect();
+        assert_eq!(hosts, vec!["long.example", "long2.example"]);
+        assert!(
+            profiles
+                .iter()
+                .all(|profile| profile.dnstype == DnsType::NewDns
+                    && profile.err_type == ErrCmdType::Ok),
+            "{:?}",
+            profiles
+        );
+        assert!(
+            profiles
+                .iter()
+                .all(|profile| profile.start_time <= profile.end_time),
+            "{:?}",
+            profiles
+        );
+    }
+
+    #[test]
+    fn a_dns_that_answered_nothing_is_two_questions_that_failed() {
+        let mut source = a_source();
+        source.set_new_dns(|_, _, _| Vec::new());
+        source.set_dns(|_| Vec::new());
+        let profiles = dns_reports(&mut source);
+        assert!(
+            source
+                .get_longlink_items(&LonglinkConfig::new("main"))
+                .is_empty(),
+            "no host resolved"
+        );
+
+        let profiles = profiles.lock().unwrap();
+        assert_eq!(
+            profiles.len(),
+            4,
+            "two hosts, two dns's each: {:?}",
+            profiles
+        );
+        assert_eq!(profiles[0].host, "long.example");
+        assert_eq!(profiles[0].dnstype, DnsType::NewDns);
+        assert_eq!(profiles[0].err_type, ErrCmdType::Local);
+        assert_eq!(profiles[0].err_code, -1);
+        assert_eq!(profiles[1].dnstype, DnsType::Dns);
+        assert!(
+            profiles[1].start_time >= profiles[0].end_time,
+            "the fallback is a second question, and starts after the first ended: {:?}",
+            profiles
+        );
+    }
+
+    #[test]
+    fn a_host_with_a_debug_ip_asks_no_dns_and_reports_none() {
+        let mut source = a_source();
+        source.set_debug_ip("long.example", "9.9.9.9");
+        let profiles = dns_reports(&mut source);
+        source.get_longlink_items(&LonglinkConfig::new("main"));
+
+        let profiles = profiles.lock().unwrap();
+        assert!(
+            profiles
+                .iter()
+                .all(|profile| profile.host != "long.example"),
+            "a debug pair is a host no dns was asked about: {:?}",
+            profiles
         );
     }
 
