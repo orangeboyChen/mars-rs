@@ -76,7 +76,8 @@ log.fatal(message: "…", tag: "login")
 log.log(.debug, message: "…", tag: "net")   // 级别要到调用时才知道
 ```
 
-级别低于 appender 打开时那个级别的记录，在格式化之前就被丢掉了。构造起来很贵的消息值得先问一句：
+级别低于 appender 当前那个级别的记录，在格式化之前就被丢掉了 —— `log.level = .warning`
+改的就是这个级别，开着的时候也能改。构造起来很贵的消息值得先问一句：
 
 ```swift
 if log.isEnabled(for: .debug) {
