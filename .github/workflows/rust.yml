@@ -378,6 +378,12 @@ jobs:
   # about the nightly and not about the commit, and one more macOS runner — the
   # fifth — is not what a pull request should wait for. It runs on main, where
   # the next tag is cut from, and on demand.
+  #
+  # What a pull request is asked about watchOS is the Swift, and it is asked
+  # by `compile (apple)` in lint-swift.yml: that job emits every Swift module
+  # of the package for `arm64_32-apple-watchos` too — a source that names a
+  # symbol the watchOS SDK does not have fails there, on the pull request, and
+  # not in the release that builds the framework.
   apple-watchos-arm64-32:
     name: build (arm64_32-apple-watchos)
     needs: changes
