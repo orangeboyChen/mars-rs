@@ -60,7 +60,8 @@ pub type NetInfo = dyn FnMut() -> i32 + Send;
 /// `StnManager::RequestSync()`.
 pub type RequestSync = dyn FnMut() + Send;
 
-/// `TimingSync`.
+/// The alarm that asks the app to sync: one due time a host reads off it,
+/// armed again whenever the app, the account or the network changes.
 pub struct TimingSync {
     /// `alarm_` — the reading it is due at, [`None`] for one that was
     /// cancelled.
@@ -161,8 +162,8 @@ impl TimingSync {
     }
 
     /// `OnLongLinkStatuChanged(_status, _channel_id)` — a link that came up
-    /// cancels the alarm and one that went down arms it. The other two states
-    /// are not looked at.
+    /// cancels the alarm and one that went down arms it. The other three
+    /// states are not looked at.
     pub fn on_longlink_status_changed(&mut self, status: LongLinkStatus) {
         self.on_longlink_status_changed_at(gettickcount(), status)
     }
@@ -265,8 +266,8 @@ impl std::fmt::Debug for TimingSync {
 mod tests {
     use super::*;
 
-    /// A sync on a wifi network, with nobody logged in and the app inactive:
-    /// the longest wait there is.
+    /// A sync with no host behind it: nobody logged in, the app inactive and
+    /// no network at all, which is the longest wait there is.
     fn a_sync(now: u64) -> TimingSync {
         TimingSync::new_at(now)
     }
