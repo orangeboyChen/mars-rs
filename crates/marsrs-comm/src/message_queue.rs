@@ -1,18 +1,21 @@
 //! `mars/comm/messagequeue/message_queue.h` — the async message queue.
 //!
-//! This is the primitive every higher layer of mars posts work onto: STN's
-//! network callbacks, the alarm, and the JNI glue all go through it. The port
-//! keeps the shapes of the C++ (`MessageQueue_t`, `MessageHandler_t`,
-//! `MessagePost_t`, `MessageTitle_t`, `Message`, `MessageTiming`, `RunLoop`)
-//! and the rules that matter:
+//! This is the primitive the port posts work onto where the C++ does: the
+//! alarm and the JNI glue both go through it. STN is not one of them — it
+//! drives its own passes over its two task queues, so none of its
+//! callbacks comes in here as a message. The port keeps the shapes of the
+//! C++ (`MessageQueue_t`, `MessageHandler_t`, `MessagePost_t`,
+//! `MessageTitle_t`, `Message`, `MessageTiming`, `RunLoop`) and the rules
+//! that matter:
 //!
-//! * a handler with `seq == 0` is a **broadcast** handler and receives every
-//!   message of its queue, including the ones addressed to another handler;
-//! * `post_message` returns a `MessagePost` that can be cancelled — by post,
-//!   by handler, or by handler + title;
+//! * a handler with `seq == 0` is a **broadcast** handler and receives
+//!   every message of its queue, including the ones addressed to another
+//!   handler;
+//! * `post_message` returns a `MessagePost` that can be cancelled — by
+//!   post, by handler, or by handler + title;
 //! * `after`/`period` messages only run once their time has come;
-//! * `RunLoop` drains the queue of the calling thread until its breaker says
-//!   stop.
+//! * `RunLoop` drains the queue of the calling thread until its breaker
+//!   says stop.
 //!
 //! What is deliberately left out: ANR reporting (the C++ logs and samples a
 //! stack when a message runs for `anr_timeout` ms) and
@@ -87,21 +90,35 @@ pub enum MessageTiming {
 
 /// `MessageQueue::Message`.
 pub struct Message {
-    /// `title`.
+    /// `title` — what a `CancelMessage` by title matches on, and what a
+    /// `FasterMessage` or a `SingletonMessage` looks for.
     pub title: MessageTitle,
-    /// `body1` — arbitrary payload, or the async function.
+    /// `body1` — arbitrary payload, which a handler downcasts back to the
+    /// type it was posted as.
     pub body1: Option<Box<dyn Any + Send>>,
-    /// `body2`.
+    /// `body2` — the second payload, for a handler that needs two.
     pub body2: Option<Box<dyn Any + Send>>,
-    /// The function an `AsyncInvoke` posted, if any.
+    /// The function an `AsyncInvoke` posted, if any. It is erased to a
+    /// callable `FnMut` and not to [`Any`], because that is what it takes
+    /// to run it: `Any` hands a value back only to a caller that names its
+    /// concrete type, and a closure's type has no name. Upstream keeps it
+    /// in `body1` — wrapped in a `shared_ptr` it can name — and any_casts
+    /// it back out, a cast that comes back empty for any other payload. A
+    /// field of its own needs no cast, and leaves `body1` and `body2` free
+    /// for the payloads a handler downcasts.
     pub invoke: Option<Box<dyn FnMut() + Send>>,
     /// `msg_name`.
     pub name: String,
     /// `anr_timeout` — kept for parity, see the module note.
     pub anr_timeout: u64,
-    /// `create_time`.
+    /// `create_time` — when this message was built, in [`gettickcount`] ms.
+    /// Nothing stamps it again on the way into the queue, so one built now
+    /// and posted a minute from now is a minute old when it is queued: read
+    /// it as the start of the message's life, and not of its wait in the
+    /// queue. The C++ is no different — its `Message` constructors are the
+    /// only writers — so posting is not where to move it.
     pub create_time: u64,
-    /// Set when the loop picks the message up.
+    /// Set when the loop picks the message up, in [`gettickcount`] ms.
     pub execute_time: u64,
 }
 
@@ -131,13 +148,15 @@ impl Message {
         message
     }
 
-    /// Attaches `body1`.
+    /// Carries `body` to the handler as [`Message::body1`], and hands `self`
+    /// back so the calls chain. A handler reaches it by downcasting back to
+    /// `T`, which is what the `Any` asks of it.
     pub fn with_body1<T: Any + Send>(mut self, body: T) -> Self {
         self.body1 = Some(Box::new(body));
         self
     }
 
-    /// Attaches `body2`.
+    /// The same for [`Message::body2`].
     pub fn with_body2<T: Any + Send>(mut self, body: T) -> Self {
         self.body2 = Some(Box::new(body));
         self
@@ -157,16 +176,16 @@ impl std::fmt::Debug for Message {
 /// What the loop actually holds.
 struct PostedMessage {
     post: MessagePost,
-    /// `Message::title`, copied here so that a cancel can match on it without
-    /// locking the payload — a handler cancelling its own periodic message
-    /// runs while the dispatcher holds that very lock.
+    /// `Message::title`, copied here so that a cancel can match on it
+    /// without locking the payload — a handler cancelling its own periodic
+    /// message runs while the dispatcher holds that very lock.
     title: MessageTitle,
     /// When an `After`/`Period` message becomes due.
     due: Option<Instant>,
     /// Set for `Period`: the delay between two runs.
     period: Option<Duration>,
-    /// Shared with the dispatcher so a periodic message can stay in the queue
-    /// while it runs (its payload cannot be cloned).
+    /// Shared with the dispatcher so a periodic message can stay in the
+    /// queue while it runs (its payload cannot be cloned).
     message: Arc<Mutex<Message>>,
 }
 
@@ -183,8 +202,8 @@ impl PostedMessage {
     }
 }
 
-/// `MessageQueue::MessageHandler`, boxed so it can be taken out of the registry
-/// while it runs — a handler posts messages of its own.
+/// `MessageQueue::MessageHandler`, boxed so it can be taken out of the
+/// registry while it runs — a handler posts messages of its own.
 type HandlerFn = dyn Fn(&mut Message) + Send + Sync;
 
 struct HandlerEntry {
@@ -310,7 +329,8 @@ pub fn current_thread_message_queue() -> MessageQueueId {
     CURRENT_QUEUE.with(|cell| cell.get())
 }
 
-/// Binds the calling thread to `id`, the way a `RunLoop` of that queue does.
+/// Binds the calling thread to `id`, the way a `RunLoop` of that
+/// queue does.
 pub fn set_current_thread_message_queue(id: MessageQueueId) {
     CURRENT_QUEUE.with(|cell| cell.set(id));
 }
@@ -431,17 +451,17 @@ pub fn post_message_at_first(handler: &MessageHandler, message: Message) -> Mess
     post
 }
 
-/// `MessageQueue::SingletonMessage(replace, handler, message)` — at most one
-/// pending message with this title. `replace` swaps the payload of the pending
-/// one; otherwise the pending one wins and its post is returned.
+/// `MessageQueue::SingletonMessage(replace, handler, message)` — at most
+/// one pending message with this title. `replace` swaps the payload of the
+/// pending one; otherwise the pending one wins and its post is returned.
 pub fn singleton_message(replace: bool, handler: &MessageHandler, message: Message) -> MessagePost {
     let title = message.title;
     if let Some(queue) = queue(handler.queue) {
         let mut state = queue.lock();
         // The title is matched on the queue entry, and the payload is never
-        // locked: a periodic message is still in the queue while it runs — the
-        // dispatcher re-arms it before it calls the handlers and holds the
-        // message's lock for as long as they do — and a `Mutex` is not
+        // locked: a periodic message is still in the queue while it runs —
+        // the dispatcher re-arms it before it calls the handlers and holds
+        // the message's lock for as long as they do — and a `Mutex` is not
         // reentrant, so a handler asking for its own message would stop the
         // queue thread for good.
         if let Some(index) = state
@@ -451,16 +471,16 @@ pub fn singleton_message(replace: bool, handler: &MessageHandler, message: Messa
         {
             if replace {
                 // A new `Message` behind a new `Arc`, which is what the C++
-                // does when it drops the pending wrapper and posts a fresh one:
-                // whatever the replacement was asked for is what the next
-                // dispatch hands to the handlers, and a dispatch that is
-                // already under way keeps the copy it took.
+                // does when it drops the pending wrapper and posts a fresh
+                // one: whatever the replacement was asked for is what the
+                // next dispatch hands to the handlers, and a dispatch that
+                // is already under way keeps the copy it took.
                 //
                 // Writing through the lock instead needs `try_lock` for the
-                // reason above, and a `try_lock` that fails drops the payload on
-                // the floor: a handler that replaced its own periodic message
-                // — the one case where the lock is always held — silently kept
-                // logging the old one.
+                // reason above, and a `try_lock` that fails drops the
+                // payload on the floor: a handler that replaced its own
+                // periodic message — the one case where the lock is always
+                // held — silently kept logging the old one.
                 state.messages[index].message = Arc::new(Mutex::new(message));
             }
             return state.messages[index].post;
@@ -469,8 +489,9 @@ pub fn singleton_message(replace: bool, handler: &MessageHandler, message: Messa
     post_message(handler, message, MessageTiming::Immediate)
 }
 
-/// `MessageQueue::BroadcastMessage(queue, message, timing)` — every handler of
-/// the queue that accepts broadcasts (and `seq == 0` marks the post as one).
+/// `MessageQueue::BroadcastMessage(queue, message, timing)` — every
+/// handler of the queue that accepts broadcasts (and `seq == 0` marks the
+/// post as one).
 pub fn broadcast_message(
     id: MessageQueueId,
     message: Message,
@@ -482,21 +503,22 @@ pub fn broadcast_message(
 /// `MessageQueue::FasterMessage(handler, message)` — with the C++'s default
 /// timing, which is "now".
 ///
-/// It is addressed to `handler`, and not broadcast: upstream builds its wrapper
-/// from the `_handlerid` it is handed (`MessageWrapper(_handlerid, ...)` in
-/// `comm/messagequeue/message_queue.cc`) and only `BroadcastMessage` posts with
-/// `seq == 0`. Posting this one as a broadcast ran every handler that had asked
-/// for broadcasts and *not* the one it was addressed to, so a `FasterMessage`
-/// disappeared instead of being delivered.
+/// It is addressed to `handler`, and not broadcast: upstream builds its
+/// wrapper from the `_handlerid` it is handed
+/// (`MessageWrapper(_handlerid, ...)` in
+/// `comm/messagequeue/message_queue.cc`) and only `BroadcastMessage` posts
+/// with `seq == 0`. Posting this one as a broadcast ran every handler that
+/// had asked for broadcasts and *not* the one it was addressed to, so a
+/// `FasterMessage` disappeared instead of being delivered.
 ///
 /// What "faster" means is **not** jumping the queue — that is
-/// [`post_message_at_first`]. Upstream looks for a message already pending for
-/// the same handler with the same title (`Message::operator==` compares the
-/// title and nothing else) and, since a message due now cannot be later than
-/// one that is already waiting, replaces it: the pending payload is dropped and
-/// its `post` is handed to the new one, so a post the caller is holding keeps
-/// naming this message. Asking twice therefore runs the handler once, with the
-/// payload of the second ask.
+/// [`post_message_at_first`]. Upstream looks for a message already pending
+/// for the same handler with the same title (`Message::operator==` compares
+/// the title and nothing else) and, since a message due now cannot be later
+/// than one that is already waiting, replaces it: the pending payload is
+/// dropped and its `post` is handed to the new one, so a post the caller is
+/// holding keeps naming this message. Asking twice therefore runs the
+/// handler once, with the payload of the second ask.
 pub fn faster_message(handler: &MessageHandler, message: Message) -> MessagePost {
     let title = message.title;
     let Some(queue) = queue(handler.queue) else {
@@ -510,19 +532,20 @@ pub fn faster_message(handler: &MessageHandler, message: Message) -> MessagePost
     if handler.seq != 0 && !state.handlers.iter().any(|it| it.seq == handler.seq) {
         return NULL_POST;
     }
-    // Search and insertion are one step under the queue's lock, not two: two
-    // threads asking for the same message when nothing is pending would each
-    // see an empty queue and post a copy of its own, and the handler would run
-    // twice — which is the one thing this call promises it does not do.
+    // Search and insertion are one step under the queue's lock, not two:
+    // two threads asking for the same message when nothing is pending would
+    // each see an empty queue and post a copy of its own, and the handler
+    // would run twice — which is the one thing this call promises it does
+    // not do.
     if let Some(index) = state
         .messages
         .iter()
         .position(|m| m.post.reg == *handler && m.title == title)
     {
         let entry = state.messages.remove(index).expect("found above");
-        // The old `post`, and the new payload: the pending copy of this message
-        // was asked for and then superseded, so what runs is what was asked for
-        // last, and not both.
+        // The old `post`, and the new payload: the pending copy of this
+        // message was asked for and then superseded, so what runs is what
+        // was asked for last, and not both.
         let replacement = PostedMessage {
             post: entry.post,
             title,
@@ -532,18 +555,19 @@ pub fn faster_message(handler: &MessageHandler, message: Message) -> MessagePost
         };
         state.messages.push_back(replacement);
         drop(state);
-        // `content.breaker->Notify(lock)` of the C++, which it does on the way
-        // out of every post: the replacement is due now, and the message it
-        // replaces may well have been due in a minute — which is exactly what a
-        // thread waiting on this queue is sleeping until. Left unnotified, the
-        // replacement sits there until that wait runs out on its own.
+        // `content.breaker->Notify(lock)` of the C++, which it does on the
+        // way out of every post: the replacement is due now, and the
+        // message it replaces may well have been due in a minute — which is
+        // exactly what a thread waiting on this queue is sleeping until.
+        // Left unnotified, the replacement sits there until that wait runs
+        // out on its own.
         queue.cond.notify_all();
         return entry.post;
     }
-    // `MessagePost` of the C++'s `post_message`, done here rather than by calling
-    // it: the sequence number and the insertion have to happen under the lock
-    // the search above took, and `MessageTiming::Immediate` is what "faster"
-    // posts — a message that is due now.
+    // `MessagePost` of the C++'s `post_message`, done here rather than by
+    // calling it: the sequence number and the insertion have to happen
+    // under the lock the search above took, and `MessageTiming::Immediate`
+    // is what "faster" posts — a message that is due now.
     let seq = state.next_post_seq;
     state.next_post_seq += 1;
     state.messages.push_back(PostedMessage {
@@ -597,8 +621,9 @@ pub fn cancel_message_by_handler_title(handler: &MessageHandler, title: MessageT
         return;
     };
     // The title is matched on the queue entry, never through
-    // `m.message.lock()`: a handler cancelling its own periodic message runs
-    // while the dispatcher holds that lock, and a `Mutex` is not reentrant.
+    // `m.message.lock()`: a handler cancelling its own periodic
+    // message runs while the dispatcher holds that lock, and a `Mutex`
+    // is not reentrant.
     let before = {
         let mut state = queue.lock();
         let before = state.messages.len();
@@ -722,10 +747,10 @@ impl RunLoop {
     }
 
     fn dispatch(queue: &Arc<Queue>, timeout: Option<Duration>) -> bool {
-        // Wait until a message is due, up to `timeout`. A wake-up is not the
-        // end of the wait: only the deadline or a due message is, otherwise a
-        // spurious wake-up reports "nothing to do" before an `After` message
-        // is due.
+        // Wait until a message is due, up to `timeout`. A wake-up is not
+        // the end of the wait: only the deadline or a due message is,
+        // otherwise a spurious wake-up reports "nothing to do" before an
+        // `After` message is due.
         let deadline = timeout.map(|timeout| Instant::now() + timeout);
         // The post this dispatch is running, which is taken out of
         // `running_posts` once its handlers are done.
@@ -741,10 +766,11 @@ impl RunLoop {
                 {
                     break Some(index);
                 }
-                // The wait is capped by the earliest message that is still to
-                // come, not only by the caller's timeout: an `After(40)` with
-                // a 300 ms timeout has to run after 40 ms, and with no timeout
-                // at all there is nothing else that would ever wake this up.
+                // The wait is capped by the earliest message that is still
+                // to come, not only by the caller's timeout: an `After(40)`
+                // with a 300 ms timeout has to run after 40 ms, and with no
+                // timeout at all there is nothing else that would ever wake
+                // this up.
                 let wait = match (state.messages.iter().filter_map(|m| m.due).min(), deadline) {
                     (Some(due), Some(deadline)) => due.min(deadline).saturating_duration_since(now),
                     (Some(due), None) => due.saturating_duration_since(now),
@@ -759,14 +785,16 @@ impl RunLoop {
             };
             let Some(index) = index else { return false };
 
-            // Take the message out, re-arm it when it is periodic, and collect the
-            // handlers to call — all while holding the same lock the wait ended
-            // on, so that a handler can post or cancel from inside a message and
-            // the index still names the message it was computed for.
+            // Take the message out, re-arm it when it is periodic, and
+            // collect the handlers to call — all while holding the same
+            // lock the wait ended on, so that a handler can post or cancel
+            // from inside a message and the index still names the message
+            // it was computed for.
             let Some(mut entry) = state.messages.remove(index) else {
                 return false;
             };
-            // `seq == 0` is a broadcast: only handlers that asked for it run.
+            // `seq == 0` is a broadcast: only handlers that asked for
+            // it run.
             let addressed = entry.post.reg.seq;
             let is_broadcast = addressed == 0;
             if let Some(period) = entry.period {
