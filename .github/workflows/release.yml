@@ -352,10 +352,23 @@ jobs:
           # someone's crash log. `consumerProguardFiles` is what AGP turns
           # into the `proguard.txt` of the AAR.
           for AAR in "dist/$MARSRS_AAR" "dist/$MARSRS_XLOG_AAR"; do
-            if ! unzip -l "$AAR" | grep -q " proguard.txt"; then
-              echo "::error file=$AAR::$AAR carries no proguard.txt: its consumerProguardFiles are missing"
-              exit 1
-            fi
+            # Read whole and matched with `case`, and not piped into a
+            # `grep -q`: one that matches stops reading at the line it
+            # matched, `unzip` is left writing the rest of the listing into a
+            # pipe nobody is reading, and the SIGPIPE it dies of is — under
+            # the `pipefail` this step asks for — a "carries no
+            # proguard.txt" over an archive that carries one. What makes it a
+            # race and not a certainty is the size of the listing: a pipe
+            # holds 64 KiB before it is grown, and the jniLibs of four ABIs
+            # are what an AAR's listing is a listing of.
+            listing="$(unzip -l "$AAR")"
+            case "$listing" in
+              *" proguard.txt"*) ;;
+              *)
+                echo "::error file=$AAR::$AAR carries no proguard.txt: its consumerProguardFiles are missing"
+                exit 1
+                ;;
+            esac
             echo "$AAR: $(unzip -p "$AAR" proguard.txt | grep -c '^-keep') keep rules"
           done
       - uses: actions/upload-artifact@v7
