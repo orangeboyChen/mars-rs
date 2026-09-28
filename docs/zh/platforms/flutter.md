@@ -54,7 +54,7 @@ await xlog.close();
 ```
 
 `logDir` 是唯一没有默认值的选项，其余都在[配置项](/zh/configuration)页上，用的
-是端口的 Kotlin 给的那套名字。
+是这个移植的 Kotlin 给的那套名字。
 
 ## App 要等什么
 
@@ -99,7 +99,7 @@ if (await xlog.isLoggable(LogLevel.debug)) {
 
 ## 开着的时候
 
-| 干什么 | 怎么干 |
+| 作用 | 怎么写 |
 |---|---|
 | 改级别 | `xlog.level = LogLevel.warning` |
 | 把级别读回来 | `xlog.level` |
@@ -133,5 +133,5 @@ if (await xlog.isLoggable(LogLevel.debug)) {
 | Android | `io.github.orangeboychen.marsrs:marsrs` —— 整个移植的 AAR，STN 和 SDT 都在里面 | App 自己的 Android 代码能起一个，再用自己的 channel 把它带到 Dart |
 | iOS | `marsrs-xlog.xcframework` 和 `mars_xlog.h` —— 只有日志，别的都没有 | 不行：`MarsRSNet` 没有被 vendored，所以没有 `MarsStn`、也没有 `MarsSdt` 可以链 |
 
-所以"从平台侧起它"今天是个只对一半的答案：Android 上算，iOS 上要等 net 那个 framework 和
+所以“从平台侧起它”今天是个只对一半的答案：Android 上算，iOS 上要等 net 那个 framework 和
 两个 net 头文件被打包到 xlog 那些旁边才算。

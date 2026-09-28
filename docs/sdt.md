@@ -47,8 +47,8 @@ test, or from a machine with no radio.
 timeout. Nothing is probed yet: the call only writes the plan.
 
 **2. Run** the plan, which is where your probes are asked — one per check, in
-order, on the calling thread. In the C++ this is the `__RunOn` thread; this port
-has no threads, so it is a call the host makes.
+order, on the calling thread. This port has no threads, so it is a call the host
+makes.
 
 **3. Take the report**, and send it wherever your logs go — or install an
 `ICallBack` and let the run hand it to you instead. The two carry the same

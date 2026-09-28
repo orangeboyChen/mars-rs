@@ -44,7 +44,7 @@ HarmonyOS 那一列也是 Kotlin 的拼法，只是大小写不同：`LogLevel.V
 
 `none` 什么都不写，连 `fatal` 也不写 —— 这是不关掉 appender 而让它安静下来的办法。
 
-构造起来很贵的消息，值得先问一句：被级别丢掉的记录，那串字符串你照样已经付过了。
+构造起来很贵的消息，值得先问一句：级别挡掉的记录也一样 —— 那串字符串你已经拼出来了。
 
 ::: code-group
 
@@ -118,4 +118,4 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 | 超过 N 秒就删文件 | `appender_set_max_alive_duration` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration` | `xlog.maxAliveTimeSeconds` |
 | 当前文件在哪 | `appender_get_current_log_path` | `Xlog.currentLogPath` | — | — | — | — | `mars_xlog_current_log_path` | — |
 
-大小和时间的 `0` 都表示"不限制"：文件永不切分、永不删除 —— C++ 那边自己保留十天。
+大小和时间的 `0` 都表示“不限制”：文件永不切分、永不删除 —— C++ 那边自己保留十天。

@@ -1,6 +1,6 @@
 # React Native
 
-两个包，一份 API：只打日志的 App 用 `marsrs-react-native-xlog`，要整个端口的用
+两个包，一份 API：只打日志的 App 用 `marsrs-react-native-xlog`，要整个移植的用
 `marsrs-react-native` —— 今天两者是同一个东西，因为这个模块露出来的是日志那半。STN 和
 SDT 将来只落在 `marsrs-react-native` 里、不落在别处：两个包背后的那个 C ABI 是带着它们
 的 —— 见[C ABI](/zh/platforms/c-abi#任务链路) —— 但两者都还不在 TypeScript 里。两个里
@@ -14,7 +14,7 @@ bridge module，还在老架构上的 App 没有可以 `TurboModuleRegistry.getE
 ## 安装
 
 ```bash
-npm install marsrs-react-native-xlog        # 要整个端口就 marsrs-react-native
+npm install marsrs-react-native-xlog        # 要整个移植就 marsrs-react-native
 cd ios && pod install
 ```
 
@@ -55,16 +55,16 @@ xlog.close();
 ```
 
 `logDir` 是唯一没有默认值的选项，其余都在[配置项](/zh/configuration)页上，用的
-是端口的 Kotlin 给的那套名字。appender 不收这个目录时 `Xlog.open` 抛错 ——
+是这个移植的 Kotlin 给的那套名字。appender 不收这个目录时 `Xlog.open` 抛错 ——
 `logDir` 或 `namePrefix` 是空的，或者那个目录写不了。
 
 ## 没有调用返回 `Promise`
 
 这个模块的 method queue 是 `RCTJSThread`，所以它的方法在 JS 线程上被调用、也从
 那里返回：返回值的方法在下一行之前就把值给回来了，没有哪个方法返回 `Promise`。
-这就是这个 `Xlog` 能和 `platforms/apple/MarsRSXlog` 的、
-`platforms/android/marsrs` 的那个逐成员对上的原因 —— `Xlog.open(config)` 给出
-appender，`xlog.i(tag, message)` 在它返回的时候已经落盘了。
+这就是这个 `Xlog` 能和 `platforms/apple/MarsRSXlog`、
+`platforms/android/marsrs` 里的那个一个成员对一个成员对上的原因 ——
+`Xlog.open(config)` 给出 appender，`xlog.i(tag, message)` 在它返回的时候已经落盘了。
 
 五个设置项是属性而不是 `setLevel` / `getLevel` 成对出现，因为 JS 的属性正是
 Swift 和 Kotlin 用的那个写法，而 TurboModule 的 setter 在写下的地方就被调用了：
@@ -76,8 +76,8 @@ xlog.maxFileSizeBytes = 8 * 1024 * 1024;
 
 `level` 是五个里唯一 C ABI 给了 getter 的那个，所以 `xlog.level` 读的是
 appender 自己的；`mode`、`consoleLogEnabled`、`maxFileSizeBytes` 和
-`maxAliveTimeSeconds` 回答的是这个实例最后写进去的那个值 —— C ABI 留下的只有这
-些可答，端口的 Swift 和 Kotlin 答的也是这些。
+`maxAliveTimeSeconds` 回答的是这个实例最后写进去的那个值 —— C ABI 能回答的就这些，
+这个移植的 Swift 和 Kotlin 答的也是这些。
 
 ## 写
 
@@ -106,14 +106,14 @@ if (xlog.isLoggable(LogLevel.debug)) {
 
 ## 开着的时候
 
-| 干什么 | 怎么干 |
+| 作用 | 怎么写 |
 |---|---|
 | 改级别 | `xlog.level = LogLevel.warning` |
 | 把级别读回来 | `xlog.level` |
 | 切异步 / 同步 | `xlog.mode = AppenderMode.sync` |
 | 同时打到控制台 | `xlog.consoleLogEnabled = true` |
 | 到多大就换一个文件 | `xlog.maxFileSizeBytes = 8 * 1024 * 1024` |
-| 到多久就换一个文件 | `xlog.maxAliveTimeSeconds = 10 * 24 * 3600` |
+| 超过这个秒数就删文件 | `xlog.maxAliveTimeSeconds = 10 * 24 * 3600` |
 | 还开着吗 | `xlog.isOpen` |
 | 把缓存排出去 | `xlog.flush(true)` |
 
@@ -139,5 +139,5 @@ if (xlog.isLoggable(LogLevel.debug)) {
 | Android | `io.github.orangeboychen.marsrs:marsrs` —— 整个移植的 AAR，STN 和 SDT 都在里面 | App 自己的 Android 代码能起一个，再用自己的 TurboModule 把它带到 JS |
 | iOS | `marsrs-xlog.xcframework` 和 `mars_xlog.h` —— 只有日志，别的都没有 | 不行：`MarsRSNet` 没有被 vendored，所以没有 `MarsStn`、也没有 `MarsSdt` 可以链 |
 
-所以"从平台侧起它"今天是个只对一半的答案：Android 上算，iOS 上要等 net 那个 framework 和
+所以“从平台侧起它”今天是个只对一半的答案：Android 上算，iOS 上要等 net 那个 framework 和
 两个 net 头文件被打包到 xlog 那些旁边才算。
