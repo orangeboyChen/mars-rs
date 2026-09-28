@@ -60,6 +60,10 @@ marsrs-<version>-<host>.zip      (Windows)
     the static and shared libraries of marsrs-ffi
 ```
 
+```bash [HarmonyOS]
+ohpm install marsrs-harmonyos-xlog
+```
+
 :::
 
 ## 2. Open, write, flush
@@ -173,6 +177,22 @@ mars_xlog_write(MarsLevelInfo, "startup", __FILE__, __func__, __LINE__, "hello f
 
 mars_xlog_flush_sync();  /* the records are on disk when this returns */
 mars_xlog_close();
+```
+
+```typescript [HarmonyOS]
+import { LogLevel, Xlog } from 'marsrs-harmonyos-xlog';
+
+const xlog: Xlog = Xlog.open({
+    logDir: `${getContext().filesDir}/xlog/log`,
+    namePrefix: 'marsrs',
+    level: LogLevel.Info,
+});
+xlog.consoleLogEnabled = true;
+
+xlog.i('startup', 'hello from mars');
+
+xlog.flush(true);   // the records are on disk when this returns
+xlog.close();
 ```
 
 :::
