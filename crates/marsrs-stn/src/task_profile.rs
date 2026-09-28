@@ -162,8 +162,9 @@ impl TaskFailHandleType {
     /// [`TaskFailHandleType::Normal`], which is what the C++'s `switch` leaves
     /// it at.
     ///
-    /// Both seams that hand an app's `int` to STN — the JNI's and the C ABI's —
-    /// read it here, so what a host answers means the same thing on either side.
+    /// Both seams that hand an app's `int` to STN — the JNI's and the C ABI's
+    /// — read it here, so what a host answers means the same thing on either
+    /// side.
     pub fn of(handle: i32) -> Self {
         match handle {
             -1 => Self::Default,
@@ -183,7 +184,7 @@ impl TaskFailHandleType {
 /// whether there was one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct NoopProfile {
-    /// `success`
+    /// `success` — whether the heartbeat came back at all.
     pub success: bool,
     /// `noop_internal` — the interval the alarm was set to.
     pub noop_internal: u64,
@@ -267,9 +268,11 @@ pub struct ConnectProfile {
     pub tried_80port: i32,
     /// `disconn_time` — when the link went away; `0` while it has not.
     pub disconn_time: u64,
-    /// `disconn_errtype`.
+    /// `disconn_errtype` — why the link went away, as an [`ErrCmdType`]:
+    /// [`ErrCmdType::Ok`] is one that was let go rather than lost.
     pub disconn_errtype: ErrCmdType,
-    /// `disconn_errcode`.
+    /// `disconn_errcode` — and the code for it, which is what the *next*
+    /// connect of this link is made for: its `conn_reason` is this.
     pub disconn_errcode: i32,
     /// `disconn_signal` — `getSignal` at the time the link went away.
     pub disconn_signal: i32,
@@ -285,10 +288,10 @@ pub struct ConnectProfile {
     /// `connect_successful_time` — when it came back, socket or no socket.
     pub connect_successful_time: u64,
     /// `socket_fd` — the socket the connect came back with; a reused one is
-    /// this too, with [`ConnectProfile::is_reused_fd`] saying so. A connect that
-    /// opened its own writes it here only once the server has said to keep it,
-    /// which is what the C++ does too: the run closes and hands back nothing but
-    /// a socket that is named here.
+    /// this too, with [`ConnectProfile::is_reused_fd`] saying so. A connect
+    /// that opened its own writes it here only once the server has said to
+    /// keep it, which is what the C++ does too: the run closes and hands
+    /// back nothing but a socket that is named here.
     pub socket_fd: SocketFd,
     /// `is_reused_fd` — whether the socket came out of the pool rather than
     /// from a connect.
@@ -303,7 +306,9 @@ pub struct ConnectProfile {
     pub noop_profiles: Vec<NoopProfile>,
     /// `tls_handshake_mismatch` — what a run keeps across a profile update.
     pub tls_handshake_mismatch: bool,
-    /// `tls_handshake_success`.
+    /// `tls_handshake_success` — whether the handshake got through, which a
+    /// profile update does not clear: like the flag above, it is one the
+    /// C++ keeps across an update on purpose.
     pub tls_handshake_success: bool,
     /// `tid` — `xlogger_tid`, which thread the run was on.
     pub tid: i64,
@@ -319,7 +324,10 @@ pub struct ConnectProfile {
     pub start_read_packet_time: u64,
     /// `read_packet_finished_time` — when the last read came back.
     pub read_packet_finished_time: u64,
-    /// `recv_reponse_cost` — how long the whole read took, from its first byte.
+    /// `recv_reponse_cost` — how long the whole read took, counted from when
+    /// the read began and not from the first byte: what the C++ works out is
+    /// `read_packet_finished_time - start_read_packet_time`, so a read that
+    /// waited on the server is charged for the wait.
     pub recv_reponse_cost: u64,
     /// `start_encode_packet_time` — when the app was handed the task to write
     /// its request, which `GetConnectProfile` copies off the run's transfer
@@ -337,7 +345,8 @@ pub struct ConnectProfile {
     pub quic_rw_timeout_ms: u32,
     /// `quic_rw_timeout_source` — where the timeout above came from.
     pub quic_rw_timeout_source: TimeoutSource,
-    /// `keepalive_timeout` — how long the server said the socket is good for.
+    /// `keepalive_timeout` — how many seconds the server said the socket is
+    /// good for; `30` on QUIC whatever it said.
     pub keepalive_timeout: u32,
     /// `is_fast_fallback_tcp` — a quic link that read `ENOTCONN` and so fell
     /// back to tcp.
@@ -468,7 +477,8 @@ pub enum TaskFailStep {
 /// constructor gives them (`ip_index` is `-1`, `last_receive_pkg_time` is `0`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TaskOutcome {
-    /// `err_type`
+    /// `err_type` — why the task ended: [`ErrCmdType::Ok`] is one that got
+    /// its answer.
     pub err_type: ErrCmdType,
     /// `err_code` — 0, a server code, or one of the `LOCAL_*` constants.
     pub err_code: i32,
@@ -478,7 +488,8 @@ pub struct TaskOutcome {
     /// `transfer_profile.last_receive_pkg_time` — `0` when no package ever
     /// arrived.
     pub last_receive_pkg_time: u64,
-    /// `start_task_time`
+    /// `start_task_time` — when the task was handed to the queue, which is
+    /// the reading `end_task_time` is measured against.
     pub start_task_time: u64,
     /// `end_task_time` — 0 while the task has not finished.
     pub end_task_time: u64,
@@ -556,9 +567,10 @@ pub struct RunId(pub u64);
 pub struct PrepareProfile {
     /// `start_task_call_time` — when the app asked for the task.
     pub start_task_call_time: u64,
-    /// `begin_process_hosts_time`.
+    /// `begin_process_hosts_time` — when the hosts were asked for.
     pub begin_process_hosts_time: u64,
-    /// `end_process_hosts_time`.
+    /// `end_process_hosts_time` — when the last of them came back; `0` is a
+    /// task whose hosts were never worked out at all.
     pub end_process_hosts_time: u64,
 }
 
@@ -624,19 +636,28 @@ pub struct TransferProfile {
     pub read_write_timeout: u64,
     /// `first_pkg_timeout` — how long the first package may take.
     pub first_pkg_timeout: u64,
-    /// `sent_size`.
+    /// `sent_size` — how many bytes of the request went out, which is what
+    /// nothing ever writes: the C++ declares it, clears it in `Reset()`,
+    /// and fills it in nowhere, and neither does the port, so it is `0`
+    /// from the reset to the report.
     pub sent_size: usize,
-    /// `send_data_size` — how long the request was.
+    /// `send_data_size` — how many bytes the request *was*: the C++ fills
+    /// this one in, from the buffer `Req2Buf` wrote.
     pub send_data_size: usize,
-    /// `received_size`.
+    /// `received_size` — how many bytes of the answer came in, the other
+    /// half of the pair the C++ declares beside `sent_size`.
     pub received_size: usize,
-    /// `receive_data_size` — how long the answer was.
+    /// `receive_data_size` — how many bytes the answer *was*: the C++ fills
+    /// this one in, from the body that came back or the total the server
+    /// named.
     pub receive_data_size: usize,
     /// `external_ip` — the near end of the socket, as the world sees it.
     pub external_ip: String,
-    /// `error_type`.
+    /// `error_type` — why the run ended, as an [`ErrCmdType`]:
+    /// [`ErrCmdType::Ok`] is a run nothing went wrong on.
     pub error_type: ErrCmdType,
-    /// `error_code`.
+    /// `error_code` — and the code for it, `0` for a run that did not have
+    /// one.
     pub error_code: i32,
 }
 
@@ -682,7 +703,9 @@ impl TransferProfile {
 /// writes the report.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskProfile {
-    /// `task`.
+    /// `task` — the task as the app asked for it, which a retry does not
+    /// change: what the fallback hosts went into is the copy in
+    /// [`TransferProfile::task`].
     pub task: Task,
     /// `channel_name` — the long link the task goes out on; empty for a task
     /// that is not a long-link one.
@@ -690,9 +713,11 @@ pub struct TaskProfile {
     /// `antiavalanche_checked` — whether the task was already weighed once,
     /// which is what keeps a retry from being given another sequence id.
     pub antiavalanche_checked: bool,
-    /// `prepare_profile`.
+    /// `prepare_profile` — what the caller did before the task was handed
+    /// over, which no retry does again.
     pub prepare_profile: PrepareProfile,
-    /// `transfer_profile`.
+    /// `transfer_profile` — what the run that went out is: a retry resets
+    /// this one and keeps the two above.
     pub transfer_profile: TransferProfile,
     /// `running_id` — [`None`] while the task is waiting for a run.
     pub running: Option<RunId>,
@@ -719,9 +744,11 @@ pub struct TaskProfile {
     pub use_proxy: bool,
     /// `retry_time_interval` — how long a retry waits.
     pub retry_time_interval: u64,
-    /// `err_type`.
+    /// `err_type` — why the task failed; [`ErrCmdType::Ok`] with `err_code`
+    /// `0` is a task that has not failed, which is what it starts as.
     pub err_type: ErrCmdType,
-    /// `err_code`.
+    /// `err_code` — and the code for it: a server code, or one of the
+    /// `LOCAL_*` / `LONG_*` / `HTTP_*` constants.
     pub err_code: i32,
     /// `link_type` — one of the `Task::CHANNEL_*` values.
     pub link_type: i32,
@@ -734,7 +761,8 @@ pub struct TaskProfile {
 }
 
 impl TaskProfile {
-    /// `TaskProfile(_task, _prepare_profile)`.
+    /// A task that has just been asked for: no try is out, the timeouts are
+    /// the task's own, and the tick count comes from the clock.
     pub fn new(task: Task, prepare_profile: PrepareProfile) -> Self {
         Self::new_at(gettickcount(), task, prepare_profile)
     }
@@ -874,11 +902,12 @@ pub fn read_write_timeout(first_pkg_timeout: u64, mobile: bool) -> u64 {
 /// `__FirstPkgTimeout(_init_first_pkg_timeout, _sendlen, _send_count,
 /// _dynamictimeout_status)` — how long the first package is waited for.
 ///
-/// `init_first_pkg_timeout` is the task's `server_process_cost`: what the server
-/// said it needs. `0` is "it said nothing", which is either the network's own
-/// short wait (a network that has been [`DynamicTimeoutStatus::Excellent`]) or
-/// the base wait grown by how long the request is and clipped to the maximum.
-/// Either way, every task that is already out makes it longer.
+/// `init_first_pkg_timeout` is the task's `server_process_cost`: what the
+/// server said it needs. `0` is "it said nothing", which is either the
+/// network's own short wait (a network that has been
+/// [`DynamicTimeoutStatus::Excellent`]) or the base wait grown by how long the
+/// request is and clipped to the maximum. Either way, every task that is
+/// already out makes it longer.
 pub fn first_pkg_timeout(
     init_first_pkg_timeout: i64,
     send_len: usize,
