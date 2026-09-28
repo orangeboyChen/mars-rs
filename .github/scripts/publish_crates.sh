@@ -174,6 +174,7 @@ for CRATE in marsrs-core marsrs-comm marsrs-crypt marsrs-buffer \
     # slowest case it has, and the release this job is the last step of is out
     # and tagged by now, so waiting is cheaper than a red step that publish.yml
     # has to be asked to run again.
+    #
     # What is asked again at the end is the answer the loop reached and not the
     # index: a probe that fails is a transient one — a DNS, a TLS, a 5xx — and
     # the loop has 119 more of them to spend, whereas one that fails here would
