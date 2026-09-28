@@ -122,6 +122,14 @@ public actual object StnLogic {
     @JvmStatic
     public actual external fun noopTaskID(): Int
 
+    public actual external fun createLonglink(config: LonglinkConfig): Boolean
+
+    @JvmStatic
+    public actual external fun destroyLonglink(name: String?): Boolean
+
+    @JvmStatic
+    public actual external fun markMainLonglink(name: String?): Boolean
+
     @JvmStatic
     public actual external fun setSignallingStrategy(period: Long, keepTime: Long)
 

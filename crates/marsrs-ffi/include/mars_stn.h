@@ -63,6 +63,7 @@ extern "C" {
 #define MARS_STN_ERR_NULL_TASK (-2) /* `mars_stn_start_task` got no task      */
 #define MARS_STN_ERR_REFUSED (-3)  /* the queues would not take the task      */
 #define MARS_STN_ERR_NO_DUE (-4)   /* `mars_stn_due_time`: nothing is waiting */
+#define MARS_STN_ERR_NULL_CONFIG (-5) /* `mars_stn_create_longlink` got none  */
 
 /* --- the eighteen questions, and their answers --------------------------- */
 
@@ -121,6 +122,27 @@ typedef struct {
     const char* const* items;
     unsigned int count;
 } MarsStnStrings;
+
+/**
+ * What a long link is made from: `LonglinkConfig` of mars/stn/stn.h with C types
+ * inside.
+ *
+ * `name` is what every other call that takes one asks with; an empty `host_list`
+ * means "the hosts the app set", an empty `group` the long-link group, and a
+ * `link_type` of 0 `Task::CHANNEL_LONG` — the two defaults a zeroed struct is
+ * filled with. The three flags are 0 or 1, and a C `int` has no "unset" for
+ * them: a zeroed struct is a link with no TLS, which is the one place it is not
+ * the default of `LonglinkConfig::new`, and that one asks for TLS.
+ */
+typedef struct {
+    const char* name;
+    MarsStnStrings host_list;
+    int is_keep_alive;
+    const char* group;
+    int is_main;
+    int link_type;
+    int need_tls;
+} MarsStnLonglinkConfig;
 
 /**
  * One unit of work: `Task` of mars/stn/stn.h with C types inside.
@@ -397,6 +419,31 @@ int mars_stn_longlink_is_connected(void);
 
 /** `LongLinkIsConnected_ext` — the same for `name`, 0 for one no link has. */
 int mars_stn_longlink_is_connected_ext(const char* name);
+
+/* --- the long links the app names ---------------------------------------- */
+
+/**
+ * `CreateLonglink_ext` — a long link the caller named, made the way the default
+ * one was. A name a link already has is that link and not a second one.
+ *
+ * @return MARS_STN_OK, MARS_STN_ERR_NULL_CONFIG, or MARS_STN_ERR_REFUSED when
+ *         there is no net core, the long link is off, or the factory would make
+ *         no link — a shape the C++ has no answer for, its
+ *         `CreateLonglink_ext` being void — or MARS_STN_ERR_PANIC.
+ */
+int mars_stn_create_longlink(const MarsStnLonglinkConfig* config);
+
+/** `DestroyLonglink_ext` — 1 when a link of that name was there, 0 when not. */
+int mars_stn_destroy_longlink(const char* name);
+
+/**
+ * `MarkMainLonglink_ext` — the link of that name is the one whose errors and
+ * status the app is told about, and the one "the" long link is.
+ *
+ * @return 1 when it is now the main one, 0 when no link has that name or it
+ *         already was.
+ */
+int mars_stn_mark_main_longlink(const char* name);
 
 /**
  * `DisableLongLink` — no task goes out on a long link again.

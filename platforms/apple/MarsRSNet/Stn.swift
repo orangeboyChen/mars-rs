@@ -20,7 +20,7 @@
 // Three of the types of that surface are not nested here but are types of the
 // module, named again by the typealiases below: an extension may not carry an
 // access modifier and neither may its members, so a type nested in `MarsStn`
-// has to be declared in this one body, and this file is held to 400 lines —
+// has to be declared in this one body, and this file is held to 450 lines —
 // which holds the values a task is made of, but not `StnTask`, `StnQuestion`
 // and `StnAnswer` as well. `MarsStn.Task` is what an app writes either way.
 //
@@ -40,6 +40,8 @@ public enum MarsStn {
     public typealias Question = StnQuestion
     /// What the app answered, which is the `StnAnswer` of `StnAnswer.swift`.
     public typealias Answer = StnAnswer
+    /// What a long link of the app's own is made from: `StnLonglinkConfig`.
+    public typealias LonglinkConfig = StnLonglinkConfig
 
     /// The `Task::CHANNEL_*` integers: what `Channel` is made of, under the
     /// names the C++ gives them.
@@ -320,6 +322,35 @@ public enum MarsStn {
     /// which `req2Buf` and `onPush` are asked for too.
     public static func noopTaskID() -> UInt32 {
         mars_stn_noop_task_id()
+    }
+    /// `CreateLonglink_ext` — a long link of the app's own, made the way the
+    /// default one was; a name a link already has is that link, not a second one.
+    ///
+    /// - Returns: whether the link is there, which the C++ cannot say — its
+    ///   `CreateLonglink_ext` is `void`.
+    @discardableResult
+    public static func createLongLink(_ config: StnLonglinkConfig) -> Bool {
+        withLonglinkConfig(config) { mars_stn_create_longlink($0) == MARS_STN_OK }
+    }
+
+    /// `DestroyLonglink_ext` — the link of that name is gone, and every task
+    /// that was going out on it is failed.
+    ///
+    /// - Returns: whether a link of that name was there.
+    @discardableResult
+    public static func destroyLongLink(_ name: String) -> Bool {
+        name.withCString { mars_stn_destroy_longlink($0) != 0 }
+    }
+
+    /// `MarkMainLonglink_ext` — the link of that name is the one whose errors
+    /// and status the app is told about, and the one the calls that mean "the"
+    /// long link reach.
+    ///
+    /// - Returns: whether it is the main one now; `false` when no link has that
+    ///   name, or when it already was.
+    @discardableResult
+    public static func markMainLongLink(_ name: String) -> Bool {
+        name.withCString { mars_stn_mark_main_longlink($0) != 0 }
     }
 
     /// `SetSignallingStrategy` — for every keeper in the process. A period or a

@@ -178,6 +178,34 @@ public expect object StnLogic {
     public fun noopTaskID(): Int
 
     /**
+     * `CreateLonglink_ext` — a long link of the app's own, made the way the
+     * default one was. A name a link already has is that link and not a second
+     * one.
+     *
+     * @return whether the link is there afterwards — an answer the C++ cannot
+     *         give, its `CreateLonglink_ext` being `void`
+     */
+    public fun createLonglink(config: LonglinkConfig): Boolean
+
+    /**
+     * `DestroyLonglink_ext` — the link of that name is gone, and every task that
+     * was going out on it is failed.
+     *
+     * @return whether a link of that name was there
+     */
+    public fun destroyLonglink(name: String?): Boolean
+
+    /**
+     * `MarkMainLonglink_ext` — the link of that name is the one whose errors and
+     * status the app is told about, and the one [makesureLongLinkConnected]
+     * connects.
+     *
+     * @return whether it is the main one now: `false` when no link has that
+     *         name, or when it already was
+     */
+    public fun markMainLonglink(name: String?): Boolean
+
+    /**
      * `SetSignallingStrategy` — for every keeper in the process. A period or a
      * keep time of `0` leaves the `SignallingKeeper` defaults alone.
      */

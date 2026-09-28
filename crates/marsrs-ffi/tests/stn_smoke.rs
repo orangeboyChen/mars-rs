@@ -12,16 +12,18 @@ use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_ffi::stn::{
-    mars_stn_clear_tasks, mars_stn_due_time, mars_stn_gen_sequence_id, mars_stn_gen_task_id,
-    mars_stn_has_task, mars_stn_keep_signalling, mars_stn_makesure_longlink_connected,
-    mars_stn_redo_tasks, mars_stn_reset, mars_stn_reset_and_init_encoder_version,
-    mars_stn_run_pending, mars_stn_set_app, mars_stn_set_backup_ips, mars_stn_set_client_version,
-    mars_stn_set_debug_ip, mars_stn_set_longlink_svr_addr, mars_stn_set_shortlink_svr_addr,
+    mars_stn_clear_tasks, mars_stn_create_longlink, mars_stn_destroy_longlink, mars_stn_due_time,
+    mars_stn_gen_sequence_id, mars_stn_gen_task_id, mars_stn_has_task, mars_stn_keep_signalling,
+    mars_stn_longlink_is_connected_ext, mars_stn_makesure_longlink_connected,
+    mars_stn_mark_main_longlink, mars_stn_redo_tasks, mars_stn_reset,
+    mars_stn_reset_and_init_encoder_version, mars_stn_run_pending, mars_stn_set_app,
+    mars_stn_set_backup_ips, mars_stn_set_client_version, mars_stn_set_debug_ip,
+    mars_stn_set_longlink_svr_addr, mars_stn_set_shortlink_svr_addr,
     mars_stn_set_signalling_strategy, mars_stn_start_task, mars_stn_stop_signalling,
     mars_stn_stop_task, mars_stn_touch_tasks, mars_stn_trig_nooping, MarsStnAnswer,
-    MarsStnAnswerKind, MarsStnQuestion, MarsStnQuestionKind, MarsStnStrings, MarsStnTask,
-    MARS_STN_ERR_NO_DUE, MARS_STN_ERR_NULL_TASK, MARS_STN_ERR_PANIC, MARS_STN_ERR_REFUSED,
-    MARS_STN_OK,
+    MarsStnAnswerKind, MarsStnLonglinkConfig, MarsStnQuestion, MarsStnQuestionKind, MarsStnStrings,
+    MarsStnTask, MARS_STN_ERR_NO_DUE, MARS_STN_ERR_NULL_CONFIG, MARS_STN_ERR_NULL_TASK,
+    MARS_STN_ERR_PANIC, MARS_STN_ERR_REFUSED, MARS_STN_OK,
 };
 use marsrs_stn::task_profile::{LOCAL_CHANNEL_SELECT, LOCAL_RESET};
 use marsrs_stn::ErrCmdType;
@@ -325,6 +327,85 @@ fn the_ids_the_caller_asks_for_are_new_every_time() {
     assert!(
         draws.iter().any(|id| *id != draws[0]),
         "eight draws were the same one: {draws:?}"
+    );
+}
+
+/// A long link the caller names is one the calls that take a name find, which
+/// is what an app with a second long link asks for: `mars/stn/stn_logic.h` has
+/// the trio under "Support multi longlinks for mars", and no binding but the
+/// Rust one reached it until now.
+#[test]
+fn a_link_the_caller_names_is_one_the_named_calls_find() {
+    let _guard = lock();
+    mars_stn_reset();
+
+    let name = leaked("minor");
+    let host = leaked("minor.weixin.qq.com");
+    let hosts = [host.as_ptr()];
+    let config = MarsStnLonglinkConfig {
+        name: name.as_ptr(),
+        host_list: MarsStnStrings {
+            items: hosts.as_ptr(),
+            count: 1,
+        },
+        is_keep_alive: 1,
+        group: std::ptr::null(),
+        is_main: 0,
+        link_type: 0,
+        need_tls: 1,
+    };
+
+    // Every string these calls take is `name`, which is leaked: a valid
+    // NUL-terminated string for as long as the process runs.
+    // SAFETY: `name` is leaked, i.e. a valid NUL-terminated string.
+    assert_eq!(
+        unsafe { mars_stn_longlink_is_connected_ext(name.as_ptr()) },
+        0
+    );
+    // SAFETY: `name` is leaked, i.e. a valid NUL-terminated string.
+    assert_eq!(unsafe { mars_stn_mark_main_longlink(name.as_ptr()) }, 0);
+
+    // SAFETY: `config` is alive for the call, and every string it points at is
+    // leaked.
+    assert_eq!(unsafe { mars_stn_create_longlink(&config) }, MARS_STN_OK);
+
+    // The link is there, which is what the two by-name calls are for: it is not
+    // connected, because nothing has connected it, but it is a link.
+    // SAFETY: `name` is leaked, i.e. a valid NUL-terminated string.
+    assert_eq!(
+        unsafe { mars_stn_longlink_is_connected_ext(name.as_ptr()) },
+        0
+    );
+    // SAFETY: `name` is leaked, i.e. a valid NUL-terminated string.
+    assert_eq!(unsafe { mars_stn_mark_main_longlink(name.as_ptr()) }, 1);
+    // The second time it is already the main one, which is not a change.
+    // SAFETY: `name` is leaked, i.e. a valid NUL-terminated string.
+    assert_eq!(unsafe { mars_stn_mark_main_longlink(name.as_ptr()) }, 0);
+
+    // SAFETY: `name` is leaked, i.e. a valid NUL-terminated string.
+    assert_eq!(unsafe { mars_stn_destroy_longlink(name.as_ptr()) }, 1);
+    // SAFETY: `name` is leaked, i.e. a valid NUL-terminated string.
+    assert_eq!(unsafe { mars_stn_destroy_longlink(name.as_ptr()) }, 0);
+    // SAFETY: `name` is leaked, i.e. a valid NUL-terminated string.
+    assert_eq!(
+        unsafe { mars_stn_longlink_is_connected_ext(name.as_ptr()) },
+        0
+    );
+    // SAFETY: `name` is leaked, i.e. a valid NUL-terminated string.
+    assert_eq!(unsafe { mars_stn_mark_main_longlink(name.as_ptr()) }, 0);
+}
+
+/// A config the caller did not hand over is an error and not a link made out of
+/// nothing: the C++ cannot tell the two apart, its `CreateLonglink_ext` being
+/// `void`, and a caller that forgot the struct is better served by the answer.
+#[test]
+fn a_config_the_caller_did_not_hand_over_is_an_error() {
+    let _guard = lock();
+    mars_stn_reset();
+    // SAFETY: null is the one pointer this symbol promises to answer for.
+    assert_eq!(
+        unsafe { mars_stn_create_longlink(std::ptr::null()) },
+        MARS_STN_ERR_NULL_CONFIG
     );
 }
 

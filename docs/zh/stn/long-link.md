@@ -9,6 +9,9 @@
 | 短连接去哪里 | `set_shortlink_svr_addr` | `setShortLinkServerAddress` | `setShortlinkSvrAddr` | `mars_stn_set_shortlink_svr_addr` |
 | 强制连一次 | `make_sure_long_link_connected` | `makeSureLongLinkConnected` | `makesureLongLinkConnected` | `mars_stn_makesure_longlink_connected` |
 | 强制连一次你命名的那条 | `make_sure_long_link_connected` | `makeSureLongLinkConnected(name:)` | `makesureLongLinkConnectedExt` | `mars_stn_makesure_longlink_connected_ext` |
+| 再开一条有名的 | `create_long_link` | `createLongLink` | `createLonglink` | `mars_stn_create_longlink` |
+| 丢掉那条有名的 | `destroy_long_link` | `destroyLongLink` | `destroyLonglink` | `mars_stn_destroy_longlink` |
+| 哪一条算主连接 | `mark_main_longlink` | `markMainLongLink` | `markMainLonglink` | `mars_stn_mark_main_longlink` |
 | 它连上了吗 | `is_default_long_link_connected` | `isLongLinkConnected` | `longLinkIsConnected` | `mars_stn_longlink_is_connected` |
 | 你命名的那条连上了吗 | `is_long_link_connected` | `isLongLinkConnected(name:)` | `longLinkIsConnectedExt` | `mars_stn_longlink_is_connected_ext` |
 | 不再走长连接 | `disable_long_link` | `disableLongLink` | `disableLongLink` | `mars_stn_disable_longlink` |
@@ -16,6 +19,12 @@
 | 保活 | `keep_signalling` / `stop_signalling` | `keepSignalling` / `stopSignalling` | `keepSignalling` / `stopSignalling` | `mars_stn_keep_signalling` / `mars_stn_stop_signalling` |
 | 现在就发一个 noop | — | `triggerNooping` | `trigNooping` | `mars_stn_trig_nooping` |
 | 丢掉重来 | `reset` / `reset_with_encoder` | `reset` / `resetAndInitEncoderVersion` | `reset` / `resetAndInitEncoderVersion` | `mars_stn_reset` / `mars_stn_reset_and_init_encoder_version` |
+
+上面那些调用到的都是默认那条长连接。要再开一条的应用得给它一个名字 —— `create_long_link`
+加一个 `LonglinkConfig`：名字、host 列表、要不要自己重连、要不要由它来向应用报状态。之
+后就按这个名字找它：`destroy_long_link` 把它丢掉、并让正在它上面跑的任务全部失败，
+`mark_main_longlink` 让它成为应用听到状态的那一条。`group` 留空、`link_type` 给 `0`，拿
+到的就是长连接的默认值。
 
 `makesureLongLinkConnected()` 在 Android 和共享 Kotlin 上什么也不回答 —— C ABI 的
 那个符号回答 1 或 0，JNI 那个回答 `void` —— 想知道的调用方读 `Question.linkStatus`。

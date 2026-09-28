@@ -160,6 +160,49 @@ object StnLogic {
         }
     }
 
+    /**
+     * What a long link of the app's own is made from: the `LonglinkConfig` of
+     * `mars/stn/stn.h`, which the C++'s Java does not declare.
+     *
+     * An empty [hostList] is "the hosts the app set", an empty [group] is the
+     * long-link group, and a [linkType] of `0` is [E_LONG] — the two defaults a
+     * config the app left alone is filled with.
+     */
+    class LonglinkConfig {
+
+        /** The name every other call that takes one asks with. */
+        @JvmField
+        var name: String? = null
+
+        /** The hosts the link goes out on. */
+        @JvmField
+        var hostList: ArrayList<String>? = null
+
+        /** `false` leaves the reconnecting to a task. */
+        @JvmField
+        var isKeepAlive: Boolean = false
+
+        /** Which links share a reconnect. */
+        @JvmField
+        var group: String? = null
+
+        /** Whether this is the link whose status the app is told about. */
+        @JvmField
+        var isMain: Boolean = false
+
+        /** One of [E_SHORT], [E_LONG] and the rest; `0` is [E_LONG]. */
+        @JvmField
+        var linkType: Int = 0
+
+        /** Whether the link is a TLS one. */
+        @JvmField
+        var needTls: Boolean = true
+
+        constructor(name: String?) {
+            this.name = name
+        }
+    }
+
     const val INVALID_TASK_ID: Int = -1
 
     // STN callback errType
@@ -512,6 +555,38 @@ object StnLogic {
     /** The task id of the noop, which is the one task no app started. */
     @JvmStatic
     external fun noopTaskID(): Int
+
+    /**
+     * Makes a long link of the app's own: the `CreateLonglink_ext` of
+     * `mars/stn/stn_logic.h`, which the C++'s Java does not declare.
+     *
+     * A name a link already has is that link and not a second one.
+     *
+     * @return whether the link is there afterwards — an answer the C++ cannot
+     *     give, its `CreateLonglink_ext` being `void`
+     */
+    @JvmStatic
+    external fun createLonglink(config: LonglinkConfig?): Boolean
+
+    /**
+     * Drops the long link of that name, and fails every task that was going out
+     * on it: `DestroyLonglink_ext`.
+     *
+     * @return whether a link of that name was there
+     */
+    @JvmStatic
+    external fun destroyLonglink(name: String?): Boolean
+
+    /**
+     * Makes the long link of that name the one whose errors and status the app
+     * is told about, and the one [makesureLongLinkConnected] connects:
+     * `MarkMainLonglink_ext`.
+     *
+     * @return whether it is the main one now — `false` when no link has that
+     *     name, or when it already was
+     */
+    @JvmStatic
+    external fun markMainLonglink(name: String?): Boolean
 
     // signalling
 
