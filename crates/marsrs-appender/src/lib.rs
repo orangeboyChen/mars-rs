@@ -84,8 +84,8 @@ pub use category::{
     flush, flush_all, get_level, get_xlogger_instance, is_enabled_for, new_xlogger_instance,
     release_xlogger_instance, set_appender_mode, set_console_log_open, set_level,
     set_max_alive_duration as category_set_max_alive_duration,
-    set_max_file_size as category_set_max_file_size, xlogger_write, XloggerCategory, XloggerHandle,
-    DEFAULT_HANDLE,
+    set_max_file_size as category_set_max_file_size, xlogger_assert, xlogger_assert_p,
+    xlogger_write, XloggerCategory, XloggerHandle, DEFAULT_HANDLE,
 };
 pub use config::{AppenderError, AppenderMode, FileIoAction, LogLevel, XLogConfig, XLoggerInfo};
 pub use dump::xlogger_memory_dump;
