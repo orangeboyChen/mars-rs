@@ -514,7 +514,7 @@ jobs:
           path: dist/kmp-native
 
   kmp-host:
-    needs: [version, android, kmp-apple]
+    needs: [version, android]
     if: needs.version.outputs.skip != 'true'
     runs-on: ubuntu-latest
     env:
@@ -598,15 +598,6 @@ jobs:
           # module before.
           mkdir -p platforms/kmp/native/android
           unzip -q -o "dist/$NATIVE_ZIP" -d platforms/kmp/native/android
-      - name: Collect the Apple archives
-        # Every one of them, for a test of the Linux one: cinterop is
-        # commonized, so the klib of a single target cannot be built without the
-        # headers of all thirteen being read — see
-        # `platforms/kmp/gradle.properties`.
-        uses: actions/download-artifact@v8
-        with:
-          name: kmp-native-apple
-          path: platforms/kmp/native
       - name: Collect the archives of this host
         run: cp -R dist/kmp-native/. platforms/kmp/native/
       - name: Prove an archive links
@@ -622,12 +613,21 @@ jobs:
         # links. Asked here and not written into `gradle.properties`, because
         # the `kmp` job on macOS publishes the klibs of the Linux and Windows
         # targets — that *is* the cross-compilation this forbids.
+        # `enableCInteropCommonization=false`, and with it no wait on
+        # `kmp-apple`: a commonized klib is one Gradle can only build out of
+        # the cinterop of every target of the module, which is what made this
+        # job download the ten Apple archives to prove that the Linux one
+        # links. What needs commonization is the metadata compilation of
+        # `nativeMain`, and that is not in the graph of a test of one target —
+        # the compile of a target reads the cinterop of that target. The ten
+        # Apple archives are the `kmp` job's, and that one still waits for
+        # them.
         #
         # `ignoreDisabledTargets` is deliberately not asked for: which targets
         # were disabled is the one line that would say so if `linuxX64` itself
         # were, and a test that silently skips is a green job that proved
         # nothing.
-        run: (cd platforms/kmp && ./gradlew --no-daemon -Pkotlin.native.enableKlibsCrossCompilation=false :marsrs-xlog:linuxX64Test)
+        run: (cd platforms/kmp && ./gradlew --no-daemon -Pkotlin.native.enableKlibsCrossCompilation=false -Pkotlin.mpp.enableCInteropCommonization=false :marsrs-xlog:linuxX64Test)
 
   # The Kotlin Multiplatform release: `marsrs-kmp` and `xlog-kmp` as a
   # maven repository, on GitHub Packages and, as a zip, on the release.
