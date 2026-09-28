@@ -38,11 +38,11 @@
 //!   does too: `fun_callback_` is not posted.
 //!
 //! Not ported: the wake lock and the android-only branches, the tls group
-//! name, the `get_real_host` / handshake / intercept setters (`SetGetRealHostFunc`
-//! and friends are one line each over a queue the port leaves to the host), the
-//! minor long link (`AddMinorLongLink`, `IsMinorAvailable`, `FixMinorRealhost` —
-//! a second link the C++ makes out of a host list the app hands in, which
-//! nothing in the port makes), `__OnShortLinkResponse` (nothing but a log), and
+//! name, the `get_real_host` / handshake / intercept setters
+//! (`SetGetRealHostFunc` and friends are one line each over a queue the port
+//! leaves to the host), the minor long link (`AddMinorLongLink`,
+//! `IsMinorAvailable`, `FixMinorRealhost` — a second link the C++ makes out
+//! of a host list the app hands in, which nothing in the port makes), `__OnShortLinkResponse` (nothing but a log), and
 //! `__ResetLongLink` (an `#ifdef __APPLE__` that is commented out).
 
 use std::collections::{HashMap, VecDeque};
@@ -1045,7 +1045,8 @@ impl NetCore {
         !self.pending.lock().unwrap_or_else(poisoned).is_empty()
     }
 
-    /// How many.
+    /// How many follow-ups are waiting — [`NetCore::run_pending`] is what
+    /// drains them.
     pub fn pending_count(&self) -> usize {
         self.pending.lock().unwrap_or_else(poisoned).len()
     }
@@ -1062,8 +1063,7 @@ impl NetCore {
     ///
     /// The queues are here and not only in [`NetCore::start_task_at`] because
     /// what starts a task is not what ends one that never answered: a task's
-    /// first-package timeout is read in
-    /// [`ShortLinkTaskManager::run_loop_at`](crate::ShortLinkTaskManager::run_loop_at),
+    /// first-package timeout is read in [`ShortLinkTaskManager::run_loop_at`],
     /// and nothing calls it but a socket event or this pass. A host that
     /// drains the follow-ups alone has a queue in which a task that got no
     /// answer sits until the process ends — which [`NetCore::due_time`] is the
@@ -1365,7 +1365,7 @@ impl NetCore {
     }
 
     /// How many short-link errors there have been, as the answer the app is
-    /// given: `Unavailable` until one has tried.
+    /// given: [`NetStatus::Unknown`] until one has tried.
     fn shortlink_all_status(&self) -> NetStatus {
         if self.shortlink_try_flag {
             shortlink_status(self.shortlink_error_count)
@@ -1480,8 +1480,8 @@ impl NetCore {
         })
     }
 
-    /// `MakeSureLongLinkConnect_ext(_name)` — the link is made, or a run is
-    /// started for it.
+    /// `MakeSureLongLinkConnect_ext(_name)` — the link of that name is already
+    /// up, or a run is started for it.
     pub fn make_sure_long_link_connected(&mut self, name: &str) {
         if let Some(link) = self.long_link(name) {
             link.lock().unwrap_or_else(poisoned).make_sure_connected();
@@ -1712,7 +1712,10 @@ fn valid_and_init_default(task: &mut Task) -> bool {
     true
 }
 
-/// How many short-link errors in a row the app is told about.
+/// The short link's own answer from a run of errors:
+/// [`NetStatus::ServerFailed`] once [`SHORTLINK_ERR_TIME`] of them have come
+/// back in a row, [`NetStatus::Unknown`] while there are some but not that
+/// many, and [`NetStatus::Connected`] when there are none.
 fn shortlink_status(error_count: i32) -> NetStatus {
     if error_count >= SHORTLINK_ERR_TIME {
         NetStatus::ServerFailed
