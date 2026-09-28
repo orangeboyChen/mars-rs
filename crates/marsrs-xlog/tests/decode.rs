@@ -323,6 +323,36 @@ fn a_legacy_record_behind_junk_is_read_though_the_file_is_short() {
     assert!(text.ends_with('x'), "{text}");
 }
 
+/// The two reasons a walk of a real `.xlog` can end on — a record the file ends
+/// in the middle of, and a tailer that is no longer the end — asserted against
+/// a record built here and not against one the appender wrote: a header carries
+/// the hour it was written at, and an hour of 1 to 13 is a byte `getLogStartPos`
+/// takes for the start of a record, so what a file of the appender's own reports
+/// hangs on the clock. The oldest shape holds a magic and a length and nothing
+/// else, so nothing in it moves.
+#[test]
+fn a_record_the_file_ends_in_the_middle_of_says_where_it_was_cut() {
+    let mut bytes = legacy_record(b"hello");
+    bytes.truncate(bytes.len() - 2);
+
+    let err = marsrs_xlog::decode_records(&bytes, None).expect_err("the record is not whole");
+
+    assert!(err.reason.contains("truncated"), "{err:?}");
+    assert!(err.recovered.is_empty(), "{:?}", err.recovered);
+}
+
+#[test]
+fn a_tailer_that_is_no_longer_the_end_of_the_record_says_so() {
+    let mut bytes = legacy_record(b"hello");
+    let last = bytes.len() - 1;
+    bytes[last] = 0x7f;
+
+    let err = marsrs_xlog::decode_records(&bytes, None).expect_err("the tailer is gone");
+
+    assert!(err.reason.contains("bad tailer"), "{err:?}");
+    assert!(err.recovered.is_empty(), "{:?}", err.recovered);
+}
+
 /// A record whose body will not inflate is a record that is there: the marker
 /// stands in for its text and the walk goes on at the one behind it.
 #[test]
