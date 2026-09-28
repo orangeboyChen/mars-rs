@@ -5,6 +5,12 @@ One dependency in `commonMain`, and each platform compiles its own half of it:
 cinterop — so the same calls in shared code write the same `.xlog` on Android,
 iOS, watchOS, tvOS, macOS, Linux and Windows.
 
+HarmonyOS is not one of them. Shared Kotlin reaches a platform through a Kotlin
+target, and Kotlin/Native has none for OpenHarmony — no `ohosArm64` for this
+package to publish — so a HarmonyOS app takes [the HAR](/platforms/harmonyos)
+and writes ArkTS, or the three `.so` and the header if it would rather write
+NAPI of its own.
+
 ```kotlin
 // settings.gradle.kts
 maven {

@@ -4,6 +4,10 @@
 `nativeMain` 通过 cinterop 走 C ABI —— 所以共享代码里的同一句调用，在 Android、iOS、
 watchOS、tvOS、macOS、Linux、Windows 上写出的都是同一个 `.xlog`。
 
+鸿蒙不在其中。共享 Kotlin 靠一个 Kotlin target 落到某个平台上，而 Kotlin/Native
+没有 OpenHarmony 的 target —— 这个包没有 `ohosArm64` 可以发布 —— 所以鸿蒙应用取
+[HAR](/zh/platforms/harmonyos) 写 ArkTS，或者取三个 `.so` 加头文件自己写 NAPI。
+
 ```kotlin
 // settings.gradle.kts
 maven {
