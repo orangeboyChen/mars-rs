@@ -62,6 +62,15 @@ modname="$(python3 -c 'import re,sys; print(re.search(r"\"name\": \"([^\"]*)\"",
 # reads. The pinned Command Line Tools carry HarmonyOS 5.1.0 Release, API 18.
 sdk_version="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["data"]; print("%s(%s)" % (d["platformVersion"], d["apiVersion"]))' \
     "$deveco/sdk/default/sdk-pkg.json")"
+# The same number again, without the API in it: `modelVersion`, which hvigor
+# wants in `hvigor/hvigor-config.json5` and in the project's own
+# `oh-package.json5` at once, and equal in both — a model it does not recognise,
+# or one the two files disagree on, is refused before a task runs. It is the
+# SDK's platform version and not a number of ours: `CURRENT_MODEL_VERSION` of
+# the plugin is the newest platform version it supports, and a model older than
+# 5.0.0 is one it tells you to migrate away from.
+model_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["platformVersion"])' \
+    "$deveco/sdk/default/sdk-pkg.json")"
 
 project="$(mktemp -d)"
 trap 'rm -rf "$project"' EXIT
@@ -71,8 +80,9 @@ cp -R "$module"/. "$project/marsrs-xlog/"
 # The project root: an app with one module in it, and no entry — an
 # `app.json5`/`AppScope` is what an app that is installed needs, and a HAR
 # build of one module is not that.
-cat > "$project/oh-package.json5" <<'JSON5'
+cat > "$project/oh-package.json5" <<JSON5
 {
+  "modelVersion": "$model_version",
   "name": "marsrs-harmonyos-xlog-project",
   "version": "1.0.0",
   "description": "The project hvigor needs around the module. Written by scripts/assemble_harmony_har.sh, and not a file of the repository.",
@@ -123,9 +133,9 @@ export default {
 TS
 
 mkdir -p "$project/hvigor"
-cat > "$project/hvigor/hvigor-config.json5" <<'JSON5'
+cat > "$project/hvigor/hvigor-config.json5" <<JSON5
 {
-  "modelVersion": "5.1.0",
+  "modelVersion": "$model_version",
   "dependencies": {},
   "plugins": []
 }
