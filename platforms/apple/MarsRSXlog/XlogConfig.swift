@@ -148,9 +148,9 @@ public final class XlogConfig: NSObject {
     /// `0` keeps every file.
     @objc public var cacheDays: Int32 = 0
 
-    /// The four fields an app has at hand when it opens a logger of its own:
-    /// the one an `Xlog` is not opened without, and the three the example on
-    /// `Xlog` names.
+    /// The four fields an app has at hand when it opens a logger: the directory
+    /// an `Xlog` is not opened without, and the three the example on `Xlog`
+    /// fills in.
     ///
     /// - Parameters:
     ///   - logDirectory: where the log files go.
@@ -173,7 +173,7 @@ public final class XlogConfig: NSObject {
         self.level = level
     }
 
-    /// Every field but `logDirectory` at the default it carries beside it.
+    /// Every field but `logDirectory` left at the default it declares.
     @objc
     public init(logDirectory: String) {
         self.logDirectory = logDirectory

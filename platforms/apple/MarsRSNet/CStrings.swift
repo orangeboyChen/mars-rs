@@ -135,8 +135,9 @@ internal struct Held {
         return UnsafePointer(list)
     }
 
-    /// The copy of `value`, as the pointer and count a `const unsigned char*`
-    /// wants; `nil` for nothing, which is an empty body and not one that is read.
+    /// A copy of `value` the C side may read after the answer has come back;
+    /// `nil` for an empty body, which a reader reads as nothing rather than as
+    /// a pointer to nothing.
     internal mutating func bytes(_ value: [UInt8]) -> UnsafePointer<UInt8>? {
         guard !value.isEmpty else {
             return nil
@@ -159,8 +160,9 @@ internal struct Held {
         arrays = []
     }
 
-    /// A copy of `value` in memory `free` takes back; `nil` when there is none
-    /// to be had, which the list of `strings` leaves empty rather than shorter.
+    /// A copy of `value` in memory `free` takes back; `nil` when `strdup`
+    /// answered none, which leaves the slot of the list empty rather than the
+    /// list shorter.
     private mutating func copy(of value: String) -> UnsafePointer<CChar>? {
         value.withCString { source in
             // The C function's own name: the call is one Swift reads as the copy
