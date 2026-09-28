@@ -1,0 +1,37 @@
+# The C ABI of the net half of mars-rs: `mars_sdt.h` and `mars_stn.h` of
+# `crates/marsrs-ffi`, read through cinterop.
+#
+# Two lines are appended by `marsrs/build.gradle.kts`, which writes one copy of
+# this file per Kotlin target into the build directory: `compilerOpts`, the
+# directory the headers are read out of, and `libraryPaths`, the directory the
+# archive `scripts/build_kmp_native.sh` built for that target is in.
+#
+# `staticLibraries` is what puts the archive *into* the klib, so an app that
+# depends on the module links `marsrs-ffi` without being told where it is. It is
+# `libmars_net_ffi.a` and not `libmars_ffi.a`: the two archives are the pair
+# `MarsRSXlog` and `MarsRSNet` are, so this one carries STN and SDT and no
+# `mars_xlog_*` — and an app that takes both modules links xlog's symbols once.
+#
+# No `mars_xlog.h` here, and no xlog symbol in the archive: `:marsrs` reaches
+# xlog through `:marsrs-xlog`, which is the module that embeds that one.
+
+package = io.github.orangeboychen.marsrs.net.ffi
+headers = mars_sdt.h mars_stn.h
+# The two headers are the whole surface; without the filter cinterop reads the
+# declarations of everything they include as well.
+headerFilter = mars_sdt.h mars_stn.h
+staticLibraries = libmars_net_ffi.a
+
+# `iana-time-zone` asks `CFTimeZone*` what the time zone is, which is why
+# `Package.swift` names the framework in its `linkerSettings` too: a Rust
+# `staticlib` carries no link flags of its own.
+linkerOpts.osx = -framework CoreFoundation
+linkerOpts.ios = -framework CoreFoundation
+linkerOpts.watchos = -framework CoreFoundation
+linkerOpts.tvos = -framework CoreFoundation
+
+# What `rustc --print native-static-libs` names for a Rust `staticlib` of the
+# same target: the C runtime and the unwinder behind `panic = "unwind"`, which
+# is what the release profile builds with.
+linkerOpts.linux = -ldl -lpthread -lm -lrt -lgcc_s
+linkerOpts.mingw = -lgcc_eh -lmingwex -lmsvcrt -lkernel32 -luser32 -ladvapi32 -lws2_32 -lbcrypt -lntdll -luserenv

@@ -116,6 +116,6 @@ jobs:
       # modules are held to.
       - run: |
           java -jar detekt-cli-all.jar \
-            --input platforms/android/marsrs/src/main/kotlin,platforms/android/marsrs-xlog/src/main/kotlin,platforms/kmp/marsrs/src/commonMain/kotlin,platforms/kmp/marsrs-xlog/src/commonMain/kotlin,platforms/kmp/marsrs-xlog/src/androidMain/kotlin,platforms/kmp/marsrs-xlog/src/nativeMain/kotlin,platforms/flutter/marsrs/android/src/main/kotlin,platforms/flutter/marsrs-xlog/android/src/main/kotlin,platforms/react-native/marsrs/android/src/main/kotlin,platforms/react-native/marsrs-xlog/android/src/main/kotlin \
+            --input platforms/android/marsrs/src/main/kotlin,platforms/android/marsrs-xlog/src/main/kotlin,platforms/kmp/marsrs/src/commonMain/kotlin,platforms/kmp/marsrs/src/androidMain/kotlin,platforms/kmp/marsrs/src/nativeMain/kotlin,platforms/kmp/marsrs-xlog/src/commonMain/kotlin,platforms/kmp/marsrs-xlog/src/androidMain/kotlin,platforms/kmp/marsrs-xlog/src/nativeMain/kotlin,platforms/flutter/marsrs/android/src/main/kotlin,platforms/flutter/marsrs-xlog/android/src/main/kotlin,platforms/react-native/marsrs/android/src/main/kotlin,platforms/react-native/marsrs-xlog/android/src/main/kotlin \
             --config detekt.yml \
             --build-upon-default-config

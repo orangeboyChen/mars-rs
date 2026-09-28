@@ -7,6 +7,16 @@
 # into a klib, which is how an app of that target links `marsrs-ffi` without
 # being told where it is.
 #
+# Two archives per target, and not one: the pair the Apple frameworks are.
+#
+#   * `libmars_ffi.a`     — xlog, and nothing else: what `:marsrs-xlog` embeds,
+#     so that a Kotlin Multiplatform app that only logs carries no byte of the
+#     task pipeline's.
+#   * `libmars_net_ffi.a` — STN and SDT, and no `mars_xlog_*`: what `:marsrs`
+#     embeds beside the one above, the way `MarsRSNet.xcframework` carries the
+#     net half and none of xlog's symbols — which is what lets an app that takes
+#     both link xlog's exactly once.
+#
 #   scripts/build_kmp_native.sh [output-dir]
 #
 # Which targets it builds is what the host can build: every Apple one on macOS,
@@ -128,29 +138,48 @@ for entry in "${targets[@]}"; do
             ;;
     esac
 
-    if [ "$build_std" = build-std ]; then
-        cargo +nightly build --release -p marsrs-ffi --target "$triple" \
-            -Z build-std=std,panic_abort
-    else
-        cargo build --release -p marsrs-ffi --target "$triple"
-    fi
+    # The archive of one feature set, built and stripped and copied into the
+    # directory of the Kotlin target, under the name the module that embeds it
+    # asks cinterop for.
+    #
+    # The second build is the one `--features` is for and not a second target:
+    # cargo writes `libmars_ffi.a` for both, so the first is copied away before
+    # the second overwrites it.
+    build_one() {
+        local features="$1" name="$2"
 
-    lib="$root/target/$triple/release/libmars_ffi.a"
-    test -f "$lib" || { echo "::error::$lib is missing"; exit 1; }
+        if [ "$build_std" = build-std ]; then
+            cargo +nightly build --release -p marsrs-ffi --target "$triple" \
+                -Z build-std=std,panic_abort --no-default-features --features "$features"
+        else
+            cargo build --release -p marsrs-ffi --target "$triple" \
+                --no-default-features --features "$features"
+        fi
 
-    # The local symbols of an archive are for the linker that built it, not for
-    # the one that links it into an app, and this archive ends up inside a klib a
-    # consumer downloads: `scripts/build_xcframework.sh` strips the same 31 % out
-    # of the slices for the same reason, and it changes nothing an app links.
-    case "$triple" in
-        *-apple-*) strip -x -S "$lib" ;;
-        *-pc-windows-gnu) x86_64-w64-mingw32-strip --strip-debug "$lib" ;;
-        *) strip --strip-debug "$lib" ;;
-    esac
+        local lib="$root/target/$triple/release/libmars_ffi.a"
+        test -f "$lib" || { echo "::error::$lib is missing"; exit 1; }
 
-    mkdir -p "$out/$kotlin"
-    cp "$lib" "$out/$kotlin/libmars_ffi.a"
-    echo "$kotlin: $out/$kotlin/libmars_ffi.a"
+        # The local symbols of an archive are for the linker that built it, not
+        # for the one that links it into an app, and this archive ends up inside
+        # a klib a consumer downloads: `scripts/build_xcframework.sh` strips the
+        # same 31 % out of the slices for the same reason, and it changes nothing
+        # an app links.
+        case "$triple" in
+            *-apple-*) strip -x -S "$lib" ;;
+            *-pc-windows-gnu) x86_64-w64-mingw32-strip --strip-debug "$lib" ;;
+            *) strip --strip-debug "$lib" ;;
+        esac
+
+        mkdir -p "$out/$kotlin"
+        cp "$lib" "$out/$kotlin/$name"
+        echo "$kotlin: $out/$kotlin/$name"
+    }
+
+    # xlog for `:marsrs-xlog`, and the net half for `:marsrs`, which takes both:
+    # the pair `MarsRSXlog` and `MarsRSNet` are, and the reason neither archive
+    # carries a symbol of the other's.
+    build_one xlog libmars_ffi.a
+    build_one sdt,stn libmars_net_ffi.a
 done
 
 find "$out" -name '*.a' | sort

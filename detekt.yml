@@ -69,6 +69,13 @@ performance:
     active: false
 
 style:
+  # The integer an enum entry carries is the C++'s own — `NetCheckType`'s
+  # `kPingCheck` is `0`, the eighteen questions of `mars_stn.h` are `0` to `18`,
+  # `kTaskFailHandleSessionTimeout` is `-13` — and a constant beside each entry is
+  # two names for one number, which is what a reader of the enum has to keep in
+  # their head twice.
+  MagicNumber:
+    ignoreEnums: true
   # `getNetworkSignalStrength(isWifi)` answers 0 and ignores its argument
   # because `com.tencent.mars.comm.NetworkSignalUtil` answers 0 and ignores
   # its argument; the function is here because an app may call it.
