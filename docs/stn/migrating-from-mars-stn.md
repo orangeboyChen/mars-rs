@@ -102,7 +102,7 @@ not `false`.
 
 ## The boot, on Android
 
-So does the boot: `Mars.init(context, handler)` and `Mars.onCreate(true)` to
+The boot is the same: `Mars.init(context, handler)` and `Mars.onCreate(true)` to
 start, `BaseEvent.onForeground` and `BaseEvent.onNetworkChange` when the screen or
 the network changes, and `AppLogic.setCallBack` for the account and the device
 STN asks about — the names the C++ project's Java spelled, in the package of this
