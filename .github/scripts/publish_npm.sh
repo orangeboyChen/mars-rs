@@ -49,20 +49,50 @@ else
     pkgs=(platforms/react-native/marsrs platforms/react-native/marsrs-xlog)
 fi
 
+# The status of a package or of a version of one on npm: 200 is "npm has it",
+# 404 is "it does not", and both are answers about the package. Read off the
+# registry and not out of the exit of an `npm view`, which says the same thing
+# about a registry it never reached as about a package that is not there — and
+# what the second of those does to a run is skip both modules with a warning,
+# which is a release that published nothing of either and ended green.
+registry_status() {
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
+        "https://registry.npmjs.org/$1"
+}
+
 for pkg in "${pkgs[@]}"; do
     name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])' "$pkg/package.json")"
 
     # The two questions the crates.io step asks crates.io. The first is the one
     # a trusted publisher cannot answer for: a package npm does not have is a
     # package that has to be published by hand first.
-    if ! npm view "$name" version > /dev/null 2>&1; then
-        echo "::warning::npm has no $name yet; publish its first version by hand, then name this repository as its trusted publisher"
-        continue
-    fi
-    if npm view "$name@$version" version > /dev/null 2>&1; then
-        echo "$name $version is already on npm"
-        continue
-    fi
+    status="$(registry_status "$name")"
+    case "$status" in
+        404)
+            echo "::warning::npm has no $name yet; publish its first version by hand, then name this repository as its trusted publisher"
+            continue
+            ;;
+        200)
+            ;;
+        *)
+            echo "::error::the npm registry answered $status for $name; whether it is there is unknown, so it is not published to"
+            exit 1
+            ;;
+    esac
+
+    status="$(registry_status "$name/$version")"
+    case "$status" in
+        200)
+            echo "$name $version is already on npm"
+            continue
+            ;;
+        404)
+            ;;
+        *)
+            echo "::error::the npm registry answered $status for $name $version; whether it is up is unknown, so it is not published over"
+            exit 1
+            ;;
+    esac
 
     # The dist-tag, named only for a pre-release: `alpha` for 0.1.0-alpha.2,
     # `beta` for 0.1.0-beta.10. npm asks for one then — under the tag it
