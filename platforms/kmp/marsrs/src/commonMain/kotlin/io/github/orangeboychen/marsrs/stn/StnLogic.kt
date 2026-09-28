@@ -132,6 +132,52 @@ public expect object StnLogic {
     public fun makesureLongLinkConnected()
 
     /**
+     * `MakesureLonglinkConnected_ext` — the long link the app named is asked to
+     * connect, if it is not connected already.
+     *
+     * A name no link was made with is nothing at all: the C++ looks its links
+     * up in a map and does nothing when one is not there, so a caller that
+     * mistypes a channel hears nothing about it.
+     */
+    public fun makesureLongLinkConnectedExt(name: String)
+
+    /**
+     * `LongLinkIsConnected` — whether the default long link is up.
+     *
+     * What "up" is is `LongLink::kConnected` and nothing else, so a link that
+     * is still connecting answers `false`: this is the question an app asks
+     * before it decides whether to start a task now or wait, and the one a
+     * caller with no other way to see the link reads to know whether pushes
+     * are arriving at all.
+     */
+    public fun longLinkIsConnected(): Boolean
+
+    /**
+     * `LongLinkIsConnected_ext` — whether the long link the app named is up,
+     * `false` for a name no link was made with.
+     */
+    public fun longLinkIsConnectedExt(name: String): Boolean
+
+    /**
+     * `DisableLongLink` — no task goes out on a long link again.
+     *
+     * The C++'s is a one-way door: it is `NetCore`'s "need use longlink" set
+     * `false`, and only [reset] — a net core made from nothing — opens it
+     * again. There is no `enable`.
+     */
+    public fun disableLongLink()
+
+    /**
+     * `getNoopTaskID` — the task id of the noop, which is the one task no app
+     * started.
+     *
+     * [Question.Kind.Req2Buf] and [Question.Kind.OnPush] are asked for it too,
+     * so an app that cannot name it answers the noop as if it were one of its
+     * own.
+     */
+    public fun noopTaskID(): Int
+
+    /**
      * `SetSignallingStrategy` — for every keeper in the process. A period or a
      * keep time of `0` leaves the `SignallingKeeper` defaults alone.
      */

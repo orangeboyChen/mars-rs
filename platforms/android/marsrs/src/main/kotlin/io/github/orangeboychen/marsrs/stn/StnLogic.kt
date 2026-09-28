@@ -493,6 +493,26 @@ object StnLogic {
     @JvmStatic
     external fun makesureLongLinkConnected()
 
+    /** Checks the state of the long link the app named: if it is not connected, a reconnect is attempted. */
+    @JvmStatic
+    external fun makesureLongLinkConnectedExt(name: String?)
+
+    /** Whether the long link is connected — `kConnected` and nothing else, so one that is still connecting is not. */
+    @JvmStatic
+    external fun longLinkIsConnected(): Boolean
+
+    /** Whether the long link the app named is connected; a name no link was made with is not. */
+    @JvmStatic
+    external fun longLinkIsConnectedExt(name: String?): Boolean
+
+    /** Stops every task from going out on a long link again; only `reset` undoes it. */
+    @JvmStatic
+    external fun disableLongLink()
+
+    /** The task id of the noop, which is the one task no app started. */
+    @JvmStatic
+    external fun noopTaskID(): Int
+
     // signalling
 
     /**

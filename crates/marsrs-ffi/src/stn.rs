@@ -809,6 +809,73 @@ pub extern "C" fn mars_stn_makesure_longlink_connected() -> c_int {
     })
 }
 
+/// `MakesureLonglinkConnected_ext` — the same for the link the caller named.
+///
+/// A name no link was made with is nothing at all: the C++ looks its links up
+/// in a map and does nothing when one is not there.
+///
+/// # Safety
+///
+/// `name` must either be null or point to a valid NUL-terminated string that is
+/// not mutated while the call runs.
+#[no_mangle]
+pub unsafe extern "C" fn mars_stn_makesure_longlink_connected_ext(name: *const c_char) {
+    guard((), || {
+        // SAFETY: forwarded to `ptr_to_str_or_empty`, whose contract the caller
+        // upholds.
+        let name = unsafe { cstr::ptr_to_str_or_empty(name) };
+        with_logic(|logic| logic.make_sure_long_link_connected(name));
+    })
+}
+
+/// `LongLinkIsConnected` — whether the default long link is up: `1` or `0`, and
+/// [`MARS_STN_ERR_PANIC`].
+///
+/// What "up" is is `LongLink::kConnected` and nothing else: a link that is
+/// still connecting answers `0`, which is what the C++'s
+/// `LongLinkIsConnected()` asks for.
+#[no_mangle]
+pub extern "C" fn mars_stn_longlink_is_connected() -> c_int {
+    guard(MARS_STN_ERR_PANIC, || {
+        with_logic(|logic| logic.is_default_long_link_connected()) as c_int
+    })
+}
+
+/// `LongLinkIsConnected_ext` — the same for the link the caller named, which
+/// answers `0` for a name no link was made with.
+///
+/// # Safety
+///
+/// `name` must either be null or point to a valid NUL-terminated string that is
+/// not mutated while the call runs.
+#[no_mangle]
+pub unsafe extern "C" fn mars_stn_longlink_is_connected_ext(name: *const c_char) -> c_int {
+    guard(MARS_STN_ERR_PANIC, || {
+        // SAFETY: forwarded to `ptr_to_str_or_empty`, whose contract the caller
+        // upholds.
+        let name = unsafe { cstr::ptr_to_str_or_empty(name) };
+        with_logic(|logic| logic.is_long_link_connected(name)) as c_int
+    })
+}
+
+/// `DisableLongLink` — no task goes out on a long link again.
+///
+/// The C++'s is a one-way door: it is `NetCore::need_use_longlink_` set `false`,
+/// and only a [`mars_stn_reset`] — a net core made from nothing — opens it
+/// again.
+#[no_mangle]
+pub extern "C" fn mars_stn_disable_longlink() {
+    guard((), || with_logic(StnLogic::disable_long_link));
+}
+
+/// `getNoopTaskID` — the taskid of the noop, which is the one task no app
+/// started: `OnPush` and `Req2Buf` are called for it too, and an app that
+/// cannot tell it apart from its own would answer it.
+#[no_mangle]
+pub extern "C" fn mars_stn_noop_task_id() -> u32 {
+    guard(0, || marsrs_stn::Task::NOOP_TASK_ID)
+}
+
 /// `SetSignallingStrategy` — for every keeper in the process. A period or a keep
 /// time of `0` leaves the `SignallingKeeper` defaults alone, which is what the
 /// C++'s `SetStrategy` does with them.
@@ -2042,5 +2109,33 @@ mod tests {
         // SAFETY: the string of the view is alive.
         assert_eq!(unsafe { cstr::ptr_to_str_or_empty(view.raw.host) }, "host");
         assert_eq!(view.raw.dnstype, 1);
+    }
+
+    /// The three of the link's entry points a test can call without moving the
+    /// pipeline the rest of them share: a name no link was made with is not up,
+    /// asking for it makes none, and the noop is the one task no app started.
+    ///
+    /// `mars_stn_disable_longlink` and `mars_stn_makesure_longlink_connected`
+    /// are not called here for that reason: they are one-way doors on the
+    /// process-wide [`logic`].
+    #[test]
+    fn a_link_nobody_named_is_not_one_that_is_up() {
+        let name = CString::new("push").expect("no NUL in it");
+        // SAFETY: `name` is a valid NUL-terminated string, read for the call.
+        assert_eq!(
+            unsafe { mars_stn_longlink_is_connected_ext(name.as_ptr()) },
+            0
+        );
+        // SAFETY: the same, and a name no link has is nothing at all.
+        unsafe {
+            mars_stn_makesure_longlink_connected_ext(name.as_ptr());
+        }
+        assert_eq!(
+            unsafe { mars_stn_longlink_is_connected_ext(name.as_ptr()) },
+            0,
+            "asking for a link that is not there makes none"
+        );
+        assert_eq!(mars_stn_longlink_is_connected(), 0);
+        assert_eq!(mars_stn_noop_task_id(), Task::NOOP_TASK_ID);
     }
 }

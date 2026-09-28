@@ -187,6 +187,42 @@ pub fn makesure_longlink_connected_impl() -> bool {
     })
 }
 
+/// `StnLogic.makesureLongLinkConnectedExt` — the same for the link Java named.
+/// A name no link was made with is nothing at all, which is what the C++ does
+/// when its look-up finds nothing.
+pub fn makesure_longlink_connected_ext_impl(name: &str) {
+    with_logic(|logic| logic.make_sure_long_link_connected(name))
+}
+
+/// `StnLogic.longLinkIsConnected` — whether the default long link is up.
+///
+/// What "up" is is `LongLink::kConnected` and nothing else, so a link that is
+/// still connecting answers `false`.
+pub fn longlink_is_connected_impl() -> bool {
+    with_logic(|logic| logic.is_default_long_link_connected())
+}
+
+/// `StnLogic.longLinkIsConnectedExt` — the same for the link Java named, which
+/// answers `false` for a name no link was made with.
+pub fn longlink_is_connected_ext_impl(name: &str) -> bool {
+    with_logic(|logic| logic.is_long_link_connected(name))
+}
+
+/// `StnLogic.disableLongLink` — no task goes out on a long link again.
+///
+/// The C++'s is a one-way door: only a `Reset` — a net core made from nothing
+/// — opens it again.
+pub fn disable_longlink_impl() {
+    with_logic(StnLogic::disable_long_link)
+}
+
+/// `StnLogic.noopTaskID` — the taskid of the noop, the one task no app
+/// started: `req2Buf` and `onPush` are asked for it too, so an app that
+/// cannot name it answers the noop as if it were its own.
+pub fn noop_task_id_impl() -> u32 {
+    Task::NOOP_TASK_ID
+}
+
 /// `StnLogic.setSignallingStrategy` — a period or a keep time of `0` leaves the
 /// `SignallingKeeper` defaults alone, which is what the C++'s `SetStrategy`
 /// does with them.

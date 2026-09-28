@@ -292,6 +292,36 @@ public enum MarsStn {
         mars_stn_makesure_longlink_connected() != 0
     }
 
+    /// `MakesureLonglinkConnected_ext` — the link `name` was made with is asked
+    /// to connect; a name no link was made with is nothing at all.
+    public static func makeSureLongLinkConnected(name: String) {
+        name.withCString { mars_stn_makesure_longlink_connected_ext($0) }
+    }
+
+    /// `LongLinkIsConnected` — whether the default long link is up, which is
+    /// `kConnected` and nothing else, so one that is still connecting is not.
+    public static func isLongLinkConnected() -> Bool {
+        mars_stn_longlink_is_connected() != 0
+    }
+
+    /// `LongLinkIsConnected_ext` — whether the link `name` was made with is up,
+    /// `false` for a name no link has.
+    public static func isLongLinkConnected(name: String) -> Bool {
+        name.withCString { mars_stn_longlink_is_connected_ext($0) != 0 }
+    }
+
+    /// `DisableLongLink` — no task goes out on a long link again, and only
+    /// `reset` opens it again: the C++'s is a one-way door.
+    public static func disableLongLink() {
+        mars_stn_disable_longlink()
+    }
+
+    /// `getNoopTaskID` — the task id of the noop, the one task no app started,
+    /// which `req2Buf` and `onPush` are asked for too.
+    public static func noopTaskID() -> UInt32 {
+        mars_stn_noop_task_id()
+    }
+
     /// `SetSignallingStrategy` — for every keeper in the process. A period or a
     /// keep time of `0` leaves the `SignallingKeeper` defaults alone.
     public static func setSignallingStrategy(period: Int64, keepTime: Int64) {

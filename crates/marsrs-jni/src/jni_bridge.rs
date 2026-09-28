@@ -43,10 +43,12 @@ use crate::sdt::{
     run_checks_java_impl, set_http_netcheck_cgi_impl, start_active_check_impl, take_reported_impl,
 };
 use crate::stn::{
-    clear_task_impl, due_time_impl, gen_sequence_id_impl, gen_task_id_impl,
-    get_load_libraries_impl, has_task_impl, keep_signalling_impl, makesure_longlink_connected_impl,
-    redo_task_impl, reset_and_init_encoder_version_impl, reset_impl, run_pending_impl,
-    set_backup_ips_impl, set_client_version_impl, set_debug_ip_impl, set_longlink_svr_addr_impl,
+    clear_task_impl, disable_longlink_impl, due_time_impl, gen_sequence_id_impl, gen_task_id_impl,
+    get_load_libraries_impl, has_task_impl, keep_signalling_impl, longlink_is_connected_ext_impl,
+    longlink_is_connected_impl, makesure_longlink_connected_ext_impl,
+    makesure_longlink_connected_impl, noop_task_id_impl, redo_task_impl,
+    reset_and_init_encoder_version_impl, reset_impl, run_pending_impl, set_backup_ips_impl,
+    set_client_version_impl, set_debug_ip_impl, set_longlink_svr_addr_impl,
     set_shortlink_svr_addr_impl, set_signalling_strategy_impl, start_task_impl,
     stop_signalling_impl, stop_task_impl, touch_tasks_impl, trig_nooping_impl,
 };
@@ -948,6 +950,71 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_makesure
     guard(|| {
         makesure_longlink_connected_impl();
     })
+}
+
+/// `StnLogic.makesureLongLinkConnectedExt` — the same for the link Java named.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_makesureLongLinkConnectedExt<
+    'local,
+>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    name: JString<'local>,
+) {
+    guard_env(&mut env, |env| {
+        let name = name
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
+            .unwrap_or_default();
+        makesure_longlink_connected_ext_impl(&name);
+    })
+}
+
+/// `StnLogic.longLinkIsConnected` — whether the default long link is up.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_longLinkIsConnected<
+    'local,
+>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jboolean {
+    guard(longlink_is_connected_impl)
+}
+
+/// `StnLogic.longLinkIsConnectedExt` — the same for the link Java named.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_longLinkIsConnectedExt<
+    'local,
+>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    name: JString<'local>,
+) -> jboolean {
+    guard_env(&mut env, |env| {
+        let name = name
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
+            .unwrap_or_default();
+        longlink_is_connected_ext_impl(&name)
+    })
+}
+
+/// `StnLogic.disableLongLink`.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_disableLongLink<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) {
+    guard(disable_longlink_impl)
+}
+
+/// `StnLogic.noopTaskID` — the taskid of the noop, which no app started.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_noopTaskID<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jint {
+    guard(|| noop_task_id_impl() as jint)
 }
 
 /// `StnLogic.setSignallingStrategy`.

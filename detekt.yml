@@ -40,12 +40,16 @@ complexity:
   # two the C++'s Java has no need of — `runPending` and `dueTime`, which there
   # a thread of the C++'s own calls — are two more in the same object, because
   # the object is the surface and not the thread. `NetStatusUtil` is the other
-  # large one. 42 is the 40 of the symbols plus those two.
+  # large one. The five a link is asked about by its own name are five more
+  # symbols of the same surface — `makesureLongLinkConnectedExt`,
+  # `longLinkIsConnected` and its `_ext` pair, `disableLongLink` and
+  # `noopTaskID` — which took the object from 40 to 45. The number stays two
+  # above the count, as it was.
   TooManyFunctions:
     thresholdInFiles: 60
     thresholdInClasses: 60
     thresholdInInterfaces: 20
-    thresholdInObjects: 42
+    thresholdInObjects: 47
     thresholdInEnums: 20
 
 empty-blocks:

@@ -17,12 +17,17 @@ import io.github.orangeboychen.marsrs.net.ffi.MarsStnHeader
 import io.github.orangeboychen.marsrs.net.ffi.MarsStnQuestion
 import io.github.orangeboychen.marsrs.net.ffi.MarsStnTask
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_clear_tasks
+import io.github.orangeboychen.marsrs.net.ffi.mars_stn_disable_longlink
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_due_time
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_gen_sequence_id
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_gen_task_id
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_has_task
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_keep_signalling
+import io.github.orangeboychen.marsrs.net.ffi.mars_stn_longlink_is_connected
+import io.github.orangeboychen.marsrs.net.ffi.mars_stn_longlink_is_connected_ext
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_makesure_longlink_connected
+import io.github.orangeboychen.marsrs.net.ffi.mars_stn_makesure_longlink_connected_ext
+import io.github.orangeboychen.marsrs.net.ffi.mars_stn_noop_task_id
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_redo_tasks
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_reset
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_reset_and_init_encoder_version
@@ -181,6 +186,23 @@ public actual object StnLogic {
     public actual fun makesureLongLinkConnected() {
         mars_stn_makesure_longlink_connected()
     }
+
+    public actual fun makesureLongLinkConnectedExt(name: String) {
+        memScoped {
+            mars_stn_makesure_longlink_connected_ext(name)
+        }
+    }
+
+    public actual fun longLinkIsConnected(): Boolean = mars_stn_longlink_is_connected() != 0
+
+    public actual fun longLinkIsConnectedExt(name: String): Boolean =
+        memScoped { mars_stn_longlink_is_connected_ext(name) != 0 }
+
+    public actual fun disableLongLink() {
+        mars_stn_disable_longlink()
+    }
+
+    public actual fun noopTaskID(): Int = mars_stn_noop_task_id().toInt()
 
     public actual fun setSignallingStrategy(period: Long, keepTime: Long) {
         mars_stn_set_signalling_strategy(period, keepTime)

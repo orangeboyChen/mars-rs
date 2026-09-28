@@ -108,6 +108,21 @@ public actual object StnLogic {
     public actual external fun makesureLongLinkConnected()
 
     @JvmStatic
+    public actual external fun makesureLongLinkConnectedExt(name: String)
+
+    @JvmStatic
+    public actual external fun longLinkIsConnected(): Boolean
+
+    @JvmStatic
+    public actual external fun longLinkIsConnectedExt(name: String): Boolean
+
+    @JvmStatic
+    public actual external fun disableLongLink()
+
+    @JvmStatic
+    public actual external fun noopTaskID(): Int
+
+    @JvmStatic
     public actual external fun setSignallingStrategy(period: Long, keepTime: Long)
 
     @JvmStatic
