@@ -83,9 +83,9 @@ options:
   -i, --in=PATH          the input, for when a positional argument reads badly
   -k, --privkey=HEX      decode: the 64 hex characters of the private key of the
                          pair whose public key the file was written with
-  -p, --pubkey=HEX       encode: the 128 hex characters of that public key; the
-                         file is encrypted, and is written in the clear without
-                         it
+  -p, --pubkey=HEX       encode: the 128 hex characters of that public key; an
+                         async file is encrypted, and is written in the clear
+                         without it
   -m, --mode=zlib|zstd   encode: which compressor, zlib by default
   -c, --compress=0|1     encode: compress the payload, 1 by default. An async
                          record is always framed as zlib or zstd, so
