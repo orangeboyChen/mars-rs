@@ -1037,8 +1037,18 @@ impl LongLink {
             self.profile.local_port = local.port();
         }
 
+        // A pair that does not answer the heartbeat is one the C++ drops and
+        // goes on to the next of (`longlink.cc:116-158`): what the host's
+        // connect hands back is the one pair it picked, so here the socket
+        // goes instead, and the connect is answered the way a connect that
+        // found no socket at all is (`longlink.cc:684-690`).
         if self.encoder.complexconnect_need_verify() && !self.verify(socket) {
+            self.close_socket(socket);
             self.set_status(LongLinkStatus::ConnectFailed);
+            // a link the app took down itself does not report the connect
+            if !self.disconnect_code.is_set() {
+                self.run_response_error(ErrCmdType::Socket, ECT_SOCKET_MAKE_SOCKET_PREPARED, false);
+            }
             return Err(ConnectFail::Verify);
         }
 
@@ -2823,18 +2833,34 @@ mod tests {
         assert!(link.connect_at(1_000).is_ok());
         assert_eq!(
             *seen.sent.lock().unwrap(),
-            vec![longlink_pack(NOOP_CMDID, Task::NOOP_TASK_ID, &[])],
-            "the noop the pair was asked to answer"
+            vec![longlink_pack(NOOP_CMDID, Task::NOOP_TASK_ID, &[])]
+        );
+        assert!(
+            seen.closed.lock().unwrap().is_empty(),
+            "a pair that answered keeps its socket"
         );
 
         // ... and a pair that does not answer it fails the connect: what the
         // C++ drops one candidate for and tries the next, and what the port
         // has to answer as a failure, the host's connect having picked one
         let (mut link, seen) = link_with_encoder(encoder);
+        let (responses, mut record_response) = sink();
+        link.set_on_response(move |_name, err_type, err_code, _profile| {
+            record_response((err_type, err_code))
+        });
         link.make_sure_connected();
         assert_eq!(link.connect_at(1_000), Err(ConnectFail::Verify));
         assert_eq!(link.connect_status(), LongLinkStatus::ConnectFailed);
         assert_eq!(seen.sent.lock().unwrap().len(), 1, "the noop went out");
+        assert_eq!(
+            *seen.closed.lock().unwrap(),
+            vec![SocketFd(3)],
+            "the socket goes back: it is not the run's to read"
+        );
+        assert_eq!(
+            *responses.lock().unwrap(),
+            vec![(ErrCmdType::Socket, ECT_SOCKET_MAKE_SOCKET_PREPARED)]
+        );
     }
 
     #[test]
