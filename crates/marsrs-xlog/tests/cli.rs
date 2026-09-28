@@ -231,11 +231,11 @@ fn every_subcommand_and_option_has_a_short_spelling() {
         "the short spelling wrote something else"
     );
 
-    // `-e` and `-d` spelled the way a flag is, every short option there is, and
-    // a value attached to its letter: `-oFILE`.
+    // `e` and `d`, every short option there is, and a value attached to its
+    // letter: `-oFILE`.
     let attached = dir.join("attached.xlog");
     let (ok, _, err) = run(&[
-        "-e",
+        "e",
         "-m",
         "zstd",
         "-c1",
@@ -246,7 +246,7 @@ fn every_subcommand_and_option_has_a_short_spelling() {
         &format!("-o{}", attached.display()),
     ]);
     assert!(ok, "encode with an attached value failed: {err}");
-    let (ok, out, err) = run(&["-d", &attached.display().to_string()]);
+    let (ok, out, err) = run(&["d", &attached.display().to_string()]);
     assert!(ok, "decode failed: {err}");
     assert_eq!(out, RECORDS, "the records did not come back");
 }
@@ -258,6 +258,15 @@ fn a_broken_command_line_is_refused() {
     assert!(!ok);
     assert!(
         err.contains("unknown subcommand"),
+        "the error does not say why: {err}"
+    );
+
+    // A dash makes an option and not a subcommand: `xlog -e` is refused, and
+    // `xlog e` is the command.
+    let (ok, _, err) = run(&["-e", "-o", "a.xlog"]);
+    assert!(!ok, "`xlog -e` was read as `xlog e`");
+    assert!(
+        err.contains("unknown option"),
         "the error does not say why: {err}"
     );
 

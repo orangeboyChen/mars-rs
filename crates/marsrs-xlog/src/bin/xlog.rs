@@ -23,8 +23,10 @@
 //! standard output when it is left out, so `xlog decode a.xlog | less` works.
 //!
 //! Every option has a short spelling, and takes its value either attached —
-//! `-oFILE`, `-o=FILE` — or as the next argument, `-o FILE`. `xlog help` is
-//! the whole command line, and `xlog --version` the version.
+//! `-oFILE`, `-o=FILE` — or as the next argument, `-o FILE`. A subcommand has
+//! one too, and it is a word and not a flag: `xlog e`, the way `cargo b` is
+//! `cargo build`. `xlog help` is the whole command line, and `xlog --version`
+//! the version.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -104,9 +106,12 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    // A subcommand is a word and not a flag: `xlog e` is `xlog encode`, the way
+    // `cargo b` is `cargo build`. The dash is what makes `-o` an option, so
+    // `xlog -e` is refused as one instead of being read as the command.
     let result = match args.first().map(String::as_str) {
-        Some("encode" | "e" | "-e") => Command::parse(true, &args[1..]).and_then(encode),
-        Some("decode" | "d" | "-d") => Command::parse(false, &args[1..]).and_then(decode),
+        Some("encode" | "e") => Command::parse(true, &args[1..]).and_then(encode),
+        Some("decode" | "d") => Command::parse(false, &args[1..]).and_then(decode),
         Some(other) => {
             let what = if other.starts_with('-') {
                 "option"
