@@ -56,7 +56,9 @@ struct ZombieTask {
     save_time: u64,
 }
 
-/// `ZombieTaskManager`.
+/// The tasks whose channel went away before they were answered: kept here
+/// instead of failed, started again when the link comes back, and failed
+/// only when the deadline they were given is used up.
 pub struct ZombieTaskManager {
     /// `lsttask_` — a `std::list`, so the order tasks were saved in is kept.
     tasks: Vec<ZombieTask>,
