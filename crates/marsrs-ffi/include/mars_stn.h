@@ -382,6 +382,39 @@ long long mars_stn_due_time(void);
 int mars_stn_makesure_longlink_connected(void);
 
 /**
+ * `MakesureLonglinkConnected_ext` — the same for the link `name` was made with.
+ * A name no link was made with is nothing at all.
+ */
+void mars_stn_makesure_longlink_connected_ext(const char* name);
+
+/**
+ * `LongLinkIsConnected` — whether the default long link is up: 1 or 0.
+ *
+ * What "up" is is `LongLink::kConnected` and nothing else, so a link that is
+ * still connecting answers 0.
+ */
+int mars_stn_longlink_is_connected(void);
+
+/** `LongLinkIsConnected_ext` — the same for `name`, 0 for one no link has. */
+int mars_stn_longlink_is_connected_ext(const char* name);
+
+/**
+ * `DisableLongLink` — no task goes out on a long link again.
+ *
+ * The C++'s is a one-way door: only `mars_stn_reset`, which makes a net core
+ * from nothing, opens it again.
+ */
+void mars_stn_disable_longlink(void);
+
+/**
+ * `getNoopTaskID` — the taskid of the noop, the one task no app started.
+ *
+ * `OnPush` and `Req2Buf` are asked for it too, so an app that cannot tell it
+ * apart from its own tasks would answer it.
+ */
+unsigned int mars_stn_noop_task_id(void);
+
+/**
  * `SetSignallingStrategy` — for every keeper in the process. A period or a keep
  * time of 0 leaves the `SignallingKeeper` defaults alone.
  */
