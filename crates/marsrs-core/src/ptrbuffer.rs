@@ -22,10 +22,10 @@ pub struct PtrBuffer<'a> {
 }
 
 impl<'a> PtrBuffer<'a> {
-    /// Attach to `_data` with an initial logical length of `_len`.
+    /// Attaches to `data`, whose first `len` bytes are already written.
     ///
     /// # Panics
-    /// Panics when `_len` exceeds `_data.len()`.
+    /// Panics when `len` exceeds `data.len()`.
     pub fn attach(data: &'a mut [u8], len: usize) -> Self {
         assert!(
             len <= data.len(),
@@ -39,7 +39,7 @@ impl<'a> PtrBuffer<'a> {
         }
     }
 
-    /// Attach to `_data` with a zero logical length.
+    /// Attaches to `data`, which is read as empty.
     pub fn new(data: &'a mut [u8]) -> Self {
         Self {
             data,
@@ -72,7 +72,6 @@ impl<'a> PtrBuffer<'a> {
         self.data
     }
 
-    /// Mutable whole backing region.
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         self.data
     }
@@ -101,12 +100,11 @@ impl<'a> PtrBuffer<'a> {
         self.pos
     }
 
-    /// `length - pos`
     pub fn pos_length(&self) -> usize {
         self.length - self.pos
     }
 
-    /// Writes `_src` at the current position and advances it.
+    /// Writes `src` at the current position and advances it.
     ///
     /// Returns the number of bytes actually written; the write is truncated so
     /// that it never runs past the backing region.
@@ -116,7 +114,7 @@ impl<'a> PtrBuffer<'a> {
         written
     }
 
-    /// Writes `_src` at `_pos` without moving the cursor.
+    /// Writes `src` at `pos` without moving the cursor.
     pub fn write_at(&mut self, pos: usize, src: &[u8]) -> usize {
         debug_assert!(pos <= self.length);
         let copy_len = src.len().min(self.data.len().saturating_sub(pos));
@@ -125,7 +123,7 @@ impl<'a> PtrBuffer<'a> {
         copy_len
     }
 
-    /// Reads into `_dst` starting at `_pos`; returns the number of bytes read.
+    /// Reads into `dst` starting at `pos`; returns the number of bytes read.
     pub fn read_at(&self, pos: usize, dst: &mut [u8]) -> usize {
         if pos >= self.length {
             return 0;
@@ -153,7 +151,7 @@ impl<'a> PtrBuffer<'a> {
     }
 
     /// Sets the logical length (clamped to the backing region) and moves the
-    /// cursor to `_pos` (clamped to the new length).
+    /// cursor to `pos` (clamped to the new length).
     pub fn set_length(&mut self, pos: usize, length: usize) {
         debug_assert!(pos <= length);
         self.length = length.min(self.data.len());
