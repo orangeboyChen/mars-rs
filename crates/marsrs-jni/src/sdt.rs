@@ -17,6 +17,15 @@
 //! tests; everything up to it — the JSON, and the record of what was handed
 //! over — is here and is covered by `cargo test`.
 //!
+//! The two the C++'s Java declares are two because the C++ needs no more: a
+//! diagnosis there is started from inside the C++, by threads that are its own
+//! and sockets that are its own. The port has neither, so Java starts the
+//! diagnosis ([`start_active_check_impl`]) and answers the four probes of it
+//! ([`run_checks_java_impl`]) — and asks the two questions that go with
+//! running one by hand: whether a check is in flight, and what it is going to
+//! do. Those are the `external`s the port's `SdtLogic` declares beside the
+//! C++'s two.
+//!
 //! Everything else the JVM touches lives in [`crate::jni_bridge`]; what is here
 //! is plain Rust and is covered by `cargo test`.
 //!
@@ -107,8 +116,9 @@ pub fn http_netcheck_cgi_impl() -> String {
 
 /// `StartActiveCheck` — `false` when a check is already in flight.
 ///
-/// Java does not declare this one; it is the Rust side of the same state, and
-/// the reason [`set_http_netcheck_cgi_impl`] exists.
+/// The C++'s Java declares no such call: there the diagnosis is started from
+/// inside the C++, which has the sockets and the threads a run needs. The port
+/// has neither, so starting one is the app's call and not the port's.
 pub fn start_active_check_impl(
     longlink_items: &CheckIPPorts,
     shortlink_items: &CheckIPPorts,
@@ -164,6 +174,24 @@ pub fn run_active_check_impl(ask: &mut Ask, network_type: i32) -> Vec<CheckResul
 /// (`PlatformComm.getNetInfo`) when nobody has set one.
 pub fn run_active_check_with_net_info_impl(ask: &mut Ask) -> Vec<CheckResultProfile> {
     run_active_check_impl(ask, crate::platform_comm::net_info_impl().as_i32())
+}
+
+/// [`run_active_check_impl`] with the probes asked of Java: the four checks
+/// want a socket, and the port opens none, so the app's `SdtLogic.IProbe` is
+/// what they reach — [`crate::jni_bridge::ask_probe`] carries one [`Query`] the
+/// way and its [`Answer`] back.
+///
+/// This is the `__RunOn` thread of the C++, run on the thread that called it:
+/// it holds the process-wide diagnosis until every probe has answered, so a
+/// run is one at a time and it does not come back until it is over.
+///
+/// `false` when nothing was in flight, and when the one that was got cancelled
+/// before its first check: a run that answered nothing is a run that reported
+/// nothing, which is what `MARS_SDT_ERR_NO_CHECK` is in the C ABI.
+pub fn run_checks_java_impl(network_type: i32) -> bool {
+    let mut ask = Ask::new(crate::jni_bridge::ask_probe);
+    let results = run_active_check_impl(&mut ask, network_type);
+    !results.is_empty()
 }
 
 /// Takes everything the checks have reported since the last call.
@@ -429,6 +457,36 @@ mod tests {
             assert_eq!(results[0].network_type, NetInfo::NoNet.as_i32());
 
             // the platform's own tests reset what was set here
+        })
+    }
+
+    /// Java is asked once per check when a run is driven from Java, and there
+    /// is no JVM to ask in a unit test — so [`run_checks_java_impl`] is the run
+    /// a host with no network at all would make.
+    #[test]
+    fn a_run_that_asks_java_with_no_jvm_to_ask_reports_one_failed_check() {
+        isolated(|| {
+            assert!(start_active_check_impl(
+                &hosts("long.weixin.qq.com"),
+                &hosts("short.weixin.qq.com"),
+                NET_CHECK_BASIC,
+                UNUSE_TIMEOUT
+            ));
+
+            assert!(
+                run_checks_java_impl(NetInfo::Wifi.as_i32()),
+                "the check ran, which is all a run reports"
+            );
+            let results = take_reported_impl();
+            // One, and not the two of the plan: the ping is first, and a ping
+            // that answered nothing ends the run — the C++'s `kCheckFinish`,
+            // which is what a host with no network gets.
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].kind(), Some(Kind::PingCheck));
+            assert_ne!(
+                results[0].error_code, 0,
+                "a probe nobody answered is one that failed"
+            );
         })
     }
 

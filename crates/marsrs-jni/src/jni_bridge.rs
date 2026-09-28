@@ -16,6 +16,8 @@ use jni::{jni_sig, jni_str};
 use jni::{Env, EnvUnowned, JavaVM};
 
 use marsrs_appender::{AppenderMode, CompressMode, LogLevel, XLogConfig, XLoggerInfo};
+use marsrs_sdt::checkimpl::{Answer as ProbeAnswer, PingStatus, Query as ProbeQuery};
+use marsrs_sdt::{CheckIPPort, CheckIPPorts};
 use marsrs_stn::{CgiProfile, Task};
 
 use std::borrow::Cow;
@@ -35,7 +37,11 @@ use crate::baseevent::{
     on_create_impl, on_destroy_impl, on_exception_crash_impl, on_foreground_impl,
     on_init_config_before_on_create_impl, on_network_change_impl, on_signal_crash_impl,
 };
-use crate::sdt::{get_load_libraries_impl as sdt_libraries, set_http_netcheck_cgi_impl};
+use crate::sdt::{
+    cancel_active_check_impl, get_load_libraries_impl as sdt_libraries, http_netcheck_cgi_impl,
+    is_checking_impl, plan_impl, report_json_impl, reset_impl as sdt_reset_impl,
+    run_checks_java_impl, set_http_netcheck_cgi_impl, start_active_check_impl, take_reported_impl,
+};
 use crate::stn::{
     clear_task_impl, due_time_impl, gen_sequence_id_impl, gen_task_id_impl,
     get_load_libraries_impl, has_task_impl, keep_signalling_impl, makesure_longlink_connected_impl,
@@ -1792,6 +1798,371 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_getLoadL
     _class: JClass<'local>,
 ) -> jobject {
     guard_env(&mut env, |env| string_array_list(env, &sdt_libraries()))
+}
+
+/// `SdtLogic.startActiveCheck` — a diagnosis of the two links' hosts, in `mode`
+/// and with `timeout` milliseconds to spend on it.
+///
+/// The two arrays are the `CheckIPPorts` the C++ starts a diagnosis with: one
+/// `SdtLogic.Link` per host name, and under it the ip/port pairs filed under
+/// that name, which is what the report names a result by.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_startActiveCheck<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    long_link: JObject<'local>,
+    short_link: JObject<'local>,
+    mode: jint,
+    timeout: jint,
+) -> jboolean {
+    guard_env(&mut env, |env| {
+        let longlink_items = hosts_from_java(env, &long_link);
+        let shortlink_items = hosts_from_java(env, &short_link);
+        start_active_check_impl(
+            &longlink_items,
+            &shortlink_items,
+            mode,
+            u32::try_from(timeout).unwrap_or(0),
+        ) as jboolean
+    })
+}
+
+/// `SdtLogic.cancelActiveCheck` — the check in flight is asked to stop.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_cancelActiveCheck<
+    'local,
+>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) {
+    guard(cancel_active_check_impl)
+}
+
+/// `SdtLogic.isChecking`.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_isChecking<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jboolean {
+    guard(is_checking_impl) as jboolean
+}
+
+/// `SdtLogic.plan` — the checks the request in flight is going to make, as the
+/// integers `SdtLogic.NetCheckType` names.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_plan<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jobject {
+    guard_env(&mut env, |env| {
+        let plan: Vec<jint> = plan_impl().iter().map(|kind| *kind as jint).collect();
+        let Some(array) = int_out(env, plan.len() as i32) else {
+            return std::ptr::null_mut();
+        };
+        if array.set_region(env, 0, &plan).is_err() {
+            return std::ptr::null_mut();
+        }
+        JObject::from(array).into_raw()
+    })
+}
+
+/// `SdtLogic.nativeRunChecks` — the planned checks, one probe per check, over
+/// the network the app's `IProbe` answers with.
+///
+/// The probes are asked of Java, so this is the whole run: it does not come
+/// back until every probe of every planned check has answered, and it holds the
+/// process-wide diagnosis for as long.
+///
+/// `false` when there was no check in flight, or when the one there was got
+/// cancelled before its first check — which is what `MARS_SDT_ERR_NO_CHECK` is
+/// in the C ABI.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_nativeRunChecks<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    network_type: jint,
+) -> jboolean {
+    guard(|| run_checks_java_impl(network_type)) as jboolean
+}
+
+/// `SdtLogic.takeReport` — the JSON of everything the checks have reported
+/// since the last call, which is the same document
+/// `SdtLogic.ICallBack.reportSignalDetectResults` was handed; taking it empties
+/// it. `null` when there was nothing to take.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_takeReport<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jobject {
+    guard_env(&mut env, |env| {
+        let reported = take_reported_impl();
+        if reported.is_empty() {
+            return std::ptr::null_mut();
+        }
+        let json = report_json_impl(&reported);
+        match env.new_string(&json) {
+            Ok(text) => JObject::from(text).into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        }
+    })
+}
+
+/// `SdtLogic.httpNetcheckCGI` — the URL the HTTP check asks for.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_httpNetcheckCGI<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jobject {
+    guard_env(&mut env, |env| {
+        match env.new_string(http_netcheck_cgi_impl()) {
+            Ok(text) => JObject::from(text).into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        }
+    })
+}
+
+/// `SdtLogic.reset` — a diagnosis made again from nothing: the check in flight,
+/// the plan it was running and every result waiting to be taken.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_reset<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) {
+    guard(sdt_reset_impl)
+}
+
+// #################### the probes a diagnosis asks Java ####################
+
+/// `SdtLogic` — the class the four probes of a run are static methods of.
+///
+/// Every one of them forwards to the `IProbe` the app handed to `runChecks`,
+/// which is why the native side never keeps the app itself: the same reason
+/// [`STN_CALLBACK`] forwards to `ICallBack` and not to the app.
+const SDT_LOGIC: &JNIStr = jni_str!("io/github/orangeboychen/marsrs/sdt/SdtLogic");
+
+/// Every one of the four answers a `SdtLogic.Answer`, which is one object for
+/// all of them: the probes do not answer the same readings, so it is the fields
+/// of the one object that name them, read for the probe it says it is.
+///
+/// Kept up here because neither signature fits on the line it is called from.
+///
+/// `(String, int)` — one host name and a timeout, which is the shape of the
+/// dns, http and ping queries: the name of the host to resolve, the URL of the
+/// CGI, and the host to ping. A ping's timeout is in **seconds**; the other
+/// two's are in milliseconds.
+const ASK_HOST_SIG: MethodSignature =
+    jni_sig!("(Ljava/lang/String;I)Lio/github/orangeboychen/marsrs/sdt/SdtLogic$Answer;");
+/// `(String, int, int)` — the noop's host, port and timeout.
+const ASK_TCP_SIG: MethodSignature =
+    jni_sig!("(Ljava/lang/String;II)Lio/github/orangeboychen/marsrs/sdt/SdtLogic$Answer;");
+
+/// The `SdtLogic.Probe` integers: which probe a query is, which is the `probe`
+/// field of `SdtLogic.Answer` on its way back.
+const PROBE_DNS: i32 = 1;
+const PROBE_TCP: i32 = 2;
+const PROBE_HTTP: i32 = 3;
+const PROBE_PING: i32 = 4;
+
+/// One of the four probes, asked of Java: attach the thread, call the one
+/// static method, and read the answer out of the `SdtLogic.Answer` Java handed
+/// back.
+///
+/// This is the seam the C++ has no use for — it opens its own sockets — and
+/// the reason [`crate::sdt::run_checks_java_impl`] exists: the port opens none,
+/// so the app's network is the one a run probes with.
+///
+/// Without a VM (a host that linked the library instead of loading it from
+/// Java) there is nobody to ask, and the answer is the one every check reads as
+/// a failure. Nothing here panics into Rust either way.
+pub(crate) fn ask_probe(query: ProbeQuery) -> ProbeAnswer {
+    guard(|| {
+        let Some(vm) = VM.get() else {
+            return ProbeAnswer::Nothing;
+        };
+        vm.attach_current_thread(|env| -> jni::errors::Result<ProbeAnswer> {
+            let Ok(class) = env.find_class(SDT_LOGIC) else {
+                return Ok(ProbeAnswer::Nothing);
+            };
+            Ok(ask_probe_of(env, class, query))
+        })
+        .unwrap_or(ProbeAnswer::Nothing)
+    })
+}
+
+fn ask_probe_of<'a>(env: &mut Env<'a>, class: JClass<'a>, query: ProbeQuery) -> ProbeAnswer {
+    match query {
+        ProbeQuery::Dns { domain, timeout_ms } => {
+            let Ok(host) = env.new_string(&domain) else {
+                return ProbeAnswer::Nothing;
+            };
+            let host = JObject::from(host);
+            let called = env.call_static_method(
+                class,
+                jni_str!("onDnsQuery"),
+                ASK_HOST_SIG,
+                &[JValue::Object(&host), JValue::Int(timeout_ms as jint)],
+            );
+            probe_answer(env, object_of(called))
+        }
+        ProbeQuery::Tcp {
+            ip,
+            port,
+            timeout_ms,
+        } => {
+            let Ok(host) = env.new_string(&ip) else {
+                return ProbeAnswer::Nothing;
+            };
+            let host = JObject::from(host);
+            let called = env.call_static_method(
+                class,
+                jni_str!("onTcpQuery"),
+                ASK_TCP_SIG,
+                &[
+                    JValue::Object(&host),
+                    JValue::Int(port as jint),
+                    JValue::Int(timeout_ms as jint),
+                ],
+            );
+            probe_answer(env, object_of(called))
+        }
+        ProbeQuery::Http { url, timeout_ms } => {
+            let Ok(url) = env.new_string(&url) else {
+                return ProbeAnswer::Nothing;
+            };
+            let url = JObject::from(url);
+            let called = env.call_static_method(
+                class,
+                jni_str!("onHttpQuery"),
+                ASK_HOST_SIG,
+                &[JValue::Object(&url), JValue::Int(timeout_ms as jint)],
+            );
+            probe_answer(env, object_of(called))
+        }
+        ProbeQuery::Ping { host, timeout_s } => {
+            let Ok(host) = env.new_string(&host) else {
+                return ProbeAnswer::Nothing;
+            };
+            let host = JObject::from(host);
+            let called = env.call_static_method(
+                class,
+                jni_str!("onPingQuery"),
+                ASK_HOST_SIG,
+                &[JValue::Object(&host), JValue::Int(timeout_s as jint)],
+            );
+            probe_answer(env, object_of(called))
+        }
+    }
+}
+
+/// What Java's `Answer` carries: the [`ProbeAnswer`] the run is waiting for,
+/// read for the probe the `probe` field says it is and not for the one that was
+/// asked — an app is free to answer `nothing`, and a host with no network to
+/// probe with is read as a failure whichever check asked.
+fn probe_answer(env: &mut Env<'_>, answer: Option<JObject<'_>>) -> ProbeAnswer {
+    let Some(answer) = answer else {
+        return ProbeAnswer::Nothing;
+    };
+    if answer.is_null() {
+        return ProbeAnswer::Nothing;
+    }
+    // Negative is a clock the port cannot read, and every probe measures its
+    // own round trip, so `0` is what a probe that did not say gets.
+    let rtt = long_field(env, &answer, jni_str!("rtt")).max(0) as u64;
+    match int_field(env, &answer, jni_str!("probe")) {
+        PROBE_DNS => ProbeAnswer::Dns {
+            error_code: int_field(env, &answer, jni_str!("errorCode")),
+            rtt,
+            ips: string_array_field(env, &answer, jni_str!("ips")),
+        },
+        PROBE_TCP => ProbeAnswer::Tcp {
+            sent: int_field(env, &answer, jni_str!("sent")),
+            received: int_field(env, &answer, jni_str!("received")),
+            is_noop_resp: bool_field(env, &answer, jni_str!("isNoopResponse")),
+            rtt,
+        },
+        PROBE_HTTP => ProbeAnswer::Http {
+            error_code: int_field(env, &answer, jni_str!("errorCode")),
+            status_code: int_field(env, &answer, jni_str!("statusCode")),
+            rtt,
+        },
+        PROBE_PING => ProbeAnswer::Ping {
+            error_code: int_field(env, &answer, jni_str!("errorCode")),
+            rtt,
+            // A ping that came back with no status is a ping that lost every
+            // one of its probes, which is what the C++'s `if (0 == ret)` is.
+            status: Some(PingStatus::new(
+                float_field(env, &answer, jni_str!("lossRate")),
+                float_field(env, &answer, jni_str!("averageRTT")),
+            )),
+        },
+        _ => ProbeAnswer::Nothing,
+    }
+}
+
+/// Reads a Java `SdtLogic.Link[]`: the `CheckIPPorts` a diagnosis is started
+/// with, which is one map entry per host name and, under it, the ip/port pairs
+/// filed under that name.
+fn hosts_from_java(env: &mut Env<'_>, array: &JObject<'_>) -> CheckIPPorts {
+    let mut items = CheckIPPorts::new();
+    if array.is_null() {
+        return items;
+    }
+    let array = unsafe { JObjectArray::<'_, JObject<'_>>::from_raw(env, array.as_raw()) };
+    let Ok(len) = array.len(env) else {
+        return items;
+    };
+    for index in 0..len {
+        let Ok(link) = array.get_element(env, index) else {
+            continue;
+        };
+        if link.is_null() {
+            continue;
+        }
+        let name = string_field(env, &link, jni_str!("name"));
+        let hosts = string_array_field(env, &link, jni_str!("hosts"));
+        let ports = match env.get_field(&link, jni_str!("ports"), jni_sig!("[I")) {
+            Ok(field) => field
+                .l()
+                .map(|ports| int_array(env, &ports))
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+        // The nth host goes with the nth port, which is the pairing
+        // `CheckIPPort` is: a list with no partner is cut short, the way the
+        // C++ reads a `std::vector` of one beside a `std::vector` of the other.
+        items.insert(
+            name,
+            hosts
+                .into_iter()
+                .zip(ports)
+                .map(|(host, port)| CheckIPPort::new(host, u16::try_from(port).unwrap_or(0)))
+                .collect(),
+        );
+    }
+    items
+}
+
+/// A `String[]` field of `obj`, which is the addresses a resolve found.
+fn string_array_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> Vec<String> {
+    guard(|| {
+        let Ok(field) = env.get_field(obj, name, jni_sig!("[Ljava/lang/String;")) else {
+            return Vec::new();
+        };
+        let Ok(array) = field.l() else {
+            return Vec::new();
+        };
+        string_array(env, &array)
+    })
+}
+
+/// A `float` field of `obj` — the loss rate and the average round trip of a
+/// ping, which no other kind of field in the tree carries.
+fn float_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> f32 {
+    guard(|| {
+        env.get_field(obj, name, jni_sig!("F"))
+            .and_then(|value| value.f())
+            .unwrap_or(0.0)
+    })
 }
 
 // #################### io.github.orangeboychen.marsrs.comm.Alarm ####################
