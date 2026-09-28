@@ -96,6 +96,12 @@ end the process without another word:
 covered by that as well. The two `flush` calls above are for the other case: a
 read or an upload that happens *while the app is still running*.
 
+Sync mode is the one exception, and it is the one place the answer is not
+"nothing": there is no cache file behind its records, so the tail the process was
+still holding — up to about 4 KiB of it — dies with the process. An app that logs
+synchronously and wants that tail has to `close()` or `flush(sync: true)`; the
+two hooks above do it, and so does an app that closes its appender.
+
 ## Rotation and retention
 
 | knob | what it does | default |

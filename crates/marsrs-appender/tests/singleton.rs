@@ -258,6 +258,34 @@ fn oneshot_flush_drains_a_foreign_cache_file() {
 /// the region is the kernel's, so nothing of a killed process is lost, it is
 /// only not in a `.xlog` yet. That is the whole reason an app does not have to
 /// flush on its way out.
+/// Sync mode is the one mode a process that is killed loses something in: there
+/// is no cache file behind its records, so the tail the process is still holding
+/// dies with it. `close()` is what hands it to the file — which is why the docs
+/// ask a synchronous app for a `close` or a `flush`, and an asynchronous one for
+/// nothing at all.
+#[test]
+fn sync_mode_holds_the_tail_until_it_is_handed_over() {
+    let _guard = singleton();
+    let tmp = tempfile::tempdir().unwrap();
+
+    appender_open(config(tmp.path(), AppenderMode::Sync)).unwrap();
+    appender_write(None, "the tail of a session that was killed");
+
+    // Nothing has been handed to the OS yet, and there is no cache file behind
+    // it: a process that dies here takes the record with it.
+    let held = std::fs::read(today_log_file(tmp.path())).unwrap_or_default();
+    assert!(
+        !payload_text(&held).contains("the tail of a session"),
+        "{held:?}"
+    );
+
+    appender_close();
+
+    let bytes = std::fs::read(today_log_file(tmp.path())).unwrap();
+    let text = payload_text(&bytes);
+    assert!(text.contains("the tail of a session"), "{text}");
+}
+
 #[test]
 fn open_drains_the_cache_a_killed_process_left() {
     use marsrs_buffer::{CompressMode, LogBuffer};
