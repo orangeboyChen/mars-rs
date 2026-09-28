@@ -418,6 +418,60 @@ fn an_uncompressed_async_record_is_refused_and_a_sync_one_is_not() {
     assert_eq!(out, RECORDS, "the records did not come back");
 }
 
+/// `count` records of `len` bytes each, all of one length: in sync mode a
+/// record is a block of its own, so a file of them is `count` blocks of one
+/// size and where a block starts is arithmetic and not a guess.
+fn fat_records(count: usize, len: usize) -> Vec<u8> {
+    let mut text = Vec::new();
+    for index in 0..count {
+        // The index padded to `len - 1` characters, then the newline a record
+        // carries: `len` bytes, whatever the index is.
+        text.extend_from_slice(format!("{index:0>width$}", width = len - 1).as_bytes());
+        text.push(b'\n');
+    }
+    text
+}
+
+#[test]
+fn a_file_cut_short_still_yields_the_records_before_the_cut() {
+    let dir = scratch("cut-short");
+    let records = fat_records(5, 200);
+    let input = write(&dir, "records.txt", &records);
+    let file = dir.join("a.xlog");
+
+    // `--sync=1` is one block per record: five of them, and the fifth is the
+    // one the cut lands in.
+    let (ok, _, err) = run(&[
+        "encode",
+        "--sync=1",
+        &input.display().to_string(),
+        "-o",
+        &file.display().to_string(),
+    ]);
+    assert!(ok, "encode failed: {err}");
+
+    let bytes = std::fs::read(&file).expect("read the .xlog");
+    let stride = bytes.len() / 5;
+    // Halfway into the last block, past its header: what a process killed
+    // between two writes leaves in the file.
+    let cut = write(&dir, "cut.xlog", &bytes[..4 * stride + 150]);
+
+    let (ok, out, err) = run(&["decode", &cut.display().to_string()]);
+    assert!(!ok, "a file that is missing its end decoded as a whole one");
+    assert!(
+        err.contains("truncated"),
+        "the error does not say why: {err}"
+    );
+    // The four records in front of the cut are the four fifths of the input:
+    // they are the answer to what the file says, and dropping them for the
+    // sake of the fifth is what this did before.
+    assert_eq!(
+        out,
+        records[..4 * 200].to_vec(),
+        "the records before the cut were dropped too"
+    );
+}
+
 /// `count` records of sixteen hex characters, from a xorshift: input no
 /// compressor shrinks by much, so a region really does fill up.
 fn random_records(count: usize) -> Vec<u8> {

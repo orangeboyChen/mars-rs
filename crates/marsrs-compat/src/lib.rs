@@ -228,8 +228,12 @@ pub fn count_blocks(bytes: &[u8]) -> Result<usize, String> {
     Ok(count)
 }
 
-/// Reads a file produced by either implementation and returns the plain log
+/// Reads a file produced by either implementation and writes the plain log
 /// text, mirroring `decode_log_file.c`.
+///
+/// `parseFile` there writes the output it has whether or not the walk ended in
+/// an error, so this does too: a file whose last record is missing its end is
+/// still written out up to the damage, and the error is what comes back.
 pub fn decode(opts: &Opts) -> Result<(), String> {
     let privkey_hex = required(opts, "privkey")?;
     let input = required(opts, "in")?;
@@ -240,10 +244,19 @@ pub fn decode(opts: &Opts) -> Result<(), String> {
         .ok_or_else(|| format!("--privkey must be 64 hex chars, got `{privkey_hex}`"))?;
 
     let bytes = fs::read(&input).map_err(|e| format!("read {input}: {e}"))?;
-    let plain = decode_records(&bytes, &privkey)?;
-    fs::write(&out_path, &plain).map_err(|e| format!("write {out_path}: {e}"))?;
-    println!("decode: {} bytes -> {} bytes", bytes.len(), plain.len());
-    Ok(())
+    match decode_records(&bytes, &privkey) {
+        Ok(plain) => {
+            fs::write(&out_path, &plain).map_err(|e| format!("write {out_path}: {e}"))?;
+            println!("decode: {} bytes -> {} bytes", bytes.len(), plain.len());
+            Ok(())
+        }
+        Err(err) => {
+            // What was recovered is the file's text as far as it goes, and it
+            // is the only copy of the records before the damage.
+            fs::write(&out_path, &err.recovered).map_err(|e| format!("write {out_path}: {e}"))?;
+            Err(err.reason)
+        }
+    }
 }
 
 /// The reader every decoder of this workspace reads through:
@@ -252,7 +265,14 @@ pub fn decode(opts: &Opts) -> Result<(), String> {
 /// It takes the private key by value and not in an `Option`, because this CLI
 /// always asks for one: every fixture the C++ wrote is encrypted, and the
 /// golden files are only comparable when each record was decrypted.
-pub fn decode_records(data: &[u8], privkey: &[u8; 32]) -> Result<Vec<u8>, String> {
+///
+/// A record that cannot be read stops the walk, and
+/// [`marsrs_xlog::DecodeError::recovered`] is the text of the records before
+/// it.
+pub fn decode_records(
+    data: &[u8],
+    privkey: &[u8; 32],
+) -> Result<Vec<u8>, marsrs_xlog::DecodeError> {
     marsrs_xlog::decode_records(data, Some(privkey))
 }
 

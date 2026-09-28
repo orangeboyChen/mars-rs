@@ -17,7 +17,9 @@
 //! * `decode` reads one back and prints the log text: `--privkey` is the
 //!   private key of that pair, without which an encrypted record is an error
 //!   and not a silent skip. This is upstream's `decode_mars_log_file.py` over
-//!   the same bytes.
+//!   the same bytes. A record that cannot be read stops it — but the records
+//!   before the damage are printed anyway, on standard output, with the reason
+//!   on standard error: a file that lost its end still has days of log in it.
 //! * `keygen` makes that pair: the 128 hex characters a `pubKey` is configured
 //!   with, and the 64 that `decode` reads what it wrote back with. It is drawn
 //!   from the system's generator and kept nowhere, so a pair that was not
@@ -482,10 +484,32 @@ fn encode(command: Command) -> Result<(), String> {
 /// framing.
 fn decode(command: Command) -> Result<(), String> {
     let bytes = command.input()?;
-    let plain = decode_records(&bytes, command.privkey.as_ref())?;
-    command.output(&plain)?;
-    eprintln!("xlog: {} bytes -> {} bytes", bytes.len(), plain.len());
-    Ok(())
+    match decode_records(&bytes, command.privkey.as_ref()) {
+        Ok(plain) => {
+            command.output(&plain)?;
+            eprintln!("xlog: {} bytes -> {} bytes", bytes.len(), plain.len());
+            Ok(())
+        }
+        Err(err) => {
+            // `parseFile` of `decode_log_file.c` writes the output it has
+            // whether or not the walk ended in an error, and so does this: a
+            // file that lost its end to a process killed between two writes
+            // still holds every record before the damage, and an operator told
+            // "truncated" with nothing beside it cannot read a single one of
+            // them. The error is still what the command answers with — the
+            // file's tail is missing, and that has to be said.
+            if !err.recovered.is_empty() {
+                command.output(&err.recovered)?;
+                eprintln!(
+                    "xlog: {} bytes -> {} bytes, then {}",
+                    bytes.len(),
+                    err.recovered.len(),
+                    err.reason
+                );
+            }
+            Err(err.reason)
+        }
+    }
 }
 
 /// Makes a key pair: the 128 hex characters a `pubKey` is configured with, and
