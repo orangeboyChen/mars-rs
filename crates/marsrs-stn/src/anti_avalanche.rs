@@ -15,10 +15,9 @@ pub enum LimitKind {
     Flow,
 }
 
-/// `AntiAvalanche`.
-///
-/// The two gates are clocked from [`gettickcount`]; [`AntiAvalanche::check_at`]
-/// takes the tick count explicitly so the tests can drive them.
+/// The two gates are clocked from [`gettickcount`];
+/// [`AntiAvalanche::check_at`] takes the tick count explicitly so the tests
+/// can drive them without sleeping.
 #[derive(Debug, Clone)]
 pub struct AntiAvalanche {
     frequency_limit: FrequencyLimit,
@@ -83,12 +82,14 @@ impl AntiAvalanche {
         self.flow_limit.set_active_at(is_active, now);
     }
 
-    /// The frequency gate, for callers that report its `span`.
+    /// The frequency gate: both gates are private fields, so this is the only
+    /// way in for a host that wants to read the table it keeps.
     pub fn frequency_limit(&mut self) -> &mut FrequencyLimit {
         &mut self.frequency_limit
     }
 
-    /// The flow gate.
+    /// The flow gate, for the same reason: a host reads the funnel through it
+    /// to see what is charged to it, and how fast it drains.
     pub fn flow_limit(&mut self) -> &mut FlowLimit {
         &mut self.flow_limit
     }
