@@ -50,8 +50,10 @@ public expect class Xlog(config: XlogConfig) {
     public var maxFileSizeBytes: Long
 
     /**
-     * How many seconds a log file of this appender is kept; `0`, the start, is
-     * the C++'s own ten days. Anything under a day asks for the same ten.
+     * How many seconds a log file of this appender is written to before the
+     * next one is opened; `0`, the start, is the C++'s own ten days. Anything
+     * under a day asks for the same ten. What keeps a file on disk is the
+     * `cacheDays` of the config, which is a different clock.
      */
     public var maxAliveTimeSeconds: Long
 
@@ -65,22 +67,16 @@ public expect class Xlog(config: XlogConfig) {
     /** Writes one record of [level]. */
     public fun log(level: LogLevel, tag: String, message: String)
 
-    /** Writes one record of [LogLevel.VERBOSE]. */
     public fun v(tag: String, message: String)
 
-    /** Writes one record of [LogLevel.DEBUG]. */
     public fun d(tag: String, message: String)
 
-    /** Writes one record of [LogLevel.INFO]. */
     public fun i(tag: String, message: String)
 
-    /** Writes one record of [LogLevel.WARNING]. */
     public fun w(tag: String, message: String)
 
-    /** Writes one record of [LogLevel.ERROR]. */
     public fun e(tag: String, message: String)
 
-    /** Writes one record of [LogLevel.FATAL]. */
     public fun f(tag: String, message: String)
 
     /**
