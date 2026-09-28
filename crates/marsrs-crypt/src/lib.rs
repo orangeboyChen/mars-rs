@@ -86,8 +86,8 @@ pub mod magic {
     /// `LogMagicNum::kMagicEnd`.
     pub const END: u8 = 0x00;
 
-    /// `LogMagicNum::MagicStartIsValid()` — true when `_magic` is one of the
-    /// eight known record-start bytes.
+    /// `LogMagicNum::MagicStartIsValid()` — true when `m` is one of the eight
+    /// known record-start bytes.
     pub fn magic_start_is_valid(m: u8) -> bool {
         matches!(
             m,
@@ -192,15 +192,14 @@ struct KeyPair {
 /// Port of the key-exchange half of `LogCrypt::LogCrypt(const char*)`.
 ///
 /// The C++ calls `uECC_make_key` / `uECC_shared_secret` on **secp256k1** with
-/// the server public key given as 64 raw bytes `X || Y` (128 hex chars).
+/// the server public key given as 64 raw bytes `X || Y` (128 hex chars). A
+/// fresh client key pair is made per process, so two runs never agree on a key.
 /// `k256` reproduces both: the shared secret is the `x` coordinate of
 /// `client_priv * server_pub`, 32 bytes big-endian — exactly what uECC's
 /// `uECC_shared_secret` produces.
 ///
 /// Returns `None` for any failure; the caller then keeps `is_crypt_ == false`,
 /// which mirrors the C++ early returns.
-/// `uECC_make_key` + `uECC_shared_secret`: a fresh client key pair per
-/// process, so two runs never agree on a key.
 fn make_key(svr_pubkey: &[u8]) -> Option<KeyPair> {
     use k256::elliptic_curve::Generate;
 
@@ -273,7 +272,7 @@ pub struct LogCrypt {
 impl LogCrypt {
     /// `LogCrypt(const char* _pubkey)`.
     ///
-    /// `_pubkey` must be exactly 128 hex characters describing a 64-byte
+    /// `pubkey` must be exactly 128 hex characters describing a 64-byte
     /// secp256k1 public key. `None`, empty, wrong length, non-hex or
     /// cryptographically invalid input all leave `is_crypt() == false`, which
     /// mirrors the C++ early returns.
@@ -358,7 +357,7 @@ impl LogCrypt {
         le::read_u32(data, off::LENGTH)
     }
 
-    /// `LogCrypt::UpdateLogLen()` — adds `_add_len` to the recorded payload
+    /// `LogCrypt::UpdateLogLen()` — adds `add_len` to the recorded payload
     /// length (wrapping, exactly like the C++ `uint32_t` arithmetic).
     pub fn update_log_len(data: &mut [u8], add_len: u32) {
         if data.len() < HEADER_LEN {
@@ -368,7 +367,7 @@ impl LogCrypt {
         le::write_u32(data, off::LENGTH, current);
     }
 
-    /// `LogCrypt::SetTailerInfo()` — writes `_magic_end` at `_data[0]`.
+    /// `LogCrypt::SetTailerInfo()` — writes `magic_end` at `data[0]`.
     ///
     /// Callers pass the slice starting at the tailer offset.
     pub fn set_tailer_info(data: &mut [u8], magic_end: u8) {
