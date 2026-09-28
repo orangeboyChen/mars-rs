@@ -789,10 +789,19 @@ impl ShortLink {
         }
 
         let index = usize::try_from(connected.index).unwrap_or(usize::MAX);
-        // the pairs that lost: the C++ reports the ones its connect had
-        // *started*, which the host does not say, so every pair before the one
-        // that won is reported
-        let losers: Vec<IpPortItem> = self.profile.ip_items.iter().take(index).cloned().collect();
+        // the pairs that lost: only the ones the host had *started* a connect
+        // on, which is what the C++'s `ConnectingIndex` carries — a pair the
+        // winner beat before its dial began is not a pair that timed out, and
+        // reporting it is how a pair that was never tried gets banned
+        let losers: Vec<IpPortItem> = self
+            .profile
+            .ip_items
+            .iter()
+            .take(index)
+            .enumerate()
+            .filter(|(i, _)| connected.is_connecting(*i))
+            .map(|(_, item)| item.clone())
+            .collect();
         for item in &losers {
             self.report(
                 ErrCmdType::Socket,
@@ -1803,6 +1812,10 @@ mod tests {
         });
         let mut host = Host::new(seen.clone());
         host.profile.index = 2;
+        // the three were dialled at once, and the first two were still
+        // connecting when the third won
+        host.profile.set_connecting(0, true);
+        host.profile.set_connecting(1, true);
         host.profile.rtt = 40;
         host.profile.total_cost = 60;
         link.set_socket_operator(host);
@@ -1837,7 +1850,31 @@ mod tests {
                     port: 80,
                 },
             ],
-            "every pair before the one that won"
+            "every pair before the one that won that was dialled"
+        );
+    }
+
+    /// The C++ reports a losing pair only when its own connect was started:
+    /// `ShortLinkConnectObserver` sets `ConnectingIndex[_index]` in `OnConnect`,
+    /// so a pair the winner beat before its dial began is not reported, and is
+    /// not one the net source's history may count against.
+    #[test]
+    fn a_pair_the_winner_beat_before_its_connect_began_is_not_reported() {
+        let seen = Seen::default();
+        let mut link = link(&seen);
+        link.set_shortlink_items(|_, _| vec![item("183.3.226.35", 80), item("183.3.226.36", 80)]);
+        let mut host = Host::new(seen.clone());
+        // the second pair answered before the first was ever dialled, so the
+        // host leaves the first out of the mask
+        host.profile.index = 1;
+        link.set_socket_operator(host);
+
+        let socket = link.connect_at(1000).unwrap();
+        assert!(socket.is_valid());
+        assert_eq!(link.profile().ip, "183.3.226.36");
+        assert!(
+            seen.reports.lock().unwrap().is_empty(),
+            "a pair no connect was started on is not one that timed out"
         );
     }
 
