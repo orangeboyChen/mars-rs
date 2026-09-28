@@ -14,8 +14,8 @@
 // them.
 //
 // The shape is the one the Android `Xlog` has, and the one the C ABI spells with
-// a handle: `Xlog(config)` opens an appender of its own and answers it, and the
-// app writes through what it was given. Nothing here is deprecated, because
+// a handle: `Xlog.open(config)` opens an appender of its own and answers it, and
+// the app writes through what it was given. Nothing here is deprecated, because
 // there is no older Swift API to keep — the process-wide appender
 // `mars_xlog_open` opens is a set of C symbols, and `import MarsRSFFI` reaches
 // them. `currentLogPath` and `currentCachePath` are the exception: they are that
@@ -33,7 +33,7 @@ import Foundation
 /// through it from wherever there is something to say.
 ///
 /// ```swift
-/// let log = try Xlog(
+/// let log = try Xlog.open(
 ///     XlogConfig(
 ///         logDirectory: logDirectory.path,
 ///         cacheDirectory: cacheDirectory.path,
@@ -264,8 +264,12 @@ public final class Xlog {
         path(of: mars_xlog_current_log_cache_path)
     }
 
-    /// Opens an appender of this `Xlog`'s own: its own log directory, file name
-    /// prefix, key, mode and cache file, all of them `config`'s.
+    /// Opens an appender of its own: its own log directory, file name prefix,
+    /// key, mode and cache file, all of them `config`'s — the one call every
+    /// platform of the port opens one with, under the one name:
+    /// `Xlog.open(config)` in Kotlin, in TypeScript and in Dart. Swift has a
+    /// constructor that does the same thing, and this is the name an app still
+    /// wants: an appender is opened for the process, not for an expression.
     ///
     /// The prefix is what the appender is known by — and what every one of its
     /// files starts with — so an app that wants two gives them two. Asking for
@@ -273,8 +277,15 @@ public final class Xlog {
     /// a second one.
     ///
     /// - Parameter config: what to open it with.
+    /// - Returns: the appender `config` asked for.
     /// - Throws: `XlogError` when the config is one the C ABI refuses, which is
     ///           what an empty log directory comes to.
+    public static func open(_ config: XlogConfig) throws -> Xlog {
+        try Xlog(config)
+    }
+
+    /// `Xlog.open(_:)`, as a constructor: the same appender, and the same
+    /// `XlogError` for a configuration the C ABI refuses.
     public init(_ config: XlogConfig) throws {
         guard !config.logDirectory.isEmpty else {
             throw XlogError.emptyLogDirectory

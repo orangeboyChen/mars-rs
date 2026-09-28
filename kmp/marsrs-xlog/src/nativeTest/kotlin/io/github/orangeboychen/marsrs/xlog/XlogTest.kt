@@ -31,7 +31,7 @@ class XlogTest {
     fun aRecordReachesTheLogFile() {
         // The appender creates the directory itself, the way the C++'s does.
         val dir = "${getenv("TMPDIR")?.toKString() ?: DEFAULT_TEMP_DIR}/marsrs-kmp-${getpid()}"
-        val xlog = Xlog(XlogConfig(logDir = dir, namePrefix = PREFIX, level = LogLevel.VERBOSE))
+        val xlog = Xlog.open(XlogConfig(logDir = dir, namePrefix = PREFIX, level = LogLevel.VERBOSE))
         try {
             assertTrue(xlog.isOpen, "no appender is open for $PREFIX in $dir")
             assertTrue(xlog.isLoggable(LogLevel.INFO), "an appender opened at verbose drops info")

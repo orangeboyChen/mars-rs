@@ -20,7 +20,7 @@ import io.github.orangeboychen.marsrs.xlog.LogLevel
 import io.github.orangeboychen.marsrs.xlog.Xlog
 import io.github.orangeboychen.marsrs.xlog.XlogConfig
 
-val xlog = Xlog(
+val xlog = Xlog.open(
     XlogConfig(
         logDir = File(context.filesDir, "xlog/log").path,
         cacheDir = File(context.filesDir, "xlog/cache").path,
@@ -55,7 +55,7 @@ xlog.f("login", "…")
 xlog.log(LogLevel.DEBUG, "net", "…")
 ```
 
-Java 写的完全一样 —— `new Xlog(config)` 然后 `xlog.i(tag, message)` —— 不用再学别的。
+Java 写的完全一样 —— `Xlog.open(config)` 然后 `xlog.i(tag, message)` —— 不用再学别的。
 
 构造起来很贵的消息值得先问一句：被级别丢掉的记录，那串 `String` 你照样已经付过了。
 
@@ -96,7 +96,7 @@ Log.setLogImp(Xlog())
 Log.d("net", "…")
 
 // 现在
-val xlog = Xlog(XlogConfig(logDir = dir, namePrefix = "marsrs"))
+val xlog = Xlog.open(XlogConfig(logDir = dir, namePrefix = "marsrs"))
 xlog.d("net", "…")
 ```
 

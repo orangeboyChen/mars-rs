@@ -30,7 +30,7 @@ framework 有四个 slice —— `ios-arm64`、`ios-arm64_x86_64-simulator`、
 ```swift
 import MarsRSXlog
 
-let log = try Xlog(
+let log = try Xlog.open(
     XlogConfig(
         logDirectory: logDirectory.path,
         cacheDirectory: cacheDirectory.path,
@@ -57,7 +57,7 @@ config.compressionLevel = 6
 config.publicKey = publicKey      // 留空写出的文件不加密
 ```
 
-appender 拒绝这份配置时，`try Xlog(...)` 会抛 `XlogError` —— 空的日志目录、空的
+appender 拒绝这份配置时，`Xlog.open(...)` 会抛 `XlogError` —— 空的日志目录、空的
 前缀、压缩器不接受的压缩级别、负的 `cacheDays`。
 
 ## 写

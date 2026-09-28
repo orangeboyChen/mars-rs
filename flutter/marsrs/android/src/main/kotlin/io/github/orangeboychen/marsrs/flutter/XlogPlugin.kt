@@ -4,7 +4,7 @@
 // port, and the same class `kmp/marsrs-xlog` publishes to a Kotlin Multiplatform
 // app and `Sources/MarsRSXlog/Xlog.swift` to a Swift one. So what this file is
 // is a channel over an API that already exists, and nothing of it is invented
-// here: `Xlog(XlogConfig(...))`, `log`, `isLoggable`, `flush`, `close`, and the
+// `Xlog.open(XlogConfig(...))`, `log`, `isLoggable`, `flush`, `close`, and the
 // five settings, under the names every other platform of the port gives them.
 //
 // The xlog-only plugin is `marsrs_flutter_xlog`, and this file is its Kotlin
@@ -83,13 +83,14 @@ class XlogPlugin :
     }
 
     /**
-     * `Xlog(XlogConfig(...))`: opens the appender of the configuration the Dart
-     * caller sent.
+     * `Xlog.open(XlogConfig(...))`: opens the appender of the configuration the
+     * Dart caller sent.
      *
-     * The constructor is what refuses a configuration the appender cannot honour
-     * — a blank `logDir` or `namePrefix`, a compression level out of range — and
-     * its `IllegalArgumentException` is what the caller is answered with, rather
-     * than a handle it would write through the process-wide appender with.
+     * The constructor [Xlog.open] calls is what refuses a configuration the
+     * appender cannot honour — a blank `logDir` or `namePrefix`, a compression
+     * level out of range — and its `IllegalArgumentException` is what the caller
+     * is answered with, rather than a handle it would write through the
+     * process-wide appender with.
      */
     private fun open(call: MethodCall, result: Result) {
         val config = XlogConfig(
@@ -103,7 +104,7 @@ class XlogPlugin :
             cacheDir = call.optionalString("cacheDir"),
             cacheDays = call.int("cacheDays", NO_CACHE_DAYS)
         )
-        appenders[config.namePrefix] = Xlog(config)
+        appenders[config.namePrefix] = Xlog.open(config)
         result.success(null)
     }
 

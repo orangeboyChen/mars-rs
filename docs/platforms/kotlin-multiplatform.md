@@ -29,7 +29,7 @@ import io.github.orangeboychen.marsrs.xlog.LogLevel
 import io.github.orangeboychen.marsrs.xlog.Xlog
 import io.github.orangeboychen.marsrs.xlog.XlogConfig
 
-val xlog = Xlog(
+val xlog = Xlog.open(
     XlogConfig(
         logDir = logDirectory,
         namePrefix = "marsrs",
@@ -48,9 +48,9 @@ xlog.close()
 `logDir` is the one option with no default — the rest are on
 [the configuration page](/configuration).
 
-This is the `Xlog` of [Android](/platforms/android): the same constructor, the
-same members, the same names, so a shared module that moves between `xlog-kmp`
-and `xlog` renames nothing.
+This is the `Xlog` of [Android](/platforms/android): `Xlog.open(config)` is a
+factory over the constructor, with the same members and the same names, so a
+shared module that moves between `xlog-kmp` and `xlog` renames nothing.
 
 ## Writing
 

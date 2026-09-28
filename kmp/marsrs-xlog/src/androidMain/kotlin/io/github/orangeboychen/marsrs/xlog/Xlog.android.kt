@@ -119,7 +119,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
      */
     private fun requireOpen(): Long {
         check(isOpen) {
-            "no appender of this Xlog is open ('$namePrefix'): build another Xlog(XlogConfig(...)) to log again"
+            "no appender of this Xlog is open ('$namePrefix'): Xlog.open(XlogConfig(...)) another to log again"
         }
         return handle
     }
@@ -163,7 +163,18 @@ public actual class Xlog actual constructor(config: XlogConfig) {
         cachedays = this@toNative.cacheDays
     }
 
-    private companion object {
+    public actual companion object {
+        /**
+         * Opens an appender of its own: the constructor of this actual, under the
+         * one name every platform of the port opens one with.
+         *
+         * `@JvmStatic` is what puts a `static` on `Xlog` itself — the class the
+         * symbols of `marsrs-jni` live beside — so a Java caller writes
+         * `Xlog.open(config)` and not `Xlog.Companion.open(config)`.
+         */
+        @JvmStatic
+        public actual fun open(config: XlogConfig): Xlog = Xlog(config)
+
         @JvmStatic
         private external fun write(handle: Long, level: Int, tag: String, message: String)
 

@@ -31,8 +31,16 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
+  "codegenConfig": {
+    "name": "NativeXlogSpec",
+    "type": "modules",
+    "jsSrcsDir": "src",
+    "android": {
+      "javaPackageName": "io.github.orangeboychen.marsrs.xlog.reactnative"
+    }
+  },
   "peerDependencies": {
     "react": ">=18.0.0",
-    "react-native": ">=0.73.0"
+    "react-native": ">=0.74.0"
   }
 }

@@ -33,7 +33,7 @@ either platform resolves it.
 ```swift
 import MarsRSXlog
 
-let log = try Xlog(
+let log = try Xlog.open(
     XlogConfig(
         logDirectory: logDirectory.path,
         cacheDirectory: cacheDirectory.path,
@@ -60,9 +60,10 @@ config.compressionLevel = 6
 config.publicKey = publicKey      // empty writes an unencrypted file
 ```
 
-`try Xlog(...)` throws an `XlogError` when the appender refuses the config — an
-empty log directory, an empty prefix, a compression level the compressor does not
-take, a negative `cacheDays`.
+`Xlog.open(_:)` is a static factory over the constructor, and it throws an
+`XlogError` when the appender refuses the config — an empty log directory, an
+empty prefix, a compression level the compressor does not take, a negative
+`cacheDays`.
 
 ## Writing
 

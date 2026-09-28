@@ -4,32 +4,24 @@
 // two names for one package until STN and SDT land in the C ABI, and they land
 // here.
 //
-// A native module, and not a JSI binding: the Apple binary is a static library
-// inside `MarsRSXlog.xcframework`, and there is nothing to `dlopen` for one. So
-// what the two halves call is the instance API every other platform of the port
-// calls — `mars_xlog_new_instance` and friends over the C ABI on iOS,
-// `Xlog(XlogConfig(...))` over the AAR on Android — and what is below is the
-// `Xlog` of `Sources/MarsRSXlog/Xlog.swift`, of `android/marsrs-xlog` and of
-// `kmp/marsrs-xlog`: the same class, the same configuration, the same six
-// helpers, under the same names.
+// A TurboModule, and not a bridge module: `src/NativeXlog.ts` is the spec
+// codegen reads, and what it answers is a module whose methods are called where
+// they are asked for and return before the next line runs — one that answers no
+// promise is a call and not an `await`, and one that answers a value answers it
+// before it returns. So this `Xlog` is the `Xlog` of
+// `Sources/MarsRSXlog/Xlog.swift`, of `android/marsrs` and of `kmp/marsrs-xlog`
+// member for member: `Xlog.open(config)` answers the appender, `xlog.level` is
+// the property it is in Kotlin and in Swift, and `xlog.i(tag, message)` has
+// landed by the time it returns.
 //
-// Two things a bridge cannot be, and they are the two places this file is not
-// the Kotlin:
-//
-//   * `Xlog.open` answers a `Promise`, because the appender is opened on the
-//     platform's thread — a JS constructor cannot await, so the constructor is
-//     `open` and not `new Xlog(...)`.
-//   * The settings are methods — `setLevel`, `setMode`, `setMaxFileSize` …
-//     — because a JS setter cannot be awaited either. What an app reads back is
-//     the value this instance holds: the one `open` or the last `setLevel` gave
-//     it, which is the appender's and no other's.
-//
-// The level, the mode and the two limits are held here too, because a JS
-// property cannot be awaited: what `level` answers is what `open` or the last
-// `setLevel` gave this instance, and `getLevel` is the call that asks the
-// appender for its own.
+// Five settings are properties and not `setLevel` / `getLevel` pairs, because a
+// JS property is the Kotlin and the Swift spelling and a TurboModule setter is
+// called where it is written: `xlog.level` reads the appender's own and writes
+// it, and `mode`, `consoleLogEnabled`, `maxFileSizeBytes` and
+// `maxAliveTimeSeconds` answer what this instance last wrote — the C ABI has no
+// getter for those four, and neither the Kotlin nor the Swift answers one.
 
-import { NativeModules } from 'react-native';
+import NativeXlog from './NativeXlog';
 
 /** `TLogLevel`; `none` is `MARS_LEVEL_NONE`, which the filter understands but
  * the C enum does not carry. */
@@ -45,8 +37,7 @@ export const LogLevel = {
 
 export type LogLevel = (typeof LogLevel)[keyof typeof LogLevel];
 
-/** `TAppenderMode`: whether a record reaches the file before the call
- * returns. */
+/** `TAppenderMode`: whether a record reaches the file before the call returns. */
 export const AppenderMode = {
   /** The record goes into the memory-mapped cache and a writer thread takes it
    * to the file — what the C++ opens with, and what `flush` drains. */
@@ -100,45 +91,27 @@ export interface XlogConfig {
   cacheDays?: number;
 }
 
-/** The native module, as `XlogModule` (Android) and `Xlog` (iOS) answer it.
- * Every method is a promise, and every promise rejects with the platform's own
- * error. Each one carries the prefix of the appender it is about, because that
- * is what an appender is known by on both platforms. */
-interface XlogNative {
-  open(config: XlogConfig): Promise<void>;
-  log(namePrefix: string, level: number, tag: string, message: string): Promise<void>;
-  isLoggable(namePrefix: string, level: number): Promise<boolean>;
-  getLevel(namePrefix: string): Promise<number>;
-  flush(namePrefix: string, sync: boolean): Promise<void>;
-  setLevel(namePrefix: string, level: number): Promise<void>;
-  setMode(namePrefix: string, mode: number): Promise<void>;
-  setConsoleLogEnabled(namePrefix: string, enabled: boolean): Promise<void>;
-  setMaxFileSize(namePrefix: string, bytes: number): Promise<void>;
-  setMaxAliveTime(namePrefix: string, seconds: number): Promise<void>;
-  close(namePrefix: string): Promise<void>;
-}
-
 /** `XlogConfig.namePrefix` of the Kotlin and of the Swift: what an appender is
  * opened with when a caller gives none. */
 const DEFAULT_NAME_PREFIX = 'xlog';
 
-const nativeModule = NativeModules.Xlog as XlogNative | undefined;
-
-function native(): XlogNative {
-  if (!nativeModule) {
-    throw new Error(
-      'marsrs-react-native: Xlog is not linked. Run `pod install` for iOS, ' +
-        'and rebuild the app for Android — the module is autolinked.'
-    );
-  }
-  return nativeModule;
-}
+/** The appender of every `namePrefix` `Xlog.open` has opened and `close` has
+ * not closed, by the prefix: what makes two `Xlog.open`s of one prefix one
+ * appender, which the native side already is — one module, one appender per
+ * prefix, and every call carrying the prefix it is about.
+ *
+ * The second `open` answers the appender the first made, so the two names an
+ * app holds are one `Xlog`: `close` on either is `close` on both, and nothing
+ * writes through an appender that is gone — which is what it would do, and in
+ * silence, if the second call were a second instance the first one's `close`
+ * did not know about. */
+const openAppenders = new Map<string, Xlog>();
 
 /** The appender of one `namePrefix`: the `Xlog` of the Swift and the Kotlin of
  * the port. `Xlog.open` makes it, and `close` releases the appender it made. */
 export class Xlog {
-  private readonly config: XlogConfig;
-
+  /** The name the appender is known by, and what every one of its files starts
+   * with: the `namePrefix` of the Kotlin and of the Swift. */
   readonly namePrefix: string;
 
   private currentLevel: LogLevel;
@@ -155,7 +128,6 @@ export class Xlog {
   private open = true;
 
   private constructor(config: XlogConfig) {
-    this.config = config;
     this.namePrefix = config.namePrefix ?? DEFAULT_NAME_PREFIX;
     this.currentLevel = config.level ?? LogLevel.info;
     this.currentMode = config.mode ?? AppenderMode.async;
@@ -164,11 +136,26 @@ export class Xlog {
   /** `mars_xlog_new_instance`: opens the appender of `config` and answers the
    * `Xlog` that writes through it.
    *
-   * Rejects when the appender would not take the configuration — an empty
+   * The appender of a `namePrefix` this has already opened is answered as it
+   * is, and not opened again: the native side is one appender per prefix, and a
+   * second one over the first would be a handle nothing releases. So two calls
+   * of one prefix are one `Xlog`, and `close` on it is `close` on both.
+   *
+   * Throws when the appender would not take the configuration — an empty
    * `logDir` or `namePrefix`, or a directory it cannot write to. */
-  static async open(config: XlogConfig): Promise<Xlog> {
+  static open(config: XlogConfig): Xlog {
+    const namePrefix = config.namePrefix ?? DEFAULT_NAME_PREFIX;
+    const alreadyOpen = openAppenders.get(namePrefix);
+    if (alreadyOpen) {
+      return alreadyOpen;
+    }
     const xlog = new Xlog(config);
-    await native().open(config);
+    if (!NativeXlog.open(config)) {
+      throw new Error(
+        `marsrs-react-native: the appender of '${xlog.namePrefix}' refused ${config.logDir}`
+      );
+    }
+    openAppenders.set(namePrefix, xlog);
     return xlog;
   }
 
@@ -177,26 +164,65 @@ export class Xlog {
     return this.open;
   }
 
-  /** The level of this appender: the one `open` or the last `setLevel` gave
-   * it. */
+  /** The level of this appender: what the appender answers, and not what this
+   * instance holds — `mars_xlog_get_level`, which is the one of the five
+   * settings the C ABI has a getter for. */
   get level(): LogLevel {
-    return this.currentLevel;
+    if (!this.open) {
+      return this.currentLevel;
+    }
+    const level = NativeXlog.getLevel(this.namePrefix) as LogLevel;
+    this.currentLevel = level;
+    return level;
   }
 
-  /** The mode of this appender: the one `open` or the last `setMode` gave it. */
+  set level(level: LogLevel) {
+    if (!this.open) {
+      return;
+    }
+    NativeXlog.setLevel(this.namePrefix, level);
+    this.currentLevel = level;
+  }
+
+  /** The mode of this appender: what `open` or the last write to it gave it,
+   * because the C ABI is asked for a mode and never answers one. */
   get mode(): AppenderMode {
     return this.currentMode;
   }
 
-  /** Whether the console prints the log too: what the last
-   * `setConsoleLogEnabled` gave it, `false` when it was never called. */
+  set mode(mode: AppenderMode) {
+    if (!this.open) {
+      return;
+    }
+    NativeXlog.setMode(this.namePrefix, mode);
+    this.currentMode = mode;
+  }
+
+  /** Whether the console prints the log too: what the last write to it gave it,
+   * `false` when there was none. */
   get consoleLogEnabled(): boolean {
     return this.currentConsoleLogEnabled;
+  }
+
+  set consoleLogEnabled(enabled: boolean) {
+    if (!this.open) {
+      return;
+    }
+    NativeXlog.setConsoleLogEnabled(this.namePrefix, enabled);
+    this.currentConsoleLogEnabled = enabled;
   }
 
   /** The size a log file is split at, in bytes; `0` never splits. */
   get maxFileSizeBytes(): number {
     return this.currentMaxFileSize;
+  }
+
+  set maxFileSizeBytes(bytes: number) {
+    if (!this.open) {
+      return;
+    }
+    NativeXlog.setMaxFileSize(this.namePrefix, bytes);
+    this.currentMaxFileSize = bytes;
   }
 
   /** How long a log file is written to before the appender opens the next one,
@@ -205,14 +231,22 @@ export class Xlog {
     return this.currentMaxAliveTime;
   }
 
+  set maxAliveTimeSeconds(seconds: number) {
+    if (!this.open) {
+      return;
+    }
+    NativeXlog.setMaxAliveTime(this.namePrefix, seconds);
+    this.currentMaxAliveTime = seconds;
+  }
+
   /** Whether a record at `level` is written: the appender's own answer, and the
-   * one the Swift's `isEnabled(for:)` and the Kotlin's `isLoggable` give. An app
-   * asks it before it builds a message that is expensive to build. */
-  async isLoggable(level: LogLevel): Promise<boolean> {
+   * one the Swift's `isLoggable` and the Kotlin's give. An app asks it before it
+   * builds a message that is expensive to build. */
+  isLoggable(level: LogLevel): boolean {
     if (!this.open) {
       return false;
     }
-    return native().isLoggable(this.namePrefix, level);
+    return NativeXlog.isLoggable(this.namePrefix, level);
   }
 
   /** `mars_xlog_write_instance`: writes `message` at `level`, tagged `tag`.
@@ -220,124 +254,64 @@ export class Xlog {
    * The file, the function and the line of the record are left empty on the
    * platform side — there is no JS frame to name, and the C++ writes an empty
    * one too. */
-  async log(level: LogLevel, tag: string, message: string): Promise<void> {
+  log(level: LogLevel, tag: string, message: string): void {
     if (!this.open) {
       return;
     }
-    await native().log(this.namePrefix, level, tag, message);
+    NativeXlog.log(this.namePrefix, level, tag, message);
   }
 
   /** `log` at `LogLevel.verbose`. */
-  v(tag: string, message: string): Promise<void> {
-    return this.log(LogLevel.verbose, tag, message);
+  v(tag: string, message: string): void {
+    this.log(LogLevel.verbose, tag, message);
   }
 
   /** `log` at `LogLevel.debug`. */
-  d(tag: string, message: string): Promise<void> {
-    return this.log(LogLevel.debug, tag, message);
+  d(tag: string, message: string): void {
+    this.log(LogLevel.debug, tag, message);
   }
 
   /** `log` at `LogLevel.info`. */
-  i(tag: string, message: string): Promise<void> {
-    return this.log(LogLevel.info, tag, message);
+  i(tag: string, message: string): void {
+    this.log(LogLevel.info, tag, message);
   }
 
   /** `log` at `LogLevel.warning`. */
-  w(tag: string, message: string): Promise<void> {
-    return this.log(LogLevel.warning, tag, message);
+  w(tag: string, message: string): void {
+    this.log(LogLevel.warning, tag, message);
   }
 
   /** `log` at `LogLevel.error`. */
-  e(tag: string, message: string): Promise<void> {
-    return this.log(LogLevel.error, tag, message);
+  e(tag: string, message: string): void {
+    this.log(LogLevel.error, tag, message);
   }
 
   /** `log` at `LogLevel.fatal`. */
-  f(tag: string, message: string): Promise<void> {
-    return this.log(LogLevel.fatal, tag, message);
+  f(tag: string, message: string): void {
+    this.log(LogLevel.fatal, tag, message);
   }
 
   /** `mars_xlog_flush_instance`: takes what is in the cache to the file. `sync`
    * waits for the write, which is what an app wants before it reads the file,
    * uploads it, or lets the process go. */
-  async flush(sync = false): Promise<void> {
+  flush(sync = false): void {
     if (!this.open) {
       return;
     }
-    await native().flush(this.namePrefix, sync);
-  }
-
-  /** `mars_xlog_set_level_instance`: moves the level of this appender to
-   * `level`. */
-  async setLevel(level: LogLevel): Promise<void> {
-    if (!this.open) {
-      return;
-    }
-    await native().setLevel(this.namePrefix, level);
-    this.currentLevel = level;
-  }
-
-  /** `mars_xlog_get_level`: the level this appender is at — what `open` or the
-   * last `setLevel` gave it, read back from the appender and not from this
-   * instance. */
-  async getLevel(): Promise<LogLevel> {
-    if (!this.open) {
-      return this.currentLevel;
-    }
-    const level = await native().getLevel(this.namePrefix);
-    this.currentLevel = level;
-    return level;
-  }
-
-  /** `mars_xlog_set_mode_instance`: moves this appender to `mode`. */
-  async setMode(mode: AppenderMode): Promise<void> {
-    if (!this.open) {
-      return;
-    }
-    await native().setMode(this.namePrefix, mode);
-    this.currentMode = mode;
-  }
-
-  /** `mars_xlog_set_console_log_instance`: whether the console prints the log
-   * too. */
-  async setConsoleLogEnabled(enabled: boolean): Promise<void> {
-    if (!this.open) {
-      return;
-    }
-    await native().setConsoleLogEnabled(this.namePrefix, enabled);
-    this.currentConsoleLogEnabled = enabled;
-  }
-
-  /** `mars_xlog_set_max_file_size_instance`: the size a log file is split at;
-   * `0` never splits. */
-  async setMaxFileSize(bytes: number): Promise<void> {
-    if (!this.open) {
-      return;
-    }
-    await native().setMaxFileSize(this.namePrefix, bytes);
-    this.currentMaxFileSize = bytes;
-  }
-
-  /** `mars_xlog_set_max_alive_duration_instance`: how long a log file is
-   * written to before the appender opens the next one; `0` is the C++'s own ten
-   * days. */
-  async setMaxAliveTime(seconds: number): Promise<void> {
-    if (!this.open) {
-      return;
-    }
-    await native().setMaxAliveTime(this.namePrefix, seconds);
-    this.currentMaxAliveTime = seconds;
+    NativeXlog.flush(this.namePrefix, sync);
   }
 
   /** `mars_xlog_release_instance`: closes the appender `Xlog.open` made.
    * Nothing is closed twice: an `Xlog` that is already closed answers `false`
-   * from `isOpen` and drops what it is asked to write. */
-  async close(): Promise<void> {
+   * from `isOpen` and drops what it is asked to write — and an appender two
+   * names hold is closed for both, because `Xlog.open` gave them one `Xlog`. */
+  close(): void {
     if (!this.open) {
       return;
     }
     this.open = false;
-    await native().close(this.namePrefix);
+    openAppenders.delete(this.namePrefix);
+    NativeXlog.close(this.namePrefix);
   }
 }
 

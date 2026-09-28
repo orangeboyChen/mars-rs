@@ -6,6 +6,12 @@ the C ABI is 28 `mars_xlog_*` symbols and nothing else. STN and SDT land in
 `marsrs-react-native` and in nothing else. Take one of the two, not both: both
 carry the same native library, and an app with two of it does not build.
 
+The module is a TurboModule, which is what the New Architecture is for: React
+Native 0.74 or newer, with the bridge switched off. It is the one thing this
+surface asks of the app, and it is what pays for the rest — a TurboModule is not
+a bridge module, so an app still on the old architecture has no module to
+`TurboModuleRegistry.getEnforcing`.
+
 ## Install
 
 ```bash
@@ -16,7 +22,7 @@ cd ios && pod install
 The package is published to npm — publishing is not switched on yet, and until it
 is, `scripts/package_react_native.sh <version> <asset-dir>` writes the same module
 as `marsrs-react-native-xlog-<version>.tgz`: `npm pack`, the version stamped into
-`package.json`, the apple job's `MarsRSXlog.xcframework` copied in. `npm install
+`package.json`, the apple job's `marsrs-xlog.xcframework` copied in. `npm install
 ./marsrs-react-native-xlog-<version>.tgz` installs that one.
 
 What the package carries that a checkout does not is that framework: CocoaPods
@@ -27,48 +33,58 @@ coordinate an app that takes the AAR directly does.
 
 Nothing in the app has to name the module: autolinking finds the `ReactPackage`
 in `android/` and the pod in `ios/`, which is what puts `Xlog` in
-`NativeModules`.
+`TurboModuleRegistry`. `src/NativeXlog.ts` is the spec React Native's codegen
+reads, and `codegenConfig` in `package.json` is what points it at `src`:
+`NativeXlogSpec` is generated into the app's `React-Codegen` pod and into the
+Android build, and neither half of the module has to be told the eleven
+signatures twice.
 
 ## Open, write, flush
 
 ```ts
 import { AppenderMode, LogLevel, Xlog } from 'marsrs-react-native-xlog';
 
-const xlog = await Xlog.open({
+const xlog = Xlog.open({
   logDir: `${RNFS.DocumentDirectoryPath}/xlog`,
   namePrefix: 'marsrs',
   level: LogLevel.info,
   mode: AppenderMode.async,
 });
-await xlog.setConsoleLogEnabled(__DEV__);
+xlog.consoleLogEnabled = __DEV__;
 
-await xlog.i('startup', 'hello from mars');
+xlog.i('startup', 'hello from mars');
 
-await xlog.flush(true);   // before the app reads or uploads the files
-await xlog.close();
+xlog.flush(true);   // before the app reads or uploads the files
+xlog.close();
 ```
 
 `logDir` is the one option with no default — the rest are on
 [the configuration page](/configuration), under the names the Kotlin of the port
-gives them.
+gives them. `Xlog.open` throws when the appender will not take the directory: an
+empty `logDir` or `namePrefix`, or one the process cannot write to.
 
-## Every call is a `Promise`
+## Nothing answers a `Promise`
 
-The module is a native module and not a JSI binding: the Apple binary is a static
-library inside `MarsRSXlog.xcframework`, and there is nothing to `dlopen` for
-one. So every call that reaches the appender crosses to the platform thread and
-answers a `Promise` — `await` it, or let it go when the caller does not want to
-wait for a record:
+The module's method queue is `RCTJSThread`, so a method of it is made on the JS
+thread and returns from there: a call that answers a value answers it before the
+next line runs, and none of them answers a `Promise`. That is what lets this
+`Xlog` be the `Xlog` of `Sources/MarsRSXlog` and of `android/marsrs` member for
+member — `Xlog.open(config)` answers the appender, and `xlog.i(tag, message)` has
+landed by the time it returns.
+
+The five settings are properties and not `setLevel` / `getLevel` pairs, because a
+JS property is the spelling the Swift and the Kotlin use and a TurboModule setter
+is called where it is written:
 
 ```ts
-void xlog.i('startup', 'cold start');
+xlog.level = LogLevel.warning;      // the appender's own, read back through it
+xlog.maxFileSizeBytes = 8 * 1024 * 1024;
 ```
 
-That is the one thing this surface cannot share with the Swift and the Kotlin of
-the port, where a record costs a call and nothing else, and it is why the
-settings are `setLevel(…)` and not `level = …`. What an app reads back —
-`level`, `mode`, `maxFileSizeBytes` … — is a getter over the value this instance
-holds, and needs no round trip.
+`level` is the one of the five the C ABI answers a getter for, so `xlog.level`
+reads the appender's own; `mode`, `consoleLogEnabled`, `maxFileSizeBytes` and
+`maxAliveTimeSeconds` answer what this instance last wrote, which is all the C
+ABI leaves to answer — and all the Swift and the Kotlin of the port answer too.
 
 ## Writing
 
@@ -77,14 +93,14 @@ tag and a message, and `log(level, tag, message)` when the level is not known
 until the call.
 
 ```ts
-await xlog.v('net', '…');
-await xlog.d('net', '…');
-await xlog.i('startup', '…');
-await xlog.w('net', '…');
-await xlog.e('login', '…');
-await xlog.f('login', '…');
+xlog.v('net', '…');
+xlog.d('net', '…');
+xlog.i('startup', '…');
+xlog.w('net', '…');
+xlog.e('login', '…');
+xlog.f('login', '…');
 
-await xlog.log(LogLevel.debug, 'net', '…');
+xlog.log(LogLevel.debug, 'net', '…');
 ```
 
 A record below the level the appender was opened at is dropped before anything is
@@ -92,8 +108,8 @@ formatted. A message that is expensive to build is worth asking about first —
 the record is dropped either way, and what `isLoggable` saves is the string:
 
 ```ts
-if (await xlog.isLoggable(LogLevel.debug)) {
-  await xlog.d('net', expensiveDescription());
+if (xlog.isLoggable(LogLevel.debug)) {
+  xlog.d('net', expensiveDescription());
 }
 ```
 
@@ -101,19 +117,22 @@ if (await xlog.isLoggable(LogLevel.debug)) {
 
 | what | how |
 |---|---|
-| move the level | `await xlog.setLevel(LogLevel.warning)` |
+| move the level | `xlog.level = LogLevel.warning` |
 | read the level back | `xlog.level` |
-| switch async / sync | `await xlog.setMode(AppenderMode.sync)` |
-| mirror records to the console | `await xlog.setConsoleLogEnabled(true)` |
-| close a file at a size | `await xlog.setMaxFileSize(8 * 1024 * 1024)` |
-| drop a file at an age | `await xlog.setMaxAliveTime(10 * 24 * 3600)` |
+| switch async / sync | `xlog.mode = AppenderMode.sync` |
+| mirror records to the console | `xlog.consoleLogEnabled = true` |
+| close a file at a size | `xlog.maxFileSizeBytes = 8 * 1024 * 1024` |
+| drop a file at an age | `xlog.maxAliveTimeSeconds = 10 * 24 * 3600` |
 | is it still open | `xlog.isOpen` |
-| drain the cache | `await xlog.flush(true)` |
+| drain the cache | `xlog.flush(true)` |
 
 `close()` drains what is left and closes the appender. Two `Xlog`s of one
 `namePrefix` are one appender — the native side is one module holding one
-appender per prefix, and every call carries the prefix it is about — so give a
-part of the app whose logs are read apart from the rest a prefix of its own.
+appender per prefix, and every call carries the prefix it is about — and an
+`Xlog.open` of a prefix that is already open answers the appender it made
+rather than a second one over it, so two names hold one `Xlog` and `close` on
+either closes it for both. A part of the app whose logs are read apart from the
+rest wants a prefix of its own.
 
 ## What is not in it
 
