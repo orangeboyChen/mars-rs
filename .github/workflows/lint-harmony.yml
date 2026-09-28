@@ -127,7 +127,7 @@ jobs:
       # hvigor runs on the JVM. The DevEco Command Line Tools carry their own
       # Node — `tool/node/` — and their own SDK, so the JDK is the one thing
       # the runner has to bring.
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
