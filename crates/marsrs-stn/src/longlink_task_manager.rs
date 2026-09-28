@@ -16,13 +16,15 @@
 //!   taken down ([`DisconnectInternalCode`]).
 //!
 //! What is left out: the `MessageQueue` the C++ runs its loop on
-//! ([`LongLinkTaskManager::due_time`] is when a host has to call it instead),
-//! `ActiveLogic` and the Android wake lock, `NetSource`'s weak-network
-//! bookkeeping, `get_real_host_`, the tls and handshake callbacks, the report
-//! (`ReportTaskProfile`), `server_sequence_id`, and the minor long links the
-//! C++ makes for itself (`AddMinorLink`, `IsMinorAvailable`, `FixMinorRealhost`)
-//! — a minor link is only a [`Task::CHANNEL_MINOR_LONG`] channel here, which is
-//! whose name the first host of [`Task::minorlong_host_list`] is.
+//! ([`LongLinkTaskManager::due_time`] is when a host has to call it instead —
+//! the deadline it computed, and the C++'s own second for a task the start
+//! path would not let out), `ActiveLogic` and the Android wake lock,
+//! `NetSource`'s weak-network bookkeeping, `get_real_host_`, the tls and
+//! handshake callbacks, the report (`ReportTaskProfile`), `server_sequence_id`,
+//! and the minor long links the C++ makes for itself (`AddMinorLink`,
+//! `IsMinorAvailable`, `FixMinorRealhost`) — a minor link is only a
+//! [`Task::CHANNEL_MINOR_LONG`] channel here, which is whose name the first
+//! host of [`Task::minorlong_host_list`] is.
 //!
 //! A task that is over is not taken off the link: the C++ stops a task on the
 //! link only when the app asked to stop it ([`LongLinkTaskManager::stop_task`]).
@@ -34,6 +36,9 @@ use crate::dynamic_timeout::{DynamicTimeout, DynamicTimeoutStatus, NetworkKind};
 use crate::long_link::DisconnectInternalCode;
 use crate::longlink::LongLinkEncoder;
 use crate::net_source::LonglinkConfig;
+// the C++ posts this queue's loop a literal `MessageTiming(1000)`, which is the
+// second the short link's `DEF_TASK_RUN_LOOP_TIMING` names
+use crate::shortlink_task_manager::RUN_LOOP_TIMING;
 use crate::task::Task;
 use crate::task_intercept::TaskIntercept;
 use crate::task_profile::{
@@ -860,13 +865,24 @@ impl LongLinkTaskManager {
 
     /// When the host has to call [`LongLinkTaskManager::run_loop_at`] again:
     /// the earliest of the deadlines the tasks are waiting on — a timeout that
-    /// is about to run out, or the wait every task owes the queue after a
-    /// channel was failed. [`None`] when there is nothing to wait for, which is
-    /// when the C++ stops its loop.
-    pub fn due_time(&mut self) -> Option<u64> {
+    /// is about to run out, the wait every task owes the queue after a channel
+    /// was failed, or the next pass the C++ gives a task the start path would
+    /// not let out. [`None`] when there is nothing to wait for, which is when
+    /// the C++ stops its loop.
+    ///
+    /// The last of the three is the C++'s own `__RunLoop`, which posts itself a
+    /// `MessageTiming(1000)` for as long as the queue holds anything at all:
+    /// a task `__RunOnStartTask` `continue`d on — one whose channel has not been
+    /// made yet, or one that is not authed — goes out on the next of them and
+    /// on nothing else. The port names the deadline it computed instead of the
+    /// second, but a task that is waiting for its channel has no deadline of
+    /// its own: the channel is made when the host makes it, and what gets the
+    /// task out then is another pass.
+    pub fn due_time_at(&mut self, now: u64) -> Option<u64> {
         let network = self.network();
         let (last_batch_error_time, retry_interval) =
             (self.last_batch_error_time, self.retry_interval);
+        let can_retry = now.saturating_sub(last_batch_error_time) >= retry_interval;
 
         let deadlines = self
             .tasks
@@ -879,8 +895,20 @@ impl LongLinkTaskManager {
             .iter()
             .filter(|profile| !profile.is_running() && profile.retried())
             .map(|_| last_batch_error_time.saturating_add(retry_interval));
+        // what `run_on_start_task_at` would try again now, and what it is still
+        // here for: a pass is what ends the wait, and not a deadline of its own
+        let waits = self
+            .tasks
+            .iter()
+            .filter(|profile| !profile.is_running() && (can_retry || !profile.retried()))
+            .map(|_| now.saturating_add(RUN_LOOP_TIMING));
 
-        deadlines.chain(retries).min()
+        deadlines.chain(retries).chain(waits).min()
+    }
+
+    /// The same, against the clock.
+    pub fn due_time(&mut self) -> Option<u64> {
+        self.due_time_at(gettickcount())
     }
 
     /// `task_intercept_`.
@@ -1814,7 +1842,7 @@ mod tests {
         LOCAL_LONG_LINK_UNAVAILABLE, LOCAL_RESET, LOCAL_TASK_TIMEOUT, LONG_FIRST_PKG_TIMEOUT,
     };
 
-    use super::{LongLinkTaskManager, Response, Timeout, RETRY_INTERNAL};
+    use super::{LongLinkTaskManager, Response, Timeout, RETRY_INTERNAL, RUN_LOOP_TIMING};
     use crate::RespHandle;
 
     /// The reading every test starts from.
@@ -1965,6 +1993,30 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .is_empty(),
             "and it is not failed"
+        );
+    }
+
+    #[test]
+    fn a_task_that_waits_to_start_is_given_the_pass_the_c_gives_it() {
+        let mut manager = manager();
+        let (sent, _, _, _) = wire(&mut manager);
+
+        let mut task = task(7);
+        task.channel_name = "long.other.qq.com".to_string();
+        manager.start_task_at(NOW, task, Task::CHANNEL_LONG);
+
+        assert_eq!(
+            manager.due_time_at(NOW),
+            Some(NOW + RUN_LOOP_TIMING),
+            "the C++ posts its loop for as long as the queue holds the task"
+        );
+
+        // the host makes the channel, and the next pass is what puts it out
+        manager.add_long_link(LonglinkConfig::new("long.other.qq.com"));
+        manager.run_loop_at(NOW + RUN_LOOP_TIMING);
+        assert_eq!(
+            *sent.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![("long.other.qq.com".to_string(), 7, 0)]
         );
     }
 

@@ -1035,7 +1035,10 @@ impl NetCore {
             return Some(now);
         }
         let zombies = self.zombie.lock().unwrap_or_else(poisoned).due_time();
-        let mut due = min_due(self.shortlink.due_time(), self.longlink.due_time());
+        let mut due = min_due(
+            self.shortlink.due_time_at(now),
+            self.longlink.due_time_at(now),
+        );
         due = min_due(due, zombies);
         min_due(due, self.timing_sync.due_time())
     }

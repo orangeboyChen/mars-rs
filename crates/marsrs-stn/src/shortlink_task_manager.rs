@@ -22,7 +22,9 @@
 //!
 //! * the `DEF_TASK_RUN_LOOP_TIMING` message `__RunLoop` posts to itself is
 //!   [`ShortLinkTaskManager::due_time`] instead, which is when the host has to
-//!   call the loop, and [`None`] when it never has to;
+//!   call the loop and [`None`] when it never has to: it names the deadline it
+//!   computed rather than the second, except for a task the start path would
+//!   not let out, which is what the C++'s second is for;
 //! * `Req2Buf` / `Buf2Resp` / `MakesureAuthed` — the app's own encoder and
 //!   decoder — are hooks, and so is `fun_callback_`;
 //! * the QUIC branch of `__RunOnStartTask`, the tls and handshake callbacks,
@@ -54,8 +56,9 @@ pub const RETRY_INTERNAL: u64 = 1000;
 
 /// `DEF_TASK_RUN_LOOP_TIMING` — how often the C++ runs its loop while there is
 /// something in the queue. The port says when it is actually needed
-/// ([`ShortLinkTaskManager::due_time`]) instead, so this is only what a host
-/// that would rather poll falls back to.
+/// ([`ShortLinkTaskManager::due_time`]) instead, so this is the wait a task the
+/// start path would not let out is given, and what a host that would rather
+/// poll falls back to.
 pub const RUN_LOOP_TIMING: u64 = 1000;
 
 /// One of the five ways `__RunOnTimeout` notices a task that answered nothing.
@@ -657,9 +660,19 @@ impl ShortLinkTaskManager {
 
     /// When the host has to call [`ShortLinkTaskManager::run_loop_at`] again:
     /// the earliest of the deadlines the tasks are waiting on — a timeout that
-    /// is about to run out, or a retry that is about to be due. [`None`] when
+    /// is about to run out, a retry that is about to be due, or the next pass
+    /// the C++ gives a task the start path would not let out. [`None`] when
     /// there is nothing to wait for, which is when the C++ stops its loop.
-    pub fn due_time(&mut self) -> Option<u64> {
+    ///
+    /// The last of the three is the C++'s own `DEF_TASK_RUN_LOOP_TIMING`
+    /// message: `__RunLoop` posts one to itself for as long as the queue holds
+    /// anything at all, and a task that `__RunOnStartTask` `continue`d on — one
+    /// that is not authed yet — is let out by the next of them and by nothing
+    /// else. The port asks for the passes it needs instead of for all of them,
+    /// but it still has to ask for that one: a task waiting for auth leaves the
+    /// wait when the app logs in, which is not the same as when its own timeout
+    /// runs out.
+    pub fn due_time_at(&mut self, now: u64) -> Option<u64> {
         let network = self.network();
         let timeouts = self
             .tasks
@@ -675,7 +688,25 @@ impl ShortLinkTaskManager {
                     .retry_start_time
                     .saturating_add(profile.retry_time_interval)
             });
-        timeouts.chain(retries).min()
+        // what `run_on_start_task_at` would try again now, and what it is still
+        // here for: a pass is what ends the wait, and not a deadline of its own.
+        // A task with nowhere to go is left out: the hosts are the task's own
+        // — `get_real_host_` is not here — so no pass fills them in
+        let waits = self
+            .tasks
+            .iter()
+            .filter(|profile| {
+                profile.running.is_none()
+                    && may_start(profile, now)
+                    && !profile.task.shortlink_host_list.is_empty()
+            })
+            .map(|_| now.saturating_add(RUN_LOOP_TIMING));
+        timeouts.chain(retries).chain(waits).min()
+    }
+
+    /// The same, against the clock.
+    pub fn due_time(&mut self) -> Option<u64> {
+        self.due_time_at(gettickcount())
     }
 
     /// `SetDebugHost(_host)` — the host a run is pointed at instead of the ones
@@ -2021,6 +2052,29 @@ mod tests {
 
         assert!(started.lock().unwrap().is_empty());
         assert_eq!(manager.len(), 1);
+    }
+
+    #[test]
+    fn a_task_that_waits_to_start_is_given_the_pass_the_c_gives_it() {
+        let mut manager = ShortLinkTaskManager::new();
+        let started = runs(&mut manager);
+        let authed: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+        let gate = authed.clone();
+        manager.set_make_sure_authed(move |_host, _user_id| *gate.lock().unwrap());
+        let mut task = task(7);
+        task.need_authed = true;
+        manager.start_task_at(100_000, task, prepare());
+
+        assert_eq!(
+            manager.due_time_at(100_000),
+            Some(100_000 + RUN_LOOP_TIMING),
+            "the C++ posts its loop for as long as the queue holds the task"
+        );
+
+        // a second later the app is logged in, and the pass is what sends it
+        *authed.lock().unwrap() = true;
+        manager.run_loop_at(100_000 + RUN_LOOP_TIMING);
+        assert_eq!(*started.lock().unwrap(), vec![(7, true)]);
     }
 
     #[test]
