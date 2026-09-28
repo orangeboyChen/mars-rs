@@ -301,9 +301,11 @@ pub struct ConnectProfile {
     pub ipv6_connect_failed: bool,
     /// `noop_profiles` — every heartbeat this link sent.
     pub noop_profiles: Vec<NoopProfile>,
-    /// `tls_handshake_mismatch` — what a run keeps across a profile update.
+    /// `tls_handshake_mismatch` — a handshake that came back for a host that
+    /// is not the one the link was made for.
     pub tls_handshake_mismatch: bool,
-    /// `tls_handshake_success`.
+    /// `tls_handshake_success`. Not one the port sets either way: the tls is
+    /// the host's to open, and these are what it would report back.
     pub tls_handshake_success: bool,
     /// `tid` — `xlogger_tid`, which thread the run was on.
     pub tid: i64,
@@ -352,14 +354,13 @@ impl ConnectProfile {
 
     /// `Reset()` — every field back to what the C++ constructor gives it:
     /// `ip_index` is `-1`, `nettype_for_report` is `-1`, and the two tls flags
-    /// are *not* cleared (a profile update keeps them, which is the one thing
-    /// the C++'s `__UpdateProfile` carries over).
+    /// go with the rest of them (`mars/stn/task_profile.h:140-141`) — a link
+    /// that is being made again has not shaken anyone's hand yet. What
+    /// carries them over upstream is `__UpdateProfile`, which copies them out
+    /// of a profile a *new* connect made; it is not `Reset`, and the port has
+    /// no second profile to copy them from.
     pub fn reset(&mut self) {
-        *self = Self {
-            tls_handshake_mismatch: self.tls_handshake_mismatch,
-            tls_handshake_success: self.tls_handshake_success,
-            ..Self::default()
-        };
+        *self = Self::default();
     }
 
     /// Whether the link this profile is about has finished: the C++ broadcasts
@@ -961,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn resetting_a_profile_keeps_the_two_tls_flags() {
+    fn resetting_a_profile_forgets_the_two_tls_flags() {
         let mut profile = ConnectProfile::new();
         profile.ip = "1.1.1.1".to_string();
         profile.disconn_time = 700;
@@ -971,8 +972,10 @@ mod tests {
         profile.reset();
         assert_eq!(profile.ip, "");
         assert!(!profile.is_finished());
-        // what `__UpdateProfile` carries over from the profile before it
-        assert!(profile.tls_handshake_success);
+        // `task_profile.h:140-141` — a link that is being made again has not
+        // shaken anyone's hand, and the flags are the handshake's and not the
+        // link's
+        assert!(!profile.tls_handshake_success);
         assert!(!profile.tls_handshake_mismatch);
     }
 
