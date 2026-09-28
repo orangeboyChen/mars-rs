@@ -1,27 +1,28 @@
 //! `mars/comm/http.h` — the http the short link speaks.
 //!
-//! The short link is one http request on a socket of its own, and this is the
-//! little http that writes it and reads the answer: a request line or a status
-//! line, the header fields, and a body that is either a `Content-Length` of
-//! bytes or a stream of chunks.
+//! The short link is one http request on a socket of its own, and this is
+//! the little http that writes it and reads the answer: a request line or a
+//! status line, the header fields, and a body that is either a
+//! `Content-Length` of bytes or a stream of chunks.
 //!
 //! What the C++ reads and writes through an `AutoBuffer` and a heap of
 //! out-parameters is a value here: [`RequestLine::parse`] and
 //! [`StatusLine::parse`] answer `Option`, [`HeaderFields::range`] is an
-//! `Option<(i64, i64)>`, and [`Builder::header_to_buffer`] hands the bytes back
-//! instead of writing them into a buffer it was given.
+//! `Option<(i64, i64)>`, and [`Builder::header_to_buffer`] hands the bytes
+//! back instead of writing them into a buffer it was given.
 //!
 //! Three things of the C++ are not here. Its `IBlockBodyProvider` and
-//! `IStreamBodyProvider` are one [`Body`]: a block body is bytes, and a stream
-//! body is bytes someone framed with [`chunk_header`] and [`CHUNK_EOF`], which
-//! is all that interface really was. Its `BodyReceiver`, which a caller
-//! subclasses to be told about the body, is the [`Vec`] a [`Parser`] collects
-//! the body in — [`Parser::body`] is what every caller wanted from it. And its
-//! `URLFactory` and `StringBody` have no caller in mars at all.
+//! `IStreamBodyProvider` are one [`Body`]: a block body is bytes, and a
+//! stream body is bytes someone framed with [`chunk_header`] and
+//! [`CHUNK_EOF`], which is all that interface really was. Its
+//! `BodyReceiver`, which a caller subclasses to be told about the body, is
+//! the [`Vec`] a [`Parser`] collects the body in — [`Parser::body`] is what
+//! every caller wanted from it. And its `URLFactory` and `StringBody` have
+//! no caller in mars at all.
 //!
-//! A header that is not UTF-8 is read with [`String::from_utf8_lossy`]: the C++
-//! keeps the raw bytes in a `std::string`, and no header of mars' is anything
-//! but ASCII.
+//! A header that is not UTF-8 is read with [`String::from_utf8_lossy`]: the
+//! C++ keeps the raw bytes in a `std::string`, and no header of mars' is
+//! anything but ASCII.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -33,7 +34,8 @@ pub const CRLF: &str = "\r\n";
 /// What ends the head: an empty line.
 const CRLF_CRLF: &str = "\r\n\r\n";
 
-/// How long a first line may grow before the C++ gives up on it: `8 * 1024`.
+/// How long a first line may grow before the C++ gives up on it:
+/// `8 * 1024`.
 pub const MAX_FIRST_LINE: usize = 8 * 1024;
 /// How long the head may grow before the C++ gives up on it: `128 * 1024`.
 pub const MAX_HEADER_FIELDS: usize = 128 * 1024;
@@ -41,12 +43,12 @@ pub const MAX_HEADER_FIELDS: usize = 128 * 1024;
 pub const MAX_CONTENT_LENGTH: u64 = 4 * 1024 * 1024 * 1024;
 /// `kMaxChunkLength` — how big one chunk may be: 4g.
 pub const MAX_CHUNK_LENGTH: u64 = 4 * 1024 * 1024 * 1024;
-/// `KDefaultKeepAliveTimeout` — what a keep-alive without a timeout of its own
-/// gets: five seconds.
+/// `KDefaultKeepAliveTimeout` — what a keep-alive without a timeout of its
+/// own gets: five seconds.
 pub const DEFAULT_KEEP_ALIVE_TIMEOUT: u32 = 5;
 
-/// `IStreamBodyProvider::AppendHeader` — the size line of one chunk: the length
-/// in hexadecimal, `CRLF` and all.
+/// `IStreamBodyProvider::AppendHeader` — the size line of one chunk: the
+/// length in hexadecimal, `CRLF` and all.
 pub fn chunk_header(len: usize) -> String {
     format!("{len:x}{CRLF}")
 }
@@ -62,8 +64,8 @@ pub const CHUNK_EOF: &str = "0\r\n\r\n";
 pub enum Version {
     /// `kVersion_0_9`
     V0_9,
-    /// `kVersion_1_0` — what a [`RequestLine`] and a [`StatusLine`] start with,
-    /// and what `Default` gives.
+    /// `kVersion_1_0` — what a [`RequestLine`] and a [`StatusLine`] start
+    /// with, and what `Default` gives.
     #[default]
     V1_0,
     /// `kVersion_1_1`
@@ -98,10 +100,11 @@ impl Version {
 /// `RequestLine::THttpMethod`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Method {
-    /// `kUnknown` — what matches none of the strings, and what a request line
-    /// therefore cannot be made of.
+    /// `kUnknown` — what matches none of the strings, and what a request
+    /// line therefore cannot be made of.
     Unknown,
-    /// `kGet` — what a [`RequestLine`] starts with, and what `Default` gives.
+    /// `kGet` — what a [`RequestLine`] starts with, and what
+    /// `Default` gives.
     #[default]
     Get,
     /// `kPost` — what the short link sends.
@@ -154,7 +157,8 @@ impl Method {
     }
 }
 
-/// `TCsMode` — whether what is being written or read is a request or an answer.
+/// `TCsMode` — whether what is being written or read is a request or
+/// an answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CsMode {
     /// `kRequest`
@@ -233,8 +237,8 @@ impl fmt::Display for RequestLine {
 pub struct StatusLine {
     /// `Version()`
     pub version: Version,
-    /// `StatusCode()` — the C++'s `int`, which is what the short link compares
-    /// against 200.
+    /// `StatusCode()` — the C++'s `int`, which is what the short link
+    /// compares against 200.
     pub status_code: i32,
     /// `ReasonPhrase()`
     pub reason_phrase: String,
@@ -252,9 +256,9 @@ impl StatusLine {
 
     /// `FromString` — the line as it came off the wire, `CRLF` and all.
     ///
-    /// A reason phrase of more than one word is dropped: the C++ takes it only
-    /// when the line is exactly three tokens, so `HTTP/1.1 404 Not Found` comes
-    /// back with no reason phrase at all.
+    /// A reason phrase of more than one word is dropped: the C++ takes it
+    /// only when the line is exactly three tokens, so
+    /// `HTTP/1.1 404 Not Found` comes back with no reason phrase at all.
     pub fn parse(line: &str) -> Option<Self> {
         let line = line.split_once(CRLF)?.0;
         let tokens = strutil::split_token(line, " ");
@@ -332,9 +336,9 @@ pub const KEEP_ALIVE: &str = "Keep-Alive";
 pub const USER_AGENT_MICRO_MESSAGE: &str = "MicroMessenger Client";
 const CHUNKED: &str = "chunked";
 const CLOSE: &str = "close";
-/// `KStringKeepalive` — the value [`HeaderFields::is_connection_keep_alive`]
-/// looks for, and the one `CheckKeepAlive` compares a task's header against
-/// exactly.
+/// `KStringKeepalive` — the value
+/// [`HeaderFields::is_connection_keep_alive`] looks for, and the one
+/// `CheckKeepAlive` compares a task's header against exactly.
 pub const KEEPALIVE: &str = "Keep-Alive";
 const ACCEPT_ALL: &str = "*/*";
 const NO_CACHE: &str = "no-cache";
@@ -346,8 +350,8 @@ const KEEP_ALIVE_TIMEOUT: &str = "timeout=";
 /// One header field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
-    /// The name, kept the way it was first written: a field set twice keeps the
-    /// name of the first time.
+    /// The name, kept the way it was first written: a field set twice keeps
+    /// the name of the first time.
     pub name: String,
     /// The value.
     pub value: String,
@@ -396,8 +400,9 @@ impl HeaderFields {
         }
     }
 
-    /// `Manipulate(name, value)` — an empty value takes the field away, which
-    /// is how a caller that was handed a field to change takes one out.
+    /// `Manipulate(name, value)` — an empty value takes the field away,
+    /// which is how a caller that was handed a field to change takes
+    /// one out.
     pub fn manipulate(&mut self, name: &str, value: &str) {
         if strutil::trim(value).is_empty() {
             self.remove(name);
@@ -412,8 +417,8 @@ impl HeaderFields {
             .retain(|header| !header.name.eq_ignore_ascii_case(name));
     }
 
-    /// `HeaderField(key)` — the value of a field, whichever way its name was
-    /// written.
+    /// `HeaderField(key)` — the value of a field, whichever way its name
+    /// was written.
     pub fn get(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()
@@ -539,8 +544,8 @@ impl HeaderFields {
             .unwrap_or(DEFAULT_KEEP_ALIVE_TIMEOUT)
     }
 
-    /// `Range(start, end)` — `bytes=from-to`, which is what a caller that wants
-    /// part of an answer writes.
+    /// `Range(start, end)` — `bytes=from-to`, which is what a caller that
+    /// wants part of an answer writes.
     pub fn range(&self) -> Option<(i64, i64)> {
         let range = self.get(RANGE)?;
         let bytes = strutil::trim(range.strip_prefix("bytes=")?);
@@ -553,8 +558,8 @@ impl HeaderFields {
         Self::content_range_of(self.get(CONTENT_RANGE)?)
     }
 
-    /// `ContentRange(line, start, end, total)` — the same, of a line that did
-    /// not come out of a head: `Content-Range: bytes 0-102400/102399`.
+    /// `ContentRange(line, start, end, total)` — the same, of a line that
+    /// did not come out of a head: `Content-Range: bytes 0-102400/102399`.
     pub fn content_range_of(line: &str) -> Option<ContentRange> {
         let bytes = strutil::trim(line.strip_prefix("bytes ")?);
         let (from, rest) = bytes.split_once('-')?;
@@ -569,9 +574,9 @@ impl HeaderFields {
     /// `__ParserHeaders` — the fields of one block, `CRLF`-separated and
     /// `CRLF CRLF`-ended.
     ///
-    /// A line with no colon in it becomes a field of itself, which is what the
-    /// C++'s own arithmetic does with one; a line that is nothing but colons is
-    /// skipped, and so is the empty line the head ends with.
+    /// A line with no colon in it becomes a field of itself, which is what
+    /// the C++'s own arithmetic does with one; a line that is nothing but
+    /// colons is skipped, and so is the empty line the head ends with.
     pub fn parse(&mut self, block: &str) {
         for line in block.split(CRLF) {
             if line.chars().all(|c| c == ':') {
@@ -603,7 +608,8 @@ impl fmt::Display for HeaderFields {
     }
 }
 
-/// What a `Content-Range` says: which bytes these are, and how many there are.
+/// What a `Content-Range` says: which bytes these are, and how many
+/// there are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ContentRange {
     /// The first byte.
@@ -614,16 +620,16 @@ pub struct ContentRange {
     pub total: u64,
 }
 
-/// What a [`Builder`] or a [`Parser`] carries as the body: `IBlockBodyProvider`
-/// and `IStreamBodyProvider` in one.
+/// What a [`Builder`] or a [`Parser`] carries as the body:
+/// `IBlockBodyProvider` and `IStreamBodyProvider` in one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Body {
     /// `IBlockBodyProvider` — the whole body at once, which is what gets a
     /// `Content-Length`.
     Block(Vec<u8>),
     /// `IStreamBodyProvider` — the body as chunks someone framed with
-    /// [`chunk_header`], [`CHUNK_TAIL`] and [`CHUNK_EOF`], which is what gets a
-    /// `Transfer-Encoding`.
+    /// [`chunk_header`], [`CHUNK_TAIL`] and [`CHUNK_EOF`], which is what
+    /// gets a `Transfer-Encoding`.
     Chunks(Vec<u8>),
 }
 
@@ -656,8 +662,8 @@ impl Builder {
         &self.request
     }
 
-    /// `Request()` — what the caller writes the method, the url and the version
-    /// into.
+    /// `Request()` — what the caller writes the method, the url and the
+    /// version into.
     pub fn request_mut(&mut self) -> &mut RequestLine {
         &mut self.request
     }
@@ -684,9 +690,9 @@ impl Builder {
 
     /// `BlockBody(body)` / `StreamBody(body)` — what goes after the head.
     ///
-    /// The C++ manages the provider it is handed behind a pointer and can be
-    /// asked for it again; here the body is owned, and [`Builder::to_buffer`]
-    /// takes it.
+    /// The C++ manages the provider it is handed behind a pointer and can
+    /// be asked for it again; here the body is owned, and
+    /// [`Builder::to_buffer`] takes it.
     pub fn set_body(&mut self, body: Body) {
         self.body = Some(body);
     }
@@ -697,8 +703,8 @@ impl Builder {
     }
 
     /// `HeaderToBuffer` — the first line, the head, and the empty line that
-    /// ends it. `None` when there is no head to write, which is what the C++
-    /// answers `false` for.
+    /// ends it. `None` when there is no head to write, which is what the
+    /// C++ answers `false` for.
     pub fn header_to_buffer(&self) -> Option<Vec<u8>> {
         let first_line = match self.mode {
             CsMode::Request => self.request.to_string(),
@@ -715,10 +721,10 @@ impl Builder {
 
     /// `HttpToBuffer` — the whole thing, head and body.
     ///
-    /// A block body gets a `Content-Length` written for it and is then taken:
-    /// the C++'s `FillData` moves it into the buffer and leaves the provider
-    /// empty. A block body of no bytes at all writes nothing — not even the
-    /// head — which is the C++'s own answer for one.
+    /// A block body gets a `Content-Length` written for it and is then
+    /// taken: the C++'s `FillData` moves it into the buffer and leaves the
+    /// provider empty. A block body of no bytes at all writes nothing — not
+    /// even the head — which is the C++'s own answer for one.
     pub fn to_buffer(&mut self) -> Option<Vec<u8>> {
         match self.body.take() {
             Some(Body::Block(body)) if !body.is_empty() => {
@@ -775,8 +781,9 @@ impl RecvStatus {
         matches!(self, Self::End)
     }
 
-    /// `FirstLineReady()` — the C++ asks this as `kFirstLineError < status`,
-    /// which is true of a head that failed to parse as well.
+    /// `FirstLineReady()` — the C++ asks this as
+    /// `kFirstLineError < status`, which is true of a head that failed to
+    /// parse as well.
     pub fn is_first_line_ready(self) -> bool {
         matches!(
             self,
@@ -789,8 +796,8 @@ impl RecvStatus {
         matches!(self, Self::Body | Self::BodyError | Self::End)
     }
 
-    /// `BodyReady()` — `kBodyError < status`, which is [`RecvStatus::End`] and
-    /// nothing else.
+    /// `BodyReady()` — `kBodyError < status`, which is [`RecvStatus::End`]
+    /// and nothing else.
     pub fn is_body_ready(self) -> bool {
         matches!(self, Self::End)
     }
@@ -798,9 +805,10 @@ impl RecvStatus {
 
 /// `Parser` — the answer that comes back off the socket.
 ///
-/// The C++ is handed the bytes a `Recv` read and answers how many of them it
-/// used; this one keeps the bytes it was given until it has used them, so the
-/// caller hands over everything it read and reads [`Parser::recv_status`].
+/// The C++ is handed the bytes a `Recv` read and answers how many of them
+/// it used; this one keeps the bytes it was given until it has used them,
+/// so the caller hands over everything it read and reads
+/// [`Parser::recv_status`].
 #[derive(Debug, Clone, Default)]
 pub struct Parser {
     status: RecvStatus,
@@ -821,11 +829,13 @@ impl Parser {
         Self::default()
     }
 
-    /// `Recv(buffer, length)` — the bytes one read of the socket gave, which is
-    /// the whole call: what is not used yet stays for the next one.
+    /// `Recv(buffer, length)` — the bytes one read of the socket gave,
+    /// which is the whole call: what is not used yet stays for the
+    /// next one.
     ///
-    /// A read of nothing is the peer hanging up, which is how a body with no
-    /// `Content-Length` — the answer of a `Connection: close` — comes to an end.
+    /// A read of nothing is the peer hanging up, which is how a body with
+    /// no `Content-Length` — the answer of a `Connection: close` — comes to
+    /// an end.
     pub fn recv(&mut self, bytes: &[u8]) -> RecvStatus {
         if bytes.is_empty() {
             if self.fields.is_connection_close() && self.status == RecvStatus::Body {
@@ -837,8 +847,8 @@ impl Parser {
         self.run(false)
     }
 
-    /// `Recv(buffer, length, nullptr, true)` — the same, stopping as soon as
-    /// the head is whole.
+    /// `Recv(buffer, length, nullptr, true)` — the same, stopping as soon
+    /// as the head is whole.
     pub fn recv_header_only(&mut self, bytes: &[u8]) -> RecvStatus {
         if bytes.is_empty() {
             return self.status;
@@ -852,8 +862,8 @@ impl Parser {
         self.status
     }
 
-    /// `CsMode()` — whether what came in is a request or an answer, which is
-    /// decided by the first line.
+    /// `CsMode()` — whether what came in is a request or an answer, which
+    /// is decided by the first line.
     pub fn mode(&self) -> CsMode {
         self.mode
     }
@@ -873,8 +883,8 @@ impl Parser {
         &self.fields
     }
 
-    /// `Fields()` — what a caller that changes the head before it asks for the
-    /// body wants.
+    /// `Fields()` — what a caller that changes the head before it asks for
+    /// the body wants.
     pub fn fields_mut(&mut self) -> &mut HeaderFields {
         &mut self.fields
     }
@@ -889,8 +899,9 @@ impl Parser {
         self.body.len()
     }
 
-    /// What came in and has not been used yet, which is [`Parser::body`] that
-    /// is not in it and the head that is not parsed.
+    /// What came in and has not been used yet: the bytes that are not in
+    /// [`Parser::body`], and a head that is not parsed. A caller that asked
+    /// for the head alone finds the body it did not read in here.
     pub fn buffered(&self) -> &[u8] {
         &self.buffer
     }
@@ -982,8 +993,8 @@ impl Parser {
         }
 
         self.first_line_len = line_len;
-        // `HTTP/1.1 401 Unauthorized\r\n\r\n`: a first line that is the whole
-        // head, which is an answer with no fields in it
+        // `HTTP/1.1 401 Unauthorized\r\n\r\n`: a first line that is the
+        // whole head, which is an answer with no fields in it
         if find(&self.buffer, CRLF_CRLF) == Some(end) {
             self.consume(line_len + CRLF.len());
             self.status = RecvStatus::Body;
@@ -1012,8 +1023,9 @@ impl Parser {
         only_header
     }
 
-    /// The body, one step: `true` when the parser has to go back to the
-    /// caller for more bytes.
+    /// One step of the body: `true` when the parser stops, which is for
+    /// more bytes, for a body that is not the one the head said, or for the
+    /// end of the answer.
     fn read_body(&mut self) -> bool {
         if self.fields.is_chunked() {
             self.chunked_body()
@@ -1128,8 +1140,8 @@ fn to_status_code(text: &str) -> i32 {
     i32::try_from(to_i64(text)).unwrap_or(0)
 }
 
-/// What `strtol` reads out of a token: the number at the front of it, and `0`
-/// when there is none.
+/// What `strtol` reads out of a token: the number at the front of it, and
+/// `0` when there is none.
 fn to_i64(text: &str) -> i64 {
     let (sign, rest) = match text.as_bytes().first() {
         Some(b'-') => (-1, &text[1..]),
@@ -1146,9 +1158,9 @@ fn to_u64(text: &str) -> u64 {
     to_u64_radix(text, 10)
 }
 
-/// What `strtoull(text, base)` reads: the digits of that base at the front of a
-/// token — 16 for the size of a chunk, 10 everywhere else — and `0` when there
-/// are none.
+/// What `strtoull(text, base)` reads: the digits of that base at the front
+/// of a token — 16 for the size of a chunk, 10 everywhere else — and `0`
+/// when there are none.
 ///
 /// Two things the C++ gets from `strtoull` and a plain parse does not: a
 /// number too big for a `uint64_t` saturates instead of failing, and a sign
@@ -1233,7 +1245,8 @@ mod tests {
         assert_eq!(line.to_string(), "HTTP/1.1 200 OK\r\n");
         assert_eq!(StatusLine::parse("HTTP/1.1 200 OK\r\n"), Some(line));
 
-        // `strVer.size() == 3` is the only case the C++ takes the reason for
+        // `strVer.size() == 3` is the only case the C++ takes the
+        // reason for
         let not_found = StatusLine::parse("HTTP/1.1 404 Not Found\r\n").unwrap();
         assert_eq!(not_found.status_code, 404);
         assert_eq!(not_found.reason_phrase, "");
@@ -1555,7 +1568,8 @@ mod tests {
     #[test]
     fn a_first_line_that_is_the_whole_head_has_no_fields() {
         let mut parser = Parser::new();
-        // a head of no fields is a body of no bytes, which is a whole answer
+        // a head of no fields is a body of no bytes, which is a
+        // whole answer
         assert_eq!(
             parser.recv(b"HTTP/1.1 401 Unauthorized\r\n\r\n"),
             RecvStatus::End
@@ -1614,8 +1628,8 @@ mod tests {
             RecvStatus::BodyError
         );
 
-        // and a `Content-Length` of more than 4g — 4g itself is still one the
-        // C++ takes, which is its `> kMaxContentLength`
+        // and a `Content-Length` of more than 4g — 4g itself is still one
+        // the C++ takes, which is its `> kMaxContentLength`
         let mut parser = Parser::new();
         assert_eq!(
             parser.recv(b"HTTP/1.1 200 OK\r\nContent-Length: 4294967297\r\n\r\n"),
@@ -1647,7 +1661,8 @@ mod tests {
             RecvStatus::Body
         );
         assert_eq!(parser.body(), b"hello");
-        // a body with no `Content-Length` is however much came before the close
+        // a body with no `Content-Length` is however much came before
+        // the close
         assert_eq!(parser.recv(b""), RecvStatus::End);
     }
 
