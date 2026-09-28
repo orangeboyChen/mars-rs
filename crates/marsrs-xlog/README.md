@@ -49,4 +49,8 @@ and the same `decode_records` the crate exports; `encode` writes one record per
 line of its input, and encrypts it when it is given the public key of the pair
 whose private key `decode` takes.
 
+Every subcommand and option has a one-letter spelling — `xlog d -k <hex>
+marsrs_20260927.xlog`, `xlog e -p <hex> -o marsrs_20260927.xlog` — and `xlog
+help` lists the whole command line, short spellings included.
+
 MIT licensed.

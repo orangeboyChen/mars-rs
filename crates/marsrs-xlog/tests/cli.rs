@@ -198,6 +198,60 @@ fn standard_input_and_output_are_the_defaults() {
 }
 
 #[test]
+fn every_subcommand_and_option_has_a_short_spelling() {
+    let dir = scratch("short");
+    let input = write(&dir, "records.txt", RECORDS);
+    let file = dir.join("a.xlog");
+    let plain = dir.join("a.plain");
+
+    // `xlog e -p <key> -i <input> -o <file>` is `xlog encode --pubkey=… --in=…
+    // --out=…`, and `-o=<file>` is the third spelling of the same option.
+    let (ok, _, err) = run(&[
+        "e",
+        "-p",
+        PUBKEY,
+        "-i",
+        &input.display().to_string(),
+        "-o",
+        &file.display().to_string(),
+    ]);
+    assert!(ok, "encode failed: {err}");
+
+    let (ok, _, err) = run(&[
+        "d",
+        "-k",
+        PRIVKEY,
+        &file.display().to_string(),
+        &format!("-o={}", plain.display()),
+    ]);
+    assert!(ok, "decode failed: {err}");
+    assert_eq!(
+        std::fs::read(&plain).expect("read the decoded text"),
+        RECORDS,
+        "the short spelling wrote something else"
+    );
+
+    // `-e` and `-d` spelled the way a flag is, every short option there is, and
+    // a value attached to its letter: `-oFILE`.
+    let attached = dir.join("attached.xlog");
+    let (ok, _, err) = run(&[
+        "-e",
+        "-m",
+        "zstd",
+        "-c1",
+        "-s0",
+        "-l3",
+        "-r4096",
+        &input.display().to_string(),
+        &format!("-o{}", attached.display()),
+    ]);
+    assert!(ok, "encode with an attached value failed: {err}");
+    let (ok, out, err) = run(&["-d", &attached.display().to_string()]);
+    assert!(ok, "decode failed: {err}");
+    assert_eq!(out, RECORDS, "the records did not come back");
+}
+
+#[test]
 fn a_broken_command_line_is_refused() {
     // A subcommand that is not one.
     let (ok, _, err) = run(&["frobnicate"]);
@@ -206,6 +260,16 @@ fn a_broken_command_line_is_refused() {
         err.contains("unknown subcommand"),
         "the error does not say why: {err}"
     );
+
+    // An option that is not one, in either spelling.
+    for arg in ["--nonsense", "-z"] {
+        let (ok, _, err) = run(&["decode", arg, "a.xlog"]);
+        assert!(!ok, "`{arg}` was accepted");
+        assert!(
+            err.contains("unknown option"),
+            "the error does not say why: {err}"
+        );
+    }
 
     // An option of the other subcommand: a `--privkey` that `encode` would
     // ignore writes a file nobody asked for.
@@ -259,15 +323,25 @@ fn an_input_with_no_record_in_it_is_refused() {
 
 #[test]
 fn the_version_and_the_usage_are_printed() {
-    let (ok, out, _) = run(&["--version"]);
-    assert!(ok, "--version failed");
-    let version = String::from_utf8_lossy(&out).into_owned();
-    assert!(version.starts_with("xlog "), "`{version}` is not a version");
+    for arg in ["--version", "-V"] {
+        let (ok, out, _) = run(&[arg]);
+        assert!(ok, "`{arg}` failed");
+        let version = String::from_utf8_lossy(&out).into_owned();
+        assert!(version.starts_with("xlog "), "`{version}` is not a version");
+    }
 
-    let (ok, out, _) = run(&["help"]);
-    assert!(ok, "help failed");
-    let usage = String::from_utf8_lossy(&out).into_owned();
-    for word in ["xlog encode", "xlog decode", "--privkey", "--pubkey"] {
-        assert!(usage.contains(word), "the usage does not mention `{word}`");
+    for arg in ["help", "h", "--help", "-h"] {
+        let (ok, out, _) = run(&[arg]);
+        assert!(ok, "`{arg}` failed");
+        let usage = String::from_utf8_lossy(&out).into_owned();
+        for word in [
+            "xlog encode",
+            "xlog decode",
+            "-o, --out",
+            "-k, --privkey",
+            "-p, --pubkey",
+        ] {
+            assert!(usage.contains(word), "the usage does not mention `{word}`");
+        }
     }
 }

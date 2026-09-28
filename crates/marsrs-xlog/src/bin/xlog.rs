@@ -2,10 +2,11 @@
 //! the `.xlog` of Tencent's `mars/xlog`.
 //!
 //! ```text
-//! xlog encode [--mode=zlib|zstd] [--compress=0|1] [--sync=0|1] [--pubkey=HEX]
-//!             [--level=N] [--region=N] [--out=PATH] [INPUT]
-//! xlog decode [--privkey=HEX] [--out=PATH] [INPUT]
-//! xlog help
+//! xlog encode|e [--mode|-m=zlib|zstd] [--compress|-c=0|1] [--sync|-s=0|1]
+//!               [--pubkey|-p=HEX] [--level|-l=N] [--region|-r=N]
+//!               [--out|-o=PATH] [--in|-i=PATH] [INPUT]
+//! xlog decode|d [--privkey|-k=HEX] [--out|-o=PATH] [--in|-i=PATH] [INPUT]
+//! xlog help|h
 //! ```
 //!
 //! * `encode` writes records into a `.xlog`: one record per line of `INPUT`,
@@ -20,6 +21,10 @@
 //! `INPUT` is a path or `-` for standard input (`--in=` and `--records=` say
 //! the same thing), and `--out` is a path or `-` for standard output; it is
 //! standard output when it is left out, so `xlog decode a.xlog | less` works.
+//!
+//! Every option has a short spelling, and takes its value either attached —
+//! `-oFILE`, `-o=FILE` — or as the next argument, `-o FILE`. `xlog help` is
+//! the whole command line, and `xlog --version` the version.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -41,27 +46,31 @@ const USAGE: &str = "\
 xlog — write and read the .xlog files of mars/xlog
 
 usage:
-  xlog encode [OPTIONS] [INPUT]   one record per line of INPUT -> a .xlog
-  xlog decode [OPTIONS] [INPUT]   a .xlog -> the log text it holds
-  xlog help                       this text
+  xlog encode|e [OPTIONS] [INPUT]   one record per line of INPUT -> a .xlog
+  xlog decode|d [OPTIONS] [INPUT]   a .xlog -> the log text it holds
+  xlog help|h                       this text
 
 options:
-  --out=PATH         where the output goes; `-`, or left out, is standard output
-  --in=PATH          the input, for when a positional argument reads badly
-  --privkey=HEX      decode: the 64 hex characters of the private key of the
-                     pair whose public key the file was written with
-  --pubkey=HEX       encode: the 128 hex characters of that public key; the
-                     file is encrypted, and is written in the clear without it
-  --mode=zlib|zstd   encode: which compressor, zlib by default
-  --compress=0|1     encode: compress the payload, 1 by default
-  --sync=0|1         encode: one record per block instead of one block per
-                     file, 0 by default. A sync record is neither compressed
-                     nor encrypted, which is what the C++ writes
-  --level=N          encode: the zstd level, 6 by default
-  --region=N         encode: the size of the buffer a record is written
-                     through, 153600 by default
+  -o, --out=PATH         where the output goes; `-`, or left out, is standard
+                         output
+  -i, --in=PATH          the input, for when a positional argument reads badly
+  -k, --privkey=HEX      decode: the 64 hex characters of the private key of the
+                         pair whose public key the file was written with
+  -p, --pubkey=HEX       encode: the 128 hex characters of that public key; the
+                         file is encrypted, and is written in the clear without
+                         it
+  -m, --mode=zlib|zstd   encode: which compressor, zlib by default
+  -c, --compress=0|1     encode: compress the payload, 1 by default
+  -s, --sync=0|1         encode: one record per block instead of one block per
+                         file, 0 by default. A sync record is neither compressed
+                         nor encrypted, which is what the C++ writes
+  -l, --level=N          encode: the zstd level, 6 by default
+  -r, --region=N         encode: the size of the buffer a record is written
+                         through, 153600 by default
 
-INPUT of `-`, or none at all, is standard input; so is `--out=-`.";
+INPUT of `-`, or none at all, is standard input; so is `--out=-`. A short
+option takes its value attached — `-oFILE`, `-o=FILE` — or as the next
+argument, `-o FILE`.";
 
 /// What the command line asked for.
 struct Command {
@@ -82,23 +91,30 @@ fn main() -> ExitCode {
     // is the same question as `xlog help`, and both are answered the same way.
     if args
         .iter()
-        .any(|arg| matches!(arg.as_str(), "help" | "--help" | "-h"))
+        .any(|arg| matches!(arg.as_str(), "help" | "h" | "--help" | "-h"))
     {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
     }
     if args
         .iter()
-        .any(|arg| matches!(arg.as_str(), "--version" | "-V"))
+        .any(|arg| matches!(arg.as_str(), "--version" | "-V" | "-v"))
     {
         println!("xlog {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
 
     let result = match args.first().map(String::as_str) {
-        Some("encode") => Command::parse(true, &args[1..]).and_then(encode),
-        Some("decode") => Command::parse(false, &args[1..]).and_then(decode),
-        Some(other) => Err(format!("unknown subcommand `{other}`\n\n{USAGE}")),
+        Some("encode" | "e" | "-e") => Command::parse(true, &args[1..]).and_then(encode),
+        Some("decode" | "d" | "-d") => Command::parse(false, &args[1..]).and_then(decode),
+        Some(other) => {
+            let what = if other.starts_with('-') {
+                "option"
+            } else {
+                "subcommand"
+            };
+            Err(format!("unknown {what} `{other}`\n\n{USAGE}"))
+        }
         None => {
             eprintln!("{USAGE}");
             return ExitCode::FAILURE;
@@ -115,7 +131,8 @@ fn main() -> ExitCode {
 }
 
 impl Command {
-    /// Parses `--key=value` options and at most one positional argument.
+    /// Parses `--key=value` and `-k value` options, and at most one positional
+    /// argument.
     fn parse(is_encode: bool, args: &[String]) -> Result<Self, String> {
         let mut command = Self {
             input: None,
@@ -133,60 +150,33 @@ impl Command {
         while index < args.len() {
             let arg = &args[index];
             index += 1;
-            let Some(rest) = arg.strip_prefix("--") else {
-                if command.input.replace(arg.clone()).is_some() {
-                    return Err(format!("two inputs given, the second one `{arg}`"));
-                }
-                continue;
-            };
-            // `--out=PATH` and `--out PATH` are the same option; the second one
-            // is what a command line reads like, and the value is the next
-            // argument that is not an option of its own.
-            let (key, value) = match rest.split_once('=') {
-                Some(pair) => pair,
-                None => {
-                    let Some(value) = args
-                        .get(index)
-                        .filter(|next| !next.starts_with("--"))
-                        .map(String::as_str)
-                    else {
-                        return Err(format!(
-                            "`{arg}` needs a value: `--{rest}=VALUE` or `--{rest} VALUE`"
-                        ));
-                    };
-                    index += 1;
-                    (rest, value)
-                }
-            };
-            match key {
-                "in" | "records" => command.input = Some(value.to_owned()),
-                "out" => command.out = Some(value.to_owned()),
-                "mode" => {
-                    command.mode = match value {
-                        "zlib" => CompressMode::Zlib,
-                        "zstd" => CompressMode::Zstd,
-                        other => return Err(format!("--mode must be zlib or zstd, got `{other}`")),
-                    }
-                }
-                "compress" | "sync" => {
-                    let flag = match value {
-                        "0" | "false" => false,
-                        "1" | "true" => true,
-                        other => {
-                            return Err(format!("--{key} must be 0 or 1, got `{other}`"));
-                        }
-                    };
-                    if key == "compress" {
-                        command.compress = flag;
-                    } else {
-                        command.sync = flag;
-                    }
-                }
-                "pubkey" => command.pubkey = Some(value.to_owned()),
-                "privkey" => command.privkey = Some(privkey(value)?),
-                "level" => command.level = number(key, value)?,
-                "region" => command.region = number(key, value)?,
-                other => return Err(format!("unknown option `--{other}`")),
+            if let Some(rest) = arg.strip_prefix("--") {
+                // `--out=PATH` and `--out PATH` are the same option; the second
+                // one is what a command line reads like, and the value is the
+                // next argument that is not an option of its own.
+                let (key, value) = match rest.split_once('=') {
+                    Some(pair) => pair,
+                    None => (rest, value_of(arg, rest, &mut index, args)?),
+                };
+                command.set(key, value)?;
+            } else if let Some(cluster) = arg.strip_prefix('-').filter(|it| !it.is_empty()) {
+                // `-o PATH`, `-o=PATH` and `-oPATH` are the three spellings of
+                // `--out=PATH`: one short option, whose value is the rest of the
+                // argument when there is one and the next argument when not.
+                let letter = cluster.chars().next().unwrap_or_default();
+                let Some(key) = short(letter) else {
+                    return Err(format!("unknown option `-{letter}`\n\n{USAGE}"));
+                };
+                let attached = &cluster[letter.len_utf8()..];
+                let attached = attached.strip_prefix('=').unwrap_or(attached);
+                let value = if attached.is_empty() {
+                    value_of(arg, key, &mut index, args)?
+                } else {
+                    attached
+                };
+                command.set(key, value)?;
+            } else if command.input.replace(arg.clone()).is_some() {
+                return Err(format!("two inputs given, the second one `{arg}`"));
             }
         }
 
@@ -202,6 +192,39 @@ impl Command {
             return Err("--privkey is an option of `xlog decode`".into());
         }
         Ok(command)
+    }
+
+    /// One `--key=value`, whichever of the two spellings it was written in.
+    fn set(&mut self, key: &str, value: &str) -> Result<(), String> {
+        match key {
+            "in" | "records" => self.input = Some(value.to_owned()),
+            "out" => self.out = Some(value.to_owned()),
+            "mode" => {
+                self.mode = match value {
+                    "zlib" => CompressMode::Zlib,
+                    "zstd" => CompressMode::Zstd,
+                    other => return Err(format!("--mode must be zlib or zstd, got `{other}`")),
+                }
+            }
+            "compress" | "sync" => {
+                let flag = match value {
+                    "0" | "false" => false,
+                    "1" | "true" => true,
+                    other => return Err(format!("--{key} must be 0 or 1, got `{other}`")),
+                };
+                if key == "compress" {
+                    self.compress = flag;
+                } else {
+                    self.sync = flag;
+                }
+            }
+            "pubkey" => self.pubkey = Some(value.to_owned()),
+            "privkey" => self.privkey = Some(privkey(value)?),
+            "level" => self.level = number(key, value)?,
+            "region" => self.region = number(key, value)?,
+            other => return Err(format!("unknown option `--{other}`")),
+        }
+        Ok(())
     }
 
     /// The input's bytes: standard input when no path was given.
@@ -242,6 +265,45 @@ impl Command {
         }
         Ok(records)
     }
+}
+
+/// The long name of every short option: `-o PATH` is `--out=PATH`, and `-k` is
+/// the key of the subcommand that takes one.
+fn short(letter: char) -> Option<&'static str> {
+    match letter {
+        'i' => Some("in"),
+        'o' => Some("out"),
+        'm' => Some("mode"),
+        'c' => Some("compress"),
+        's' => Some("sync"),
+        'p' => Some("pubkey"),
+        'k' => Some("privkey"),
+        'l' => Some("level"),
+        'r' => Some("region"),
+        _ => None,
+    }
+}
+
+/// The value of an option that was written without one: the next argument,
+/// unless that argument is an option of its own — `--out --mode=zlib` is a
+/// value that is missing, and not an output of `--mode=zlib`.
+fn value_of<'a>(
+    arg: &str,
+    key: &str,
+    index: &mut usize,
+    args: &'a [String],
+) -> Result<&'a str, String> {
+    let Some(value) = args
+        .get(*index)
+        .map(String::as_str)
+        .filter(|next| !next.starts_with('-') || *next == "-")
+    else {
+        return Err(format!(
+            "`{arg}` needs a value: `--{key}=VALUE` or `{arg} VALUE`"
+        ));
+    };
+    *index += 1;
+    Ok(value)
 }
 
 /// Writes the records of the input into a `.xlog`, encrypted when `--pubkey`
