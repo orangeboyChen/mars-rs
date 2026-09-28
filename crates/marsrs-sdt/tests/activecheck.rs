@@ -499,8 +499,10 @@ fn a_timeout_that_runs_out_is_spent_down_to_nothing() {
     assert_eq!(check.remaining(), 0);
     assert_eq!(asked.lock().unwrap().len(), 2);
 
-    // every other check spends the same timeout the same way: the one host it
-    // got to is the one it reports, and the ping walks both links
+    // every other check spends the same timeout the same way: the host it was
+    // spent on is reported, and so is every host behind it — the C++ `break`s
+    // out of the loop over the ip/port of one name and not out of the walk —
+    // and the ping walks both links
     for kind in [
         NetCheckType::PingCheck,
         NetCheckType::TcpCheck,
@@ -511,9 +513,9 @@ fn a_timeout_that_runs_out_is_spent_down_to_nothing() {
         assert!(check.start_do_check(kind, &mut request, &mut ask, 1, "/netcheck"));
         assert_eq!(check.remaining(), 0, "{kind:?}");
         let walked = if kind == NetCheckType::PingCheck {
-            2
+            4
         } else {
-            1
+            2
         };
         assert_eq!(request.checkresult_profiles.len(), walked, "{kind:?}");
     }
@@ -521,6 +523,40 @@ fn a_timeout_that_runs_out_is_spent_down_to_nothing() {
     // `CancelDoCheck()`, which the C++'s destructor calls
     check.cancel();
     assert!(check.is_cancelled());
+}
+
+#[test]
+fn a_spent_timeout_ends_the_name_it_was_spent_on_and_not_the_walk() {
+    // two ip/port under one name, and one name behind it
+    let longlink: CheckIPPorts = [
+        (
+            "long.a".to_owned(),
+            vec![
+                CheckIPPort::new("1.1.1.1", 80),
+                CheckIPPort::new("2.2.2.2", 80),
+            ],
+        ),
+        ("long.b".to_owned(), vec![CheckIPPort::new("3.3.3.3", 80)]),
+    ]
+    .into_iter()
+    .collect();
+    let mut request = request_of(longlink, CheckIPPorts::new(), 10);
+    // every probe takes longer than the 10 ms the run was given
+    let (mut ask, asked) = stub(slow);
+    let mut check = check_of(&request);
+
+    assert!(check.start_do_check(NetCheckType::TcpCheck, &mut request, &mut ask, 1, ""));
+
+    // the first ip of the name that spent it, and then the name behind it: not
+    // the second ip of the name that spent it, because the `break` the C++
+    // takes is the inner loop's
+    let ips: Vec<String> = request
+        .checkresult_profiles
+        .iter()
+        .map(|profile| profile.ip.clone())
+        .collect();
+    assert_eq!(ips, vec!["1.1.1.1".to_owned(), "3.3.3.3".to_owned()]);
+    assert_eq!(asked.lock().unwrap().len(), 2);
 }
 
 #[test]

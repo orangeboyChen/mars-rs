@@ -22,7 +22,7 @@ use crate::constants::{
     DEFAULT_TCP_CONN_TIMEOUT, UNUSE_TIMEOUT,
 };
 use crate::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
-use crate::sdt::{CheckIPPort, CheckIPPorts, CheckStatus, NetCheckType, TcpErrCode};
+use crate::sdt::{CheckIPPorts, CheckStatus, NetCheckType, TcpErrCode};
 use crate::sdt_core::CancelHandle;
 
 /// Why a check stopped walking the hosts of one link.
@@ -33,9 +33,6 @@ enum Stop {
     /// `is_canceled_` — the C++ `return`s from `__DoCheck`, so the link that
     /// would have followed is not walked either.
     Cancelled,
-    /// The timeout is used up: the C++ `break`s out of the loop it is in, and
-    /// the second link of the request is walked anyway.
-    Timeout,
 }
 
 /// `BaseChecker` — what the four checks of one run have in common: whether the
@@ -179,7 +176,9 @@ impl Check {
             };
 
             if !self.spend(rtt) {
-                return Stop::Timeout;
+                // the C++'s `break`: one loop over the host names, so the rest
+                // of this link's hosts are not resolved
+                break;
             }
         }
         Stop::Done
@@ -188,69 +187,77 @@ impl Check {
     /// `TcpChecker::__DoCheck(_check_request)` — a noop round trip per long-link
     /// host. The short-link hosts are not checked over TCP.
     fn tcp_check(&mut self, request: &mut CheckRequestProfile, ask: &mut Ask, network_type: i32) {
-        let longlink = ports_of(&request.longlink_items);
+        let longlink = request.longlink_items.clone();
         self.tcp_check_ports(&longlink, request, ask, network_type);
     }
 
     /// One walk of the TCP check: a noop and whatever comes back.
+    ///
+    /// The C++ walks the map twice — every host name, and every ip/port filed
+    /// under it — and the `break` it takes on a spent timeout is the inner
+    /// loop's, so the hosts filed after the one that spent it are probed too,
+    /// with nothing left to spend. One flat loop would end the walk there.
     fn tcp_check_ports(
         &mut self,
-        ports: &[CheckIPPort],
+        items: &CheckIPPorts,
         request: &mut CheckRequestProfile,
         ask: &mut Ask,
         network_type: i32,
     ) -> Stop {
-        for port in ports {
-            if self.cancel.is_cancelled() {
-                return Stop::Cancelled;
-            }
+        for ports in items.values() {
+            for port in ports {
+                if self.cancel.is_cancelled() {
+                    return Stop::Cancelled;
+                }
 
-            let mut profile = CheckResultProfile::of(NetCheckType::TcpCheck);
-            profile.ip = port.ip.clone();
-            profile.port = port.port as u32;
-            profile.network_type = network_type;
+                let mut profile = CheckResultProfile::of(NetCheckType::TcpCheck);
+                profile.ip = port.ip.clone();
+                profile.port = port.port as u32;
+                profile.network_type = network_type;
 
-            let timeout_ms = self.probe_timeout(DEFAULT_TCP_CONN_TIMEOUT);
-            let answer = ask.ask(Query::Tcp {
-                ip: port.ip.clone(),
-                port: port.port,
-                timeout_ms,
-            });
-            let (sent, received, is_noop_resp, rtt) = answer.tcp();
+                let timeout_ms = self.probe_timeout(DEFAULT_TCP_CONN_TIMEOUT);
+                let answer = ask.ask(Query::Tcp {
+                    ip: port.ip.clone(),
+                    port: port.port,
+                    timeout_ms,
+                });
+                let (sent, received, is_noop_resp, rtt) = answer.tcp();
 
-            // `kSndRcvErr` for a noop that did not go out or that nothing came
-            // back from, `kTcpRespErr` for an answer that was not the noop's:
-            // what the C++ records is never the socket's own error code, and
-            // `cost_time` is the C++'s, which it takes only for a round trip
-            // that worked.
-            let (error_code, rtt) = if sent < 0 || received < 0 {
-                (TcpErrCode::SndRcvErr.as_i32(), 0)
-            } else if !is_noop_resp {
-                (TcpErrCode::TcpRespErr.as_i32(), rtt)
-            } else {
-                (0, rtt)
-            };
-            profile.error_code = error_code;
-            profile.rtt = rtt;
+                // `kSndRcvErr` for a noop that did not go out or that nothing
+                // came back from, `kTcpRespErr` for an answer that was not the
+                // noop's: what the C++ records is never the socket's own error
+                // code, and `cost_time` is the C++'s, which it takes only for a
+                // round trip that worked.
+                let (error_code, rtt) = if sent < 0 || received < 0 {
+                    (TcpErrCode::SndRcvErr.as_i32(), 0)
+                } else if !is_noop_resp {
+                    (TcpErrCode::TcpRespErr.as_i32(), rtt)
+                } else {
+                    (0, rtt)
+                };
+                profile.error_code = error_code;
+                profile.rtt = rtt;
 
-            request.checkresult_profiles.push(profile);
+                request.checkresult_profiles.push(profile);
 
-            // The C++ `continue`s on a receive that failed — and only on that:
-            // the profile is recorded, but neither the status the run reports
-            // nor the timeout it has left is the failed receive's to decide,
-            // so the next host is probed with the budget as it was.
-            if sent >= 0 && received < 0 {
-                continue;
-            }
+                // The C++ `continue`s on a receive that failed — and only on
+                // that: the profile is recorded, but neither the status the run
+                // reports nor the timeout it has left is the failed receive's
+                // to decide, so the next host is probed with the budget as it
+                // was.
+                if sent >= 0 && received < 0 {
+                    continue;
+                }
 
-            request.check_status = if error_code == 0 {
-                CheckStatus::CheckContinue
-            } else {
-                CheckStatus::CheckFinish
-            };
+                request.check_status = if error_code == 0 {
+                    CheckStatus::CheckContinue
+                } else {
+                    CheckStatus::CheckFinish
+                };
 
-            if !self.spend(rtt) {
-                return Stop::Timeout;
+                if !self.spend(rtt) {
+                    break;
+                }
             }
         }
         Stop::Done
@@ -265,61 +272,68 @@ impl Check {
         network_type: i32,
         cgi: &str,
     ) {
-        let shortlink = named_ports_of(&request.shortlink_items);
+        let shortlink = request.shortlink_items.clone();
         self.http_check_ports(&shortlink, request, ask, network_type, cgi);
     }
 
     /// One walk of the HTTP check: the CGI, on the host of one item.
+    ///
+    /// Two loops, like the TCP check's: the host name the URL is built from is
+    /// the one the item is filed under, and the timeout is spent by the ip/port
+    /// under it and not by the host, so a host after the one that spent it is
+    /// asked anyway.
     fn http_check_ports(
         &mut self,
-        ports: &[(String, CheckIPPort)],
+        items: &CheckIPPorts,
         request: &mut CheckRequestProfile,
         ask: &mut Ask,
         network_type: i32,
         cgi: &str,
     ) -> Stop {
-        for (host, port) in ports {
-            if self.cancel.is_cancelled() {
-                return Stop::Cancelled;
-            }
+        for (host, ports) in items {
+            for port in ports {
+                if self.cancel.is_cancelled() {
+                    return Stop::Cancelled;
+                }
 
-            let mut profile = CheckResultProfile::of(NetCheckType::HttpCheck);
-            profile.network_type = network_type;
-            profile.ip = port.ip.clone();
-            profile.port = port.port as u32;
+                let mut profile = CheckResultProfile::of(NetCheckType::HttpCheck);
+                profile.network_type = network_type;
+                profile.ip = port.ip.clone();
+                profile.port = port.port as u32;
 
-            // the C++'s `(iter->first.empty() ? DEFAULT_HTTP_HOST : iter->first) + sg_netcheck_cgi`
-            let mut url = if host.is_empty() {
-                DEFAULT_HTTP_HOST.to_owned()
-            } else {
-                host.clone()
-            };
-            url.push_str(cgi);
-            if !url.starts_with("http://") {
-                url = format!("http://{url}");
-            }
-            profile.url = url.clone();
+                // the C++'s `(iter->first.empty() ? DEFAULT_HTTP_HOST : iter->first) + sg_netcheck_cgi`
+                let mut url = if host.is_empty() {
+                    DEFAULT_HTTP_HOST.to_owned()
+                } else {
+                    host.clone()
+                };
+                url.push_str(cgi);
+                if !url.starts_with("http://") {
+                    url = format!("http://{url}");
+                }
+                profile.url = url.clone();
 
-            // `SendHttpQuery` gets the timeout as the request has it, default
-            // and all: the C++ hands `_check_request.total_timeout` over
-            // without a fallback of its own.
-            let answer = ask.ask(Query::Http {
-                url,
-                timeout_ms: self.remaining,
-            });
-            let (error_code, status_code, rtt) = answer.http();
-            profile.status_code = status_code;
-            profile.rtt = rtt;
+                // `SendHttpQuery` gets the timeout as the request has it,
+                // default and all: the C++ hands `_check_request.total_timeout`
+                // over without a fallback of its own.
+                let answer = ask.ask(Query::Http {
+                    url,
+                    timeout_ms: self.remaining,
+                });
+                let (error_code, status_code, rtt) = answer.http();
+                profile.status_code = status_code;
+                profile.rtt = rtt;
 
-            request.checkresult_profiles.push(profile);
-            request.check_status = if error_code >= 0 {
-                CheckStatus::CheckContinue
-            } else {
-                CheckStatus::CheckFinish
-            };
+                request.checkresult_profiles.push(profile);
+                request.check_status = if error_code >= 0 {
+                    CheckStatus::CheckContinue
+                } else {
+                    CheckStatus::CheckFinish
+                };
 
-            if !self.spend(rtt) {
-                return Stop::Timeout;
+                if !self.spend(rtt) {
+                    break;
+                }
             }
         }
         Stop::Done
@@ -328,69 +342,75 @@ impl Check {
     /// `PingChecker::__DoCheck(_check_request)` — the ips of the request, long
     /// link first, the same two loops the DNS check walks.
     fn ping_check(&mut self, request: &mut CheckRequestProfile, ask: &mut Ask, network_type: i32) {
-        let longlink = ports_of(&request.longlink_items);
+        let longlink = request.longlink_items.clone();
         if self.ping_check_ports(&longlink, request, ask, Some(network_type)) == Stop::Cancelled {
             return;
         }
-        let shortlink = ports_of(&request.shortlink_items);
+        let shortlink = request.shortlink_items.clone();
         // the C++'s short-link loop does not fill `network_type` in, and
         // neither does this one
         self.ping_check_ports(&shortlink, request, ask, None);
     }
 
     /// One walk of the ping check: `DEFAULT_PING_COUNT` pings per ip.
+    ///
+    /// Two loops, like the TCP check's: the timeout is spent by an ip and not
+    /// by the host it is filed under, so the hosts after the one that spent it
+    /// are pinged anyway.
     fn ping_check_ports(
         &mut self,
-        ports: &[CheckIPPort],
+        items: &CheckIPPorts,
         request: &mut CheckRequestProfile,
         ask: &mut Ask,
         network_type: Option<i32>,
     ) -> Stop {
-        for port in ports {
-            if self.cancel.is_cancelled() {
-                return Stop::Cancelled;
-            }
+        for ports in items.values() {
+            for port in ports {
+                if self.cancel.is_cancelled() {
+                    return Stop::Cancelled;
+                }
 
-            // `(*ipport).ip.empty() ? DEFAULT_PING_HOST : (*ipport).ip`
-            let host = if port.ip.is_empty() {
-                DEFAULT_PING_HOST.to_owned()
-            } else {
-                port.ip.clone()
-            };
-            let mut profile = CheckResultProfile::of(NetCheckType::PingCheck);
-            profile.ip = host.clone();
-            if let Some(network_type) = network_type {
-                profile.network_type = network_type;
-            }
+                // `(*ipport).ip.empty() ? DEFAULT_PING_HOST : (*ipport).ip`
+                let host = if port.ip.is_empty() {
+                    DEFAULT_PING_HOST.to_owned()
+                } else {
+                    port.ip.clone()
+                };
+                let mut profile = CheckResultProfile::of(NetCheckType::PingCheck);
+                profile.ip = host.clone();
+                if let Some(network_type) = network_type {
+                    profile.network_type = network_type;
+                }
 
-            // the C++'s `UNUSE_TIMEOUT == total_timeout ? 0 : total_timeout / 1000`
-            let timeout_s = if self.remaining == UNUSE_TIMEOUT {
-                0
-            } else {
-                self.remaining / 1000
-            };
-            let answer = ask.ask(Query::Ping { host, timeout_s });
-            let (error_code, rtt, status) = answer.ping();
-            profile.error_code = error_code;
-            // `DEFAULT_PING_COUNT`, however the run went
-            profile.checkcount = DEFAULT_PING_COUNT;
+                // the C++'s `UNUSE_TIMEOUT == total_timeout ? 0 : total_timeout / 1000`
+                let timeout_s = if self.remaining == UNUSE_TIMEOUT {
+                    0
+                } else {
+                    self.remaining / 1000
+                };
+                let answer = ask.ask(Query::Ping { host, timeout_s });
+                let (error_code, rtt, status) = answer.ping();
+                profile.error_code = error_code;
+                // `DEFAULT_PING_COUNT`, however the run went
+                profile.checkcount = DEFAULT_PING_COUNT;
 
-            // the C++'s `if (0 == ret) { GetPingStatus(); snprintf(...) }`
-            if let Some(status) = status.filter(|_| error_code == 0) {
-                // `snprintf(loss_rate, 16, "%f", ...)` — six decimals, like `%f`
-                profile.loss_rate = format!("{:.6}", status.loss_rate);
-                profile.rtt_str = format!("{:.6}", status.avgrtt);
-            }
+                // the C++'s `if (0 == ret) { GetPingStatus(); snprintf(...) }`
+                if let Some(status) = status.filter(|_| error_code == 0) {
+                    // `snprintf(loss_rate, 16, "%f", ...)` — six decimals, like `%f`
+                    profile.loss_rate = format!("{:.6}", status.loss_rate);
+                    profile.rtt_str = format!("{:.6}", status.avgrtt);
+                }
 
-            request.checkresult_profiles.push(profile);
-            request.check_status = if error_code == 0 {
-                CheckStatus::CheckContinue
-            } else {
-                CheckStatus::CheckFinish
-            };
+                request.checkresult_profiles.push(profile);
+                request.check_status = if error_code == 0 {
+                    CheckStatus::CheckContinue
+                } else {
+                    CheckStatus::CheckFinish
+                };
 
-            if !self.spend(rtt) {
-                return Stop::Timeout;
+                if !self.spend(rtt) {
+                    break;
+                }
             }
         }
         Stop::Done
@@ -425,18 +445,4 @@ impl Check {
 /// so this is the order of the keys.
 fn hosts_of(items: &CheckIPPorts) -> Vec<String> {
     items.keys().cloned().collect()
-}
-
-/// The ip/port of one link, in the order the C++ walks them.
-fn ports_of(items: &CheckIPPorts) -> Vec<CheckIPPort> {
-    items.values().flatten().cloned().collect()
-}
-
-/// The ip/port of one link, each with the host name it is filed under — which
-/// is what the HTTP check builds its URL from.
-fn named_ports_of(items: &CheckIPPorts) -> Vec<(String, CheckIPPort)> {
-    items
-        .iter()
-        .flat_map(|(host, ports)| ports.iter().map(move |port| (host.clone(), port.clone())))
-        .collect()
 }
