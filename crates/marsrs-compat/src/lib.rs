@@ -262,9 +262,11 @@ pub fn decode(opts: &Opts) -> Result<(), String> {
 /// The reader every decoder of this workspace reads through:
 /// `marsrs_xlog::decode_records`, the port of `decode_log_file.c`.
 ///
-/// It takes the private key by value and not in an `Option`, because this CLI
-/// always asks for one: every fixture the C++ wrote is encrypted, and the
-/// golden files are only comparable when each record was decrypted.
+/// It takes the private key by value and not in an `Option`, because this
+/// CLI asks for one whatever the file holds — `--privkey` is required — and
+/// every case of `fixtures/manifest.json` was written against the one pair
+/// in it. Half of them were written with no public key, and theirs are the
+/// records the key is never used on.
 ///
 /// A record that cannot be read is skipped and marked rather than ending the
 /// walk, so a damaged file still yields the records behind the damage. What
