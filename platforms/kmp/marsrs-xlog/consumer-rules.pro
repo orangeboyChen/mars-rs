@@ -28,9 +28,10 @@
 # * `allowoptimization` is what R8 is still free to do. It rewrites bodies and
 #   not names, and a name is the whole of what JNI asks about.
 #
-# `platforms/kmp/marsrs` needs no file of its own: it is this module's API
-# re-exported, and consumer rules travel with the dependency that carries
-# them.
+# `platforms/kmp/marsrs` needs no rules for the logger: it is this module's API
+# re-exported, and consumer rules travel with the dependency that carries them.
+# It has a file of its own all the same — for the net half, which is its own
+# code over `marsrs-jni` and not this module's.
 
 ## 1. Kotlin -> native
 ##

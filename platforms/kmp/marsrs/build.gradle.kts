@@ -33,6 +33,15 @@ val publishedVersion: String = (findProperty("publishedVersion") as String?) ?: 
 // after it, plus `android/<abi>` for the .so files of the JNI bridge. The two
 // names are the two archives `scripts/build_kmp_native.sh` writes; this module
 // asks for the net one, and `:marsrs-xlog` for xlog's.
+//
+// `android/` is *not* packaged by this module, and the name is here so the
+// check at the bottom can skip it: the `Java_*` symbols `src/androidMain` calls
+// — `StnLogic` and `SdtLogic` over `libmarsrsxlog.so` — are in the AAR of
+// `:marsrs-xlog`, which `commonMain` takes as an `api` dependency and which
+// packages that very directory. An AAR of this one that carried the same
+// `jni/<abi>/libmarsrsxlog.so` would be a second copy of one file: AGP's native
+// merge of a consumer that depends on both fails on it, and every consumer
+// would have to add a `pickFirst` to build at all.
 val nativeDir: File = rootProject.file("native")
 val androidNativeDir: File = File(nativeDir, "android")
 // The two headers of the net half, which are checked in next to the crate:
@@ -118,15 +127,14 @@ android {
         // `marsrs-jni` is built against NDK 27 / API 24; 21 is the floor the C++
         // project ships with.
         minSdk = 21
-    }
 
-    // The .so of the JNI bridge, which is the one `scripts/build_android.sh`
-    // builds and the AAR of `platforms/android/marsrs` carries: `StnLogic` and
-    // `SdtLogic` of `src/androidMain` are the `Java_*` symbols of it.
-    sourceSets {
-        getByName("main") {
-            jniLibs.srcDirs(androidNativeDir)
-        }
+        // The rules an app's R8 has to have for the net half, carried in the AAR
+        // as `proguard.txt`: `:marsrs-xlog` ships its own for `xlog.*`, and
+        // those travel with the dependency, but nothing keeps the classes
+        // `src/androidMain` puts in front of `marsrs-jni` — `stn.StnLogic`,
+        // `stn.Task`, `sdt.SdtLogic` and the `Answer` a probe is read out of —
+        // which the bridge reaches by name through JNI.
+        consumerProguardFiles("consumer-rules.pro")
     }
 
     compileOptions {
