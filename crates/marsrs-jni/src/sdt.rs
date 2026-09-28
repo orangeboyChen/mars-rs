@@ -39,6 +39,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use marsrs_sdt::checkimpl::Ask;
 use marsrs_sdt::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
+use marsrs_sdt::sdt_core::CancelHandle;
 use marsrs_sdt::{Callback, CheckIPPorts, NetCheckType, SdtLogic};
 
 /// What `getLoadLibraries` reports: the C++ lists the modules the process
@@ -73,14 +74,41 @@ struct SdtState {
     reported: Arc<Mutex<Vec<CheckResultProfile>>>,
 }
 
+/// A diagnosis nobody has touched yet, with the callback that records what it
+/// finds already installed.
+fn new_state() -> SdtState {
+    let reported = Arc::new(Mutex::new(Vec::new()));
+    let mut logic = SdtLogic::new();
+    logic.set_callback(Sink(Arc::clone(&reported)));
+    // A new diagnosis is a new core, and a new cancellation flag with it: this
+    // is the one [`cancel_active_check_impl`] sets, and it has to be the one
+    // the logic the state holds answers to.
+    *cancel()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = logic.cancel_handle();
+    SdtState { logic, reported }
+}
+
+/// The cancellation flag of the request in flight, kept *outside* [`state()`].
+///
+/// That is the whole point: [`run_active_check_impl`] holds the process-wide
+/// diagnosis for as long as the checks take — which is exactly when a caller
+/// wants to cancel — so a flag that had to be reached through that lock could
+/// only ever be set before a run started or after it had already finished and
+/// reset itself. [`marsrs_sdt::CancelHandle`] is shared for the same reason
+/// inside the diagnosis, and this is the copy the boundary keeps of it.
+fn cancel() -> &'static Mutex<CancelHandle> {
+    static CANCEL: OnceLock<Mutex<CancelHandle>> = OnceLock::new();
+    // A flag of its own, and not [`new_state`]'s: that one reaches for this,
+    // so asking it here would be asking the question the answer is made of.
+    // Every state that follows overwrites it with the handle of the core it
+    // holds, which is the one a run of that core reads.
+    CANCEL.get_or_init(|| Mutex::new(CancelHandle::new()))
+}
+
 fn state() -> &'static Mutex<SdtState> {
     static STATE: OnceLock<Mutex<SdtState>> = OnceLock::new();
-    STATE.get_or_init(|| {
-        let reported = Arc::new(Mutex::new(Vec::new()));
-        let mut logic = SdtLogic::new();
-        logic.set_callback(Sink(Arc::clone(&reported)));
-        Mutex::new(SdtState { logic, reported })
-    })
+    STATE.get_or_init(|| Mutex::new(new_state()))
 }
 
 fn with_state<R>(f: impl FnOnce(&mut SdtState) -> R) -> R {
@@ -93,12 +121,12 @@ fn with_state<R>(f: impl FnOnce(&mut SdtState) -> R) -> R {
 /// Drops the diagnosis state and starts over: the waiting checks, the
 /// callback and everything that was reported go away together.
 pub fn reset_impl() {
-    let reported = Arc::new(Mutex::new(Vec::new()));
-    let mut logic = SdtLogic::new();
-    logic.set_callback(Sink(Arc::clone(&reported)));
-    *state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = SdtState { logic, reported };
+    // The lock comes first: `new_state` reaches for [`cancel`], so building
+    // the new state on the right of an assignment that has not locked yet
+    // — the operands are evaluated right to left — would let the state's
+    // own first build overwrite the handle the new one had just stored, and
+    // a cancel would then set a flag no run reads.
+    with_state(|state| *state = new_state());
     if let Ok(mut delivered) = delivered().lock() {
         delivered.clear();
     }
@@ -133,8 +161,16 @@ pub fn start_active_check_impl(
 }
 
 /// `CancelActiveCheck`.
+///
+/// It stops a run that is *in* flight, not one that has not started: the flag
+/// this sets is the one the run's own read, and it is reached without the lock
+/// that run holds, so a caller may cancel from another thread while the probes
+/// are still being asked — which is the only moment cancelling means anything.
 pub fn cancel_active_check_impl() {
-    with_state(|state| state.logic.cancel_active_check())
+    cancel()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .cancel();
 }
 
 /// Whether a check is in flight.
@@ -363,6 +399,62 @@ mod tests {
             ));
             cancel_active_check_impl();
             assert!(run_checks_impl(record).is_empty());
+        })
+    }
+
+    /// A cancel that has to wait for the run it means to stop is no cancel at
+    /// all — and the run holds the diagnosis for as long as its probes take,
+    /// which is exactly when the app's UI thread presses "stop". So the flag is
+    /// reached without that lock: the cancel below lands on another thread
+    /// while the first check is still being made, and the run stops at the
+    /// second. (Were it reached through the state lock, `join` would never
+    /// return.)
+    #[test]
+    fn a_cancel_from_another_thread_stops_the_run_that_is_in_flight() {
+        isolated(|| {
+            assert!(start_active_check_impl(
+                &hosts("long"),
+                &hosts("short"),
+                NET_CHECK_BASIC,
+                UNUSE_TIMEOUT
+            ));
+            assert_eq!(plan_impl().len(), 2);
+
+            let mut first = true;
+            let results = run_checks_impl(|kind, request| {
+                record(kind, request);
+                if std::mem::take(&mut first) {
+                    // The thread stands in for the app's: it takes no part of
+                    // the run with it, which is the point.
+                    std::thread::spawn(cancel_active_check_impl).join().unwrap();
+                }
+            });
+            assert_eq!(results.len(), 1, "the second check never ran");
+            assert_eq!(results[0].kind(), Some(Kind::PingCheck));
+        })
+    }
+
+    /// A reset throws the cancellation away with the request it cancelled: the
+    /// flag a caller sets afterwards belongs to the core the next run reads,
+    /// not to the one that is gone.
+    #[test]
+    fn a_reset_takes_the_cancellation_with_it() {
+        isolated(|| {
+            assert!(start_active_check_impl(
+                &hosts("long"),
+                &hosts("short"),
+                NET_CHECK_BASIC,
+                UNUSE_TIMEOUT
+            ));
+            cancel_active_check_impl();
+            reset_impl();
+            assert!(start_active_check_impl(
+                &hosts("long"),
+                &hosts("short"),
+                NET_CHECK_BASIC,
+                UNUSE_TIMEOUT
+            ));
+            assert_eq!(run_checks_impl(record).len(), 2, "the new request ran");
         })
     }
 
