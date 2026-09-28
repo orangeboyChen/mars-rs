@@ -115,13 +115,23 @@ index_path() {
 # "no matching package named <crate> found, location searched: crates.io
 # index" in the next `cargo publish` of the run.
 index_has() {
-    curl -sS -A "$CRATES_IO_UA" "https://index.crates.io/$(index_path "$1")" |
-        # `-F` and not a pattern: a `.` in a version is a wildcard in one, so
-        # `0.1.0-alpha.3` matches a `0.1.0-alphaX3` the index holds and the
-        # wait ends on a version that was never published. Fixed, and with
-        # both quotes in it, the only string it can match is the field itself
-        # — the requirements of a dependency are under `"req"`.
-        grep -Fq "\"vers\":\"$version\""
+    local body
+    # Fetched whole, and not piped into a `grep`: one that matches stops
+    # reading at the line it matched, `curl` is left writing into a pipe
+    # nobody is reading, and the SIGPIPE it dies of is — under the `pipefail`
+    # this script asks for — a "this version is not in the index" that ends
+    # the run over a version that is in it. The index of a crate of nine
+    # versions is small enough for `curl` to finish first; one of a hundred
+    # is not, and that is what a crate becomes.
+    body="$(curl -sS -A "$CRATES_IO_UA" "https://index.crates.io/$(index_path "$1")")" || return 1
+    # `case` and not a `grep`: a glob is literal in everything but `*?[]`,
+    # none of which a version holds, and the quotes either side of the field
+    # are what keep the match to the `vers` of the crate — the requirement of
+    # a dependency on that same version sits under `"req"`.
+    case "$body" in
+        *"\"vers\":\"$version\""*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # Dependency order, and the two crates a caller takes last: crates.io resolves a
