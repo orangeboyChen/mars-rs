@@ -1,0 +1,34 @@
+# Codecov's own configuration, for the one report .github/workflows/rust.yml
+# uploads: `cargo llvm-cov` over the whole workspace and every feature, on one
+# host, written to one file.
+#
+# The 90 % floor is deliberately not here. It is `--fail-under-lines 90` on the
+# `cargo llvm-cov` that measures the number, so a commit under it fails that job
+# whether this upload happened or not — a target here would be a second gate on
+# the same number, and the day the two of them round it differently it would be
+# a second answer too. What Codecov is for is what one run cannot say: where the
+# number has been going, and which lines of a pull request it is about.
+
+coverage:
+  status:
+    project:
+      default:
+        # `auto`, and not a number: the coverage main carried, so a pull request
+        # is measured against the tree it is going into and not against a figure
+        # written here and kept by hand ever after.
+        target: auto
+        # Anything below it counts, and not the whole percentage point: a pull
+        # request that moves the number by a rounding error has not regressed.
+        threshold: 1%
+    patch:
+      default:
+        # The lines a pull request touched, reported and not enforced: a patch
+        # of three lines at 90 % is not the claim a workspace at 90 % is, and
+        # the floor that gates a commit is the one over the whole workspace.
+        informational: true
+
+comment:
+  # reach, diff, files: what the coverage of the change is, what it did to the
+  # number, and where. No `flags` — there is one flag, and a column of one says
+  # nothing a reader of this repository does not already know.
+  layout: 'reach, diff, files'

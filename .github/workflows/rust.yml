@@ -12,7 +12,9 @@ name: Rust
 # a coverage job of its own: it is `cargo test` again under `cargo llvm-cov`,
 # on the same host and over the same workspace, so it is a step of the Linux
 # `test` job rather than a fourth runner with the same checkout and the same
-# toolchain on it.
+# toolchain on it — and the report that step writes is what the next one gives
+# Codecov, so the number the badge in the README shows is the number the floor
+# below measured.
 #
 # Every cross target of a platform shares one runner instead of taking one
 # each: each of them is the same `cargo build` of the same crate, and four in
@@ -89,7 +91,7 @@ jobs:
             'crates/**' '*.rs' '**/*.rs' 'Cargo.toml' '**/Cargo.toml' 'Cargo.lock' \
             '.cargo/**' 'clippy.toml' 'rustfmt.toml' '.gitattributes' \
             '.github/scripts/**' 'scripts/build_harmony.sh' \
-            '.github/workflows/rust.yml'
+            '.github/workflows/rust.yml' 'codecov.yml'
 
   lint:
     name: rustfmt + clippy + doc + net build
@@ -184,9 +186,56 @@ jobs:
       - name: Measure line coverage
         if: needs.changes.outputs.needed == 'true' && matrix.os == 'ubuntu-latest'
         run: |
-          cargo llvm-cov --workspace --all-features --summary-only \
+          # `--lcov`, and not the `--summary-only` this step used to be: the
+          # floor is still what decides the job, and the report it writes is
+          # what the next step uploads, so Codecov is told the number this
+          # measurement found and not one a second run of its own found.
+          cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info \
             --ignore-filename-regex 'marsrs-jni/src/jni_bridge\.rs' \
             --fail-under-lines 90
+          # The table this step used to print, out of the measurement it just
+          # made. `--summary-only` and `--lcov` cannot be asked for in one
+          # breath, and the number is worth having in the log and not only on
+          # Codecov, so it is printed from the same data: `report` runs no test
+          # again and takes well under a second.
+          cargo llvm-cov report --ignore-filename-regex 'marsrs-jni/src/jni_bridge\.rs'
+      # The report above, to the Codecov that draws the coverage badge in the
+      # README. Three things about it are worth writing down.
+      #
+      # Whether there is a token at all is asked by the step below and not
+      # here: `secrets` is not a context a step's `if` may read and `env` is,
+      # but `env` on the job is the environment of every step of all three legs
+      # — the toolchain, the cache, and every `cargo test` and build script
+      # they run — for a secret that only this one upload needs. So it is read
+      # into one step whose whole body is a `printf`, and handed to this one,
+      # and to nothing else. A pull request from a fork, and one Dependabot
+      # opens until the token is given to it as a Dependabot secret, have none,
+      # and the upload is skipped rather than failed: an upload that cannot
+      # happen is not a fact about the commit.
+      #
+      # Where the token does exist, `fail_ci_if_error` is on: the badge is only
+      # as good as the last report that reached Codecov, and one that did not
+      # arrive should say so.
+      #
+      # `lcov.info` is named and the search for other reports is switched off
+      # because there is exactly one report, and it is the one just written.
+      - name: Is there a Codecov token
+        id: codecov-token
+        if: needs.changes.outputs.needed == 'true' && matrix.os == 'ubuntu-latest'
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        # `:+true`, and not the token: the answer is all that leaves this step.
+        run: printf 'present=%s\n' "${CODECOV_TOKEN:+true}" >> "$GITHUB_OUTPUT"
+      - name: Upload the report to Codecov
+        if: steps.codecov-token.outputs.present == 'true'
+        uses: codecov/codecov-action@v7
+        with:
+          files: lcov.info
+          disable_search: true
+          fail_ci_if_error: true
+          flags: rust
+          name: rust
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   android:
     name: build (android)

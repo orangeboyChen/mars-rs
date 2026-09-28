@@ -1,5 +1,10 @@
 /target
 
+# the coverage report: what `cargo llvm-cov --lcov` writes for
+# .github/workflows/rust.yml to upload, and what it leaves behind when it is
+# run by hand
+/lcov.info
+
 # platforms/android: what the release workflow unpacks and what Gradle writes
 platforms/android/*/libs/
 platforms/android/.gradle/
