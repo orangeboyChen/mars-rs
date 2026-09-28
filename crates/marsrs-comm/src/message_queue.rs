@@ -188,12 +188,22 @@ impl PostedMessage {
 type HandlerFn = dyn Fn(&mut Message) + Send + Sync;
 
 struct HandlerEntry {
+    /// The sequence number the handler was installed with, which is the one
+    /// a `MessagePost` names it by.
+    seq: u32,
     handler: Arc<HandlerFn>,
     recv_broadcast: bool,
 }
 
 struct QueueState {
-    handlers: HashMap<u32, HandlerEntry>,
+    /// The handlers in the order they were installed.
+    ///
+    /// `std::list<HandlerWrapper*> lst_handler` of
+    /// `comm/messagequeue/message_queue.cc`, which a dispatch walks from the
+    /// front: with more than one handler for a message — a broadcast, or
+    /// several alarms on one queue — the order they run in is the order they
+    /// were installed in, and not whatever a map hands out.
+    handlers: Vec<HandlerEntry>,
     messages: VecDeque<PostedMessage>,
     next_handler_seq: u32,
     next_post_seq: u32,
@@ -203,7 +213,7 @@ struct QueueState {
 impl QueueState {
     fn new() -> Self {
         Self {
-            handlers: HashMap::new(),
+            handlers: Vec::new(),
             messages: VecDeque::new(),
             next_handler_seq: 1,
             next_post_seq: 1,
@@ -325,20 +335,18 @@ where
     let mut state = queue.lock();
     let seq = state.next_handler_seq;
     state.next_handler_seq += 1;
-    state.handlers.insert(
+    state.handlers.push(HandlerEntry {
         seq,
-        HandlerEntry {
-            handler: Arc::new(handler),
-            recv_broadcast,
-        },
-    );
+        handler: Arc::new(handler),
+        recv_broadcast,
+    });
     MessageHandler { queue: id, seq }
 }
 
 /// `MessageQueue::UnInstallMessageHandler`.
 pub fn uninstall_message_handler(handler: &MessageHandler) {
     if let Some(queue) = queue(handler.queue) {
-        queue.lock().handlers.remove(&handler.seq);
+        queue.lock().handlers.retain(|it| it.seq != handler.seq);
     }
 }
 
@@ -370,7 +378,7 @@ pub fn post_message(
     let Some(queue) = queue(handler.queue) else {
         return NULL_POST;
     };
-    if handler.seq != 0 && !queue.lock().handlers.contains_key(&handler.seq) {
+    if handler.seq != 0 && !queue.lock().handlers.iter().any(|it| it.seq == handler.seq) {
         return NULL_POST;
     }
     let (due, period) = first_due(&timing);
@@ -480,7 +488,7 @@ pub fn faster_message(handler: &MessageHandler, message: Message) -> MessagePost
     // message carrying its `reg` could never run: `post_message` answers
     // `NULL_POST` for the same reason, and matching a pending entry below would
     // hand back a post that no dispatch will ever pick up.
-    if handler.seq != 0 && !state.handlers.contains_key(&handler.seq) {
+    if handler.seq != 0 && !state.handlers.iter().any(|it| it.seq == handler.seq) {
         return NULL_POST;
     }
     // Search and insertion are one step under the queue's lock, not two: two
@@ -703,8 +711,8 @@ impl RunLoop {
             let handlers: Vec<Arc<HandlerFn>> = state
                 .handlers
                 .iter()
-                .filter(|(seq, entry)| **seq == addressed || (is_broadcast && entry.recv_broadcast))
-                .map(|(_, entry)| Arc::clone(&entry.handler))
+                .filter(|it| it.seq == addressed || (is_broadcast && it.recv_broadcast))
+                .map(|it| Arc::clone(&it.handler))
                 .collect();
             state.running = true;
             (handlers, Arc::clone(&entry.message))

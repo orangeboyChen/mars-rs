@@ -387,6 +387,35 @@ fn the_run_loop_runs_until_its_breaker_says_stop() {
 }
 
 #[test]
+fn a_broadcast_runs_the_handlers_in_the_order_they_were_installed() {
+    let queue = create_message_queue();
+    let order = Arc::new(Mutex::new(Vec::new()));
+    for id in 1_u32..=3 {
+        let sink = Arc::clone(&order);
+        install_message_handler(
+            move |_| {
+                sink.lock().unwrap().push(id);
+            },
+            true,
+            queue,
+        );
+    }
+
+    broadcast_message(
+        queue,
+        Message::new(MessageTitle(1), "order"),
+        MessageTiming::Immediate,
+    );
+    assert!(RunLoop::dispatch_timeout(queue, Duration::from_millis(200)));
+
+    // `lst_handler` of the C++ is a `std::list` walked from the front, so
+    // which of several handlers for one message runs first is the order they
+    // were installed in and not the order a `HashMap` happens to yield.
+    assert_eq!(*order.lock().unwrap(), vec![1, 2, 3]);
+    destroy_message_queue(queue);
+}
+
+#[test]
 fn a_thread_with_no_queue_of_its_own_answers_the_invalid_id() {
     let queue = create_message_queue();
     let (sender, receiver) = mpsc::channel();
