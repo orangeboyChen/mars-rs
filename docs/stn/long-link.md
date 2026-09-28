@@ -40,7 +40,15 @@ STN is told, in the spelling of the platform:
 | where | how |
 |---|---|
 | Android | `BaseEvent.onNetworkChange()`, and `BaseEvent.onForeground(true / false)` when the app comes back or goes away |
+| Rust | `stn.on_network_change { … }` — the closure is the host's own change, and it runs before STN's |
 | everywhere else | `reset` — and the two addresses above, when where it connects has changed |
+
+What a network change does is more than note it: every long link is taken down
+and asked for again — at once, or after the interval its own monitor is on — and
+the tasks that were out on one are cancelled and started again, which is what
+puts them on a link that is up. An app on the C ABI, on HarmonyOS, in Swift or in
+a shared Kotlin module has no call for it, so there `reset` is the whole of what
+a change can ask for.
 
 A short link needs no telling: a task goes out on whichever link is up, and
 `Task::new` asks for both.

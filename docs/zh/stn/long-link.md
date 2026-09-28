@@ -36,7 +36,13 @@
 | 哪里 | 怎么告诉 |
 |---|---|
 | Android | `BaseEvent.onNetworkChange()`，以及 App 回来或离开时 `BaseEvent.onForeground(true / false)` |
+| Rust | `stn.on_network_change { … }` —— 闭包里是宿主自己的变更，它比 STN 的先跑 |
 | 其余每个平台 | `reset` —— 连的地方变了的话，再加上上面那两个地址 |
+
+一次网络变化做的事不止是记一笔：每条长连接都会被拆掉、重新去连 —— 立刻，或者
+等它自己的 monitor 走到下一个间隔 —— 走在那条连接上的任务会被取消再发起一次，
+这样它们才会落到一条已经起来的链路上。C ABI、HarmonyOS、Swift 和共享 Kotlin
+模块上的 App 没有这个调用，在那里 `reset` 就是一次变化能要求的全部。
 
 短连接不需要告诉：一个任务会走第一条已经起来的链路，`Task::new` 两条都要。
 
