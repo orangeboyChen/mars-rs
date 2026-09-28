@@ -268,10 +268,16 @@ StnLogic.startTask(task)
 // 3. 循环 —— `dueTime()` 是这一趟还能等多少毫秒，没有要等的东西时回答 `null`
 var due = StnLogic.dueTime()
 while (due != null) {
+    wait(due)               // App 自己的：共享 Kotlin 里没有 sleep
     StnLogic.runPending()
     due = StnLogic.dueTime()
 }
 ```
+
+等也是 App 自己的事：共享 Kotlin 没有自己的 sleep，所以上面的 `wait` 是 App 写的
+一个 `expect` —— Android 上 `Thread.sleep(due)`，native 目标上 `usleep(due *
+1000)`。不写它，这个循环就是空转，能跑，但烧掉一个核 —— [任务](/zh/stn/tasks)那一页
+就是这么写的。
 
 `StnLogic` 是 `commonMain` 里一个 `expect object`，每个平台族有一个 `actual` ——
 Android 上走 JNI 桥，每个 Kotlin/Native target 上通过 cinterop 走 C ABI。一个

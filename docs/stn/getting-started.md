@@ -280,10 +280,16 @@ StnLogic.startTask(task)
 //    and it answers `null` when there is nothing to wait for
 var due = StnLogic.dueTime()
 while (due != null) {
+    wait(due)               // the app's own: `common` Kotlin has no sleep
     StnLogic.runPending()
     due = StnLogic.dueTime()
 }
 ```
+
+The wait is the app's own too: `common` Kotlin carries no sleep of its own, so
+`wait` above is an `expect` the app writes — `Thread.sleep(due)` on Android and
+`usleep(due * 1000)` on the native targets. Left out, the loop is a spin, which
+works and burns a core, the way [a task](/stn/tasks) says it does.
 
 `StnLogic` is one `expect object` in `commonMain`, with one `actual` per platform
 family — over the JNI bridge on Android, over the C ABI through cinterop on every
