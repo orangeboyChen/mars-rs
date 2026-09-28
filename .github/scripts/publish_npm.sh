@@ -49,8 +49,30 @@ for pkg in platforms/react-native/marsrs platforms/react-native/marsrs-xlog; do
         continue
     fi
 
-    echo "publishing $name $version"
+    # The dist-tag, named only for a pre-release: `alpha` for 0.1.0-alpha.2,
+    # `beta` for 0.1.0-beta.10. npm asks for one then — under the tag it
+    # defaults to it refuses the publish outright, "You must specify a tag
+    # using --tag when publishing a prerelease version" — and a tag that is
+    # named is the only tag the publish moves, so `latest` stays where the
+    # last stable version left it, which is what the `npm install <name>` of
+    # the docs and of the README installs.
+    #
+    # A stable version is published with the tag left implicit: that is what
+    # keeps npm's own check on `latest`, the one that refuses a version lower
+    # than a version already published — a 1.5.1 asked for after a 2.0.0 —
+    # and it is a check npm makes of a tag it picked itself.
+    tag=""
+    if [ "${version#*-}" != "$version" ]; then
+        tag="${version#*-}"
+        tag="${tag%%.*}"
+    fi
+    args=(--provenance)
+    if [ -n "$tag" ]; then
+        args+=(--tag "$tag")
+    fi
+
+    echo "publishing $name $version${tag:+ as $tag}"
     # `--provenance`: the registry records what built the tarball it was given.
     # No `--access`: an unscoped package is public, and npm says so.
-    (cd "$pkg" && npm publish --provenance)
+    (cd "$pkg" && npm publish "${args[@]}")
 done
