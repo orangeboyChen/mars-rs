@@ -80,8 +80,10 @@ public enum MarsSdt {
     /// Which probe is being asked: the four of `mars/sdt/src/checkimpl/`, plus
     /// `nothing` for a probe nobody answered.
     public enum Probe: UInt32 {
-        /// Nobody answered — a host with no network to probe with, which every
-        /// check reads as a failure.
+        /// Nobody answered — a host with no network to probe with, which the
+        /// check that asked reads as a failure, and a failed check ends the
+        /// run. A ping is the one exception: a ping nobody sent is a check that
+        /// did not run, and the plan goes on behind it.
         case nothing = 0
         /// `socket_gethostbyname` — the resolve of one host name.
         case dns = 1
@@ -148,7 +150,10 @@ public enum MarsSdt {
     /// probe leaves behind, and nothing else: a resolve answers addresses, a
     /// noop a round trip, the CGI a status and a ping a loss rate.
     public enum Result {
-        /// Nobody answered, which every check reads as a failure.
+        /// Nobody answered, which the check that asked reads as a failure — and
+        /// a failed check ends the run. A ping is the one exception: a ping
+        /// nobody sent is one the C++ never made, so it is left out of the
+        /// report and the run goes on to the check behind it.
         case nothing
         /// The resolve of one host name.
         case dns(errorCode: Int32, rtt: UInt64, addresses: [String])

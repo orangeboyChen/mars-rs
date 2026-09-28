@@ -6,8 +6,10 @@ package io.github.orangeboychen.marsrs.sdt
  *
  * Every case carries the readings a run of that probe leaves behind, and nothing
  * else: a resolve answers addresses, a noop a round trip, the CGI a status and a
- * ping a loss rate. [None] is a probe nobody answered, which every check reads
- * as a failure.
+ * ping a loss rate. [None] is a probe nobody answered, which the check that
+ * asked reads as a failure, and a failed check ends the run. A ping is the one
+ * exception: a ping nobody sent is a check that did not run, so it is left out
+ * of the report and the run goes on to the check behind it.
  */
 public sealed class ProbeAnswer {
     /** Nobody answered — a host with no network to probe with. */

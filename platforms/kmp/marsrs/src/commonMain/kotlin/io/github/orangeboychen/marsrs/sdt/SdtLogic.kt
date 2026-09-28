@@ -15,8 +15,10 @@ package io.github.orangeboychen.marsrs.sdt
  * The one thing an app supplies is the network: DNS, TCP, HTTP and ping are four
  * probes the port refuses to open for itself, so they cross the boundary as the
  * four methods of [IProbe], and [runChecks] drives the run the C++ drives from
- * its `__RunOn` thread. Answer [ProbeAnswer.None] and every check fails, which
- * is what a host with no network gets.
+ * its `__RunOn` thread. Answer [ProbeAnswer.None] and the check that asked
+ * fails, and a failed check ends the run — which is what a host with no network
+ * gets. A ping is the one exception: a ping nobody sent is a check that did not
+ * run, so it is left out of the report and the run goes on behind it.
  *
  * A probe is asked while the process-wide diagnosis is held, so it must not call
  * another [SdtLogic]: everything it needs is in the query it is given.

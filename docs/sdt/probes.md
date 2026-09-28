@@ -30,10 +30,12 @@ test, or from a machine with no radio.
 The run asks them one at a time, in the order of the plan, on the thread that
 called it — and the call does not come back until every probe has answered, so no
 sleep and no loop is involved the way one is for
-[a task](/stn/getting-started). A probe that has
-nothing to say answers "nothing" — `.nothing` in Swift, `Answer.None` in the
-shared Kotlin, `MarsSdtAnswerNothing` in C — and the check is recorded as one
-that did not run.
+[a task](/stn/getting-started). A probe that has nothing to say answers
+"nothing" — `.nothing` in Swift, `ProbeAnswer.None` in the shared Kotlin,
+`MarsSdtNothing` in C — and the check that asked is recorded as one that
+failed, which ends the run: what stands behind it in the plan is not checked.
+A ping is the one exception — a ping nobody sent is a check that did not run,
+so it is left out of the report and the run goes on behind it.
 
 ## The answers
 

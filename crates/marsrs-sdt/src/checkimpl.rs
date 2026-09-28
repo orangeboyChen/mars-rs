@@ -154,11 +154,13 @@ pub enum Answer {
     /// to make one with.
     ///
     /// A check that has no answer to read reads this as a failure — the host
-    /// could not resolve, could not connect — with one exception, and it is the
-    /// C++'s own: `PingChecker::StartDoCheck` answers `-1` for a platform with
-    /// no ping (`#if defined(ANDROID) || defined(__APPLE__)`), which is a check
-    /// that did not run and not one that failed, so [`Answer::Nothing`] to a
-    /// [`Query::Ping`] records no profile and ends no run.
+    /// could not resolve, could not connect — and a failed check ends the
+    /// run, so what stands behind it in the plan is not checked. One check
+    /// is not failed by it, and the exception is the C++'s own:
+    /// `PingChecker::StartDoCheck` answers `-1` for a platform with no ping
+    /// (`#if defined(ANDROID) || defined(__APPLE__)`), which is a check
+    /// that did not run, so [`Answer::Nothing`] to a [`Query::Ping`]
+    /// records no profile and the run goes on behind it.
     #[default]
     Nothing,
 }
@@ -241,8 +243,12 @@ impl Ask {
 
 impl Default for Ask {
     /// A diagnosis nobody can probe with: every question goes unanswered, and
-    /// every check fails — which is what a host with no network of its own
-    /// gets, and what [`crate::activecheck`]'s samples start from.
+    /// the first check that asks one fails, which ends the run — what a
+    /// host with no network of its own gets, and what
+    /// [`crate::activecheck`]'s samples start from. The ping is the one
+    /// check it does not fail: a ping nobody sent is a check that did not
+    /// run, so the run goes on to the resolve behind it, which is the check
+    /// that fails and ends it.
     fn default() -> Self {
         Self::new(|_| Answer::Nothing)
     }
