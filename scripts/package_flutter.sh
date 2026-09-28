@@ -55,7 +55,7 @@ esac
 
 # The framework the two plugins carry: the one the apple job built, named by the
 # zip it came in. Both are lower-case, the way every archive of this port's own
-# is spelled — what is CamelCase is the module inside, `MarsRSXlogFFI`, because
+# is spelled — what is CamelCase is the module inside, `MarsRSFFI`, because
 # that is the name an app writes after `import`.
 framework_zip="${XCFRAMEWORK_ZIP:-marsrs-xlog.xcframework.zip}"
 framework="${framework_zip%.zip}"
