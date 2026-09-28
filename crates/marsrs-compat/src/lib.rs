@@ -42,7 +42,8 @@ const DEFAULT_REGION: usize = 150 * 1024;
 /// `ZSTD_c_compressionLevel` default of `XlogConfig` in the C++ appender.
 const DEFAULT_LEVEL: i32 = 6;
 
-/// Reads `--key=value` style options; see the CLI in `main.rs`.
+/// The `--key=value` options of one subcommand: `main.rs` fills one in from
+/// a command line, and [`encode`] and [`decode`] take theirs out of it.
 pub type Opts = HashMap<String, String>;
 
 fn required(opts: &Opts, key: &str) -> Result<String, String> {
