@@ -67,9 +67,9 @@ static size_t g_instances_capacity = 0;
 
 // --- values ---------------------------------------------------------------
 
-// A copy of `s`, malloc'd, or NULL. `strdup` is not spelled for what it is here
-// on purpose: which feature macros a libc of this platform wants before it
-// declares that one is not a question this shim needs an answer to.
+// A copy of `s`, malloc'd, or NULL. `strdup` is not called on purpose: which
+// feature macros a libc of this platform wants before it declares that one is
+// not a question this shim needs an answer to.
 static char* Duplicate(const char* s) {
     size_t length = strlen(s) + 1;
     char* out = (char*)malloc(length);
@@ -308,9 +308,9 @@ static napi_value GetLevel(napi_env env, napi_callback_info info) {
     char* namePrefix = ArgString(env, info, 0);
     long long handle = HandleOf(namePrefix);
     free(namePrefix);
-    // -1 is what the C ABI answers for a handle it does not know, and it is not
-    // a `LogLevel`; what this answers instead is the level the ArkTS is already
-    // holding, which `Xlog.level` reads when the appender is closed.
+    // `Info` for a prefix this module has no handle for, and for the `-1` the
+    // C ABI answers for a handle it does not know: `-1` is no `LogLevel`, and
+    // a prefix with no appender behind it is asked nothing further.
     int level = handle == 0 ? MarsLevelInfo : mars_xlog_get_level(handle);
     return Int32(env, level < 0 ? MarsLevelInfo : level);
 }
