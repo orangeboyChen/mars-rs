@@ -258,32 +258,26 @@ export class Xlog {
     NativeXlog.log(this.namePrefix, level, tag, message);
   }
 
-  /** `log` at `LogLevel.verbose`. */
   v(tag: string, message: string): void {
     this.log(LogLevel.verbose, tag, message);
   }
 
-  /** `log` at `LogLevel.debug`. */
   d(tag: string, message: string): void {
     this.log(LogLevel.debug, tag, message);
   }
 
-  /** `log` at `LogLevel.info`. */
   i(tag: string, message: string): void {
     this.log(LogLevel.info, tag, message);
   }
 
-  /** `log` at `LogLevel.warning`. */
   w(tag: string, message: string): void {
     this.log(LogLevel.warning, tag, message);
   }
 
-  /** `log` at `LogLevel.error`. */
   e(tag: string, message: string): void {
     this.log(LogLevel.error, tag, message);
   }
 
-  /** `log` at `LogLevel.fatal`. */
   f(tag: string, message: string): void {
     this.log(LogLevel.fatal, tag, message);
   }

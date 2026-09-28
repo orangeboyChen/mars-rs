@@ -2,9 +2,9 @@
 // `src/index.ts` calls at runtime.
 //
 // Codegen makes two things of it — `NativeXlogSpec`, the abstract class the
-// Android half extends, and `NativeXlogSpec`, the protocol the iOS half conforms
-// to — and the two of them are what let a call land where it is made instead of
-// crossing a bridge: a TurboModule method that answers no promise is called on
+// Android half extends and the protocol the iOS half conforms to, and
+// `NativeXlogSpecJSI`, the C++ class the iOS factory answers — and they are
+// what let a call land where it is made instead of crossing a bridge: a TurboModule method that answers no promise is called on
 // the JS thread and returns, and one that answers a value answers it before it
 // returns. That is the only reason `src/index.ts` can be the Kotlin and the
 // Swift member for member — `Xlog.open(config)`, `xlog.level`,
