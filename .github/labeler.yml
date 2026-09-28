@@ -1,0 +1,201 @@
+# What a pull request is labelled with, decided by the paths it touches.
+#
+# Every name below has to be a label the repository already carries: this file
+# names labels, it never makes one, and a name that no label has fails the run
+# rather than quietly labelling nothing. So a new rule here begins with
+# `gh label create`.
+#
+# The families:
+#
+#   `area:`     which half of the port a change is in — the xlog pipeline, the
+#               STN task model, the SDT diagnosis, or the ABI boundary that
+#               the platforms which are not Rust cross.
+#   `platform:` what the port ships as — the crates, the C ABI, the Swift
+#               package, the Kotlin Multiplatform artefacts, the Android AAR,
+#               the HarmonyOS libraries, and the two bridging plugins.
+#   `meta:`     the repository's own machinery: the workflows, the release,
+#               the site, the dependencies.
+#   `type:`     documentation, and nothing else. See below.
+#
+# A change carries one of each, and that is what the families are for: a fix in
+# `crates/marsrs-ffi/` is `area: ffi` — what it is — and `platform: c-abi` —
+# what ships because of it. Which of them a reader sorts by is their call.
+#
+# Only `type: documentation` is derived here. `type: bug` against `type:
+# feature` is a claim about what the author meant, and no path can make it: the
+# two look alike in a diff. Those are put on by hand, and they stay put — see
+# `sync-labels` in the workflow.
+#
+# The crates with no `area:` of their own — `marsrs-core`, `marsrs-comm`,
+# `marsrs-compat` and the `marsrs` facade — are the ones every half of the port
+# is built on. A change to one is not a change to any half in particular; it is
+# a Rust change, and `platform: rust` is what it gets.
+
+# The xlog half: the facade over it, the three crates it is made of, and the
+# logger's own module on every platform that has one. `marsrs-buffer`,
+# `marsrs-appender` and `marsrs-crypt` are published in their own right but are
+# an implementation detail of this half, which is why they are labelled with it
+# and not as areas of their own.
+'area: xlog':
+- changed-files:
+  - any-glob-to-any-file:
+    - crates/marsrs-xlog/**
+    - crates/marsrs-appender/**
+    - crates/marsrs-buffer/**
+    - crates/marsrs-crypt/**
+    - Sources/MarsRSXlog/**
+    - android/marsrs-xlog/**
+    - android/marsrs/src/main/kotlin/**/xlog/**
+    - kmp/marsrs-xlog/**
+    - kmp/marsrs/src/**/xlog/**
+    - flutter/marsrs-xlog/**
+    - react-native/marsrs-xlog/**
+
+# The STN half. `Sources/MarsRSNet/` is one module for both halves of the net,
+# so its files are named apart: `Stn*.swift` is the task model and `Sdt*.swift`
+# is the diagnosis. The Android and Kotlin Multiplatform packages are split the
+# same way — and the Kotlin ones are named before the packages exist, because a
+# glob that matches nothing today matches the day the directory under it lands.
+# `kmp/marsrs/src/**/xlog/**`, up under `area: xlog`, is in the same state.
+'area: stn':
+- changed-files:
+  - any-glob-to-any-file:
+    - crates/marsrs-stn/**
+    - Sources/MarsRSNet/Stn*.swift
+    - android/marsrs/src/main/kotlin/**/stn/**
+    - kmp/marsrs/src/**/stn/**
+
+# The SDT half, and the same two Swift files' worth of care.
+'area: sdt':
+- changed-files:
+  - any-glob-to-any-file:
+    - crates/marsrs-sdt/**
+    - Sources/MarsRSNet/Sdt*.swift
+    - android/marsrs/src/main/kotlin/**/sdt/**
+    - kmp/marsrs/src/**/sdt/**
+
+# The two boundaries out of Rust. `marsrs-ffi` is the C ABI every platform
+# that is not Rust is built on; `marsrs-jni` is the JNI the Android module
+# reaches through. Neither is an area of mars that the C++ project has — both
+# are what this port needed to add to cross into Kotlin and Swift.
+'area: ffi':
+- changed-files:
+  - any-glob-to-any-file:
+    - crates/marsrs-ffi/**
+    - crates/marsrs-jni/**
+
+# The crates, and the Rust face of everything above: every crate is Rust, so
+# this is the one `platform:` a change to the port always gets.
+'platform: rust':
+- changed-files:
+  - any-glob-to-any-file:
+    - crates/**
+    - Cargo.toml
+    - Cargo.lock
+    - rustfmt.toml
+    - clippy.toml
+
+# The C ABI archive and its headers — `crates/marsrs-ffi/include/*.h`, which is
+# what a C, C++ or Objective-C caller includes.
+'platform: c-abi':
+- changed-files:
+  - any-glob-to-any-file:
+    - crates/marsrs-ffi/**
+
+# Apple: the Swift package, the three CocoaPods pods, and the script that
+# stitches the xcframework together out of the per-slice libraries.
+'platform: swift':
+- changed-files:
+  - any-glob-to-any-file:
+    - Sources/**
+    - Package.swift
+    - '*.podspec'
+    - scripts/build_xcframework.sh
+
+# The Kotlin Multiplatform build, and the script that builds the `.so` or
+# `.dylib` its cinterop definitions point at.
+'platform: kotlin-kmp':
+- changed-files:
+  - any-glob-to-any-file:
+    - kmp/**
+    - scripts/build_kmp_native.sh
+
+# The Android modules and the JNI crate behind them. `marsrs-jni` is Rust, but
+# the only caller it has is this platform, so it is labelled with it.
+'platform: android':
+- changed-files:
+  - any-glob-to-any-file:
+    - android/**
+    - crates/marsrs-jni/**
+    - scripts/build_android.sh
+
+# HarmonyOS, which is one script: the three `libmars_ffi.so` it builds come out
+# of `marsrs-ffi` unmodified, so there is no source tree of its own to name
+# here. The workflow that runs the script is `meta: ci`, like every other one.
+'platform: harmonyos':
+- changed-files:
+  - any-glob-to-any-file:
+    - scripts/build_harmony.sh
+
+'platform: flutter':
+- changed-files:
+  - any-glob-to-any-file:
+    - flutter/**
+    - scripts/package_flutter.sh
+
+'platform: react-native':
+- changed-files:
+  - any-glob-to-any-file:
+    - react-native/**
+    - scripts/package_react_native.sh
+
+# The workflows, their helper scripts, Dependabot's configuration and this
+# file. `.github/**` is matched: `dot` has defaulted to true since v5.
+'meta: ci':
+- changed-files:
+  - any-glob-to-any-file:
+    - .github/**
+
+# Versioning, packaging and publishing: the two workflows that cut a release
+# and push it somewhere, the JitPack build, and the scripts they run — the
+# version, the pub.dev and npm packages, and the JitPack build.
+'meta: release':
+- changed-files:
+  - any-glob-to-any-file:
+    - .github/workflows/release.yml
+    - .github/workflows/pub.yml
+    - .github/scripts/release_version.sh
+    - .github/scripts/jitpack_build.sh
+    - .github/scripts/publish_npm.sh
+    - .github/scripts/publish_pub.sh
+    - jitpack.yml
+
+# The VitePress site under `docs/`, in both languages, and the npm project
+# that builds it.
+'meta: docs-site':
+- changed-files:
+  - any-glob-to-any-file:
+    - docs/**
+
+# A change to a lockfile or a manifest of versions. Dependabot's own
+# configuration counts: what it changes is the set of dependencies, not the
+# code that depends on them.
+'meta: dependencies':
+- changed-files:
+  - any-glob-to-any-file:
+    - Cargo.toml
+    - Cargo.lock
+    - crates/*/Cargo.toml
+    - docs/package.json
+    - docs/package-lock.json
+    - .github/dependabot.yml
+
+# The one `type:` a path can decide. A change to prose is documentation
+# whichever half of the port it describes, and the site is prose too — hence
+# both `meta: docs-site` and this on a change under `docs/`.
+'type: documentation':
+- changed-files:
+  - any-glob-to-any-file:
+    - docs/**
+    - README.md
+    - crates/*/README.md
