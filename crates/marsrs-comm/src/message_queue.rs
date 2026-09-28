@@ -188,26 +188,48 @@ impl PostedMessage {
 type HandlerFn = dyn Fn(&mut Message) + Send + Sync;
 
 struct HandlerEntry {
+    /// The sequence number the handler was installed with, which is the one
+    /// a `MessagePost` names it by.
+    seq: u32,
     handler: Arc<HandlerFn>,
     recv_broadcast: bool,
 }
 
 struct QueueState {
-    handlers: HashMap<u32, HandlerEntry>,
+    /// The handlers in the order they were installed.
+    ///
+    /// `std::list<HandlerWrapper*> lst_handler` of
+    /// `comm/messagequeue/message_queue.cc`, which a dispatch walks from the
+    /// front: with more than one handler for a message — a broadcast, or
+    /// several alarms on one queue — the order they run in is the order they
+    /// were installed in, and not whatever a map hands out.
+    handlers: Vec<HandlerEntry>,
     messages: VecDeque<PostedMessage>,
     next_handler_seq: u32,
     next_post_seq: u32,
-    running: bool,
+    /// The messages the queue is running, one entry per dispatch under way: a
+    /// dispatch pushes its post before it calls the handlers and takes it out
+    /// when they are done.
+    ///
+    /// `lst_runloop_info` of `comm/messagequeue/message_queue.cc` is a list
+    /// with one `RunLoopInfo` — and so one `runing_message_id` — per run loop
+    /// of the queue, which is to say per thread dispatching it. One post for
+    /// the whole queue is the second of two concurrent dispatches overwriting
+    /// the first, and whichever of the two handlers finished first reporting
+    /// the other's message as gone while it was still running: `found_message`
+    /// answered `false` for a message the queue was running, and a
+    /// `wait_message` on it returned before its handler had finished.
+    running_posts: Vec<MessagePost>,
 }
 
 impl QueueState {
     fn new() -> Self {
         Self {
-            handlers: HashMap::new(),
+            handlers: Vec::new(),
             messages: VecDeque::new(),
             next_handler_seq: 1,
             next_post_seq: 1,
-            running: false,
+            running_posts: Vec::new(),
         }
     }
 }
@@ -229,8 +251,15 @@ impl Queue {
         self.state.lock().unwrap()
     }
 
-    fn set_running(&self, running: bool) {
-        self.lock().running = running;
+    /// The message is over: [`found_message`] stops reporting it and a
+    /// [`wait_message`] on it can return, so everyone waiting on the queue is
+    /// woken. Only `post` is taken out — a second dispatch of this queue is
+    /// running a message of its own, and it is still running when this one is
+    /// done.
+    fn clear_running(&self, post: MessagePost) {
+        let mut state = self.lock();
+        state.running_posts.retain(|it| *it != post);
+        drop(state);
         self.cond.notify_all();
     }
 }
@@ -239,7 +268,7 @@ static QUEUES: Mutex<Option<HashMap<MessageQueueId, Arc<Queue>>>> = Mutex::new(N
 static NEXT_QUEUE_ID: Mutex<MessageQueueId> = Mutex::new(DEFAULT_QUEUE_ID + 1);
 
 thread_local! {
-    static CURRENT_QUEUE: std::cell::Cell<MessageQueueId> = const { std::cell::Cell::new(DEFAULT_QUEUE_ID) };
+    static CURRENT_QUEUE: std::cell::Cell<MessageQueueId> = const { std::cell::Cell::new(INVALID_QUEUE_ID) };
 }
 
 fn queues() -> &'static Mutex<Option<HashMap<MessageQueueId, Arc<Queue>>>> {
@@ -268,6 +297,15 @@ fn queue(id: MessageQueueId) -> Option<Arc<Queue>> {
 }
 
 /// `MessageQueue::CurrentThreadMessageQueue()`.
+///
+/// [`INVALID_QUEUE_ID`] when the calling thread owns no queue. The C++
+/// (`comm/messagequeue/message_queue.cc`) derives the id from the thread id
+/// and answers `KInvalidQueueID` for a thread that is not one of its queues,
+/// so "am I the thread this queue runs on" is a question the answer names a
+/// queue for. Starting the thread-local at [`DEFAULT_QUEUE_ID`] answered
+/// "yes, the default one" on every thread instead, and a caller that posts
+/// work to be run asynchronously then ran it inline — the wrong thread, and
+/// not asynchronous.
 pub fn current_thread_message_queue() -> MessageQueueId {
     CURRENT_QUEUE.with(|cell| cell.get())
 }
@@ -316,20 +354,18 @@ where
     let mut state = queue.lock();
     let seq = state.next_handler_seq;
     state.next_handler_seq += 1;
-    state.handlers.insert(
+    state.handlers.push(HandlerEntry {
         seq,
-        HandlerEntry {
-            handler: Arc::new(handler),
-            recv_broadcast,
-        },
-    );
+        handler: Arc::new(handler),
+        recv_broadcast,
+    });
     MessageHandler { queue: id, seq }
 }
 
 /// `MessageQueue::UnInstallMessageHandler`.
 pub fn uninstall_message_handler(handler: &MessageHandler) {
     if let Some(queue) = queue(handler.queue) {
-        queue.lock().handlers.remove(&handler.seq);
+        queue.lock().handlers.retain(|it| it.seq != handler.seq);
     }
 }
 
@@ -361,7 +397,7 @@ pub fn post_message(
     let Some(queue) = queue(handler.queue) else {
         return NULL_POST;
     };
-    if handler.seq != 0 && !queue.lock().handlers.contains_key(&handler.seq) {
+    if handler.seq != 0 && !queue.lock().handlers.iter().any(|it| it.seq == handler.seq) {
         return NULL_POST;
     }
     let (due, period) = first_due(&timing);
@@ -471,7 +507,7 @@ pub fn faster_message(handler: &MessageHandler, message: Message) -> MessagePost
     // message carrying its `reg` could never run: `post_message` answers
     // `NULL_POST` for the same reason, and matching a pending entry below would
     // hand back a post that no dispatch will ever pick up.
-    if handler.seq != 0 && !state.handlers.contains_key(&handler.seq) {
+    if handler.seq != 0 && !state.handlers.iter().any(|it| it.seq == handler.seq) {
         return NULL_POST;
     }
     // Search and insertion are one step under the queue's lock, not two: two
@@ -577,14 +613,29 @@ pub fn cancel_message_by_handler_title(handler: &MessageHandler, title: MessageT
 }
 
 /// `MessageQueue::FoundMessage(post)`.
+///
+/// `true` for a message that is pending **or** running: the C++ compares
+/// `post` with the `runing_message_id` of every run loop of the queue
+/// before it walks `lst_message`, so a caller that asks from inside the
+/// message — the handler, or something the handler called — is told the
+/// message is there. Looking only at the pending messages answered `false`
+/// for the message the question was asked about.
 pub fn found_message(post: &MessagePost) -> bool {
     queue(post.reg.queue)
-        .map(|queue| queue.lock().messages.iter().any(|m| m.post == *post))
+        .map(|queue| {
+            let state = queue.lock();
+            state.running_posts.contains(post) || state.messages.iter().any(|m| m.post == *post)
+        })
         .unwrap_or(false)
 }
 
 /// `MessageQueue::WaitMessage(post, timeout)` — `true` once the message has
 /// been handled. A negative timeout waits forever.
+///
+/// What it waits for is `post`, and not for the queue to go quiet: a message
+/// another thread is running on the same queue is not this one's business,
+/// and the C++ waits on the condition of the one run loop that is running
+/// `post` (`WaitForRunningLockEnd`).
 pub fn wait_message(post: &MessagePost, timeout_ms: i64) -> bool {
     let Some(queue) = queue(post.reg.queue) else {
         return false;
@@ -593,7 +644,7 @@ pub fn wait_message(post: &MessagePost, timeout_ms: i64) -> bool {
         (timeout_ms >= 0).then(|| Instant::now() + Duration::from_millis(timeout_ms as u64));
     let mut state = queue.lock();
     loop {
-        if !state.messages.iter().any(|m| m.post == *post) && !state.running {
+        if !state.messages.iter().any(|m| m.post == *post) && !state.running_posts.contains(post) {
             return true;
         }
         state = match deadline {
@@ -622,24 +673,52 @@ pub struct RunLoop;
 
 impl RunLoop {
     /// Runs until `breaker` returns `true`. `duty` is called once per turn,
-    /// before the queue is looked at, exactly like the C++ RunLoop.
+    /// before the queue is looked at and before the breaker is asked — the
+    /// order of the C++ RunLoop, so it also runs on the turn that stops the
+    /// loop.
     pub fn run(id: MessageQueueId, mut breaker: impl FnMut() -> bool, mut duty: impl FnMut()) {
         let Some(queue) = queue(id) else { return };
         set_current_thread_message_queue(id);
         loop {
+            // The duty runs before the breaker is asked, which is the order of
+            // `RunLoop::Run` in `comm/messagequeue/message_queue.cc`: the duty
+            // therefore also runs on the turn that stops the loop. A caller
+            // whose duty flushes or saves got one pass fewer than it asked for
+            // — the last one, on the turn the breaker said stop — while the
+            // breaker was asked first.
+            duty();
             if breaker() {
                 break;
             }
-            duty();
             Self::dispatch(&queue, Some(Duration::from_millis(1)));
         }
     }
 
     /// Handles at most one message, waiting up to `timeout` for one to be due.
+    ///
+    /// The calling thread is bound to `id` for as long as the dispatch lasts,
+    /// the way [`RunLoop::run`] binds the thread it runs the loop on: a
+    /// handler asking [`current_thread_message_queue`] from inside its message
+    /// is answered the queue it is running on. Only `run` bound it before, so
+    /// a queue driven this way — the default queue is, by the JNI glue —
+    /// answered [`INVALID_QUEUE_ID`] from inside its own handlers, and a
+    /// caller that asks whether it may run queue work inline
+    /// (`CurrentThreadMessageQueue() == Handler2Queue(...)`, the macros of
+    /// `comm/messagequeue/message_queue.h`) took the wrong way round.
+    ///
+    /// The binding the thread had is put back when the dispatch is over: a
+    /// thread is a queue's thread for exactly as long as it is running that
+    /// queue's work, so dispatching another queue from inside a message does
+    /// not unbind the thread from the one it is running.
     pub fn dispatch_timeout(id: MessageQueueId, timeout: Duration) -> bool {
-        queue(id)
-            .map(|queue| Self::dispatch(&queue, Some(timeout)))
-            .unwrap_or(false)
+        let Some(queue) = queue(id) else {
+            return false;
+        };
+        let previous = current_thread_message_queue();
+        set_current_thread_message_queue(id);
+        let ran = Self::dispatch(&queue, Some(timeout));
+        set_current_thread_message_queue(previous);
+        ran
     }
 
     fn dispatch(queue: &Arc<Queue>, timeout: Option<Duration>) -> bool {
@@ -648,6 +727,9 @@ impl RunLoop {
         // spurious wake-up reports "nothing to do" before an `After` message
         // is due.
         let deadline = timeout.map(|timeout| Instant::now() + timeout);
+        // The post this dispatch is running, which is taken out of
+        // `running_posts` once its handlers are done.
+        let post;
         let (handlers, message) = {
             let mut state = queue.lock();
             let index = loop {
@@ -694,10 +776,18 @@ impl RunLoop {
             let handlers: Vec<Arc<HandlerFn>> = state
                 .handlers
                 .iter()
-                .filter(|(seq, entry)| **seq == addressed || (is_broadcast && entry.recv_broadcast))
-                .map(|(_, entry)| Arc::clone(&entry.handler))
+                .filter(|it| it.seq == addressed || (is_broadcast && it.recv_broadcast))
+                .map(|it| Arc::clone(&it.handler))
                 .collect();
-            state.running = true;
+            // `runing_message_id` of one `RunLoopInfo` in the C++'s
+            // `lst_runloop_info`, which `FoundMessage` answers `true` for:
+            // from here until the handlers are done, this dispatch is running
+            // this message and not merely holding it. It is pushed rather
+            // than stored in one slot per queue, because two threads
+            // dispatching the same queue run two messages at once and the
+            // first of them is still running when the second is pushed.
+            post = entry.post;
+            state.running_posts.push(post);
             (handlers, Arc::clone(&entry.message))
         };
 
@@ -709,7 +799,7 @@ impl RunLoop {
             }
         }
 
-        queue.set_running(false);
+        queue.clear_running(post);
         true
     }
 }

@@ -231,13 +231,21 @@ impl Alarm {
         self.state.lock().unwrap().seq
     }
 
-    /// `Alarm::ElapseTime()` — 0 while the alarm has not finished.
+    /// `Alarm::ElapseTime()` — how long the alarm has been running for.
+    ///
+    /// While the alarm waits, that is the time it has been waiting so far;
+    /// once it has fired or been cancelled it is the span it ran for. An
+    /// alarm that was never started answers 0, the way the C++ does.
     pub fn elapse_time(&self) -> u64 {
         let alarm = self.state.lock().unwrap();
-        if alarm.end_time == 0 {
-            0
+        // `endtime_ < starttime_` of `comm/alarm.cc`, i.e. `endtime_` is
+        // still 0 because the alarm has not finished: what the C++ answers
+        // then is `gettickspan(starttime_)`, the running span, and not 0 —
+        // a caller polling a waiting alarm is asking how long it has waited.
+        if alarm.end_time < alarm.start_time {
+            gettickcount().saturating_sub(alarm.start_time)
         } else {
-            alarm.end_time.saturating_sub(alarm.start_time)
+            alarm.end_time - alarm.start_time
         }
     }
 
@@ -431,6 +439,24 @@ mod tests {
 
         assert!(!RunLoop::dispatch_timeout(queue, Duration::from_millis(50)));
         assert_eq!(fired.load(Ordering::SeqCst), 0);
+        destroy_message_queue(queue);
+    }
+
+    #[test]
+    fn a_waiting_alarm_reports_how_long_it_has_waited() {
+        let queue = create_message_queue();
+        let mut alarm = Alarm::new(queue, || {});
+        assert!(alarm.start(60_000));
+        // `endtime_` is still 0, so the answer is the running span: a caller
+        // polling a waiting alarm is asking how long it has waited, and 0
+        // told it nothing at all.
+        assert!(alarm.elapse_time() < 60_000);
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            alarm.elapse_time() >= 40,
+            "the span has to keep growing while it waits"
+        );
+        alarm.cancel();
         destroy_message_queue(queue);
     }
 

@@ -3,6 +3,7 @@
 //! Every test uses its own queue: the default one is process-wide and the
 //! tests run in parallel.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Barrier, Mutex};
@@ -11,11 +12,11 @@ use std::time::{Duration, Instant};
 
 use marsrs_comm::message_queue::{
     broadcast_message, cancel_message, cancel_message_by_handler, cancel_message_by_handler_title,
-    create_message_queue, destroy_message_queue, faster_message, found_message,
-    get_def_message_queue, install_async_handler, install_message_handler,
+    create_message_queue, current_thread_message_queue, destroy_message_queue, faster_message,
+    found_message, get_def_message_queue, install_async_handler, install_message_handler,
     install_message_handler as install, pending_message_count, post_message, post_message_at_first,
     singleton_message, uninstall_message_handler, wait_message, Message, MessageHandler,
-    MessagePost, MessageTiming, MessageTitle, RunLoop, NULL_POST,
+    MessagePost, MessageTiming, MessageTitle, RunLoop, INVALID_QUEUE_ID, NULL_POST,
 };
 
 #[test]
@@ -379,10 +380,124 @@ fn the_run_loop_runs_until_its_breaker_says_stop() {
             duty_counter.fetch_add(1, Ordering::SeqCst);
         },
     );
-    // the breaker runs at the top of every turn, so there is exactly one duty
-    // per dispatched message and none on the turn that stops the loop
+    // the duty runs before the breaker is asked, so there is one duty per
+    // dispatched message and one more on the turn that stops the loop
     assert_eq!(handled.load(Ordering::SeqCst), 3);
-    assert_eq!(duties.load(Ordering::SeqCst), 3);
+    assert_eq!(duties.load(Ordering::SeqCst), 4);
+    destroy_message_queue(queue);
+}
+
+#[test]
+fn the_duty_runs_on_the_turn_that_stops_the_loop() {
+    // A loop that stops on its very first turn still runs its duty once: the
+    // duty is what a caller uses for a flush or a save, and the pass it would
+    // lose by asking the breaker first is the last one.
+    let queue = create_message_queue();
+    let duties = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&duties);
+    RunLoop::run(
+        queue,
+        || true,
+        move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+    assert_eq!(duties.load(Ordering::SeqCst), 1);
+    destroy_message_queue(queue);
+}
+
+#[test]
+fn a_broadcast_runs_the_handlers_in_the_order_they_were_installed() {
+    let queue = create_message_queue();
+    let order = Arc::new(Mutex::new(Vec::new()));
+    for id in 1_u32..=3 {
+        let sink = Arc::clone(&order);
+        install_message_handler(
+            move |_| {
+                sink.lock().unwrap().push(id);
+            },
+            true,
+            queue,
+        );
+    }
+
+    broadcast_message(
+        queue,
+        Message::new(MessageTitle(1), "order"),
+        MessageTiming::Immediate,
+    );
+    assert!(RunLoop::dispatch_timeout(queue, Duration::from_millis(200)));
+
+    // `lst_handler` of the C++ is a `std::list` walked from the front, so
+    // which of several handlers for one message runs first is the order they
+    // were installed in and not the order a `HashMap` happens to yield.
+    assert_eq!(*order.lock().unwrap(), vec![1, 2, 3]);
+    destroy_message_queue(queue);
+}
+
+#[test]
+fn a_message_is_found_while_it_is_running() {
+    let queue = create_message_queue();
+    // The handler has to ask about the post, but the post is only known once
+    // it has been posted — and a post names the handler it is addressed to,
+    // so the handler has to be installed first.
+    let slot = Arc::new(Mutex::new(NULL_POST));
+    let found = Arc::new(AtomicUsize::new(0));
+    let handler_slot = Arc::clone(&slot);
+    let counter = Arc::clone(&found);
+    let handler = install_message_handler(
+        move |_| {
+            let post = *handler_slot.lock().unwrap();
+            if found_message(&post) {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
+        },
+        false,
+        queue,
+    );
+
+    let post = post_message(
+        &handler,
+        Message::new(MessageTitle(1), "running"),
+        MessageTiming::Immediate,
+    );
+    *slot.lock().unwrap() = post;
+    assert!(RunLoop::dispatch_timeout(queue, Duration::from_millis(200)));
+    assert_eq!(
+        found.load(Ordering::SeqCst),
+        1,
+        "the message it is running was not found"
+    );
+    // … and it is gone once it has been handled
+    assert!(!found_message(&post));
+    destroy_message_queue(queue);
+}
+
+#[test]
+fn a_thread_with_no_queue_of_its_own_answers_the_invalid_id() {
+    let queue = create_message_queue();
+    let (sender, receiver) = mpsc::channel();
+    // Both readings are taken on the worker and not on the thread this test
+    // runs on: a thread keeps the queue a `RunLoop` bound it to, so a test
+    // thread that has already run one would not answer the invalid id.
+    let worker = thread::spawn(move || {
+        sender.send(current_thread_message_queue()).unwrap();
+        let mut turns = 0;
+        RunLoop::run(
+            queue,
+            move || {
+                turns += 1;
+                turns > 1
+            },
+            move || {
+                sender.send(current_thread_message_queue()).unwrap();
+            },
+        );
+    });
+
+    assert_eq!(receiver.recv().unwrap(), INVALID_QUEUE_ID);
+    assert_eq!(receiver.recv().unwrap(), queue);
+    worker.join().unwrap();
     destroy_message_queue(queue);
 }
 
@@ -613,6 +728,176 @@ fn replacing_a_periodic_message_while_it_runs_reaches_the_next_run() {
         "the replacement never reached a run: {seen:?}"
     );
     cancel_message_by_handler(&handler);
+    destroy_message_queue(queue);
+}
+
+/// Two threads dispatching the same queue run two messages at once, and the
+/// C++ keeps one `runing_message_id` per run loop of the queue
+/// (`lst_runloop_info`, `comm/messagequeue/message_queue.cc`) — one per thread
+/// dispatching it. A single post for the whole queue is the second dispatch
+/// overwriting the first, and a handler asking about the message it is running
+/// being answered "it is not there" while the other dispatch is under way.
+#[test]
+fn two_dispatchers_at_once_each_find_the_message_they_are_running() {
+    let queue = create_message_queue();
+    let posts: Arc<Mutex<HashMap<u64, MessagePost>>> = Arc::new(Mutex::new(HashMap::new()));
+    let found: Arc<Mutex<HashMap<u64, bool>>> = Arc::new(Mutex::new(HashMap::new()));
+    // both handlers are inside their own message before either one asks
+    let both_running = Arc::new(Barrier::new(2));
+
+    let handler_posts = Arc::clone(&posts);
+    let handler_found = Arc::clone(&found);
+    let handler_barrier = Arc::clone(&both_running);
+    let handler = install_message_handler(
+        move |message: &mut Message| {
+            let post = handler_posts.lock().unwrap()[&message.title.0];
+            handler_barrier.wait();
+            let is_found = found_message(&post);
+            handler_found
+                .lock()
+                .unwrap()
+                .insert(message.title.0, is_found);
+        },
+        false,
+        queue,
+    );
+
+    for title in [1_u64, 2] {
+        let post = post_message(
+            &handler,
+            Message::new(MessageTitle(title), "running"),
+            MessageTiming::Immediate,
+        );
+        posts.lock().unwrap().insert(title, post);
+    }
+
+    let dispatchers: Vec<_> = (0..2)
+        .map(|_| {
+            thread::spawn(move || RunLoop::dispatch_timeout(queue, Duration::from_millis(2_000)))
+        })
+        .collect();
+    for dispatcher in dispatchers {
+        assert!(dispatcher.join().expect("the dispatcher panicked"));
+    }
+
+    assert_eq!(
+        *found.lock().unwrap(),
+        HashMap::from([(1, true), (2, true)]),
+        "a message the queue was running was not found"
+    );
+    destroy_message_queue(queue);
+}
+
+/// What a `wait_message` waits for is the post it was asked about, and not for
+/// the queue to go quiet. Clearing one queue-wide post reports both of two
+/// running messages as over, so a wait on the one that is still running
+/// returns while its handler has yet to finish.
+#[test]
+fn wait_message_waits_for_the_post_it_was_asked_about() {
+    let queue = create_message_queue();
+    let (started, running) = mpsc::channel();
+    let finished = Arc::new(Mutex::new(Vec::new()));
+    let handler_finished = Arc::clone(&finished);
+    let handler_started = started;
+    let both_running = Arc::new(Barrier::new(2));
+    let handler_barrier = Arc::clone(&both_running);
+    let handler = install_message_handler(
+        move |message: &mut Message| {
+            let title = message.title.0;
+            handler_barrier.wait();
+            handler_started.send(title).unwrap();
+            // the slow message: it is still running when the other one has
+            // already been handled
+            if title == 1 {
+                thread::sleep(Duration::from_millis(150));
+            }
+            handler_finished.lock().unwrap().push(title);
+        },
+        false,
+        queue,
+    );
+
+    let mut posts = HashMap::new();
+    for title in [1_u64, 2] {
+        posts.insert(
+            title,
+            post_message(
+                &handler,
+                Message::new(MessageTitle(title), "running"),
+                MessageTiming::Immediate,
+            ),
+        );
+    }
+
+    let dispatchers: Vec<_> = (0..2)
+        .map(|_| {
+            thread::spawn(move || RunLoop::dispatch_timeout(queue, Duration::from_millis(2_000)))
+        })
+        .collect();
+    // both handlers have reached their message, so neither post is pending
+    // any more and both are waiting for their handlers to finish
+    for _ in 0..2 {
+        running
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a message never ran");
+    }
+
+    assert!(wait_message(&posts[&1], 5_000));
+    assert!(
+        finished.lock().unwrap().contains(&1),
+        "the wait returned before the message it was asked about had been handled"
+    );
+    for dispatcher in dispatchers {
+        assert!(dispatcher.join().expect("the dispatcher panicked"));
+    }
+    destroy_message_queue(queue);
+}
+
+/// A queue driven by single dispatches and not by `RunLoop::run` is still the
+/// queue its handler is running on: `dispatch_timeout` is how the JNI glue
+/// drains the default queue, and it did not bind the thread at all. A handler
+/// asking `current_thread_message_queue()` — which is what the
+/// `CurrentThreadMessageQueue() == Handler2Queue(handler)` macros of
+/// `comm/messagequeue/message_queue.h` ask before running queue work inline —
+/// was answered `INVALID_QUEUE_ID`, the answer a thread with no queue of its
+/// own gets, from inside a message of that very queue.
+///
+/// The queue is one this test owns and not the default one: the binding is by
+/// id, and the default queue is the whole process's.
+#[test]
+fn a_dispatch_binds_the_thread_running_it_to_the_queue() {
+    let queue = create_message_queue();
+    let (sender, receiver) = mpsc::channel();
+    let handler = install_message_handler(
+        move |_| {
+            let _ = sender.send(current_thread_message_queue());
+        },
+        false,
+        queue,
+    );
+    post_message(
+        &handler,
+        Message::new(MessageTitle(1), "bound"),
+        MessageTiming::Immediate,
+    );
+
+    // On a worker, so that a handler that never runs is a test that fails and
+    // not one that never finishes.
+    let worker = thread::spawn(move || {
+        let ran = RunLoop::dispatch_timeout(queue, Duration::from_millis(500));
+        (ran, current_thread_message_queue())
+    });
+
+    let answered = receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the message never ran");
+    assert_eq!(answered, queue, "the queue did not bind the thread");
+    let (ran, after) = worker.join().unwrap();
+    assert!(ran, "the message did not run");
+    // … and a thread is a queue's thread only while it dispatches it, so a
+    // dispatch of one queue from inside a message of another leaves the
+    // thread bound to the one it is running
+    assert_eq!(after, INVALID_QUEUE_ID);
     destroy_message_queue(queue);
 }
 
