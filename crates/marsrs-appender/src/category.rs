@@ -27,6 +27,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Condvar, Mutex, OnceLock, RwLock};
+use std::time::Instant;
 
 use crate::{
     appender_close_instance, appender_flush, appender_flush_instance, appender_flush_sync,
@@ -508,6 +509,122 @@ fn write_assert(info: Option<&XLoggerInfo>, log: &str) -> bool {
     write_default(Some(&info), Some(log))
 }
 
+/// `XScopeTracer` of `mars/comm/xlogger/xlogger.h` — the guard behind the
+/// `xverbose_scope` / `xverbose_function` macros, and the port's answer to
+/// them: one record when the scope is entered, one when it is dropped, and
+/// the milliseconds between the two in the second. The span is measured on the
+/// monotonic clock, so a wall clock stepped while the scope is open does not
+/// move it; the two records themselves are stamped with the wall clock, which
+/// is what a record says the moment was.
+///
+/// ```no_run
+/// use marsrs_appender::{LogLevel, XLoggerInfo, XloggerScopeTracer};
+///
+/// let info = XLoggerInfo {
+///     level: LogLevel::Info,
+///     ..XLoggerInfo::default()
+/// };
+/// let mut scope = XloggerScopeTracer::new(info, "connect", Some("to the long link"));
+/// scope.exit("timed out");
+/// // dropped here, and `<- connect +12, timed out` goes out
+/// ```
+///
+/// The C++ keeps the scope's name in a `char[128]`, so a longer one is cut
+/// at 127 bytes; the port keeps the whole name, which is the difference
+/// between a truncated record and none at all only for a name that long.
+#[must_use = "the exit record is written when the tracer is dropped"]
+pub struct XloggerScopeTracer<'a> {
+    /// Whether the level let the scope in, asked once — where the C++ asks it,
+    /// in the constructor: a level raised while the scope is open does not let
+    /// the exit record in after all.
+    enabled: bool,
+    info: XLoggerInfo<'a>,
+    name: String,
+    /// What the span of the exit record is measured against, and not the wall
+    /// clock the two records are stamped with: the C++ subtracts two
+    /// `gettimeofday` readings, so a clock stepped while the scope is open —
+    /// an NTP correction, a machine put back from a snapshot — reads as a span
+    /// that is negative or far too long.
+    started: Instant,
+    /// What [`XloggerScopeTracer::exit`] has been given, in the order it was
+    /// given: the C++ appends, so two calls read as one message.
+    exitmsg: String,
+}
+
+impl<'a> XloggerScopeTracer<'a> {
+    /// Enters the scope and writes its entry record.
+    ///
+    /// `log` is the message the scope was entered with; both records are
+    /// asked of [`is_enabled_for`] for the default logger, which is the
+    /// `xlogger_IsEnabledFor` the C++ asks.
+    pub fn new(mut info: XLoggerInfo<'a>, name: &str, log: Option<&str>) -> Self {
+        let started = Instant::now();
+        info.timeval = crate::file_util::now_timeval();
+        // The C++ sets the three to -1 before it writes either record, and
+        // that is what has `xlogger_Write` fill in the process, the thread and
+        // the main thread: an info of [`XLoggerInfo::default()`] carries 0, and
+        // a record that says "pid 0" names no process at all.
+        info.pid = -1;
+        info.tid = -1;
+        info.maintid = -1;
+
+        let enabled = is_enabled_for(DEFAULT_HANDLE, info.level);
+        let scope = Self {
+            enabled,
+            info,
+            // Owned only when the level let the scope in: a scope in a hot
+            // function that the level turns away is the ordinary case, and it
+            // is a name no record of it can carry, so it is not worth an
+            // allocation either.
+            name: if enabled {
+                name.to_owned()
+            } else {
+                String::new()
+            },
+            started,
+            exitmsg: String::new(),
+        };
+        // `-> %s %s` — the C++ prints the message it was given, or an empty
+        // one, so the space between the name and it is there either way and
+        // the shape of the record does not depend on whether a message was
+        // handed in.
+        if scope.enabled {
+            let entry = format!("-> {} {}", scope.name, log.unwrap_or(""));
+            write_default(Some(&scope.info), Some(&entry));
+        }
+        scope
+    }
+
+    /// `XScopeTracer::Exit` — the message the exit record carries. Appended
+    /// to, the way the C++ appends, so a scope that exits twice reads as one
+    /// message and not as the last one only.
+    pub fn exit(&mut self, msg: &str) {
+        // A scope no record will come of keeps nothing: `exit` is called in
+        // the ordinary case too, and an append that is never read is a copy
+        // of a message for nothing.
+        if !self.enabled {
+            return;
+        }
+        self.exitmsg.push_str(msg);
+    }
+}
+
+impl Drop for XloggerScopeTracer<'_> {
+    /// `<- %s +%ld, %s` — the C++ writes the comma and the message whether or
+    /// not there is one, and so does the port: a reader that splits the two
+    /// halves of a scope reads the same shape either way.
+    fn drop(&mut self) {
+        if !self.enabled {
+            return;
+        }
+        let now = crate::file_util::now_timeval();
+        self.info.timeval = now;
+        let span = self.started.elapsed().as_millis();
+        let exit = format!("<- {} +{}, {}", self.name, span, self.exitmsg);
+        write_default(Some(&self.info), Some(&exit));
+    }
+}
+
 /// `mars::xlog::IsEnabledFor`.
 ///
 /// `false` for an unknown non-zero handle, so nothing is written through it.
@@ -956,6 +1073,89 @@ mod tests {
 
         release_xlogger_instance("filtered");
         set_filter(None);
+    }
+
+    /// `XScopeTracer` — the entry record on the way in, the exit record with
+    /// the span on the way out.
+    #[test]
+    fn a_scope_is_bracketed_by_two_records() {
+        let _guard = serial();
+        let dir = tempfile::tempdir().unwrap();
+        crate::appender_open(config("scope", dir.path())).unwrap();
+        set_appender_mode(DEFAULT_HANDLE, AppenderMode::Sync);
+        set_level(DEFAULT_HANDLE, LogLevel::Verbose);
+
+        let info = XLoggerInfo {
+            level: LogLevel::Info,
+            ..XLoggerInfo::default()
+        };
+        let mut scope = XloggerScopeTracer::new(info, "connect", Some("to the long link"));
+        scope.exit("timed out");
+        drop(scope);
+        flush(DEFAULT_HANDLE, true);
+
+        let text = log_text(dir.path());
+        assert!(text.contains("-> connect to the long link"), "{text}");
+        let exit = text
+            .find("<- connect +")
+            .unwrap_or_else(|| panic!("no exit record: {text}"));
+        assert!(text[exit..].contains("timed out"), "{text}");
+        // The span is milliseconds, and it is in the record behind the `+`.
+        let span = text[exit + "<- connect +".len()..]
+            .split(',')
+            .next()
+            .unwrap_or_default();
+        assert!(span.chars().all(|c| c.is_ascii_digit()), "{span}");
+
+        crate::appender_close();
+        set_level(DEFAULT_HANDLE, LogLevel::None);
+    }
+
+    /// The level is asked **once**, where the C++ asks it — in the
+    /// constructor — so a scope a level refused writes neither of its two
+    /// records.
+    #[test]
+    fn a_scope_the_level_refused_writes_nothing() {
+        let _guard = serial();
+        let dir = tempfile::tempdir().unwrap();
+        crate::appender_open(config("silent-scope", dir.path())).unwrap();
+        set_appender_mode(DEFAULT_HANDLE, AppenderMode::Sync);
+        set_level(DEFAULT_HANDLE, LogLevel::Error);
+
+        let info = XLoggerInfo {
+            level: LogLevel::Info,
+            ..XLoggerInfo::default()
+        };
+        let scope = XloggerScopeTracer::new(info, "silent", None);
+        drop(scope);
+        flush(DEFAULT_HANDLE, true);
+
+        let text = log_text(dir.path());
+        assert!(!text.contains("silent"), "{text}");
+
+        crate::appender_close();
+        set_level(DEFAULT_HANDLE, LogLevel::None);
+    }
+
+    /// A scope the level refused owns nothing — neither the name nor what
+    /// [`XloggerScopeTracer::exit`] is handed — so a scope a level turns away
+    /// costs the level check and no more, and stays cheap enough to stand in
+    /// a function that is called on every pass of a hot loop.
+    #[test]
+    fn a_scope_the_level_refused_owns_nothing() {
+        let _guard = serial();
+        set_level(DEFAULT_HANDLE, LogLevel::Error);
+
+        let info = XLoggerInfo {
+            level: LogLevel::Info,
+            ..XLoggerInfo::default()
+        };
+        let mut scope = XloggerScopeTracer::new(info, "hot", None);
+        scope.exit("a message no record carries");
+        assert!(scope.name.is_empty(), "{:?}", scope.name);
+        assert!(scope.exitmsg.is_empty(), "{:?}", scope.exitmsg);
+
+        set_level(DEFAULT_HANDLE, LogLevel::None);
     }
 
     #[test]
