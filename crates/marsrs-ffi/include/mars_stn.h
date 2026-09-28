@@ -265,6 +265,7 @@ typedef struct {
     int longlink_host;
     int check_type;
     const MarsStnTask* task;
+    unsigned int limit;       /* what the gate weighed the task against      */
 } MarsStnQuestion;
 
 /**

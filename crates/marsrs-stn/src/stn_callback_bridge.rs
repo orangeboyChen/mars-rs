@@ -171,10 +171,13 @@ pub trait App: Send {
     /// report.
     fn report_task_profile(&mut self, _profile: &TaskProfile) {}
 
-    /// `ReportTaskLimited` — a task the app asked to have limited, and the
-    /// answer is what the limit is: `0` is "go ahead".
-    fn report_task_limited(&mut self, _check_type: i32, _task: &Task) -> u32 {
-        0
+    /// `ReportTaskLimited` — a task the anti-avalanche gates refused, and the
+    /// number they answered with: how long ago the same body went out, or how
+    /// many bytes the funnel refused. What the app answers is that number
+    /// back — `0` is "go ahead" — which is the C++'s `unsigned int& _param`:
+    /// in and out, and the caller reads it after the call.
+    fn report_task_limited(&mut self, _check_type: i32, _task: &Task, param: u32) -> u32 {
+        param
     }
 
     /// `ReportDnsProfile` — how a dns question went.
@@ -563,11 +566,12 @@ impl StnCallbackBridge {
         }
     }
 
-    /// `ReportTaskLimited` — `0` while there is no app, which is "go ahead".
-    pub fn report_task_limited(&mut self, check_type: i32, task: &Task) -> u32 {
-        self.app
-            .as_mut()
-            .map_or(0, |app| app.report_task_limited(check_type, task))
+    /// `ReportTaskLimited` — the number it was handed while there is no app,
+    /// which is "go ahead": an app that says nothing leaves the limit alone.
+    pub fn report_task_limited(&mut self, check_type: i32, task: &Task, param: u32) -> u32 {
+        self.app.as_mut().map_or(param, |app| {
+            app.report_task_limited(check_type, task, param)
+        })
     }
 
     /// `ReportDnsProfile`.
@@ -784,9 +788,9 @@ mod tests {
             self.said.lock().unwrap().profiles += 1;
         }
 
-        fn report_task_limited(&mut self, check_type: i32, _task: &Task) -> u32 {
-            self.said.lock().unwrap().limited.push((check_type, 1));
-            1
+        fn report_task_limited(&mut self, check_type: i32, _task: &Task, param: u32) -> u32 {
+            self.said.lock().unwrap().limited.push((check_type, param));
+            param
         }
 
         fn report_dns_profile(&mut self, profile: &DnsProfile) {
@@ -854,7 +858,8 @@ mod tests {
             0
         );
         assert_eq!(bridge.net_check_shortlink_hosts(), Vec::<String>::new());
-        assert_eq!(bridge.report_task_limited(1, &Task::new(7, 12)), 0);
+        // the number it was handed comes back while there is no app
+        assert_eq!(bridge.report_task_limited(1, &Task::new(7, 12), 7), 7);
         assert!(!bridge.identify_response("channel", b"resp", b"hash"));
         // a check that nobody answered is put off, not failed
         assert_eq!(
@@ -919,7 +924,7 @@ mod tests {
             Task::new(7, 12),
             crate::PrepareProfile::new(),
         ));
-        assert_eq!(bridge.report_task_limited(2, &Task::new(7, 12)), 1);
+        assert_eq!(bridge.report_task_limited(2, &Task::new(7, 12), 1), 1);
         bridge.report_dns_profile(&DnsProfile::new("host"));
 
         let said = said.lock().unwrap().clone();
