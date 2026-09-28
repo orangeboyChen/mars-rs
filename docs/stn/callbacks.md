@@ -15,17 +15,28 @@ and the rest. Every platform funnels all eighteen through one thing:
 | HarmonyOS | the same function pointer, through a NAPI shim of your own |
 
 The names are the ones the C++ project used, so an answer written there is
-written here:
+written here — all eighteen of them, in the order STN numbers them:
 
-| the question | what STN wants | Rust | Swift | shared Kotlin | Android | C |
-|---|---|---|---|---|---|---|
-| `req2Buf` | the bytes the task sends | `req2buf` | `.req2Buf` | `Question.Kind.Req2Buf` | `req2Buf` | `MarsStnQuestionReq2Buf` |
-| `buf2Resp` | what the answer meant | `buf2resp` | `.buf2Resp` | `Question.Kind.Buf2Resp` | `buf2Resp` | `MarsStnQuestionBuf2Resp` |
-| `onTaskEnd` | what to do about the end | `on_task_end` | `.onTaskEnd` | `Question.Kind.OnTaskEnd` | `onTaskEnd` | `MarsStnQuestionOnTaskEnd` |
-| `onPush` | what the server sent down the long link | `on_push` | `.onPush` | `Question.Kind.OnPush` | `onPush` | `MarsStnQuestionOnPush` |
-| `onNewDns` | the addresses of a host | `on_new_dns` | `.onNewDns` | `Question.Kind.OnNewDns` | `onNewDns` | `MarsStnQuestionOnNewDns` |
-| `isAuthed` | whether this user is logged in | `is_authed` | `.isAuthed` | `Question.Kind.IsAuthed` | `isAuthed` | `MarsStnQuestionIsAuthed` |
-| `getAppInfo` | the account and the device | `get_app_info` | `.getAppInfo` | `Question.Kind.GetAppInfo` | `getAppInfo` | `MarsStnQuestionGetAppInfo` |
+| # | the question | what STN wants | Rust | Swift | shared Kotlin | Android | C |
+|---|---|---|---|---|---|---|---|
+| 1 | `makesureAuthed` | whether this user is logged in | `makesure_authed` | `.makesureAuthed` | `Question.Kind.MakesureAuthed` | `makesureAuthed` | `MarsStnQuestionMakesureAuthed` |
+| 2 | `trafficData` | how much went out and came in | `traffic_data` | `.trafficData` | `Question.Kind.TrafficData` | `trafficData` | `MarsStnQuestionTrafficData` |
+| 3 | `onNewDns` | the addresses of a host | `on_new_dns` | `.onNewDns` | `Question.Kind.OnNewDns` | `onNewDns` | `MarsStnQuestionOnNewDns` |
+| 4 | `onPush` | the server sent this, and no task asked for it | `on_push` | `.onPush` | `Question.Kind.OnPush` | `onPush` | `MarsStnQuestionOnPush` |
+| 5 | `req2Buf` | the bytes the task sends | `req2buf` | `.req2Buf` | `Question.Kind.Req2Buf` | `req2Buf` | `MarsStnQuestionReq2Buf` |
+| 6 | `buf2Resp` | what the answer meant | `buf2resp` | `.buf2Resp` | `Question.Kind.Buf2Resp` | `buf2Resp` | `MarsStnQuestionBuf2Resp` |
+| 7 | `onTaskEnd` | what to do about the end | `on_task_end` | `.onTaskEnd` | `Question.Kind.OnTaskEnd` | `onTaskEnd` | `MarsStnQuestionOnTaskEnd` |
+| 8 | `reportConnectStatus` | the network, as the app is to see it | `report_connect_status` | `.reportConnectStatus` | `Question.Kind.ReportConnectStatus` | `reportConnectInfo` | `MarsStnQuestionReportConnectStatus` |
+| 9 | `onLongLinkNetworkError` | the main long link failed | `on_long_link_network_error` | `.longLinkNetworkError` | `Question.Kind.LongLinkNetworkError` | — | `MarsStnQuestionLongLinkNetworkError` |
+| 10 | `onShortLinkNetworkError` | a short link failed | `on_short_link_network_error` | `.shortLinkNetworkError` | `Question.Kind.ShortLinkNetworkError` | — | `MarsStnQuestionShortLinkNetworkError` |
+| 11 | `onLongLinkStatusChange` | where the default long link is | `on_long_link_status_change` | `.longLinkStatusChange` | `Question.Kind.LongLinkStatusChange` | — | `MarsStnQuestionLongLinkStatusChange` |
+| 12 | `getLonglinkIdentifyCheckBuffer` | the check a new link is used with | `identify_check_buffer` | `.identifyCheckBuffer` | `Question.Kind.IdentifyCheckBuffer` | `getLongLinkIdentifyCheckBuffer` | `MarsStnQuestionIdentifyCheckBuffer` |
+| 13 | `onLonglinkIdentifyResponse` | whether the answer is the one the check asked for | `identify_response` | `.identifyResponse` | `Question.Kind.IdentifyResponse` | `onLongLinkIdentifyResp` | `MarsStnQuestionIdentifyResponse` |
+| 14 | `requestSync` | the app is asked to sync | `request_sync` | `.requestSync` | `Question.Kind.RequestSync` | `requestDoSync` | `MarsStnQuestionRequestSync` |
+| 15 | `requestNetCheckShortLinkHosts` | the hosts the network check may probe | `net_check_shortlink_hosts` | `.netCheckShortLinkHosts` | `Question.Kind.NetCheckShortLinkHosts` | `requestNetCheckShortLinkHosts` | `MarsStnQuestionNetCheckShortLinkHosts` |
+| 16 | `reportTaskProfile` | everything a task left behind | `report_task_profile` | `.reportTaskProfile` | `Question.Kind.ReportTaskProfile` | `reportTaskProfile` | `MarsStnQuestionReportTaskProfile` |
+| 17 | `reportTaskLimited` | a task the two gates refused: which gate, and its reading | `report_task_limited` | `.reportTaskLimited` | `Question.Kind.ReportTaskLimited` | — | `MarsStnQuestionReportTaskLimited` |
+| 18 | `reportDnsProfile` | how a dns question went | `report_dns_profile` | `.reportDnsProfile` | `Question.Kind.ReportDnsProfile` | — | `MarsStnQuestionReportDnsProfile` |
 
 A question the app does not answer is a question with the default answer, and
 every platform but Android carries one for all eighteen — so an app writes the
@@ -33,10 +44,25 @@ ones it cares about: `default: return .nothing` in Swift, `else -> Answer.None`
 in the shared Kotlin, an `App` with three methods in Rust.
 
 Android's `ICallBack` is the plain interface the C++ project's Java declared, and
-it has no defaults: the object is the app's to finish. The shared Kotlin of
-`marsrs-kmp` is asked all eighteen on Kotlin/Native and thirteen on Android —
-the two network errors, the long link's status change, the task limit and the DNS
-profile are five the JNI bridge answers itself.
+it has no defaults: the object is the app's to finish. It is asked thirteen of
+the eighteen — the five marked `—` above are ones the Java api has no method
+for, so STN takes its own answers for them — plus one of its own, `isLogoned`,
+which nothing asks.
+
+`marsrs-kmp`'s shared Kotlin is asked all eighteen on Kotlin/Native and
+thirteen on Android, the same five.
+
+`reportTaskLimited` is the one question only a refused task is asked for: the
+two anti-avalanche gates weigh every task that goes out, and a task they refuse
+never reaches a queue, so nothing else the app hears carries it. What the app is
+handed is which gate refused it and the reading it weighed the task against —
+how long ago the same body went out, or how many bytes the funnel would not
+take — and what it answers is that reading, changed or not, which is what ends
+See [the long link](/stn/long-link) for the link a task goes out on.
+
+The account and the device are not one of the eighteen: on Android they are
+`AppLogic.ICallBack`, and on every other platform they are nothing STN asks
+about.
 
 ## The boot, on Android
 
@@ -48,7 +74,7 @@ Mars.init(context, Handler(Looper.getMainLooper()))
 Mars.onCreate(true)
 
 AppLogic.setCallBack(object : AppLogic.ICallBack { /* the account and the device */ })
-StnLogic.setCallBack(object : StnLogic.ICallBack { /* the fourteen questions */ })
+StnLogic.setCallBack(object : StnLogic.ICallBack { /* the thirteen it is asked, and `isLogoned` */ })
 
 // when the screen or the network changes
 BaseEvent.onForeground(true)
