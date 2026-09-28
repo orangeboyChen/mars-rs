@@ -2,10 +2,10 @@
 //! next task.
 //!
 //! A task that answered does not have to pay for a new connect: the socket it
-//! used goes into the pool, and the next task that wants the same ip, port and
-//! host takes it back out — unless it has been in there too long, or the peer
-//! closed it, or a socket taken from the pool turned out to be no good, which
-//! bans the pool for [`BAN_INTERVAL`].
+//! used goes into the pool, and the next task that wants the same transport,
+//! ip, port and host takes it back out — unless it has been in there too
+//! long, or the peer closed it, or a socket taken from the pool turned out to
+//! be no good, which bans the pool for [`BAN_INTERVAL`].
 //!
 //! The pool keeps no socket of its own: a socket is an opaque [`SocketFd`], and
 //! what the C++ reaches for through three function pointers it carries in every
