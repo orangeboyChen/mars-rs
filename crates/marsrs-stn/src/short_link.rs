@@ -792,14 +792,17 @@ impl ShortLink {
         // the pairs that lost: only the ones the host had *started* a connect
         // on, which is what the C++'s `ConnectingIndex` carries — a pair the
         // winner beat before its dial began is not a pair that timed out, and
-        // reporting it is how a pair that was never tried gets banned
+        // reporting it is how a pair that was never tried gets banned. The C++
+        // walks them with `i < profile.index`, which stops at the winner and so
+        // misses a dial behind it: its dials are staggered, so a pair after the
+        // one that won may be one it had started. The winner's own bit is the
+        // one the C++ clears in `OnConnected`, and is never a loser's.
         let losers: Vec<IpPortItem> = self
             .profile
             .ip_items
             .iter()
-            .take(index)
             .enumerate()
-            .filter(|(i, _)| connected.is_connecting(*i))
+            .filter(|(i, _)| *i != index && connected.is_connecting(*i))
             .map(|(_, item)| item.clone())
             .collect();
         for item in &losers {

@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use marsrs_comm::tickcount::gettickcount;
 use marsrs_comm::{LocalIpStack, ProxyInfo, ProxyType, SocketAddress};
-use marsrs_stn::short_link::{ConnectFail, RunFail, ShortLink};
+use marsrs_stn::short_link::{ConnectFail, RunFail, ShortLink, ETIMEDOUT};
 use marsrs_stn::{
     default_packer, pack, request_headers, request_url, CachedSocket, ConnectProfile, ErrCmdType,
     ExtraInfo, IpPortItem, IpSourceType, NetSource, OpBreaker, SocketFd, SocketOperator,
@@ -398,6 +398,49 @@ fn the_pairs_newdns_handed_the_link_are_the_ones_it_goes_out_on() {
         seen.addresses.lock().unwrap()[0][0].ip(),
         "10.0.0.9",
         "dns was not asked at all"
+    );
+}
+
+/// The pairs that lost are the ones the host had begun to dial, and the C++
+/// walks them with `i < profile.index` — a loop that stops at the winner. Its
+/// dials are staggered, so a pair *behind* the winner can be one it had begun
+/// and that the winner then beat: that pair lost, and is one the app's callback
+/// and the net source's history ought to hear about.
+#[test]
+fn a_pair_dialled_behind_the_winner_is_one_that_lost() {
+    let seen = Seen::default();
+    let mut link = link(Arc::new(Mutex::new(net_source())), &seen);
+    let pairs: Vec<IpPortItem> = ["183.3.226.35", "183.3.226.36", "183.3.226.37"]
+        .into_iter()
+        .map(|ip| {
+            let mut item = IpPortItem::new(ip, 80);
+            item.source_type = IpSourceType::Dns;
+            item.host = "short.weixin.qq.com".to_string();
+            item
+        })
+        .collect();
+    link.set_connect_params(pairs, 1500, 2500);
+    link.set_socket_operator({
+        let mut host = Host::new(seen.clone());
+        // the first pair won while the second was still being dialled, and the
+        // third was never begun at all
+        host.profile.index = 0;
+        host.profile.set_connecting(1, true);
+        host
+    });
+
+    assert_eq!(link.connect_at(NOW), Ok(SocketFd(3)));
+    assert_eq!(link.profile().ip, "183.3.226.35");
+    assert_eq!(
+        seen.reports.lock().unwrap().as_slice(),
+        &[Reported {
+            err_type: ErrCmdType::Socket,
+            err_code: ETIMEDOUT,
+            ip: "183.3.226.36".to_string(),
+            host: "short.weixin.qq.com".to_string(),
+            port: 80,
+        }],
+        "the dial that was still in flight, and not the one never begun"
     );
 }
 
