@@ -67,6 +67,9 @@ struct App {
     short_err: Arc<Mutex<ShortErr>>,
     pushed: Arc<Mutex<Pushed>>,
     reported: Arc<Mutex<Reported>>,
+    /// What the app's timeout hook was given: the short-link queue hands out
+    /// every try that ended, and not only the task that is over.
+    timeout_or_remote: Arc<Mutex<Reported>>,
     /// How the app shall read the next answer.
     answer: Arc<Mutex<(i32, TaskFailHandleType)>>,
 }
@@ -172,6 +175,16 @@ impl App {
                 profile.history.len(),
             ));
         });
+        let timeout_or_remote: Arc<Mutex<Reported>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = timeout_or_remote.clone();
+        core.set_on_shortlink_timeout_or_remote_shutdown(move |profile| {
+            recorder.lock().unwrap().push((
+                profile.task.taskid,
+                profile.err_type,
+                profile.err_code,
+                profile.history.len(),
+            ));
+        });
 
         Self {
             core,
@@ -182,6 +195,7 @@ impl App {
             short_err,
             pushed,
             reported,
+            timeout_or_remote,
             answer,
         }
     }
@@ -279,6 +293,11 @@ impl App {
     fn reported(&self) -> Reported {
         self.reported.lock().unwrap().clone()
     }
+
+    /// What the app's timeout hook was given for the tries that ended.
+    fn timeout_or_remote(&self) -> Reported {
+        self.timeout_or_remote.lock().unwrap().clone()
+    }
 }
 
 #[test]
@@ -361,6 +380,29 @@ fn a_task_that_is_over_is_handed_to_the_apps_own_report() {
     app.start(7);
     assert_eq!(app.answered_short(7), Some(RespHandle::Ended));
     assert_eq!(app.reported(), vec![(7, ErrCmdType::Ok, 0, 1)]);
+}
+
+/// `net_core.h:223` — the core hands the short-link queue's timeout hook to the
+/// app, and the long link has none of it.
+#[test]
+fn a_try_that_ended_is_handed_to_the_apps_timeout_hook() {
+    let mut app = App::new();
+    app.start(7);
+    assert_eq!(app.answered_short(7), Some(RespHandle::Ended));
+    assert_eq!(
+        app.timeout_or_remote(),
+        vec![(7, ErrCmdType::Ok, 0, 1)],
+        "a short-link try that ended is handed out through the core"
+    );
+
+    let mut app = App::new();
+    app.bring_up(MAIN, LongLinkStatus::Connected);
+    app.start(7);
+    assert_eq!(app.answered(7), Some(RespHandle::Ended));
+    assert!(
+        app.timeout_or_remote().is_empty(),
+        "the hook is the short-link queue's, and a long-link try is not asked about"
+    );
 }
 
 #[test]

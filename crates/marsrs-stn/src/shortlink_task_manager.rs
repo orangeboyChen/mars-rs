@@ -250,6 +250,16 @@ pub type RunProfile = dyn Fn(RunId) -> ConnectProfile + Send;
 /// of the tries, the transfer readings, and how the task ended. Unset, and a
 /// task that is over is reported nowhere.
 pub type ReportProfile = dyn FnMut(&TaskProfile) + Send;
+
+/// `on_timeout_or_remote_shutdown_` — a task that is done with a try, at the
+/// moment the try was pushed into its history and before the next one is begun
+/// (`mars/stn/src/shortlink_task_manager.cc:1197,1256`, set by
+/// `NetCore::SetShortLinkOnTimeoutOrRemoteShutdown`,
+/// `mars/stn/src/net_core.h:223`). The name is the C++'s, and a timeout and a
+/// shutdown of the far end are what it is mostly asked about, but the C++ asks
+/// for every try that ended, one that came back an answer as well. Unset, and
+/// nothing is asked.
+pub type TimeoutOrRemoteShutdown = dyn FnMut(&TaskProfile) + Send;
 /// `ShortLinkTaskManager`.
 pub struct ShortLinkTaskManager {
     /// `lst_cmd_`, sorted by [`crate::task_profile::compare_task`].
@@ -289,6 +299,9 @@ pub struct ShortLinkTaskManager {
     run_profile: Option<Box<RunProfile>>,
     /// `ReportTaskProfile` — where the finished task is handed out.
     report_profile: Option<Box<ReportProfile>>,
+    /// `on_timeout_or_remote_shutdown_` — where an error the queue is done
+    /// with is handed out, whether the task is over or not.
+    on_timeout_or_remote_shutdown: Option<Box<TimeoutOrRemoteShutdown>>,
     /// `closefunc` — what the C++ closes a socket with, which the queue needs
     /// for one a run answered badly on. The pool's own is
     /// [`SocketPool::set_close`].
@@ -323,6 +336,7 @@ impl ShortLinkTaskManager {
             gen_sequence_id: None,
             run_profile: None,
             report_profile: None,
+            on_timeout_or_remote_shutdown: None,
             close: None,
         }
     }
@@ -890,6 +904,27 @@ impl ShortLinkTaskManager {
         self.report_profile = Some(Box::new(report));
     }
 
+    /// `on_timeout_or_remote_shutdown_` — where an error the queue is done with
+    /// is handed out: the task with the try that failed pushed into its
+    /// history, which is what an app watches to judge its network by. A task
+    /// that is over is handed out once; one with another try coming is handed
+    /// out once per try, before the next one clears the readings.
+    pub fn set_on_timeout_or_remote_shutdown(
+        &mut self,
+        hook: impl FnMut(&TaskProfile) + Send + 'static,
+    ) {
+        self.on_timeout_or_remote_shutdown = Some(Box::new(hook));
+    }
+
+    /// `on_timeout_or_remote_shutdown_(…)` at `at`, which is what both places
+    /// an error ends a try with do.
+    fn timeout_or_remote_shutdown_at(&mut self, at: usize) {
+        let ended = self.tasks[at].clone();
+        if let Some(hook) = self.on_timeout_or_remote_shutdown.as_mut() {
+            hook(&ended);
+        }
+    }
+
     /// `closefunc` — what a socket the queue is done with is closed with.
     pub fn set_close_socket(&mut self, close: impl FnMut(SocketFd) + Send + 'static) {
         self.close = Some(Box::new(close));
@@ -1175,6 +1210,9 @@ impl ShortLinkTaskManager {
                 profile.transfer_profile.error_code = err_code;
                 profile.push_history();
             }
+            // `shortlink_task_manager.cc:1197` — the try that failed is in the
+            // task's history now, and it is still whole
+            self.timeout_or_remote_shutdown_at(at);
             // `shortlink_task_manager.cc:1206` — the task is only whole now:
             // the error it ended on and the history of its tries are both in
             // it, and this is the last moment the queue has it
@@ -1201,8 +1239,16 @@ impl ShortLinkTaskManager {
             return false;
         }
 
+        {
+            let profile = &mut self.tasks[at];
+            profile.push_history();
+        }
+        // `shortlink_task_manager.cc:1256` — the try that failed is in the
+        // history, and this is the moment before the readings it left are
+        // cleared for the one coming
+        self.timeout_or_remote_shutdown_at(at);
+
         let profile = &mut self.tasks[at];
-        profile.push_history();
         profile.init_send_param_at(now);
         profile.retry_start_time = if fail_handle == TaskFailHandleType::SessionTimeout {
             0
@@ -2610,6 +2656,89 @@ mod tests {
             "the task that is over, with the try that failed in its history"
         );
     }
+
+    /// `shortlink_task_manager.cc:1197,1256` — the app is asked about every try
+    /// that ended, and not only about the task that is over: a task with two
+    /// tries in it is asked twice, the first time with one entry in its history
+    /// and the second with two.
+    #[test]
+    fn a_try_that_ended_is_handed_to_the_timeout_hook_before_the_next_one() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        let ended: Reported = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&ended);
+        manager.set_on_timeout_or_remote_shutdown(move |profile| {
+            recorder.lock().unwrap().push((
+                profile.task.taskid,
+                profile.err_type,
+                profile.err_code,
+                profile.history.len(),
+            ));
+        });
+
+        manager.start_task_at(100_000, task(7), prepare());
+        assert!(manager.on_send_at(100_000, RunId(7)));
+        assert_eq!(
+            manager.on_response_at(
+                100_500,
+                RunId(7),
+                failed(ErrCmdType::Socket, ECT_SOCKET_SHUTDOWN)
+            ),
+            Some(RespHandle::Retried)
+        );
+        assert_eq!(
+            ended.lock().unwrap().clone(),
+            vec![(7, ErrCmdType::Socket, ECT_SOCKET_SHUTDOWN, 1)],
+            "the try that failed, before the next one is begun"
+        );
+
+        manager.run_loop_at(102_000);
+        assert!(manager.on_send_at(102_000, RunId(7)));
+        assert_eq!(
+            manager.on_response_at(102_500, RunId(7), failed(ErrCmdType::Socket, -1)),
+            Some(RespHandle::Ended)
+        );
+        assert_eq!(
+            ended.lock().unwrap().clone(),
+            vec![
+                (7, ErrCmdType::Socket, ECT_SOCKET_SHUTDOWN, 1),
+                (7, ErrCmdType::Socket, -1, 2)
+            ],
+            "the task that is over, with both of its tries in its history"
+        );
+    }
+
+    /// `shortlink_task_manager.cc:1197` — a task that came back an answer is
+    /// asked about too: the C++ names the hook for a timeout, and calls it for
+    /// every try that ended.
+    #[test]
+    fn a_try_that_came_back_an_answer_is_handed_to_the_timeout_hook() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        let ended: Reported = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&ended);
+        manager.set_on_timeout_or_remote_shutdown(move |profile| {
+            recorder.lock().unwrap().push((
+                profile.task.taskid,
+                profile.err_type,
+                profile.err_code,
+                profile.history.len(),
+            ));
+        });
+
+        manager.start_task_at(100_000, task(7), prepare());
+        assert!(manager.on_send_at(100_000, RunId(7)));
+        assert_eq!(
+            manager.on_response_at(100_500, RunId(7), answered(&[])),
+            Some(RespHandle::Ended)
+        );
+        assert_eq!(
+            ended.lock().unwrap().clone(),
+            vec![(7, ErrCmdType::Ok, 0, 1)],
+            "a task that ended well is asked about as well"
+        );
+    }
+
     #[test]
     fn the_debug_of_a_queue_is_what_the_host_would_want_to_see() {
         let mut manager = ShortLinkTaskManager::new();

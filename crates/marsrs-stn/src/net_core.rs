@@ -199,6 +199,15 @@ pub type LastForegroundChangeTime = dyn FnMut() -> u64 + Send;
 /// of it, and the queue is the only thing that has the whole of it.
 pub type ReportTaskProfile = dyn FnMut(&TaskProfile) + Send;
 
+/// `NetCore::SetShortLinkOnTimeoutOrRemoteShutdown`
+/// (`mars/stn/src/net_core.h:223`) — a try of the short-link queue that ended,
+/// over or not, at the moment it was pushed into the task's history
+/// (`mars/stn/src/shortlink_task_manager.cc:1197,1256`). The name is the C++'s,
+/// and it is what an app that judges its network by the tasks that did not come
+/// back asks for; only the short-link queue has it. Unset, and nothing is
+/// asked.
+pub type TimeoutOrRemoteShutdown = dyn FnMut(&TaskProfile) + Send;
+
 fn poisoned<T>(poisoned: PoisonError<T>) -> T {
     poisoned.into_inner()
 }
@@ -255,6 +264,7 @@ struct Hooks {
     push_preprocess: Option<Box<PushPreprocess>>,
     on_push: Option<Box<OnPush>>,
     report_task_profile: Option<Box<ReportTaskProfile>>,
+    on_timeout_or_remote_shutdown: Option<Box<TimeoutOrRemoteShutdown>>,
 }
 
 impl std::fmt::Debug for Hooks {
@@ -265,6 +275,10 @@ impl std::fmt::Debug for Hooks {
             .field("push_preprocess", &self.push_preprocess.is_some())
             .field("on_push", &self.on_push.is_some())
             .field("report_task_profile", &self.report_task_profile.is_some())
+            .field(
+                "on_timeout_or_remote_shutdown",
+                &self.on_timeout_or_remote_shutdown.is_some(),
+            )
             .finish()
     }
 }
@@ -600,6 +614,19 @@ impl NetCore {
             }
         });
 
+        let hooks = Arc::clone(&self.hooks);
+        self.shortlink
+            .set_on_timeout_or_remote_shutdown(move |profile| {
+                if let Some(hook) = hooks
+                    .lock()
+                    .unwrap_or_else(poisoned)
+                    .on_timeout_or_remote_shutdown
+                    .as_mut()
+                {
+                    hook(profile);
+                }
+            });
+
         let net_info = Arc::clone(&self.net_info);
         self.net_source
             .set_net_info(move || net_info.lock().unwrap_or_else(poisoned)());
@@ -670,6 +697,21 @@ impl NetCore {
             .lock()
             .unwrap_or_else(poisoned)
             .report_task_profile = Some(Box::new(report));
+    }
+
+    /// `NetCore::SetShortLinkOnTimeoutOrRemoteShutdown` — a try of the
+    /// short-link queue that ended, whichever way it ended, which the queue
+    /// hands out before it begins the next one: an app that judges its network
+    /// by the tasks that did not come back is what it is for. Unset, and
+    /// nothing is asked.
+    pub fn set_on_shortlink_timeout_or_remote_shutdown(
+        &mut self,
+        ended: impl FnMut(&TaskProfile) + Send + 'static,
+    ) {
+        self.hooks
+            .lock()
+            .unwrap_or_else(poisoned)
+            .on_timeout_or_remote_shutdown = Some(Box::new(ended));
     }
 
     /// `StnManager::ReportConnectStatus`.
