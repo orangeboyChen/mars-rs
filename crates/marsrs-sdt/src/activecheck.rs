@@ -8,15 +8,15 @@
 //! is the loop around it, the error code the answer turns into, and the
 //! timeout that spends — all of it the C++'s.
 //!
-//! Not ported: the `#if defined(ANDROID) || defined(__APPLE__)` around
-//! `PingChecker::StartDoCheck` (whether a host can ping is its own business
-//! here, and a ping it cannot send is answered
-//! [`crate::checkimpl::Answer::Nothing`], like any other probe nobody made),
-//! and the three check types the C++ has no checker for — `kNewDnsCheck`,
-//! `kTracerouteCheck`, `kReqBufCheck` — which [`Check::start_do_check`] leaves
-//! alone.
+//! Not ported: the three check types the C++ has no checker for —
+//! `kNewDnsCheck`, `kTracerouteCheck`, `kReqBufCheck` — which
+//! [`Check::start_do_check`] leaves alone. The `#if defined(ANDROID) ||
+//! defined(__APPLE__)` around `PingChecker::StartDoCheck` *is* here, as the
+//! answer a host gives and not as a target of its own: a platform with no ping
+//! is one whose [`Ask`] answers [`Answer::Nothing`] to a [`Query::Ping`], and
+//! what the C++ does for such a platform is skip the check — not fail it.
 
-use crate::checkimpl::{Ask, Query};
+use crate::checkimpl::{Answer, Ask, Query};
 use crate::constants::{
     DEFAULT_DNS_TIMEOUT, DEFAULT_HTTP_HOST, DEFAULT_PING_COUNT, DEFAULT_PING_HOST,
     DEFAULT_TCP_CONN_TIMEOUT, UNUSE_TIMEOUT,
@@ -388,8 +388,22 @@ impl Check {
                 } else {
                     self.remaining / 1000
                 };
-                let answer = ask.ask(Query::Ping { host, timeout_s });
-                let (error_code, rtt, status) = answer.ping();
+                // A ping nobody sent is a ping that was not made, and not one
+                // that failed: `PingChecker::StartDoCheck` answers `-1` for it
+                // — the `#if defined(ANDROID) || defined(__APPLE__)` around it
+                // is the C++'s "there is no ping on this platform" — and `-1`
+                // leaves `check_status` alone, so what stands behind the ping
+                // is checked all the same. A ping that *was* sent and came
+                // back failed is what ends a run, which is the `error_code`
+                // below.
+                let Answer::Ping {
+                    error_code,
+                    rtt,
+                    status,
+                } = ask.ask(Query::Ping { host, timeout_s })
+                else {
+                    continue;
+                };
                 profile.error_code = error_code;
                 // `DEFAULT_PING_COUNT`, however the run went
                 profile.checkcount = DEFAULT_PING_COUNT;

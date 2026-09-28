@@ -78,7 +78,7 @@ fn slow(query: &Query) -> Answer {
 }
 
 #[test]
-fn a_host_that_cannot_probe_fails_every_check() {
+fn a_host_that_cannot_probe_fails_every_check_it_runs() {
     let mut request = request_of(
         link(&[("long.host", "1.2.3.4", 80)]),
         link(&[("short.host", "5.6.7.8", 443)]),
@@ -101,11 +101,11 @@ fn a_host_that_cannot_probe_fails_every_check() {
         .iter()
         .filter_map(CheckResultProfile::kind)
         .collect();
+    // No ping profile at all: a host with no ICMP to send is a platform the
+    // C++ skips the ping on, so the check did not run and failed nothing.
     assert_eq!(
         kinds,
         vec![
-            NetCheckType::PingCheck,
-            NetCheckType::PingCheck,
             NetCheckType::DnsCheck,
             NetCheckType::DnsCheck,
             NetCheckType::TcpCheck,
@@ -113,33 +113,99 @@ fn a_host_that_cannot_probe_fails_every_check() {
         ]
     );
 
-    // a ping nobody sent: the count the check always sends, and nothing else
-    assert_eq!(results[0].error_code, -1);
-    assert_eq!(results[0].checkcount, DEFAULT_PING_COUNT);
-    assert!(results[0].loss_rate.is_empty());
-    assert_eq!(results[0].ip, "1.2.3.4");
-    // the C++ fills `network_type` in the long-link loop only
-    assert_eq!(results[0].network_type, 2);
-    assert_eq!(results[1].network_type, 0);
-
     // a host nobody resolved
-    assert_eq!(results[2].domain_name, "long.host");
-    assert_eq!(results[2].error_code, -1);
-    assert!(results[2].ip1.is_empty());
-    assert!(results[2].ip2.is_empty());
+    assert_eq!(results[0].domain_name, "long.host");
+    assert_eq!(results[0].error_code, -1);
+    assert!(results[0].ip1.is_empty());
+    assert!(results[0].ip2.is_empty());
+    assert_eq!(results[1].domain_name, "short.host");
 
     // a noop that did not go out: not the socket's own error, but `kSndRcvErr`
-    assert_eq!(results[4].error_code, TcpErrCode::SndRcvErr.as_i32());
-    assert_eq!(results[4].rtt, 0);
-    assert_eq!(results[4].port, 80);
+    assert_eq!(results[2].error_code, TcpErrCode::SndRcvErr.as_i32());
+    assert_eq!(results[2].rtt, 0);
+    assert_eq!(results[2].port, 80);
 
     // a request nobody sent, to the CGI the core was given
-    assert_eq!(results[5].url, "http://short.host/netcheck");
-    assert_eq!(results[5].status_code, 0);
+    assert_eq!(results[3].url, "http://short.host/netcheck");
+    assert_eq!(results[3].status_code, 0);
 
     assert_eq!(request.check_status, CheckStatus::CheckFinish);
     // a run without a timeout is never a run that ran out of one
     assert_eq!(check.remaining(), UNUSE_TIMEOUT);
+}
+
+/// A host with a resolver, a socket and an HTTP stack, but no ICMP: the C++
+/// skips the ping on a platform that has none, so the checks standing behind
+/// it run — which is the whole of the difference, because `__RunOn` breaks on
+/// `kCheckFinish` and a ping that *failed* takes the rest of the plan with it.
+#[test]
+fn a_host_that_cannot_ping_is_resolved_and_asked_all_the_same() {
+    let longlink = link(&[("long.host", "1.2.3.4", 80)]);
+    let shortlink = link(&[("short.host", "5.6.7.8", 80)]);
+    let (mut ask, asked) = stub(|query| match query {
+        Query::Ping { .. } => Answer::Nothing,
+        _ => slow(query),
+    });
+
+    let mut core = SdtCore::new();
+    core.set_http_netcheck_cgi("/netcheck");
+    assert!(core.start_check(
+        &longlink,
+        &shortlink,
+        NET_CHECK_BASIC | NET_CHECK_SHORT,
+        UNUSE_TIMEOUT
+    ));
+    let results = core.run_checks(&mut ask, 3);
+
+    let kinds: Vec<NetCheckType> = results
+        .iter()
+        .filter_map(CheckResultProfile::kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            NetCheckType::DnsCheck,
+            NetCheckType::DnsCheck,
+            NetCheckType::HttpCheck,
+        ]
+    );
+    // the ping was asked for and not made, and no profile says otherwise
+    assert!(matches!(asked.lock().unwrap()[0], Query::Ping { .. }));
+    assert!(!results
+        .iter()
+        .any(|profile| profile.kind() == Some(NetCheckType::PingCheck)));
+}
+
+/// The other half of that: a ping the host *did* send, and that came back
+/// failed, is what ends the run — `error_code != 0` sets `kCheckFinish`.
+#[test]
+fn a_ping_that_failed_ends_the_run_behind_it() {
+    let longlink = link(&[("long.host", "1.2.3.4", 80)]);
+    let shortlink = link(&[("short.host", "5.6.7.8", 80)]);
+    let (mut ask, _) = stub(|query| match query {
+        Query::Ping { .. } => Answer::Ping {
+            error_code: -1,
+            rtt: 4,
+            status: None,
+        },
+        _ => slow(query),
+    });
+
+    let mut core = SdtCore::new();
+    core.set_http_netcheck_cgi("/netcheck");
+    assert!(core.start_check(
+        &longlink,
+        &shortlink,
+        NET_CHECK_BASIC | NET_CHECK_SHORT,
+        UNUSE_TIMEOUT
+    ));
+    let results = core.run_checks(&mut ask, 3);
+
+    // the ping alone: nothing behind it was asked for
+    assert_eq!(results.len(), 2);
+    assert!(results
+        .iter()
+        .all(|profile| profile.kind() == Some(NetCheckType::PingCheck)));
 }
 
 #[test]

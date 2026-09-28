@@ -565,11 +565,12 @@ mod tests {
                 "the check ran, which is all a run reports"
             );
             let results = take_reported_impl();
-            // One, and not the two of the plan: the ping is first, and a ping
-            // that answered nothing ends the run — the C++'s `kCheckFinish`,
-            // which is what a host with no network gets.
+            // One, and not the two of the plan: a host with nothing to answer
+            // with is a platform the C++ skips the ping on, so the check that
+            // reports is the resolve behind it — and a resolve nobody answered
+            // is `kCheckFinish`, which ends the run there.
             assert_eq!(results.len(), 1);
-            assert_eq!(results[0].kind(), Some(Kind::PingCheck));
+            assert_eq!(results[0].kind(), Some(Kind::DnsCheck));
             assert_ne!(
                 results[0].error_code, 0,
                 "a probe nobody answered is one that failed"
