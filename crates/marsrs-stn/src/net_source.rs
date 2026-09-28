@@ -43,11 +43,14 @@ pub const NUM_MAKE_COUNT: usize = 5;
 /// `kNoNet` — what `getNetInfo()` answers with no network, and what an unset
 /// [`NetInfo`] answers too.
 pub const NO_NET: i32 = -1;
-/// `DEFAULT_LONGLINK_GROUP`.
+/// `DEFAULT_LONGLINK_GROUP` — the group a long link is put in when the app
+/// names none.
 pub const DEFAULT_LONGLINK_GROUP: &str = "default-group";
-/// `sg_quic_default_rw_timeoutms`.
+/// How long a read waits on a quic link, in milliseconds, until the app sets
+/// another: the C++'s `sg_quic_default_rw_timeoutms`.
 pub const DEFAULT_QUIC_RW_TIMEOUT_MS: u32 = 5_000;
-/// `quic_default_conn_timeoutms_`.
+/// How long a quic connect is given, in milliseconds, until the app sets
+/// another: the C++'s `quic_default_conn_timeoutms_`.
 pub const DEFAULT_QUIC_CONNECT_TIMEOUT_MS: u32 = 250;
 /// What `DisableQUIC` is called with when the caller says nothing.
 pub const DISABLE_QUIC_SECONDS: i64 = 20 * 60;
@@ -117,11 +120,8 @@ pub type NetInfo = dyn FnMut() -> i32 + Send;
 /// link.
 #[derive(Debug, Clone, Copy)]
 struct Make {
-    /// `_count`.
     count: usize,
-    /// `_is_backup`.
     is_backup: bool,
-    /// `_is_longlink`.
     is_longlink: bool,
 }
 
@@ -150,14 +150,17 @@ pub struct LonglinkConfig {
     pub host_list: Vec<String>,
     /// `is_keep_alive` — `false` leaves the reconnect to a task.
     pub is_keep_alive: bool,
-    /// `group`.
+    /// `group` — which group of long links this one belongs to;
+    /// [`DEFAULT_LONGLINK_GROUP`] when the app names none.
     pub group: String,
-    /// `isMain`.
+    /// `isMain` — the one link whose errors and status the app hears about,
+    /// which the net core keeps as its default link.
     pub is_main: bool,
     /// `link_type` — one of the `Task::CHANNEL_*`, which is what decides which
     /// debug ip a long link is given.
     pub link_type: i32,
-    /// `need_tls`.
+    /// `need_tls` — whether the link is wrapped in TLS: `true` until the app
+    /// says otherwise.
     pub need_tls: bool,
 }
 
@@ -182,39 +185,52 @@ impl LonglinkConfig {
     }
 }
 
-/// `NetSource`.
+/// Where every ip/port pair comes from: the hosts and ports the app set, the
+/// debug ips that take a host or a cgi out of dns altogether, the backup ips a
+/// host falls back to, and the history of what failed.
 pub struct NetSource {
-    /// `ipportstrategy_`.
+    /// `ipportstrategy_` — the history: what sorts and filters every pair that
+    /// came from dns, and bans the ones that failed.
     ipport_strategy: SimpleIpPortSort,
     /// `v4_timeout_`, in milliseconds.
     v4_timeout: u32,
     /// `v6_timeout_`, in milliseconds.
     v6_timeout: u32,
 
-    /// `sg_longlink_hosts`.
+    /// `sg_longlink_hosts` — the hosts a long link is tried on, in this order.
     longlink_hosts: Vec<String>,
-    /// `sg_longlink_ports`.
+    /// `sg_longlink_ports` — the ports every one of those hosts is tried on.
     longlink_ports: Vec<u16>,
-    /// `sg_longlink_debugip`.
+    /// `sg_longlink_debugip` — a debug ip for a `Task::CHANNEL_LONG` link,
+    /// which takes the link out of dns altogether.
     longlink_debugip: String,
 
-    /// `sg_minorlong_debugip`.
+    /// `sg_minorlong_debugip` — the same, for a `Task::CHANNEL_MINOR_LONG`
+    /// link.
     minorlong_debugip: String,
-    /// `sg_minorlong_port`.
+    /// `sg_minorlong_port` — and this is the port that came with it, which
+    /// nothing reads: the C++ writes it down in `SetMinorLongDebugIP` and
+    /// never asks for it back either.
     minorlong_port: u16,
 
-    /// `sg_shortlink_port`.
+    /// `sg_shortlink_port` — the one port a short-link host is tried on.
     shortlink_port: u16,
-    /// `sg_shortlink_debugip`.
+    /// `sg_shortlink_debugip` — a debug ip for a short link, and the last one
+    /// looked at: a cgi's own pair and a host's own ip both win over it.
     shortlink_debugip: String,
-    /// `sg_host_backupips_mapping`.
+    /// `sg_host_backupips_mapping` — the ips a host falls back to, and what
+    /// the backup pass is made of.
     host_backup_ips: BTreeMap<String, Vec<String>>,
-    /// `sg_lowpriority_longlink_ports`.
+    /// `sg_lowpriority_longlink_ports` — and when this is not empty it is
+    /// what a long link is tried on in the backup pass instead of
+    /// `longlink_ports`.
     low_priority_longlink_ports: Vec<u16>,
 
-    /// `sg_host_debugip_mapping`.
+    /// `sg_host_debugip_mapping` — a debug ip for one host, which wins over
+    /// the link's own on either kind of link.
     host_debugip: BTreeMap<String, String>,
-    /// `sg_cgi_debug_mapping`.
+    /// `sg_cgi_debug_mapping` — a debug pair for one cgi, which wins over
+    /// everything on a short link.
     cgi_debug: BTreeMap<String, (String, u16)>,
 
     /// `sg_quic_reopen_tick` — when quic is let back in, as a tick count.
@@ -223,20 +239,25 @@ pub struct NetSource {
     quic_enabled: bool,
     /// `quic_forbidden_` — off for good.
     quic_forbidden: bool,
-    /// `sg_quic_default_rw_timeoutms`.
+    /// `sg_quic_default_rw_timeoutms` — [`DEFAULT_QUIC_RW_TIMEOUT_MS`] until
+    /// the app sets another.
     quic_default_rw_timeoutms: u32,
-    /// `sg_quic_default_timeout_source`.
+    /// `sg_quic_default_timeout_source` — where the one above came from.
     quic_default_timeout_source: TimeoutSource,
-    /// `sg_cgi_quic_rw_timeoutms_mapping`.
+    /// `sg_cgi_quic_rw_timeoutms_mapping` — a read timeout one cgi has of its
+    /// own.
     cgi_quic_rw_timeoutms: BTreeMap<String, u32>,
-    /// `quic_default_conn_timeoutms_`.
+    /// `quic_default_conn_timeoutms_` — [`DEFAULT_QUIC_CONNECT_TIMEOUT_MS`]
+    /// until the app sets another.
     quic_default_conn_timeoutms: u32,
-    /// `quic_default_connect_timeout_source_`.
+    /// `quic_default_connect_timeout_source_` — where the one above came from.
     quic_default_connect_timeout_source: TimeoutSource,
-    /// `cgi_quic_connect_timeoutms_mapping_`.
+    /// `cgi_quic_connect_timeoutms_mapping_` — a connect timeout one cgi has
+    /// of its own.
     cgi_quic_connect_timeoutms: BTreeMap<String, u32>,
 
-    /// `sg_ipv6_enabled`.
+    /// `sg_ipv6_enabled` — whether a v6 address is a candidate at all: on
+    /// until `DisableIPv6`.
     ipv6_enabled: bool,
 
     new_dns: Option<Box<NewDns>>,
@@ -254,7 +275,10 @@ impl Default for NetSource {
 }
 
 impl NetSource {
-    /// `NetSource(_active_logic, _context)`.
+    /// An empty table: no hosts, no ports and no debug ip, so everything has
+    /// to come from dns. Quic starts forbidden, which is the one thing
+    /// [`NetSource::forbid_quic`] has to take back before anything can use
+    /// it; ipv6 starts allowed.
     pub fn new() -> Self {
         Self::new_at(gettickcount())
     }
@@ -602,9 +626,9 @@ impl NetSource {
         self.disable_quic_at(gettickcount(), seconds);
     }
 
-    /// The same, with the reading handed in: quic is off for `seconds` and comes
-    /// back on its own the first time it is asked about afterwards, which is the
-    /// C++'s `sg_quic_reopen_tick.gettickspan() >= 0`.
+    /// The same, with the reading handed in: quic is off for `seconds` and
+    /// comes back on its own the first time it is asked about afterwards, which
+    /// is the C++'s `sg_quic_reopen_tick.gettickspan() >= 0`.
     pub fn disable_quic_at(&mut self, now: u64, seconds: i64) {
         self.quic_enabled = false;
         let millis = u64::try_from(seconds).unwrap_or(0).saturating_mul(1_000);
@@ -936,9 +960,9 @@ impl NetSource {
         if is_backup && !ports.is_empty() {
             let known: BTreeSet<&str> = so_far.iter().map(|item| item.ip.as_str()).collect();
             let ports_count = ports.len();
-            // `_count - _ip_items.size()`: how many more pairs the caller wants,
-            // which the C++ computes in `size_t` and wraps when the list is
-            // already longer. The port clamps it, so the pairs the list has
+            // `_count - _ip_items.size()`: how many more pairs the caller
+            // wants, which the C++ computes in `size_t` and wraps when the list
+            // is already longer. The port clamps it, so the pairs the list has
             // already got are the ones dropped
             let mut required = count.saturating_sub(so_far.len());
             if required < ports_count {
