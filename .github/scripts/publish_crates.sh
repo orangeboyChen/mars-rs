@@ -88,6 +88,37 @@ crate_status() {
         "https://crates.io/api/v1/crates/$1/$version"
 }
 
+# Where a crate sits in the sparse index: the name lower-cased, under the
+# first two letters of it over the next two — `marsrs-crypt` is
+# `ma/rs/marsrs-crypt`. A name of one, two or three letters gets a directory
+# of its own; none of this port's is that short, but the rule is the index's
+# and not this script's.
+index_path() {
+    local name
+    # The index lower-cases a name: a crate can be published with capitals in
+    # it, and the file it is found under is the lower-cased one. `tr` and not
+    # `${name,,}`, which is a bash 4 expansion and a bad substitution on the
+    # 3.2 a macOS still ships.
+    name="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    case "${#name}" in
+        1) echo "1/$name" ;;
+        2) echo "2/$name" ;;
+        3) echo "3/${name:0:1}/$name" ;;
+        *) echo "${name:0:2}/${name:2:2}/$name" ;;
+    esac
+}
+
+# Whether `cargo` can resolve <crate> <version> — the question the publish of
+# the crate that depends on this one asks. `cargo` reads the sparse index and
+# not the api above, and the index is a copy of crates.io's database that lags
+# behind it: a version the api answers 200 for and the index has not is a
+# "no matching package named <crate> found, location searched: crates.io
+# index" in the next `cargo publish` of the run.
+index_has() {
+    curl -sS -A "$CRATES_IO_UA" "https://index.crates.io/$(index_path "$1")" |
+        grep -q "\"vers\":\"$version\""
+}
+
 # Dependency order, and the two crates a caller takes last: crates.io resolves a
 # dependency out of the registry, so a crate is only publishable once the crates
 # it names are on it.
@@ -106,9 +137,11 @@ for CRATE in marsrs-core marsrs-comm marsrs-crypt marsrs-buffer \
     case "$status" in
         200)
             echo "$CRATE $version is already on crates.io"
-            continue
             ;;
         404)
+            # The version is the release's and the checkout is the tag's, so the
+            # tree carries an edit `cargo publish` would otherwise refuse.
+            cargo publish -p "$CRATE" --allow-dirty
             ;;
         *)
             echo "::error::crates.io answered $status for $CRATE $version; whether it is up is unknown, so it is not published over"
@@ -116,17 +149,22 @@ for CRATE in marsrs-core marsrs-comm marsrs-crypt marsrs-buffer \
             ;;
     esac
 
-    # The version is the release's and the checkout is the tag's, so the tree
-    # carries an edit `cargo publish` would otherwise refuse.
-    cargo publish -p "$CRATE" --allow-dirty
-
-    # crates.io's index is not its database: a publish is visible to the next
-    # `cargo publish` only once the index has caught up, and a dependency that
-    # has not is "no matching package". Anything but a 200 is "not yet" here —
-    # the index that answers 404, and an answer this job could not read — and
-    # either way the publish that follows is what decides, and says so.
-    for _ in $(seq 1 60); do
-        [ "$(crate_status "$CRATE")" = 200 ] && break
+    # What is waited for is the index and not the api: crates.io's index is a
+    # second, cached copy of its database, and it is the one `cargo` resolves
+    # out of, so an api that answers 200 while the index still answers 404 is a
+    # wait that ends early and a "no matching package" in the crate published
+    # next — which is what a release of these nine ended red on.
+    #
+    # Ten minutes, and not five: a crate the index has never seen is the
+    # slowest case it has, and the release this job is the last step of is out
+    # and tagged by now, so waiting is cheaper than a red step that publish.yml
+    # has to be asked to run again.
+    for _ in $(seq 1 120); do
+        index_has "$CRATE" && break
         sleep 5
     done
+    if ! index_has "$CRATE"; then
+        echo "::error::$CRATE $version is on crates.io but not in its index after ten minutes; the crates that depend on it cannot resolve it, so they are not published"
+        exit 1
+    fi
 done
