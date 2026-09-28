@@ -42,8 +42,9 @@
 //! (`SetGetRealHostFunc` and friends are one line each over a queue the port
 //! leaves to the host), the minor long link (`AddMinorLongLink`,
 //! `IsMinorAvailable`, `FixMinorRealhost` — a second link the C++ makes out
-//! of a host list the app hands in, which nothing in the port makes), `__OnShortLinkResponse` (nothing but a log), and
-//! `__ResetLongLink` (an `#ifdef __APPLE__` that is commented out).
+//! of a host list the app hands in, which nothing in the port makes),
+//! `__OnShortLinkResponse` (nothing but a log), and `__ResetLongLink` (an
+//! `#ifdef __APPLE__` that is commented out).
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
