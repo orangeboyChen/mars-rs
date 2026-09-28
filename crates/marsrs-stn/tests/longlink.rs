@@ -166,12 +166,17 @@ fn the_version_the_host_set_is_the_one_the_packages_carry() {
     set_client_version(0x0102_0304);
     let packed = longlink_pack(1, 1, b"v");
     set_client_version(0);
+    // Read back under the lock: every test leaves the version as it found it,
+    // but only while it holds the lock is that its own to read — after the drop
+    // the next test's `set_client_version` is what this would be looking at, and
+    // what it read was the version that test had just set.
+    let left_behind = client_version();
     drop(guard);
 
     // the header is `head_length | client_version | cmdid | seq | body_length`
     assert_eq!(&packed[4..8], &0x0102_0304u32.to_be_bytes());
     assert_eq!(&packed[0..4], &(HEADER_LEN as u32).to_be_bytes());
-    assert_eq!(client_version(), 0, "the tests leave it as they found it");
+    assert_eq!(left_behind, 0, "the tests leave it as they found it");
 }
 
 #[test]
