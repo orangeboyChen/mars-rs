@@ -2,7 +2,7 @@
 // to every other group of the site.
 //
 // One of these pages answers a question — how do I open an appender, how do I
-// read a log file — in eight platforms at once, and the reader who asks it asks
+// read a log file — in nine platforms at once, and the reader who asks it asks
 // four pages of it in a row. They are on Android for the first block and on
 // Android for the rest of them, so a tab picked once is a tab that should not
 // have to be picked again. VitePress keeps no state here of its own: a group is
@@ -41,6 +41,7 @@ const PLATFORMS: string[][] = [
   ['Flutter'],
   ['React Native'],
   ['C'],
+  ['HarmonyOS'],
 ]
 
 // GitHub Pages serves every project of this owner from the one origin, and so

@@ -300,6 +300,10 @@ marsrs-<version>-<host>.zip      (Windows)
     libmars_ffi.a / libmars_ffi.so (.dylib, .dll)
 ```
 
+One archive per host — Linux, macOS and Windows — on the release of the version
+you take. It is the same archive [the logger's section](/xlog/getting-started#c-abi)
+publishes: one library, all three headers in it.
+
 ```c
 #include <mars_stn.h>
 

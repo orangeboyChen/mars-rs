@@ -34,6 +34,10 @@ mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK, or a negative 
 
 :::
 
+Flutter, React Native and HarmonyOS answer no path — the appender carries no
+`currentLogPath` on any of the three — so an app on them reads the directory it
+gave and the name above.
+
 ## Async: the record may still be in the cache
 
 The default mode hands a record to a writer thread through a memory-mapped cache
@@ -60,6 +64,18 @@ xlog.flush(sync = true)
 
 ```kotlin [Kotlin Multiplatform]
 Xlog.flush(sync = true)
+```
+
+```dart [Flutter]
+await xlog.flush(sync: true)
+```
+
+```ts [React Native]
+xlog.flush(true)
+```
+
+```typescript [HarmonyOS]
+xlog.flush(true)
 ```
 
 ```c [C]
@@ -90,6 +106,8 @@ end the process without another word:
 |---|---|
 | Android | `Xlog(config, context)` — any `Context` of the app registers a `ComponentCallbacks2` that flushes from `TRIM_MEMORY_UI_HIDDEN` up |
 | SwiftPM | every `Xlog`, from the moment it is built: it watches `didEnterBackground` and `willTerminate`, and `WKExtension`'s on watchOS |
+| Flutter, React Native | nothing of its own: both reach the C ABI themselves, on Android without a `Context` and on iOS without the Swift wrapper, so no hook is registered — the next start, as above |
+| HarmonyOS | nothing: the NAPI module registers no lifecycle callback — the next start, as above |
 | everywhere else | the next start, as above |
 
 `close()` drains too, so an app that closes its appender on the way out is

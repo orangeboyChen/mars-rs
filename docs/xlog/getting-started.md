@@ -167,9 +167,9 @@ implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")  // + STN and SDT
 ```
 
 Both AARs carry the same `libmarsrsxlog.so`, for `arm64-v8a`, `armeabi-v7a` and
-`x86_64`. Both carry the R8 rules that keep the names the Kotlin and the native
-half call each other by, so a release build that sets `minifyEnabled true` needs
-no rules of its own.
+`x86_64`, and both ask for `minSdk 21`. Both carry the R8 rules that keep the
+names the Kotlin and the native half call each other by, so a release build that
+sets `minifyEnabled true` needs no rules of its own.
 
 ```kotlin
 val xlog = Xlog.open(
@@ -247,7 +247,10 @@ Android needs nothing extra — it resolves `io.github.orangeboychen.marsrs:xlog
 from JitPack — and `pod install` is `flutter build ios`'s own business: the
 plugin is a normal Flutter plugin with a podspec, and nothing in the app's
 `Podfile` has to name it. Take one of the two packages and not both: both carry
-the same native library, and an app with two of it does not build.
+the same native library, and an app with two of it does not build. It is a plugin
+of two platforms — `platforms:` in its `pubspec.yaml` names Android and iOS and
+nothing else — so an app that also builds for the web or the desktop takes the
+logger from that platform's own code.
 
 ```dart
 final dir = await getTemporaryDirectory();          // path_provider
@@ -287,7 +290,9 @@ in the app has to name the module: autolinking finds the `ReactPackage` in
 `android/` and the pod in `ios/`, which is what puts `Xlog` in
 `TurboModuleRegistry`. It is a TurboModule, which is what the New Architecture is
 for — React Native 0.74 or newer, with the bridge switched off — and it is the
-one thing this surface asks of the app.
+one thing this surface asks of the app. What the module carries is two platforms,
+Android and iOS: an app that also builds for the web takes the logger from that
+platform's own code.
 
 ```ts
 const xlog = Xlog.open({
@@ -320,8 +325,11 @@ marsrs-<version>-<host>.zip      (Windows)
     libmars_ffi.a / libmars_ffi.so (.dylib, .dll)
 ```
 
-built for `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin` and
-`x86_64-pc-windows-msvc`, with the task pipeline and the diagnosis included.
+One archive per host, on the release of the version you take —
+`x86_64-unknown-linux-gnu`, `aarch64-apple-darwin` and
+`x86_64-pc-windows-msvc`. Unpack it anywhere: `include/` and the library are the
+whole of what is in it, and the task pipeline and the diagnosis are in the same
+library as the logger.
 
 ```c
 #include <mars_xlog.h>
