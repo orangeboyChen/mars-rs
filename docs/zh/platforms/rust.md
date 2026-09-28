@@ -1,7 +1,7 @@
 # Rust
 
 ```bash
-cargo add marsrs          # 整个端口：xlog、stn、sdt
+cargo add marsrs          # 整个移植：xlog、stn、sdt
 cargo add marsrs-xlog     # 只有 xlog —— 日志，别的都没有
 ```
 

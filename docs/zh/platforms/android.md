@@ -6,7 +6,7 @@ maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
 implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")    // 只有 xlog
-implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")  // 整个端口：还有 STN、SDT
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")  // 整个移植：还有 STN、SDT
 ```
 
 两个 AAR 带的是同一个 `libmarsrsxlog.so`，覆盖 `arm64-v8a`、`armeabi-v7a`、`x86_64`。
@@ -58,7 +58,7 @@ xlog.log(LogLevel.DEBUG, "net", "…")
 
 Java 写的完全一样 —— `Xlog.open(config)` 然后 `xlog.i(tag, message)` —— 不用再学别的。
 
-构造起来很贵的消息值得先问一句：被级别丢掉的记录，那串 `String` 你照样已经付过了。
+构造起来很贵的消息值得先问一句：级别挡掉的记录也一样 —— 那串 `String` 你已经拼出来了。
 
 ```kotlin
 if (xlog.isLoggable(LogLevel.DEBUG)) {
@@ -93,7 +93,7 @@ val xlog = Xlog(config, context)
 val opened = Xlog.open(config, context)     // 同一个调用，另一个名字
 ```
 
-Android 没有"App 要退出了"这件事：`Application.onTerminate` 在真机上从来不会被调用，
+Android 没有“App 要退出了”这件事：`Application.onTerminate` 在真机上从来不会被调用，
 而系统结束一个进程时，一个字都不会说。剩下能用的是
 `ComponentCallbacks2.onTrimMemory`，`Xlog` 注册的就是它 —— 从
 `TRIM_MEMORY_UI_HIDDEN` 往上，说明 App 的每个 activity 都已经被别的界面挡住了，
@@ -182,9 +182,7 @@ SdtLogic.runChecks(1, object : SdtLogic.IProbe {
 
 四个探针是 App 的：这个移植不持有任何 socket，所以一次检查是向交给 `runChecks` 的那个
 `IProbe` 一个一个地问，都在调用它的那个线程上，而且这个调用要等每个探针都回答了才返回，
-所以一次只有一个诊断在跑。C++ 是在自己的线程上开始一次诊断的 ——
-`com.tencent.mars.sdt.SdtLogic` 没有声明任何 start 方法 —— 所以这个面是这个移植自己的，
-不是对齐出来的。
+所以一次只有一个诊断在跑。
 
 [网络诊断](/zh/sdt)是它的全部：那个模式、那份计划、以及报告的那份 JSON。
 

@@ -198,8 +198,7 @@ SdtLogic.runChecks(1, object : SdtLogic.IProbe {
 The four probes are the app's: this port owns no sockets, so a check is asked of
 the `IProbe` you hand to `runChecks`, one at a time, on the thread that called
 it — and that call does not come back until every probe has answered, so one
-diagnosis runs at a time. The C++ starts a diagnosis on a thread of its own — `com.tencent.mars.sdt.SdtLogic`
-declares no start method — so this surface is the port's own rather than parity.
+diagnosis runs at a time.
 
 [The network diagnosis](/sdt) is the whole of it: the mode, the plan, and the
 JSON of the report.

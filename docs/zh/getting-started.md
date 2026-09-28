@@ -7,7 +7,7 @@
 ::: code-group
 
 ```bash [Rust]
-cargo add marsrs          # 整个端口：xlog、stn、sdt
+cargo add marsrs          # 整个移植：xlog、stn、sdt
 cargo add marsrs-xlog     # 只有 xlog —— 日志，别的都没有
 ```
 
@@ -45,7 +45,7 @@ flutter pub add marsrs_xlog          # 要整个端口就 marsrs
 ```
 
 ```bash [React Native]
-npm install marsrs-react-native-xlog         # 要整个端口就 marsrs-react-native
+npm install marsrs-react-native-xlog         # 要整个移植就 marsrs-react-native
 cd ios && pod install          # autolinking 会找到这个模块
 ```
 

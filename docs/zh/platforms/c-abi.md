@@ -37,7 +37,7 @@ mars_xlog_flush_sync();   /* 返回时记录已经在磁盘上了 */
 mars_xlog_close();
 ```
 
-`MarsXLogConfig` 里每个指针都必须是 NUL 结尾的 UTF-8 或 `NULL`；`NULL` 等于"空"，
+`MarsXLogConfig` 里每个指针都必须是 NUL 结尾的 UTF-8 或 `NULL`；`NULL` 等于“空”，
 只有 `log_dir` 是必填。一次写入的 `tag`、`filename`、`func_name`、`message` 可以是
 `NULL`。
 
@@ -68,7 +68,7 @@ cc -I include -o app app.c libmars_ffi.a -lpthread -ldl     # 静态
 cc -I include -o app app.c -L. -lmars_ffi                  # 动态
 ```
 
-头文件就签在 crate 旁边，`crates/marsrs-ffi/include`，所以构建可以直接指向仓库，
+头文件就放在 crate 旁边，`crates/marsrs-ffi/include`，所以构建可以直接指向仓库，
 不必拷一份。
 
 ## 当前文件与错误码

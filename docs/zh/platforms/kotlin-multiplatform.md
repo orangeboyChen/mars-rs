@@ -13,7 +13,7 @@ maven {
 
 // 共享模块的 build.gradle.kts
 implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")    // 只有 xlog
-implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")  // 整个端口
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")  // 整个移植
 ```
 
 不想为 GitHub Packages 配认证的应用，可以拿 release 里的 `marsrs-kmp-maven.zip`：
@@ -76,13 +76,13 @@ if (xlog.isLoggable(LogLevel.DEBUG)) {
 
 ## 开着的时候
 
-| 要什么 | 怎么写 |
+| 作用 | 怎么写 |
 |---|---|
 | 改级别 | `xlog.level = LogLevel.WARNING` |
 | 切异步 / 同步 | `xlog.mode = AppenderMode.SYNC` |
 | 同时打到控制台 | `xlog.consoleLogEnabled = true` |
 | 到某个大小就切文件 | `xlog.maxFileSizeBytes = 8 * 1024 * 1024` |
-| 到某个年龄就删文件 | `xlog.maxAliveTimeSeconds = 10 * 24 * 3600` |
+| 超过这个秒数就删文件 | `xlog.maxAliveTimeSeconds = 10 * 24 * 3600` |
 | 还开着吗 | `xlog.isOpen` |
 | 把缓存排空 | `xlog.flush(sync = true)` |
 
@@ -103,7 +103,7 @@ STN 和 SDT，这样只拿 `xlog-kmp` 的 App 才一个字节的任务链路都�
 
 ## 不在这里面的
 
-这个 API 面是两座桥的交集，也是 `common` 声明唯一能是的东西。C ABI 那个进程级的
+这套 API 是两座桥的交集，`common` 声明也只能做到这样。C ABI 那个进程级的
 appender —— `mars_xlog_open`、`mars_xlog_close`、`mars_xlog_current_log_path` —— 不在
 里面，因为 JNI 桥没有对应的东西：要用它们就是某个单一平台的调用方，写在那平台的
 source set 里。
