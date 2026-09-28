@@ -397,6 +397,12 @@ impl NetCore {
             last_foreground_change_time: None,
             clock: None,
         };
+        // `dynamic_timeout_`: the C++ owns one and hands the *same* one to both
+        // queues (`net_core.cc:85,217`), so a package that went out on either
+        // of them is what both compute their first-package timeouts from
+        let dynamic_timeout = core.dynamic_timeout.clone();
+        core.shortlink.set_dynamic_timeout(dynamic_timeout.clone());
+        core.longlink.set_dynamic_timeout(dynamic_timeout);
         // `defaultConfig.longlink_encoder = default_longlink_encoder`: every
         // link the core makes is made with the encoder it was given, until the
         // app replaces the factory with its own
@@ -1037,12 +1043,9 @@ impl NetCore {
     /// The same, with the reading handed in.
     pub fn on_network_change_at(&mut self, now: u64) {
         self.net_source.clear_cache();
+        // the queues hold the same timeout the core does, so one reset is the
+        // C++'s `dynamic_timeout_->ResetStatus()`
         self.dynamic_timeout.reset();
-        // the two queues keep a timeout of their own — the C++ hands them the
-        // *same* one the net core has — so the network they learned is theirs
-        // to forget too
-        self.shortlink.dynamic_timeout().reset();
-        self.longlink.dynamic_timeout().reset();
         if self.use_long_link {
             self.timing_sync.on_network_change_at(now);
             self.longlink.on_network_change_at(now);
@@ -3036,35 +3039,38 @@ mod tests {
         );
     }
 
+    /// The C++'s `NetCore` owns the one `DynamicTimeout` and hands the same one
+    /// to both of its queues (`net_core.cc:85,217`), so the network is judged
+    /// once for the whole core and not once per queue: what the short link
+    /// learned is what the long link picks its first-package timeouts from.
     #[test]
-    fn a_network_change_forgets_the_network_every_queue_learned() {
+    fn the_two_queues_share_one_judgement_of_the_network() {
         let (mut core, _rec) = wired();
+        let failed = crate::config::DYN_TIME_TASK_FAILED_PKG_LEN;
 
-        // a network the two queues learned on their own: one that answered
-        // slowly enough to be called `Bad`
-        core.shortlink().dynamic_timeout().record_at(
-            crate::dynamic_timeout::NetworkKind::Mobile,
-            1,
-            10_000,
-            NOW,
+        // four packages the short link never got an answer to, which is enough
+        // of a window to call the network `Bad`
+        for _ in 0..4 {
+            core.shortlink().dynamic_timeout().record_at(
+                crate::dynamic_timeout::NetworkKind::Mobile,
+                failed,
+                0,
+                NOW,
+            );
+        }
+        assert_eq!(
+            core.shortlink().dynamic_timeout().status(),
+            DynamicTimeoutStatus::Bad
         );
-        core.longlink().dynamic_timeout().record_at(
-            crate::dynamic_timeout::NetworkKind::Mobile,
-            1,
-            10_000,
-            NOW,
+        assert_eq!(
+            core.longlink().dynamic_timeout().status(),
+            DynamicTimeoutStatus::Bad,
+            "the long link reads the window the short link wrote"
         );
-        core.dynamic_timeout().record_at(
-            crate::dynamic_timeout::NetworkKind::Mobile,
-            1,
-            10_000,
-            NOW,
-        );
+        assert_eq!(core.dynamic_timeout().status(), DynamicTimeoutStatus::Bad);
 
+        // and a change of network forgets it once, for both
         core.on_network_change_at(NOW + 1);
-
-        // the C++ resets the one timeout all three share, which is what a
-        // change of network means: what was learned about the old one is gone
         assert_eq!(
             core.shortlink().dynamic_timeout().status(),
             DynamicTimeoutStatus::Evaluating

@@ -188,9 +188,9 @@ pub struct LongLinkTaskManager {
     retry_interval: u64,
     /// `tasks_continuous_fail_count_`.
     tasks_continuous_fail_count: u32,
-    /// `dynamic_timeout_` — the C++ shares one with the short-link queue; this
-    /// one is the queue's own, and [`LongLinkTaskManager::dynamic_timeout`] is
-    /// the one to share.
+    /// `dynamic_timeout_` — the window the first-package timeout is picked
+    /// from, which the C++ shares with the short-link queue: one for the whole
+    /// core, and [`NetCore`](crate::NetCore) is what hands it over.
     dynamic_timeout: DynamicTimeout,
     /// `task_intercept_`.
     intercept: TaskIntercept,
@@ -891,6 +891,15 @@ impl LongLinkTaskManager {
     /// `dynamic_timeout_`.
     pub fn dynamic_timeout(&mut self) -> &mut DynamicTimeout {
         &mut self.dynamic_timeout
+    }
+
+    /// The timeout the queue is to compute its first-package timeouts from:
+    /// the C++'s `NetCore` hands both of its queues the one it owns
+    /// (`mars/stn/src/net_core.cc:217`), so a package that went out on the
+    /// short link is what the long link measures the network by, and the other
+    /// way round. A queue nobody wired keeps the window it was made with.
+    pub fn set_dynamic_timeout(&mut self, timeout: DynamicTimeout) {
+        self.dynamic_timeout = timeout;
     }
 
     /// The encoder the queue asks whether an answer is the server pushing.

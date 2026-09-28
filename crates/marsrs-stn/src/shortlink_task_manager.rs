@@ -235,7 +235,9 @@ pub struct ShortLinkTaskManager {
     default_use_proxy: bool,
     /// `tasks_continuous_fail_count_`.
     tasks_continuous_fail_count: u32,
-    /// `dynamic_timeout_`.
+    /// `dynamic_timeout_` — the window the first-package timeout is picked
+    /// from, which the C++ shares with the long-link queue: one for the whole
+    /// core, and [`NetCore`](crate::NetCore) is what hands it over.
     dynamic_timeout: DynamicTimeout,
     /// `debug_host_`.
     debug_host: String,
@@ -715,6 +717,15 @@ impl ShortLinkTaskManager {
     /// `dynamic_timeout_`.
     pub fn dynamic_timeout(&mut self) -> &mut DynamicTimeout {
         &mut self.dynamic_timeout
+    }
+
+    /// The timeout the queue is to compute its first-package timeouts from:
+    /// the C++'s `NetCore` hands both of its queues the one it owns
+    /// (`mars/stn/src/net_core.cc:85`), so a package that went out on the long
+    /// link is what the short link measures the network by, and the other way
+    /// round. A queue nobody wired keeps the window it was made with.
+    pub fn set_dynamic_timeout(&mut self, timeout: DynamicTimeout) {
+        self.dynamic_timeout = timeout;
     }
 
     /// `ShortLinkChannelFactory::Create` — the host starts a run. An unset one
