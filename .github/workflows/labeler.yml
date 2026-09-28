@@ -1,0 +1,65 @@
+name: Label
+
+# A pull request is labelled by what it touches: `.github/labeler.yml` maps a
+# path to a label, and `actions/labeler` reads the map against the diff of the
+# pull request. What it never does is guess what a change *meant* — `type: bug`
+# against `type: feature` is a claim no path can make, and both are left to a
+# person. The comment at the top of the configuration says which families are
+# derived and which are not.
+#
+# The event is `pull_request_target` and not `pull_request`, and that is the one
+# line here worth explaining. A pull request opened from a fork runs
+# `pull_request` with a token that can read and not write, so the action could
+# see the diff and could not label anything. `pull_request_target` runs in the
+# context of the base branch instead, and its token can write. What makes that
+# safe is what this workflow does not do: it never checks the pull request out
+# and never runs a line of it — the action reads the diff through the API and
+# writes a label back. The two files that decide what it does are this one and
+# the configuration beside it, both from the base branch, both reviewed like
+# anything else. Nothing else in this workflow may change that: a step that
+# checked the pull request out, or ran one of its scripts, would hand a fork
+# the write token of the base.
+#
+# This is not one of the checks the ruleset asks for, so a run that does not
+# happen cannot leave a pull request waiting for a status that is not coming.
+# It is a convenience and not a gate: it holds no merge up.
+
+on:
+  pull_request_target:
+    # Labelled when it opens, and again on every push that changes what it
+    # touches. Nothing else: a rebased pull request keeps its labels, and a
+    # retitled one is not re-labelled.
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+# A push supersedes the run it interrupts. The group is the pull request and
+# not `github.ref`, because `pull_request_target` runs with the ref of the
+# *base* branch: every pull request would otherwise share one group with every
+# other, and cancel each other's labelling.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  label:
+    name: Label by the paths changed
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The label is written back through the API, which is the whole of what
+      # this job does.
+      pull-requests: write
+      issues: write
+    steps:
+      # `sync-labels` is left at its default `false`: the action adds a label
+      # whose paths are touched and leaves every other one where it is. With it
+      # on, a push that stopped touching `docs/` would take
+      # `type: documentation` back off, and a label put on by hand — a `type:`,
+      # which is exactly the family a path cannot decide — would not outlive the
+      # first push that did not match it.
+      - uses: actions/labeler@v7
