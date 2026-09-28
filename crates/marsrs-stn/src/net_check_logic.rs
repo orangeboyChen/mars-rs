@@ -144,7 +144,9 @@ impl Default for NetTaskStatusItem {
     }
 }
 
-/// `NetCheckLogic`.
+/// Decides when a run of failed tasks is a network worth diagnosing: one
+/// window of the last thirty-two tasks per link, and a wait that grows
+/// between the checks it starts.
 pub struct NetCheckLogic {
     longlink_taskstatus_item: NetTaskStatusItem,
     shortlink_taskstatus_item: NetTaskStatusItem,
@@ -245,7 +247,7 @@ impl NetCheckLogic {
     }
 
     /// `sdt::SdtManager::CancelActiveCheck()` — what the C++'s destructor
-    /// calls, and what a host that owns an [`NetCheckLogic`] calls when it
+    /// calls, and what a host that owns a [`NetCheckLogic`] calls when it
     /// lets it go.
     pub fn set_cancel_active_check(&mut self, cancel: impl FnMut() + Send + 'static) {
         self.cancel_active_check = Some(Box::new(cancel));
