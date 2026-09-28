@@ -176,10 +176,16 @@ publishing {
 // writes it after `publishing { }` has run.
 afterEvaluate {
     publishing.publications.withType<MavenPublication>().configureEach {
-        artifactId = if (name == "kotlinMultiplatform") {
-            publishedArtifact
-        } else {
-            "$publishedArtifact-${name.lowercase()}"
+        // The three names `marsrs-xlog` writes, for the reason it writes
+        // them. The Android one is `-android` and not `-androidrelease`:
+        // the publication AGP registers is named `androidRelease`, after
+        // the build variant, and this module publishes one —
+        // `publishLibraryVariants("release")` — so which variant it is is
+        // nothing a consumer can pick, and what is left reads as a typo.
+        artifactId = when (name) {
+            "kotlinMultiplatform" -> publishedArtifact
+            "androidRelease" -> "$publishedArtifact-android"
+            else -> "$publishedArtifact-${name.lowercase()}"
         }
         groupId = publishedGroup
         version = publishedVersion

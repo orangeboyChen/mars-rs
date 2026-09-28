@@ -189,10 +189,18 @@ afterEvaluate {
         // is not Kotlin's to name: AGP writes the artifactId of the AAR itself,
         // and it does that *after* the `publishing` block has run — so a rename
         // of it there is overwritten by `marsrs-xlog-android`.
-        artifactId = if (name == "kotlinMultiplatform") {
-            publishedArtifact
-        } else {
-            "$publishedArtifact-${name.lowercase()}"
+        //
+        // `-android` and not `-androidrelease`, which is what
+        // `name.lowercase()` makes of the publication AGP registers: it is
+        // named `androidRelease`, after the build variant, and this module
+        // publishes one — `publishLibraryVariants("release")` — so which
+        // variant it is is nothing a consumer can pick. The suffix is what
+        // a reader meets twice: in the listing of GitHub Packages, and in
+        // the tree of `marsrs-kmp-maven.zip`.
+        artifactId = when (name) {
+            "kotlinMultiplatform" -> publishedArtifact
+            "androidRelease" -> "$publishedArtifact-android"
+            else -> "$publishedArtifact-${name.lowercase()}"
         }
         groupId = publishedGroup
         version = publishedVersion
