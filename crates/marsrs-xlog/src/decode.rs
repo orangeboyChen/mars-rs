@@ -61,7 +61,7 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
     let mut offset = 0;
     let mut blocks = 0;
 
-    while offset + HEADER_LEN + TAILER_LEN <= data.len() {
+    while data.len() - offset >= HEADER_LEN + TAILER_LEN {
         let magic_start = data[offset];
         if !magic::magic_start_is_valid(magic_start) {
             return Err(format!("bad magic 0x{magic_start:02x} at {offset}"));
@@ -69,10 +69,14 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
         let len = u32::from_le_bytes(data[offset + 5..offset + 9].try_into().expect("slice of 4"))
             as usize;
         let body_start = offset + HEADER_LEN;
-        let body_end = body_start + len;
-        if body_end + TAILER_LEN > data.len() {
+        // The length is read out of the file, so it is compared against what is
+        // left of the input and never added to an offset: a record declaring
+        // `u32::MAX` wraps that sum on a 32-bit target, which would panic on the
+        // slices below instead of being reported as a truncated record.
+        if len > data.len() - body_start - TAILER_LEN {
             return Err(format!("record at {offset} is truncated"));
         }
+        let body_end = body_start + len;
         if data[body_end] != magic::END {
             return Err(format!("bad tailer 0x{:02x} at {body_end}", data[body_end]));
         }

@@ -142,6 +142,35 @@ fn an_encrypted_file_is_not_read_without_the_private_key() {
 }
 
 #[test]
+fn a_record_that_declares_more_than_the_file_holds_is_reported() {
+    let dir = scratch("declared-length");
+    let input = write(&dir, "records.txt", RECORDS);
+    let file = dir.join("a.xlog");
+
+    let (ok, _, err) = run(&[
+        "encode",
+        &input.display().to_string(),
+        "-o",
+        &file.display().to_string(),
+    ]);
+    assert!(ok, "encode failed: {err}");
+
+    // The length field of the header says `u32::MAX`: a reader that adds it to
+    // the offset wraps on a 32-bit target and panics on the slice, so what is
+    // checked is the length against what is left of the input.
+    let mut bytes = std::fs::read(&file).expect("read the .xlog");
+    bytes[5..9].copy_from_slice(&u32::MAX.to_le_bytes());
+    let broken = write(&dir, "broken.xlog", &bytes);
+
+    let (ok, _, err) = run(&["decode", &broken.display().to_string()]);
+    assert!(!ok, "a record that is not in the file was decoded");
+    assert!(
+        err.contains("truncated"),
+        "the error does not say why: {err}"
+    );
+}
+
+#[test]
 fn a_public_key_that_is_not_one_is_refused_before_anything_is_written() {
     let dir = scratch("bad-key");
     let input = write(&dir, "records.txt", RECORDS);
@@ -195,6 +224,110 @@ fn standard_input_and_output_are_the_defaults() {
     let decoded = child.wait_with_output().expect("the log text");
     assert!(decoded.status.success(), "decode failed");
     assert_eq!(decoded.stdout, RECORDS, "the records did not come back");
+}
+
+#[test]
+fn an_uncompressed_async_record_is_refused_and_a_sync_one_is_not() {
+    let dir = scratch("uncompressed");
+    let input = write(&dir, "records.txt", RECORDS);
+    let file = dir.join("a.xlog");
+
+    // An async body is framed as zlib or zstd whatever `--compress` says, so
+    // `--compress=0` would write a file that decodes to nothing at all.
+    let (ok, _, err) = run(&[
+        "encode",
+        "--compress=0",
+        &input.display().to_string(),
+        "-o",
+        &file.display().to_string(),
+    ]);
+    assert!(!ok, "a file that decodes to nothing was written");
+    assert!(
+        err.contains("--sync=1"),
+        "the error does not say what to do instead: {err}"
+    );
+    assert!(!file.exists(), "the .xlog was written anyway");
+
+    // `--sync=1` is the mode that stores a record verbatim, which is what
+    // `--compress=0` asks for.
+    let (ok, _, err) = run(&[
+        "encode",
+        "--compress=0",
+        "--sync=1",
+        &input.display().to_string(),
+        "-o",
+        &file.display().to_string(),
+    ]);
+    assert!(ok, "encode failed: {err}");
+    let (ok, out, err) = run(&["decode", &file.display().to_string()]);
+    assert!(ok, "decode failed: {err}");
+    assert_eq!(out, RECORDS, "the records did not come back");
+}
+
+/// `count` records of sixteen hex characters, from a xorshift: input no
+/// compressor shrinks by much, so a region really does fill up.
+fn random_records(count: usize) -> Vec<u8> {
+    let mut state = 0x2545_f491_4f6c_dd1du64;
+    let mut text = String::new();
+    for _ in 0..count {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        text.push_str(&format!("{state:016x}"));
+        text.push('\n');
+    }
+    text.into_bytes()
+}
+
+/// One record out of `count` of them — the newlines taken out and one put back
+/// at the end.
+fn one_random_record(count: usize) -> Vec<u8> {
+    let mut text = String::from_utf8(random_records(count)).expect("the records are hex");
+    text.retain(|char| char != '\n');
+    text.push('\n');
+    text.into_bytes()
+}
+
+#[test]
+fn a_region_smaller_than_the_records_round_trips_them_anyway() {
+    let dir = scratch("small-region");
+    let records = random_records(400);
+    let input = write(&dir, "records.txt", &records);
+    let file = dir.join("a.xlog");
+
+    // A region that holds a handful of records and not the whole input: the
+    // file is one block per flush, and every record is in one of them.
+    for region in ["256", "4096"] {
+        let (ok, _, err) = run(&[
+            "encode",
+            &format!("--region={region}"),
+            &input.display().to_string(),
+            "-o",
+            &file.display().to_string(),
+        ]);
+        assert!(ok, "encode with --region={region} failed: {err}");
+        let (ok, out, err) = run(&["decode", &file.display().to_string()]);
+        assert!(ok, "decode with --region={region} failed: {err}");
+        assert_eq!(
+            out, records,
+            "--region={region} dropped part of the records"
+        );
+    }
+
+    // And a record longer than the region asked for: the region is raised to
+    // what the largest record needs instead of the record being refused.
+    let one = write(&dir, "one.txt", &one_random_record(512));
+    let (ok, _, err) = run(&[
+        "encode",
+        "--region=64",
+        &one.display().to_string(),
+        "-o",
+        &file.display().to_string(),
+    ]);
+    assert!(ok, "encode of one long record failed: {err}");
+    let (ok, out, err) = run(&["decode", &file.display().to_string()]);
+    assert!(ok, "decode failed: {err}");
+    assert_eq!(out, std::fs::read(&one).expect("read the input"));
 }
 
 #[test]

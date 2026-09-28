@@ -18,6 +18,11 @@
 //!   and not a silent skip. This is upstream's `decode_mars_log_file.py` over
 //!   the same bytes.
 //!
+//! An async record is compressed whichever `--compress` says: it is framed as
+//! zlib or zstd, there is no framing for one that is not, and every decoder
+//! inflates it. So `--compress=0` is asked for with `--sync=1` — the mode that
+//! stores a record verbatim — and is refused without it.
+//!
 //! `INPUT` is a path or `-` for standard input (`--in=` and `--records=` say
 //! the same thing), and `--out` is a path or `-` for standard output; it is
 //! standard output when it is left out, so `xlog decode a.xlog | less` works.
@@ -32,6 +37,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::process::ExitCode;
 
+use marsrs_crypt::TAILER_LEN;
 use marsrs_xlog::{bytes::AutoBuffer, decode_records, CompressMode, LogBuffer};
 
 /// `kBufferBlockLength` in `mars/xlog/src/appender.cc` (150 KiB), the size of
@@ -39,10 +45,17 @@ use marsrs_xlog::{bytes::AutoBuffer, decode_records, CompressMode, LogBuffer};
 const DEFAULT_REGION: usize = 150 * 1024;
 /// `ZSTD_c_compressionLevel` default of `XlogConfig` in the C++ appender.
 const DEFAULT_LEVEL: i32 = 6;
-/// Room for a header, a tailer and a compressor that expanded, on top of the
-/// largest record of the input, when a region of the default size is too small
-/// for it.
-const REGION_SLACK: usize = 4096;
+/// The bytes one record needs of the region: its own length, the tailer byte,
+/// and the most a compressor adds to an input it cannot compress — zstd's
+/// `ZSTD_COMPRESSBOUND` is `len + len / 128 + 64`, and that also covers zlib's
+/// stored blocks, five bytes per 64 KiB.
+///
+/// [`LogBuffer::write`] writes into the room there is and drops the rest, so
+/// the CLI has to know this before it writes and not after: a record that
+/// turned out not to fit would be truncated in silence.
+fn room_for(len: usize) -> usize {
+    len + len / 128 + TAILER_LEN + 64
+}
 
 const USAGE: &str = "\
 xlog — write and read the .xlog files of mars/xlog
@@ -62,7 +75,10 @@ options:
                          file is encrypted, and is written in the clear without
                          it
   -m, --mode=zlib|zstd   encode: which compressor, zlib by default
-  -c, --compress=0|1     encode: compress the payload, 1 by default
+  -c, --compress=0|1     encode: compress the payload, 1 by default. An async
+                         record is always framed as zlib or zstd, so
+                         `--compress=0` goes with `--sync=1`, the mode that
+                         stores a record verbatim
   -s, --sync=0|1         encode: one record per block instead of one block per
                          file, 0 by default. A sync record is neither compressed
                          nor encrypted, which is what the C++ writes
@@ -315,9 +331,24 @@ fn value_of<'a>(
 /// was given — the write path of `XloggerAppender`, over a region in memory
 /// instead of the mmap'd cache file it keeps.
 fn encode(command: Command) -> Result<(), String> {
+    // An async record is framed as zlib or zstd whatever `--compress` says,
+    // because that is the only async framing there is: the C++ hardcodes
+    // `true` for `is_compress` where it builds its `Log*Buffer`, and a decoder
+    // — this one included — inflates a body whose magic says async. So
+    // `--compress=0` would write a file that decodes to nothing, and is
+    // refused: `--sync=1` is the mode that stores a record verbatim.
+    if !command.compress && !command.sync {
+        return Err(
+            "--compress=0 writes a record no reader can read back: an async body is \
+             always framed as zlib or zstd and is inflated on the way out. Use \
+             --sync=1, the mode whose records are stored verbatim"
+                .into(),
+        );
+    }
+
     let records = command.records()?;
     let largest = records.iter().map(Vec::len).max().unwrap_or_default();
-    let region_len = command.region.max(largest + REGION_SLACK);
+    let region_len = command.region.max(room_for(largest));
 
     let mut region = vec![0u8; region_len];
     let mut buffer = LogBuffer::new(
@@ -348,9 +379,20 @@ fn encode(command: Command) -> Result<(), String> {
         }
     } else {
         for (index, record) in records.iter().enumerate() {
-            // A region that filled up is flushed and the record written to the
-            // next one, the way the appender's own cache file is: one file holds
-            // a block per flush and not one per run.
+            // `LogBuffer::write` writes into the room there is and drops what
+            // does not fit, and it says `true` either way — so a record the
+            // region cannot hold whole would be truncated in silence. Flush
+            // first whenever the room left is not provably enough for the
+            // record, its tailer and the most a compressor that could not
+            // compress adds to it.
+            if region_len.saturating_sub(buffer.len()) < room_for(record.len()) {
+                let mut block = AutoBuffer::new();
+                buffer.flush(&mut region, &mut block);
+                bytes.extend_from_slice(block.as_slice());
+            }
+            // A region that filled up anyway is flushed and the record written
+            // to the next one, the way the appender's own cache file is: one
+            // file holds a block per flush and not one per run.
             if !buffer.write(&mut region, record) {
                 let mut block = AutoBuffer::new();
                 buffer.flush(&mut region, &mut block);
