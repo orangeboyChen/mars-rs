@@ -37,7 +37,8 @@ fn main() -> ExitCode {
     }
 }
 
-/// Parses `--key=value` into a map; anything else is a usage error.
+/// Parses `--key=value` into a map; an argument that is not one is warned
+/// about and dropped, so no command line is refused for it.
 fn parse_opts(args: impl Iterator<Item = String>) -> Opts {
     let mut opts = Opts::new();
     for arg in args {
