@@ -8,6 +8,11 @@
 | 它连到哪里 | `set_longlink_svr_addr` | `setLongLinkServerAddress` | `setLonglinkSvrAddr` | `mars_stn_set_longlink_svr_addr` |
 | 短连接去哪里 | `set_shortlink_svr_addr` | `setShortLinkServerAddress` | `setShortlinkSvrAddr` | `mars_stn_set_shortlink_svr_addr` |
 | 强制连一次 | `make_sure_long_link_connected` | `makeSureLongLinkConnected` | `makesureLongLinkConnected` | `mars_stn_makesure_longlink_connected` |
+| 强制连一次你命名的那条 | `make_sure_long_link_connected` | `makeSureLongLinkConnected(name:)` | `makesureLongLinkConnectedExt` | `mars_stn_makesure_longlink_connected_ext` |
+| 它连上了吗 | `is_default_long_link_connected` | `isLongLinkConnected` | `longLinkIsConnected` | `mars_stn_longlink_is_connected` |
+| 你命名的那条连上了吗 | `is_long_link_connected` | `isLongLinkConnected(name:)` | `longLinkIsConnectedExt` | `mars_stn_longlink_is_connected_ext` |
+| 不再走长连接 | `disable_long_link` | `disableLongLink` | `disableLongLink` | `mars_stn_disable_longlink` |
+| noop 的任务 id | `Task::NOOP_TASK_ID` | `noopTaskID` | `noopTaskID` | `mars_stn_noop_task_id` |
 | 保活 | `keep_signalling` / `stop_signalling` | `keepSignalling` / `stopSignalling` | `keepSignalling` / `stopSignalling` | `mars_stn_keep_signalling` / `mars_stn_stop_signalling` |
 | 现在就发一个 noop | — | `triggerNooping` | `trigNooping` | `mars_stn_trig_nooping` |
 | 丢掉重来 | `reset` / `reset_with_encoder` | `reset` / `resetAndInitEncoderVersion` | `reset` / `resetAndInitEncoderVersion` | `mars_stn_reset` / `mars_stn_reset_and_init_encoder_version` |
@@ -25,6 +30,9 @@
 | 其余每个平台 | `reset` —— 连的地方变了的话，再加上上面那两个地址 |
 
 短连接不需要告诉：一个任务会走第一条已经起来的链路，`Task::new` 两条都要。
+
+“连上了”是一个状态，不是“没断开”：还在连的那一条回答 `false`。关掉也是单向的
+—— `disable_long_link` 把长连接彻底放下，只有 `reset` 会造出一个重新用它的 core。
 
 ## 接着看
 
