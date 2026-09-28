@@ -30,6 +30,34 @@ Flutter 插件和 React Native 模块今天就只有日志：两个都不认识�
 TypeScript 认识之前也不会认识 —— 见 [Flutter](/zh/platforms/flutter#里面没有什么)和
 [React Native](/zh/platforms/react-native#里面没有什么)。
 
+::: warning socket 是你自己的，这个端口一个都不开
+这个端口里的一条链路是连接的**模型**，不是连接本身：`ShortLink` 和 `LongLink` 建起来时
+没有 `SocketOperator` —— 也就是 C++ 里 `socketOperator_` 的那个 trait —— 而没有它的链路，
+对一个任务开头的那次连接回答 `SocketFd::INVALID`，于是任务以一次 socket 错误
+（`ErrCmdType::Socket`）结束，而不是真的发出去。这个端口里没有任何一处实现那个 trait：
+树里每个 `impl SocketOperator` 都是测试用的，C、JNI、Swift 和 Kotlin 的绑定也都不装，所以
+除 Rust 之外，今天还没有放 socket 的地方。
+
+在 Rust 里接线是你自己的事，通过 C++ 里 `net_channel_factory.cc` 那两个钩子：
+
+```rust
+use marsrs::stn::{ShortLink, StnLogic};
+
+let mut stn = StnLogic::new();
+stn.set_callback(MyApp);
+stn.create();
+let core = stn.net_core().expect("create() has been through");
+core.factory().set_create_shortlink(|task, use_proxy| {
+    let mut link = ShortLink::new(task, use_proxy);
+    link.set_socket_operator(MySockets); // 你自己的 connect / send / recv / close
+    link
+});
+```
+
+socket **周围**的一切都在，而且测过：队列、链路的选择、连接前的 DNS、重试、超时，以及最后
+的 profile 和报告。
+:::
+
 ## 三件事，按这个顺序
 
 **1. 装上应用。** 一个任务跑着的时候，STN 会问应用十八个问题 —— *这个用户登录了吗？*，

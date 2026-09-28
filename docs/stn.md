@@ -33,6 +33,38 @@ today: neither names a task, and neither will until the Dart and the TypeScript
 below them do — see [Flutter](/platforms/flutter#what-is-not-in-it) and
 [React Native](/platforms/react-native#what-is-not-in-it).
 
+::: warning The socket is yours, and the port opens none
+A link in this port is a *model* of a connection and not one: `ShortLink` and
+`LongLink` are made with no `SocketOperator` — the trait the C++'s
+`socketOperator_` is — and a link with none answers `SocketFd::INVALID` to the
+connect a task starts with, which is a task that ends in a socket error
+(`ErrCmdType::Socket`) instead of going out. Nothing in the port implements the
+trait: every `impl SocketOperator` in the tree is one a test uses, and no C,
+JNI, Swift or Kotlin binding installs one, so outside Rust there is nowhere to
+put a socket yet.
+
+In Rust the wiring is yours, through the two hooks `net_channel_factory.cc` is
+in the C++:
+
+```rust
+use marsrs::stn::{ShortLink, StnLogic};
+
+let mut stn = StnLogic::new();
+stn.set_callback(MyApp);
+stn.create();
+let core = stn.net_core().expect("create() has been through");
+core.factory().set_create_shortlink(|task, use_proxy| {
+    let mut link = ShortLink::new(task, use_proxy);
+    link.set_socket_operator(MySockets); // your connect / send / recv / close
+    link
+});
+```
+
+Everything *around* the socket is there and tested: the queue, the choice of
+link, the DNS ahead of the connect, the retry, the timeout, and the profile and
+the report at the end.
+:::
+
 ## Three things, in this order
 
 **1. Install the app.** STN asks the app eighteen questions while a task runs —
