@@ -74,6 +74,10 @@ pub struct SdtCore {
     /// `checking_`.
     checking: bool,
     /// `netcheck_cgi_` — the URL the HTTP check goes to.
+    ///
+    /// The C++'s is a file-static `sg_netcheck_cgi` (`httpchecker.cc:31`) that
+    /// every checker of the process reads, whatever core it belongs to; a core
+    /// here keeps its own, which is what no process of its own means.
     netcheck_cgi: String,
 }
 

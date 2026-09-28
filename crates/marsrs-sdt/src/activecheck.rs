@@ -445,6 +445,11 @@ impl Check {
     ///
     /// `false` when the timeout is used up. A run that was started without one
     /// never is.
+    ///
+    /// The subtraction saturates where the C++'s wraps — `total_timeout` is a
+    /// `uint32_t` — so a probe that cost more than the whole budget ends the run
+    /// here, and gives the C++ one of four billion milliseconds to keep
+    /// probing with.
     fn spend(&mut self, cost: u64) -> bool {
         if self.remaining == UNUSE_TIMEOUT {
             return true;

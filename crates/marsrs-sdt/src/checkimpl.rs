@@ -73,7 +73,10 @@ pub enum Query {
 
 /// `struct PingStatus` — what `PingQuery::GetPingStatus` hands back.
 ///
-/// The C++'s carries the ip as well, which no checker reads.
+/// The C++'s carries the raw `res`, `minrtt`, `maxrtt` and the ip as well
+/// (`pingquery.h:44`); nothing reads them but the two log lines of
+/// `GetPingStatus` (`pingquery.cc:177`), so what is here is the two the
+/// diagnosis prints (`pingchecker.cc:96`).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct PingStatus {
     /// `loss_rate` — `1.0` is every ping of the run lost, which the C++ calls
