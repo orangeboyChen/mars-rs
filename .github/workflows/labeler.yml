@@ -19,9 +19,11 @@ name: Label
 # request opened from a branch of this repository — which is every pull
 # request it has had — gets exactly that from `pull_request`.
 #
-# What it costs is the fork, and the job below says so out loud rather than
-# failing on one: a pull request whose head is another repository is skipped,
-# because the token it would run with could not write the label in any case.
+# What it costs is a pull request whose token cannot write, and the job below
+# says so out loud rather than failing on one: one opened from a fork, and one
+# opened by Dependabot, are skipped — neither could write the label in any
+# case. Dependabot's own head is a branch here, but GitHub runs what it opens
+# as if it came from a fork, and the token is read-only for the same reason.
 #
 # What it does not cost is what the old event was chosen for. The workflow
 # never checks the pull request out and never runs a line of it — the action
@@ -58,10 +60,15 @@ jobs:
   label:
     name: Label by the paths changed
     runs-on: ubuntu-latest
-    # A fork's pull request is left unlabelled rather than failed on: the token
-    # it runs with can only read, so a job that asked for a label would be a
-    # red run that could never have been green.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # A pull request run with a token that cannot write is left unlabelled
+    # rather than failed on: a job that asked for a label it had no right to
+    # write would be a red run that could never have been green. Two kinds get
+    # such a token — one whose head is another repository, and one opened by
+    # Dependabot, which GitHub runs as if it came from a fork even though its
+    # head is a branch here.
+    if: >
+      github.actor != 'dependabot[bot]'
+      && github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: read
       # The label is written back through the API, which is the whole of what
