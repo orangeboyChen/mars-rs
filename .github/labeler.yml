@@ -50,6 +50,7 @@
     - kmp/marsrs/src/**/xlog/**
     - flutter/marsrs-xlog/**
     - react-native/marsrs-xlog/**
+    - platforms/harmonyos/marsrs-xlog/**
 
 # The STN half. `Sources/MarsRSNet/` is one module for both halves of the net,
 # so its files are named apart: `Stn*.swift` is the task model and `Sdt*.swift`
@@ -129,13 +130,19 @@
     - crates/marsrs-jni/**
     - scripts/build_android.sh
 
-# HarmonyOS, which is one script: the three `libmars_ffi.so` it builds come out
-# of `marsrs-ffi` unmodified, so there is no source tree of its own to name
-# here. The workflow that runs the script is `meta: ci`, like every other one.
+# HarmonyOS: the module an app installs — the ArkTS, the NAPI seam under it and
+# the three `libmarsrs_xlog.so` it is packed with — and the two scripts that
+# build them. `scripts/build_harmony.sh` is the other HarmonyOS asset, the three
+# `libmars_ffi.so` with no package around them, and it is labelled with these
+# because it is the same platform: an app takes one or the other, and the
+# difference is whether it writes NAPI of its own.
 'platform: harmonyos':
 - changed-files:
   - any-glob-to-any-file:
+    - platforms/harmonyos/**
     - scripts/build_harmony.sh
+    - scripts/build_harmony_napi.sh
+    - scripts/package_harmony.sh
 
 'platform: flutter':
 - changed-files:

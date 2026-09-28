@@ -91,6 +91,8 @@ jobs:
             'crates/**' '*.rs' '**/*.rs' 'Cargo.toml' '**/Cargo.toml' 'Cargo.lock' \
             '.cargo/**' 'clippy.toml' 'rustfmt.toml' '.gitattributes' \
             '.github/scripts/**' 'scripts/build_harmony.sh' \
+            'scripts/build_harmony_napi.sh' 'scripts/package_harmony.sh' \
+            'platforms/harmonyos/**' \
             '.github/workflows/rust.yml' 'codecov.yml'
 
   lint:
@@ -338,6 +340,19 @@ jobs:
       - run: scripts/build_harmony.sh dist/harmony
       - name: The three libraries a HarmonyOS module carries
         run: ls -l dist/harmony/*/libmars_ffi.so
+      # The package's own natives: the same crate, with `napi_init.cpp` — the
+      # one C file in the port, and the one nothing else compiles — linked
+      # around it. A link that only ever ran at release time is a link nobody
+      # notices is broken, so it runs here, on the SDK this job has already
+      # downloaded and the Rust this job has already built.
+      - run: scripts/build_harmony_napi.sh dist/harmony-napi
+      - name: The three libraries the HAR carries
+        run: ls -l dist/harmony-napi/*/libmarsrs_xlog.so
+      # And the package itself: the HAR is a tree and a tar, so what this proves
+      # is the staging and the version stamp — which is the part a release would
+      # otherwise find out. `0.0.0` is not a release; the number is stamped at
+      # release time and nowhere else.
+      - run: scripts/package_harmony.sh 0.0.0 dist dist/harmony-napi
 
   apple:
     name: build (apple)

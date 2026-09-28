@@ -51,7 +51,7 @@ registry of their own:
 | Flutter | `marsrs_flutter_xlog` or `marsrs_flutter` | [Flutter](/platforms/flutter) |
 | React Native | `marsrs-react-native-xlog` or `marsrs-react-native` | [React Native](/platforms/react-native) |
 | anything with a C FFI | the `marsrs-<version>-<host>` archive | [The C ABI](/platforms/c-abi) |
-| HarmonyOS | the three `.so` of `marsrs-harmony-<version>.tar.gz` | [HarmonyOS](/platforms/harmonyos) |
+| HarmonyOS | `marsrs-harmonyos-xlog`, or the three `.so` of `marsrs-harmony-<version>.tar.gz` | [HarmonyOS](/platforms/harmonyos) |
 
 `xlog` is the logger alone; `marsrs` adds the STN task pipeline and the SDT
 network diagnosis — the same pair the crates on crates.io are. An app that only
@@ -60,7 +60,8 @@ logs takes the first, and the same split is the one every platform makes:
 `xlog-kmp` or `marsrs-kmp` for a shared Kotlin module.
 
 The Flutter plugin and the React Native module are on pub.dev and on npm:
-`flutter pub add` and `npm install` take the newest version there.
+`flutter pub add` and `npm install` take the newest version there. The HarmonyOS
+package is a HAR a release carries: ohpm is not being published to yet.
 
 ## The half that is not the logger
 

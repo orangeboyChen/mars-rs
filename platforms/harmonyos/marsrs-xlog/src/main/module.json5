@@ -1,0 +1,21 @@
+// The module declaration a HAR carries: what kind of module it is, and which
+// devices an app of it may be built for.
+//
+// `type: "har"` is the whole point — a static library the app compiles into
+// its own HAP, and not an HSP shared at runtime and not a feature. `name` is
+// the module's own and is not the ohpm name in `oh-package.json5`: it is an
+// identifier, which is why it is underscored.
+{
+  "module": {
+    "name": "marsrs_xlog",
+    "type": "har",
+    // Everything an app of a logger could run on: a phone, a tablet, a 2-in-1
+    // and a wearable — and not `car`, because nothing here needs a display.
+    "deviceTypes": [
+      "default",
+      "tablet",
+      "2in1",
+      "wearable"
+    ]
+  }
+}
