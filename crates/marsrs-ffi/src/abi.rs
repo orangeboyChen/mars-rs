@@ -360,8 +360,13 @@ pub extern "C" fn mars_xlog_set_console_log(open: c_int) {
 /// keeps the same fields one by one. The record is handed over unformatted,
 /// so what a console record looks like on the platform is the callback's
 /// decision.
-/// A callback that panics has its panic swallowed by the sink's `guard`, and
-/// one that is handed a `NULL` string sees an empty one instead.
+///
+/// A callback must not unwind. `extern "C"` is not an unwind boundary, so a
+/// Rust one that panics ends the process at the shim of its own definition
+/// before there is anything to catch on this side, and a C++ one that throws
+/// is undefined behaviour for the same reason. What the port can promise is
+/// narrower: the record is already on its way to the log file, so what a
+/// callback that panicked loses is the console copy of that one record.
 pub type MarsXLogConsoleFun =
     unsafe extern "C" fn(c_int, *const c_char, *const c_char, *const c_char, c_int, *const c_char);
 
