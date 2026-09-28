@@ -256,6 +256,13 @@ export default defineConfig({
               { text: 'Configuration', link: '/configuration' },
               { text: 'Log files', link: '/log-files' },
               { text: 'The CLI', link: '/cli' },
+              // Two pages, because the app that arrives here is one of two:
+              // the one that took the logger and nothing else, and the one
+              // that took all three.
+              {
+                text: 'Migrating from mars-xlog',
+                link: '/migrating-from-mars-xlog',
+              },
               { text: 'Migrating from mars', link: '/migrating-from-mars' },
             ],
           },
@@ -330,6 +337,7 @@ export default defineConfig({
               { text: '配置项', link: '/zh/configuration' },
               { text: '日志文件', link: '/zh/log-files' },
               { text: '命令行', link: '/zh/cli' },
+              { text: '从 mars-xlog 迁移', link: '/zh/migrating-from-mars-xlog' },
               { text: '从 mars 迁移', link: '/zh/migrating-from-mars' },
             ],
           },
