@@ -134,3 +134,36 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 | 当前文件在哪 | `appender_get_current_log_path` | `Xlog.currentLogPath` | — | — | — | — | `mars_xlog_current_log_path` | — |
 
 大小和时间的 `0` 都表示“不限制”：文件永不切分、永不删除 —— C++ 那边自己保留十天。
+
+## 控制台那一副本去哪
+
+`appender_set_console_log(true)` —— 在那些这么拼的平台上写作
+`xlog.consoleLogEnabled = true` —— 让每条记录除了进文件，还抄一份到控制台。
+控制台指的是哪个，是平台的事：Apple 和 Android 上是系统日志，Rust 和 C 上是标准错误。
+
+想让它去别处的 App 可以给 logger 一个自己的出口，原本要进控制台的那一份就改去那里：
+
+::: code-group
+
+```rust [Rust]
+use marsrs::xlog::set_console_fun;
+
+set_console_fun(Some(|info, log| println!("{:?}: {log}", info.level)));
+set_console_fun(None);   // 又回到控制台
+```
+
+```c [C]
+static void to_my_console(int level, const char* tag, const char* filename,
+                          const char* func_name, int line, const char* log) {
+    my_console_write(level, log);
+}
+
+mars_xlog_set_console_fun(to_my_console);
+mars_xlog_set_console_fun(NULL);   /* 又回到控制台 */
+```
+
+:::
+
+出口只有一个，挂在 appender 上而不是写在配置里：再设一次就是换掉。交给它的是没排过版
+的那条记录 —— 级别、tag、调用点在哪、还有消息本身 —— 这正是要它的原因：在 Apple 上
+`os_log` 就在那里，而只有 App 自己的代码调得到它。

@@ -148,3 +148,39 @@ every one of them takes effect from the next record:
 
 `0` is "no limit" for both sizes and ages: a file is never split and never
 dropped — the C++ keeps its own ten days.
+
+## Where the console copy goes
+
+`appender_set_console_log(true)` — `xlog.consoleLogEnabled = true` on the
+platforms that spell it that way — mirrors every record to the console as well
+as to the file. Which console that is, is the platform's: the system log on
+Apple and on Android, standard error on Rust and C.
+
+An app that wants it somewhere else hands the logger a sink of its own, and
+what was going to the console goes to that instead:
+
+::: code-group
+
+```rust [Rust]
+use marsrs::xlog::set_console_fun;
+
+set_console_fun(Some(|info, log| println!("{:?}: {log}", info.level)));
+set_console_fun(None);   // the console has it again
+```
+
+```c [C]
+static void to_my_console(int level, const char* tag, const char* filename,
+                          const char* func_name, int line, const char* log) {
+    my_console_write(level, log);
+}
+
+mars_xlog_set_console_fun(to_my_console);
+mars_xlog_set_console_fun(NULL);   /* the console has it again */
+```
+
+:::
+
+There is one sink and it is the appender's, not a config: setting it again
+replaces it. What it is handed is the record unformatted — the level, the tag,
+where the call site is, and the message — which is the whole point: on Apple
+that is where `os_log` goes, and only the app's own code can call it.
