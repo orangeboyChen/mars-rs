@@ -49,8 +49,8 @@ features:
 
 `xlog` 只有日志；`marsrs` 再加上 STN 任务链路和 SDT 网络诊断 —— 和 crates.io 上那两个 crate 是同一对。只打日志的 App 用前者。
 
-Flutter 插件和 React Native 模块发在 pub.dev 和 npm 上，不在 release 的压缩包
-里；这两个 registry 的发布流程还没开。
+Flutter 插件和 React Native 模块在 pub.dev 和 npm 上：`flutter pub add`、
+`npm install` 装的是上面最新的版本。
 
 ## 其余几页
 

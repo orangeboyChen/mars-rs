@@ -19,10 +19,8 @@ npm install marsrs-react-native-xlog        # or marsrs-react-native, for the wh
 cd ios && pod install
 ```
 
-The package is published to npm — publishing is not switched on yet, and until it
-is, `scripts/package_react_native.sh <version> <asset-dir>` writes the same module
-as `marsrs-react-native-xlog-<version>.tgz`: `npm pack`, the version stamped into
-`package.json`, the apple job's `marsrs-xlog.xcframework` copied in. `npm install
+The package is on npm: `npm install` takes the newest version there. A release
+also carries the module, as `marsrs-react-native-xlog-<version>.tgz`. `npm install
 ./marsrs-react-native-xlog-<version>.tgz` installs that one.
 
 What the package carries that a checkout does not is that framework: CocoaPods

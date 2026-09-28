@@ -31,8 +31,8 @@ SDT have no pages of their own yet, and not every package carries them either �
 | iOS 12+, watchOS 10+, Swift or Objective-C | the `MarsRSXlog` product or pod | SwiftPM or CocoaPods, from this repository |
 | Android, Kotlin or Java | `xlog` / `marsrs` | [JitPack](https://jitpack.io) |
 | Kotlin Multiplatform | `xlog-kmp` / `marsrs-kmp` | GitHub Packages, or the release's `marsrs-kmp-maven.zip` |
-| Flutter | `marsrs_flutter_xlog` / `marsrs_flutter` | the release tarball — pub.dev is not switched on yet |
-| React Native 0.74+ | `marsrs-react-native-xlog` / `marsrs-react-native` | the release tarball — npm is not switched on yet |
+| Flutter | `marsrs_flutter_xlog` / `marsrs_flutter` | [pub.dev](https://pub.dev), or the release's `marsrs-flutter-xlog-<version>.tar.gz` |
+| React Native 0.74+ | `marsrs-react-native-xlog` / `marsrs-react-native` | [npm](https://www.npmjs.com), or the release's `marsrs-react-native-xlog-<version>.tgz` |
 | anything with a C FFI | the `marsrs-<version>-<host>` archive | the release: Linux, macOS and Windows hosts |
 | HarmonyOS | the three `.so` of `marsrs-harmony-<version>.tar.gz` | the release |
 

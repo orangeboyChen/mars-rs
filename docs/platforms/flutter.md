@@ -12,11 +12,9 @@ the same native library, and an app with two of it does not build.
 flutter pub add marsrs_flutter_xlog        # or marsrs_flutter, for the whole port
 ```
 
-The plugin is published to pub.dev — publishing is not switched on yet, and until
-it is, `scripts/package_flutter.sh <version> <asset-dir>` writes the same plugin
-as `marsrs-flutter-xlog-<version>.tar.gz`: the version stamped into the pubspec
-and the podspec, and the apple job's `MarsRSXlog.xcframework` copied in. A `path:`
-dependency on the directory inside the tarball installs that one:
+The plugin is on pub.dev: `flutter pub add` takes the newest version there. A
+release also carries the plugin itself, as `marsrs-flutter-xlog-<version>.tar.gz`,
+and a `path:` dependency on the directory inside the tarball installs that one:
 
 ```yaml
 # pubspec.yaml
