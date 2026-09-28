@@ -2008,8 +2008,13 @@ mod tests {
 
     /// A link with one candidate on `1.1.1.1:80`, and the host's record of it.
     fn link() -> (LongLink, Seen) {
+        link_with_encoder(LongLinkEncoder::new())
+    }
+
+    /// The same, with the encoder the app asked for.
+    fn link_with_encoder(encoder: LongLinkEncoder) -> (LongLink, Seen) {
         let seen = Seen::default();
-        let mut link = LongLink::new(LonglinkConfig::new("long.example"));
+        let mut link = LongLink::with_encoder(LonglinkConfig::new("long.example"), encoder);
         link.set_longlink_items(|_| vec![item("1.1.1.1", 80, "long.example")]);
         link.set_local_ip_stack(|| LocalIpStack::IPv4);
         link.set_socket_operator(Host::new(seen.clone()));
@@ -2534,7 +2539,12 @@ mod tests {
 
     /// A link that is up: what every heartbeat test starts from.
     fn connected() -> LongLink {
-        let (mut link, _) = link();
+        connected_with(LongLinkEncoder::new())
+    }
+
+    /// The same, with the encoder the app asked for.
+    fn connected_with(encoder: LongLinkEncoder) -> LongLink {
+        let (mut link, _) = link_with_encoder(encoder);
         link.make_sure_connected();
         assert!(link.connect_at(1_000).is_ok());
         link
@@ -2753,6 +2763,78 @@ mod tests {
         written(&mut link);
         assert!(link.send_heartbeat_at(late, false, false));
         assert!(!link.heartbeat().unwrap().is_doze_style());
+    }
+
+    #[test]
+    fn an_encoder_with_an_interval_of_its_own_keeps_the_heartbeat_out_of_it() {
+        // the heartbeat interval is one value for the whole process
+        let _lock = crate::test_lock();
+        let mut encoder = LongLinkEncoder::new();
+        encoder.noop_interval = 60_000;
+        let mut link = connected_with(encoder);
+        link.set_smart_heartbeat(SmartHeartbeat::new());
+
+        // `__GetNextHeartbeatInterval` answers the interval itself, and the
+        // smart heartbeat is not asked (`longlink.cc:1175`)
+        assert_eq!(link.next_heartbeat_interval(false), 60_000);
+        assert_eq!(link.next_heartbeat_interval(true), 60_000);
+
+        // ... and neither `__NotifySmartHeartbeatHeartReq` nor
+        // `JudgeDozeStyle` is one a link with its own interval goes through
+        // (`longlink.cc:1192`), so nothing a heartbeat does is written down
+        assert!(link.send_heartbeat_at(1_000, true, false));
+        assert!(link.profile().noop_profiles.is_empty());
+        assert_eq!(link.heartbeat().unwrap().info().succ_heart_count, 0);
+
+        written(&mut link);
+        assert!(link.send_heartbeat_at(1_000 + 90_000, true, false));
+        assert!(!link.heartbeat().unwrap().is_doze_style());
+        assert_eq!(link.heartbeat().unwrap().info().succ_heart_count, 0);
+    }
+
+    #[test]
+    fn a_heartbeat_goes_out_with_the_cmdid_the_encoder_names() {
+        // the client version every package is stamped with is one value for
+        // the whole process
+        let _lock = crate::test_lock();
+        let mut encoder = LongLinkEncoder::new();
+        encoder.noop_cmdid = 77;
+        let mut link = connected_with(encoder);
+
+        assert!(link.send_heartbeat_at(2_000, false, false));
+        let queued = link.queued();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].task.cmdid, 77);
+        assert_eq!(queued[0].task.taskid, Task::NOOP_TASK_ID);
+        assert_eq!(queued[0].buffer, longlink_pack(77, Task::NOOP_TASK_ID, &[]));
+    }
+
+    #[test]
+    fn an_encoder_that_asks_for_it_has_the_pair_it_landed_on_verified() {
+        // the client version every package is stamped with is one value for
+        // the whole process
+        let _lock = crate::test_lock();
+        let mut encoder = LongLinkEncoder::new();
+        encoder.complexconnect_need_verify = true;
+        let (mut link, seen) = link_with_encoder(encoder);
+        *seen.answer.lock().unwrap() = longlink_pack(NOOP_CMDID, Task::NOOP_TASK_ID, &[]);
+        link.make_sure_connected();
+
+        assert!(link.connect_at(1_000).is_ok());
+        assert_eq!(
+            *seen.sent.lock().unwrap(),
+            vec![longlink_pack(NOOP_CMDID, Task::NOOP_TASK_ID, &[])],
+            "the noop the pair was asked to answer"
+        );
+
+        // ... and a pair that does not answer it fails the connect: what the
+        // C++ drops one candidate for and tries the next, and what the port
+        // has to answer as a failure, the host's connect having picked one
+        let (mut link, seen) = link_with_encoder(encoder);
+        link.make_sure_connected();
+        assert_eq!(link.connect_at(1_000), Err(ConnectFail::Verify));
+        assert_eq!(link.connect_status(), LongLinkStatus::ConnectFailed);
+        assert_eq!(seen.sent.lock().unwrap().len(), 1, "the noop went out");
     }
 
     #[test]
