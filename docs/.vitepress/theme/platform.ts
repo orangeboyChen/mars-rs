@@ -29,7 +29,10 @@
 // One line per platform, holding every name a group can call it by: an app on
 // Apple is named on these pages by how it takes the package — SwiftPM,
 // CocoaPods, or neither, which is the tab called Swift — and the three are one
-// platform to the reader. A group is handed the first of the names it carries.
+// platform to the reader. One of them is not the other two, though: the
+// dependency group carries SwiftPM and CocoaPods side by side, and a group is
+// handed the name the reader picked where it carries it, and one of the others
+// only where it does not.
 const PLATFORMS: string[][] = [
   ['Rust'],
   ['Swift', 'SwiftPM', 'CocoaPods'],
@@ -99,13 +102,19 @@ let picked: string | null = null
 // pick, and again on every page: the walk in ./index.ts is what says when a
 // page is there.
 export function applyPlatform(): void {
-  const names = picked ? platform(picked) : undefined
-  if (!names) return
+  const name = picked
+  const names = name ? platform(name) : undefined
+  if (!name || !names) return
 
   document.querySelectorAll('.vp-code-group').forEach((group) => {
-    const tab = Array.from(group.querySelectorAll('input')).find((input) =>
-      names.includes(nameOf(input) ?? ''),
-    )
+    const tabs = Array.from(group.querySelectorAll('input'))
+    // The name the reader picked first, and one of the others only where a
+    // group carries none of it: the dependency group carries SwiftPM and
+    // CocoaPods side by side, and a pick of CocoaPods is not a pick of the
+    // tab above it.
+    const tab =
+      tabs.find((input) => nameOf(input) === name) ??
+      tabs.find((input) => names.includes(nameOf(input) ?? ''))
     if (tab) select(tab)
   })
 }
