@@ -370,10 +370,6 @@ public final class Xlog: NSObject {
     /// What [mode] answers while this side is the only one that knows it.
     private var currentMode: AppenderMode
 
-    /// The buffer the path symbols write into; a path never fills it, and the C
-    /// ABI answers a length instead of a pointer when it would.
-    private static let pathBufferSize = 1_024
-
     /// The handle the C ABI answers for an appender it did not open.
     private static let noHandle: Int64 = 0
 
@@ -398,14 +394,5 @@ public final class Xlog: NSObject {
             return
         }
         body(handle)
-    }
-
-    private static func path(of body: (UnsafeMutablePointer<CChar>, UInt32) -> Int32) -> String? {
-        var buffer = [CChar](repeating: 0, count: pathBufferSize)
-        let written = body(&buffer, UInt32(buffer.count))
-        guard written > 0 else {
-            return nil
-        }
-        return String(cString: buffer)
     }
 }
