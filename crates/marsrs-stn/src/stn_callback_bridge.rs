@@ -76,7 +76,9 @@ pub trait App: Send {
     fn on_push(&mut self, _channel_id: &str, _cmdid: u32, _taskid: u32, _body: &[u8]) {}
 
     /// `Req2Buf` — what the app wants to send. [`Err`] is the C++'s `false`,
-    /// and the code in it is the one the task ends with.
+    /// and the code in it is the one the task ends with. `channel_select` is
+    /// the channel the task is going out on, which is the one the queue
+    /// picked for it and not the `channel_select` it was made with.
     fn req2buf(
         &mut self,
         _taskid: u32,
@@ -90,6 +92,7 @@ pub trait App: Send {
 
     /// `Buf2Resp` — how the app reads an answer: the code it ended with, and
     /// what STN is to do about it. [`TaskFailHandleType::Normal`] is "nothing".
+    /// `channel_select` is the channel the answer came back on.
     fn buf2resp(
         &mut self,
         _taskid: u32,

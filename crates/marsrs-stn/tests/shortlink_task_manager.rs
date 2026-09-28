@@ -109,8 +109,8 @@ impl App {
 
         let answer = Arc::new(Mutex::new((0, TaskFailHandleType::Normal)));
         let decoder = answer.clone();
-        manager.set_buf2resp(move |_task, _body| *decoder.lock().unwrap());
-        manager.set_req2buf(|task| Ok(task.cgi.clone().into_bytes()));
+        manager.set_buf2resp(move |_task, _body, _channel| *decoder.lock().unwrap());
+        manager.set_req2buf(|task, _channel| Ok(task.cgi.clone().into_bytes()));
         manager.set_make_sure_authed(|_host, _user_id| true);
         manager.set_anti_avalanche_check(|_task, _body| true);
         manager.set_net_info(|| NetworkKind::Wifi);
@@ -479,7 +479,7 @@ fn the_most_urgent_task_goes_out_first_and_a_send_only_one_does_not_go_at_all() 
 #[test]
 fn a_task_the_app_cannot_write_is_failed_at_once() {
     let mut app = App::new();
-    app.manager.set_req2buf(|_task| Err(-1_234));
+    app.manager.set_req2buf(|_task, _channel| Err(-1_234));
     app.start(7);
 
     assert!(!app.manager.has_task(7));

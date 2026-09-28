@@ -104,9 +104,9 @@ impl App {
             Some(RunId(u64::from(task.taskid)))
         });
         core.shortlink()
-            .set_req2buf(|task| Ok(task.cgi.clone().into_bytes()));
+            .set_req2buf(|task, _channel| Ok(task.cgi.clone().into_bytes()));
         core.longlink()
-            .set_req2buf(|task| Ok(task.cgi.clone().into_bytes()));
+            .set_req2buf(|task, _channel| Ok(task.cgi.clone().into_bytes()));
         core.longlink().set_make_sure_connected(|_name| true);
         core.longlink().set_channel_profile(|name| {
             let mut profile = ConnectProfile::new();
@@ -119,10 +119,10 @@ impl App {
         let answer = Arc::new(Mutex::new((0, TaskFailHandleType::Normal)));
         let decoder = answer.clone();
         core.shortlink()
-            .set_buf2resp(move |_task, _body| *decoder.lock().unwrap());
+            .set_buf2resp(move |_task, _body, _channel| *decoder.lock().unwrap());
         let decoder = answer.clone();
         core.longlink()
-            .set_buf2resp(move |_task, _body| *decoder.lock().unwrap());
+            .set_buf2resp(move |_task, _body, _channel| *decoder.lock().unwrap());
 
         let ended: Arc<Mutex<Ended>> = Arc::new(Mutex::new(Vec::new()));
         let recorder = ended.clone();

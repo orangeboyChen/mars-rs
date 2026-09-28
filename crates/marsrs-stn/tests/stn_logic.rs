@@ -34,6 +34,11 @@ const START: u64 = 100 * 1000;
 struct Said {
     encoded: Vec<(u32, String, u16)>,
     decoded: Vec<(u32, Vec<u8>)>,
+    /// The channel the app was told a task is going out on, which is the one
+    /// the queue picked for it and not the `channel_select` it was made with.
+    encoded_on: Vec<(u32, i32)>,
+    /// The channel the app was told an answer came back on.
+    decoded_on: Vec<(u32, i32)>,
     ended: Vec<(u32, ErrCmdType, i32, String)>,
     /// The connect every task that ended is reported with.
     profiles: Vec<Cgi>,
@@ -68,15 +73,14 @@ impl App for Rec {
         &mut self,
         taskid: u32,
         _user_id: &str,
-        _channel_select: i32,
+        channel_select: i32,
         host: &str,
         sequence: u16,
     ) -> Result<Vec<u8>, i32> {
-        self.said
-            .lock()
-            .unwrap()
-            .encoded
-            .push((taskid, host.to_string(), sequence));
+        let mut said = self.said.lock().unwrap();
+        said.encoded.push((taskid, host.to_string(), sequence));
+        said.encoded_on.push((taskid, channel_select));
+        drop(said);
         match self.body.lock().unwrap().clone() {
             Some(body) => Ok(body),
             None => Err(-300),
@@ -88,13 +92,12 @@ impl App for Rec {
         taskid: u32,
         _user_id: &str,
         body: &[u8],
-        _channel_select: i32,
+        channel_select: i32,
     ) -> (i32, TaskFailHandleType) {
-        self.said
-            .lock()
-            .unwrap()
-            .decoded
-            .push((taskid, body.to_vec()));
+        let mut said = self.said.lock().unwrap();
+        said.decoded.push((taskid, body.to_vec()));
+        said.decoded_on.push((taskid, channel_select));
+        drop(said);
         *self.answer.lock().unwrap()
     }
 
@@ -595,6 +598,34 @@ fn a_task_that_ended_is_reported_with_the_cgi_profile_of_the_connect_it_ran_on()
     );
     assert_eq!(host.said().profiles[0].rtt, 40);
     assert_eq!(host.said().profiles[0].nettype, "wifi");
+}
+
+#[test]
+fn the_app_is_told_the_channel_the_task_is_going_out_on() {
+    let mut host = Host::new();
+    host.write(Some(b"/cgi-bin/9"));
+
+    // no long link is up, so a task that may use either goes out on the short
+    // link: the app is told `kChannelShort`, which is what the C++ hands for a
+    // short link, and not the `kChannelBoth` the task was made with
+    let mut task = Task::new(9, 12);
+    task.cgi = "/cgi-bin/9".to_string();
+    task.channel_select = Task::CHANNEL_BOTH;
+    task.shortlink_host_list = vec![SHORT_HOST.to_string()];
+    task.user_id = "user".to_string();
+    assert!(host.logic.start_task_at(START, task));
+    assert_eq!(host.said().encoded_on, vec![(9, Task::CHANNEL_SHORT)]);
+
+    // and the long link hands its own: a task that may use anything, which is
+    // the `kChannelAll` the app made it with, is told `kChannelLong`
+    host.bring_up(MAIN, LongLinkStatus::Connected);
+    host.write(Some(b"/cgi-bin/8"));
+    host.start(8);
+    assert_eq!(host.said().encoded_on[1], (8, Task::CHANNEL_LONG));
+
+    // the answer comes back on the same channel the request went out on
+    assert_eq!(host.answered(8), Some(RespHandle::Ended));
+    assert_eq!(host.said().decoded_on, vec![(8, Task::CHANNEL_LONG)]);
 }
 
 #[test]
