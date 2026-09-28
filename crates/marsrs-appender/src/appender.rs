@@ -126,6 +126,18 @@ thread_local! {
     static RECURSION_COUNT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
+// `thread_local std::string recursion_str` — the dump of a write that was
+// logged from inside the logger, which the next write that is not recursive
+// hands to `WriteTips2File`.
+//
+// The C++ keeps it because the console is not a copy: a process started from
+// an icon has no terminal behind it, and the log file is the only trace of a
+// logging loop an app that uploads its logs ever has.
+thread_local! {
+    static RECURSION_DUMP: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 // `char temp[16 * 1024]` of `__WriteSync` / `__WriteAsync`, one per thread.
 //
 // The C++ writes it as `char temp[16 * 1024] = {0}` — 16 KiB of stores on every
@@ -1762,19 +1774,34 @@ impl Appender {
         // record it logs.
         let _recursion_guard = RecursionGuard;
 
-        if count >= 2 {
+        // `if (2 <= recursion_count && recursion_str.empty())` — one dump per
+        // episode: a deeper frame takes the one that is already there rather
+        // than overwriting it, so what reaches the file is the first record
+        // that recursed.
+        if count >= 2 && RECURSION_DUMP.with(|cell| cell.borrow().is_none()) {
             if count > MAX_RECURSION {
                 return;
             }
-            // The C++ also dumps the recursion stack into the log file; the port
-            // only reports it on the console, which is the observable part.
             let mut recursive = info.cloned().unwrap_or_default();
             recursive.level = LogLevel::Fatal;
-            console_log(
-                Some(&recursive),
-                &format!("ERROR!!! xlogger_appender Recursive calls!!!, count:{count}"),
-            );
+            let body = format!("ERROR!!! xlogger_appender Recursive calls!!!, count:{count}");
+            // Formatted, because the file gets the string raw: `WriteTips2File`
+            // hands its argument to the buffer as it stands, so the line a
+            // decoder of the log shows is the one the formatter produced. The
+            // C++ hands `ConsoleLog` that same string, which is why its console
+            // shows the prefix twice; the port consoles the body.
+            let len = format_record(Some(&recursive), &body);
+            let dump = with_record(len, |data| String::from_utf8_lossy(data).into_owned());
+            console_log(Some(&recursive), &body);
+            RECURSION_DUMP.with(|cell| *cell.borrow_mut() = Some(dump));
             return;
+        }
+
+        // `else`: the dump the last recursive write left, filed with the next
+        // record. This is the half the port used to drop, so a logger that logs
+        // from inside itself left nothing behind but a line on stderr.
+        if let Some(dump) = RECURSION_DUMP.with(|cell| cell.borrow_mut().take()) {
+            self.write_tips2file(&dump);
         }
 
         // The record, formatted before the lock: one buffer per thread, grown
@@ -2516,6 +2543,31 @@ mod tests {
         );
         let text = decoded_text(&fs::read(&today).unwrap());
         assert!(text.contains("a tip with no time of its own"), "{text}");
+    }
+
+    /// `WriteTips2File(recursion_str)` — the dump of a write that was logged
+    /// from inside the logger is filed with the next record, and not only
+    /// printed on the console.
+    #[test]
+    fn the_recursion_dump_reaches_the_log_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Sync), 0, 0).unwrap();
+
+        // The counter is per thread, so raising it is what a write that is
+        // itself inside a write looks like from here.
+        RECURSION_COUNT.with(|cell| cell.set(1));
+        appender.write(Some(&info(LogLevel::Info)), "logged from inside the logger");
+        RECURSION_COUNT.with(|cell| cell.set(0));
+
+        appender.write(Some(&info(LogLevel::Info)), "the record after it");
+        appender.close();
+
+        let text = decoded_text(&fs::read(today_name(tmp.path())).unwrap());
+        // The record that recursed is the one that is *not* filed: the dump
+        // stands in for it.
+        assert!(!text.contains("logged from inside the logger"), "{text}");
+        assert!(text.contains("Recursive calls!!!, count:2"), "{text}");
+        assert!(text.contains("the record after it"), "{text}");
     }
 
     /// Sync mode writes every record to its own file, so a record that carries no
