@@ -1,8 +1,9 @@
 # Flutter
 
 两个插件，一份 API：只打日志的 App 用 `marsrs_flutter_xlog`，要整个端口的用
-`marsrs_flutter` —— 今天两者是同一个东西，因为 C ABI 就是 28 个 `mars_xlog_*`
-符号、没有别的。STN 和 SDT 将来只落在 `marsrs_flutter` 里。两个里挑一个，不要
+`marsrs_flutter` —— 今天两者是同一个东西，因为这个插件露出来的是日志那半。STN 和 SDT
+将来只落在 `marsrs_flutter` 里、不落在别处：两个插件背后的那个 C ABI 是带着它们的 ——
+见[C ABI](/zh/platforms/c-abi#任务链路) —— 但两者都还不在 Dart 里。两个里挑一个，不要
 都要：它们带着同一份 native 库，一个 App 里有两份是编不过的。
 
 ## 安装
@@ -117,3 +118,8 @@ if (await xlog.isLoggable(LogLevel.debug)) {
 空的。当前文件在哪也不回答 —— 没有 `mars_xlog_current_log_path`、也没有
 `Xlog.currentLogPath` —— 因为路径是 App 拿着自己给的那个目录问出来的，[日志文件
 ](/zh/log-files)页才是写它的地方。
+
+[任务链路](/zh/stn)和[网络诊断](/zh/sdt)都不在里面：没有 `StnLogic`、没有 `SdtLogic`、
+没有任务、也没有检查。这个插件盖在上面的那个 C ABI 带着这两半，它解析到的那两个 AAR 和
+framework 也带着，所以缺的是 Dart —— 它落在 `marsrs_flutter` 里，别处没有。今天要起一个
+任务的 App，从自己那个插件的平台侧起它，或者等这个调用落下来。

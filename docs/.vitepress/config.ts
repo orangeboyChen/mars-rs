@@ -223,11 +223,10 @@ export default defineConfig({
         'The xlog logging pipeline, the STN task model and the SDT network diagnosis of Tencent/mars, in Rust.',
       themeConfig: {
         ...en,
-        // One tab, because one piece of the port is documented: xlog. A tab is
-        // a piece of mars and not a kind of page — the day STN and the SDT
-        // diagnosis carry pages of their own, they are two tabs beside this
-        // one and not four more links in the same bar. The pages under a tab
-        // are the pages the sidebar carries, in the same order.
+        // Two tabs, one per piece of the port: a tab is a piece of mars and
+        // not a kind of page, so the task pipeline and the diagnosis are a tab
+        // beside the logger and not four more links in the same bar. The pages
+        // under a tab are the pages the sidebar carries, in the same order.
         nav: [
           {
             text: 'Xlog',
@@ -237,6 +236,13 @@ export default defineConfig({
               { text: 'Log files', link: '/log-files' },
               { text: 'The CLI', link: '/cli' },
               { text: 'Platforms', link: '/platforms/rust' },
+            ],
+          },
+          {
+            text: 'The mars half',
+            items: [
+              { text: 'The task pipeline (STN)', link: '/stn' },
+              { text: 'The network diagnosis (SDT)', link: '/sdt' },
             ],
           },
         ],
@@ -250,6 +256,17 @@ export default defineConfig({
               { text: 'Configuration', link: '/configuration' },
               { text: 'Log files', link: '/log-files' },
               { text: 'The CLI', link: '/cli' },
+            ],
+          },
+          // The two pages of the half that is not the logger: they are a pair,
+          // the way xlog and the rest of it are a pair in the crate, and they
+          // sit together because a reader who wants one of them usually wants
+          // to know whether the other is there too.
+          {
+            text: 'The mars half',
+            items: [
+              { text: 'The task pipeline (STN)', link: '/stn' },
+              { text: 'The network diagnosis (SDT)', link: '/sdt' },
             ],
           },
           {
@@ -281,8 +298,8 @@ export default defineConfig({
         'Tencent/mars 的 xlog 日志链路、STN 任务模型与 SDT 网络诊断的 Rust 实现。',
       themeConfig: {
         ...zh,
-        // 同上：一个 tab 是 mars 的哪一块，不是哪一类页面 —— xlog 是今天唯一
-        // 有文档的那一块。
+        // 同上：一个 tab 是 mars 的哪一块，不是哪一类页面 —— 所以日志是一块，
+        // 任务链路和网络诊断是它旁边的一块。
         nav: [
           {
             text: 'Xlog',
@@ -292,6 +309,13 @@ export default defineConfig({
               { text: '日志文件', link: '/zh/log-files' },
               { text: '命令行', link: '/zh/cli' },
               { text: '各平台', link: '/zh/platforms/rust' },
+            ],
+          },
+          {
+            text: 'mars 那半',
+            items: [
+              { text: '任务链路（STN）', link: '/zh/stn' },
+              { text: '网络诊断（SDT）', link: '/zh/sdt' },
             ],
           },
         ],
@@ -305,6 +329,13 @@ export default defineConfig({
               { text: '配置项', link: '/zh/configuration' },
               { text: '日志文件', link: '/zh/log-files' },
               { text: '命令行', link: '/zh/cli' },
+            ],
+          },
+          {
+            text: 'mars 的另一半',
+            items: [
+              { text: '任务链路（STN）', link: '/zh/stn' },
+              { text: '网络诊断（SDT）', link: '/zh/sdt' },
             ],
           },
           {

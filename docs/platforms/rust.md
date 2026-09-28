@@ -103,3 +103,52 @@ let (begin, end) = get_period_logs(std::path::Path::new("marsrs_20260927.xlog"),
 ```
 
 `LogBuffer` is the decoder; see [log files](/log-files).
+
+## The task pipeline
+
+```rust
+use marsrs::stn::{gen_task_id, App, StnLogic, Task};
+
+let mut stn = StnLogic::new();
+stn.set_callback(MyApp);   // one App answers the eighteen questions
+stn.create();              // builds the net core; nothing else works before this
+
+let mut task = Task::new(gen_task_id(), 100);
+task.cgi = "/cgi-bin/hello".to_owned();
+stn.start_task(task);
+
+// no threads in the port: the queue is drained by whoever calls this
+while stn.due_time().is_some() {
+    stn.run_pending();
+}
+```
+
+`marsrs::stn` is the half of the port that talks to a server: a task goes out on
+the short link or the long link, is retried, timed out and reported, and the app
+answers the eighteen questions STN asks while it runs — every one of them has a
+default, so an app writes the ones it cares about.
+
+[The task pipeline](/stn) is the whole of it — the two links, the fields of a
+task, how a task ends, and what a long link asks of an app.
+
+## The network diagnosis
+
+```rust
+use marsrs::sdt::{report_json, Ask, CheckIPPort, CheckIPPorts, SdtLogic};
+
+let mut sdt = SdtLogic::new();
+sdt.set_http_netcheck_cgi("http://example.com/netcheck");
+let mut longlink = CheckIPPorts::new();
+longlink.insert("default".to_owned(), vec![CheckIPPort::new("1.2.3.4", 80)]);
+sdt.start_active_check(&longlink, &CheckIPPorts::new(), 0, 10_000);
+
+let results = sdt.run_checks(&mut Ask::new(probe), 1 /* comm::getNetInfo() */);
+println!("{}", report_json(&results));
+```
+
+The four probes — ping, dns, tcp and http — are the app's: this port owns no
+sockets, so `run_checks` asks them of the `Ask` you hand it, one at a time, on
+the calling thread.
+
+[The network diagnosis](/sdt) is the whole of it: the mode, the plan, and the
+JSON of the report.

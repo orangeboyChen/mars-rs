@@ -87,3 +87,62 @@ Every call that returns an `int` answers `MARS_XLOG_OK` (0) or a negative
 empty `log_dir`, an appender that refused the config, an output buffer too small,
 no file open yet. `MARS_XLOG_ERR_PANIC` is a Rust panic caught at the boundary;
 nothing in the C ABI unwinds into C.
+
+## The task pipeline
+
+`mars_stn.h` is the half of the port that talks to a server, and it is the same
+library: nothing else to link, nothing else to open.
+
+```c
+#include <mars_stn.h>
+
+mars_stn_set_app(NULL, ask);          /* one callback answers the eighteen questions */
+
+MarsStnTask task;
+memset(&task, 0, sizeof task);
+task.taskid = mars_stn_gen_task_id();
+task.channel_select = 0x3;            /* both links */
+task.cgi = "/cgi-bin/hello";
+mars_stn_start_task(&task);
+
+/* no threads in the port: the queues are drained by whoever calls this */
+long long due = mars_stn_due_time();
+while (due >= 0) {                    /* MARS_STN_ERR_NO_DUE is "nothing to wait for" */
+    mars_stn_run_pending();
+    due = mars_stn_due_time();
+}
+```
+
+[The task pipeline](/stn) is the whole of it — the two links, the fields of a
+task, how a task ends, and what a long link asks of an app.
+
+## The network diagnosis
+
+```c
+#include <mars_sdt.h>
+
+MarsSdtIpPort port = { "1.2.3.4", 80 };
+MarsSdtHosts longlink[] = { { "default", &port, 1 } };
+mars_sdt_set_http_netcheck_cgi("http://example.com/netcheck");
+mars_sdt_start_active_check(longlink, 1, NULL, 0, 0, 10000);
+mars_sdt_run_checks(NULL, probe, 1);   /* one probe at a time, on the calling thread */
+
+char buffer[4096];
+if (mars_sdt_take_report(buffer, sizeof buffer) >= 0) { send(buffer); }
+```
+
+The four probes — ping, dns, tcp and http — are the caller's: this port owns no
+sockets, so `mars_sdt_run_checks` asks them of the `MarsSdtProbe` you hand it.
+
+[The network diagnosis](/sdt) is the whole of it: the mode, the plan, and the
+JSON of the report.
+
+## Errors, of both halves
+
+Every `int` of the two headers answers `MARS_STN_OK` / `MARS_SDT_OK` (0) or a
+negative `MARS_STN_ERR_*` / `MARS_SDT_ERR_*` — a `NULL` argument, a buffer too
+small, a task the queues refused, a report that does not fit — and
+`MARS_STN_ERR_PANIC` / `MARS_SDT_ERR_PANIC` is a Rust panic caught at the
+boundary. Nothing in the C ABI unwinds into C, and a diagnosis whose report did
+not fit its buffer keeps its results, so a caller who asks again with a bigger
+one gets the diagnosis rather than an empty one.

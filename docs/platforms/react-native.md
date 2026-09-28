@@ -2,9 +2,11 @@
 
 Two packages, one API: `marsrs-react-native-xlog` for an app that only logs, and
 `marsrs-react-native` for the whole port — which today is the same thing, because
-the C ABI is 28 `mars_xlog_*` symbols and nothing else. STN and SDT land in
-`marsrs-react-native` and in nothing else. Take one of the two, not both: both
-carry the same native library, and an app with two of it does not build.
+what the module exposes is the logger. STN and SDT land in
+`marsrs-react-native` and in nothing else: the C ABI behind both carries them —
+see [the C ABI](/platforms/c-abi#the-task-pipeline) — but neither is in the
+TypeScript yet. Take one of the two, not both: both carry the same native
+library, and an app with two of it does not build.
 
 The module is a TurboModule, which is what the New Architecture is for: React
 Native 0.74 or newer, with the bridge switched off. It is the one thing this
@@ -139,3 +141,10 @@ to name, and the C++ writes an empty one too. Where the current file is is not
 answered — no `mars_xlog_current_log_path` and no `Xlog.currentLogPath` — because
 the path is a thing the app asks of the directory it gave, and
 [the log files page](/log-files) is what names it.
+
+Neither [the task pipeline](/stn) nor [the network diagnosis](/sdt) is in it: no
+`StnLogic`, no `SdtLogic`, no task and no check. The C ABI the module is built
+over carries both, and the two AARs and frameworks it resolves carry both, so
+what is missing is the TypeScript — it lands in `marsrs-react-native` and nowhere
+else. An app that needs a task today starts it from the platform side of its own
+module, or waits for the call to land.

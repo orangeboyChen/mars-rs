@@ -103,14 +103,62 @@ if log.isEnabled(for: .debug) {
 C 的那些符号也在：`import MarsRSXlog` 重新导出了 `MarsRSFFI`，所以
 `mars_xlog_open`、`mars_xlog_write` 这些照样能直接调。
 
-## App 退出的时候
-
-**什么都不用调用。** App 离开屏幕时，`Xlog` 自己会 flush：它监听 `didEnterBackground`
-—— 有 scene 的 App 监听的是 scene 的那个，因为这类 App 根本收不到 `UIApplication` 的
-生命周期通知 —— 以及 `willTerminate`，两个通知都会当场跑一次 `flush(sync: true)`。
-watchOS 上没有 UIKit，监听的是 `WKExtension` 的 `applicationDidEnterBackground`。
-
-那是排空的时刻，因为它是系统最后一次开口：从后台被杀掉的 App 一个通知都收不到，之后再
-没有 `flush` 能跑的地方。没有它也什么都不丢 —— 记录留在缓存文件里，下一个同 `namePrefix`
-的 `Xlog` 打开时会把它们排进日志文件 —— 但本次会话那个文件要等它跑完才算完整。
 见[日志文件](/zh/log-files)。
+
+## 任务链路
+
+`MarsRSNet` 带着这个移植里跟服务器说话的那半：`MarsStn` 是一个装静态成员的 `enum`，
+底下是 C ABI 的那批 `mars_stn_*`。
+
+```swift
+import MarsRSNet
+
+MarsStn.setApp { question in        // 一个闭包回答那十八个问题
+    switch question.kind {
+    case .req2Buf:  return .encoded(try! encode(question.task!))
+    case .buf2Resp: handle(question.body); return .decoded(errorCode: 0, handle: .normal)
+    case .onTaskEnd: return .ended(errorCode: 0)
+    default:        return .nothing
+    }
+}
+
+var task = StnTask(channelSelect: .short)
+task.taskID = MarsStn.generateTaskID()
+task.cgi = "/cgi-bin/hello"
+MarsStn.start(task)
+
+while MarsStn.dueTime != nil {      // 没有哪个线程自己排空这个队列
+    MarsStn.runPending()
+}
+```
+
+`MarsStn.dueTime` 是下一趟什么时候到期，`MarsStn.runPending()` 就是那一趟：C++ 把它们
+跑在一个消息队列线程上，而这个移植没有那个线程，所以这个循环是 App 的。一个启动了却从
+来没被排空过的任务，就一直留在它的队列里。
+
+[任务链路](/zh/stn)是它的全部 —— 两条连接、一个任务的各个字段、任务怎么结束、长连接
+要 App 做什么。
+
+## 网络诊断
+
+```swift
+import MarsRSNet
+
+MarsSdt.setHTTPNetCheckCGI("http://example.com/netcheck")
+MarsSdt.startActiveCheck(longLink: longLink, shortLink: [], mode: 0, timeout: 10_000)
+
+MarsSdt.runChecks(networkType: 1) { query in
+    switch query.probe {
+    case .dns:  return .dns(errorCode: 0, rtt: 12, addresses: ["1.2.3.4"])
+    case .ping: return .ping(errorCode: 0, rtt: 20, lossRate: 0, averageRTT: 18)
+    default:    return .nothing
+    }
+}
+
+if let report = MarsSdt.takeReport() { send(report) }
+```
+
+四个探针是 App 的 —— 这个移植不持有任何 socket，所以一次检查是向交给 `runChecks` 的那
+个闭包一个一个地问，都在调用的线程上。
+
+[网络诊断](/zh/sdt)是它的全部：那个模式、那份计划、以及报告的那份 JSON。

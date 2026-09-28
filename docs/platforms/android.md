@@ -132,6 +132,75 @@ val xlog = Xlog.open(XlogConfig(logDir = dir, namePrefix = "marsrs"))
 xlog.d("net", "…")
 ```
 
+## The task pipeline
+
+`marsrs` carries the half of the port that talks to a server, under
+`io.github.orangeboychen.marsrs.stn.StnLogic` — one object of statics over the
+JNI bridge, the way `com.tencent.mars.stn.StnLogic` was one class of statics over
+the C++'s own.
+
+```kotlin
+import io.github.orangeboychen.marsrs.stn.StnLogic
+
+StnLogic.setCallBack(object : StnLogic.ICallBack { /* the fourteen questions */ })
+
+val task = StnLogic.Task(StnLogic.Task.E_BOTH, 100, "/cgi-bin/hello", arrayListOf("example.com"))
+task.totalTimeout = 10_000
+StnLogic.setShortlinkSvrAddr(443)
+StnLogic.startTask(task)
+
+// no threads in the port: the queue is drained by whoever calls this
+var due = StnLogic.dueTime()
+while (due >= 0) {          // -1 is "nothing to wait for"
+    StnLogic.runPending()
+    due = StnLogic.dueTime()
+}
+```
+
+`ICallBack` is the fourteen questions STN asks while a task runs, and it is a
+plain interface with no defaults, so the object is the app's to finish.
+`dueTime()` answers `-1` when there is nothing to wait for, and `runPending()`
+is the pass: a task that is started and never drained stays in its queue.
+
+[The task pipeline](/stn) is the whole of it — the two links, the fields of a
+task, how a task ends, and what a long link asks of an app.
+
+## The network diagnosis
+
+```kotlin
+import io.github.orangeboychen.marsrs.sdt.SdtLogic
+
+SdtLogic.setCallBack(object : SdtLogic.ICallBack {           // where the report goes
+    override fun reportSignalDetectResults(resultsJson: String?) { send(resultsJson) }
+})
+SdtLogic.setHttpNetcheckCGI("http://example.com/netcheck")
+SdtLogic.startActiveCheck(
+    arrayOf(SdtLogic.Link("default", arrayOf("1.2.3.4"), intArrayOf(80))),
+    emptyArray(),
+    0,      // the mode
+    10_000, // the timeout
+)
+SdtLogic.runChecks(1, object : SdtLogic.IProbe {
+    override fun dns(host: String, timeoutMs: Int) =
+        SdtLogic.Answer.dns(errorCode = 0, rtt = 12, ips = arrayOf("1.2.3.4"))
+    override fun tcp(host: String, port: Int, timeoutMs: Int) =
+        SdtLogic.Answer.tcp(sent = 0, received = 0, isNoopResponse = true, rtt = 30)
+    override fun http(url: String, timeoutMs: Int) =
+        SdtLogic.Answer.http(errorCode = 0, statusCode = 200, rtt = 40)
+    override fun ping(host: String, timeoutSec: Int) =
+        SdtLogic.Answer.ping(errorCode = 0, rtt = 20, lossRate = 0f, averageRTT = 18f)
+})
+SdtLogic.takeReport()?.let { send(it) }   // answers it once, and empties it
+```
+
+The four probes are the app's: this port owns no sockets, so a check is asked of
+the `IProbe` you hand to `runChecks`, one at a time, on the thread that called
+it. The C++ starts a diagnosis on a thread of its own — `com.tencent.mars.sdt.SdtLogic`
+declares no start method — so this surface is the port's own rather than parity.
+
+[The network diagnosis](/sdt) is the whole of it: the mode, the plan, and the
+JSON of the report.
+
 ## Shrinking the release build
 
 Nothing to add. `libmarsrsxlog.so` and the Kotlin that calls it name each other

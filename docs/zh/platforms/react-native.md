@@ -1,9 +1,10 @@
 # React Native
 
 两个包，一份 API：只打日志的 App 用 `marsrs-react-native-xlog`，要整个端口的用
-`marsrs-react-native` —— 今天两者是同一个东西，因为 C ABI 就是 28 个
-`mars_xlog_*` 符号、没有别的。STN 和 SDT 将来只落在 `marsrs-react-native` 里。
-两个里挑一个，不要都要：它们带着同一份 native 库，一个 App 里有两份是编不过的。
+`marsrs-react-native` —— 今天两者是同一个东西，因为这个模块露出来的是日志那半。STN 和
+SDT 将来只落在 `marsrs-react-native` 里、不落在别处：两个包背后的那个 C ABI 是带着它们
+的 —— 见[C ABI](/zh/platforms/c-abi#任务链路) —— 但两者都还不在 TypeScript 里。两个里
+挑一个，不要都要：它们带着同一份 native 库，一个 App 里有两份是编不过的。
 
 这个模块是 TurboModule，也就是新架构要的那个东西：React Native 0.74 或更新，桥
 关掉。这是这份 API 唯一向 App 要的东西，其余的都是它换来的 —— TurboModule 不是
@@ -128,3 +129,8 @@ if (xlog.isLoggable(LogLevel.debug)) {
 的。当前文件在哪也不回答 —— 没有 `mars_xlog_current_log_path`、也没有
 `Xlog.currentLogPath` —— 因为路径是 App 拿着自己给的那个目录问出来的，[日志文件
 ](/zh/log-files)页才是写它的地方。
+
+[任务链路](/zh/stn)和[网络诊断](/zh/sdt)都不在里面：没有 `StnLogic`、没有 `SdtLogic`、
+没有任务、也没有检查。这个模块盖在上面的那个 C ABI 带着这两半，它解析到的那两个 AAR 和
+framework 也带着，所以缺的是 TypeScript —— 它落在 `marsrs-react-native` 里，别处没有。
+今天要起一个任务的 App，从自己那个模块的平台侧起它，或者等这个调用落下来。

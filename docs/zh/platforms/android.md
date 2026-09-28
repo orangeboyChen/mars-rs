@@ -119,6 +119,73 @@ val xlog = Xlog.open(XlogConfig(logDir = dir, namePrefix = "marsrs"))
 xlog.d("net", "…")
 ```
 
+## 任务链路
+
+`marsrs` 带着这个移植里跟服务器说话的那半，在
+`io.github.orangeboychen.marsrs.stn.StnLogic` 下面 —— 一个装静态成员的 object，架在 JNI
+桥上，就像 `com.tencent.mars.stn.StnLogic` 曾经是一个装静态成员的 class、架在 C++ 自己
+那套上一样。
+
+```kotlin
+import io.github.orangeboychen.marsrs.stn.StnLogic
+
+StnLogic.setCallBack(object : StnLogic.ICallBack { /* 那十四个问题 */ })
+
+val task = StnLogic.Task(StnLogic.Task.E_BOTH, 100, "/cgi-bin/hello", arrayListOf("example.com"))
+task.totalTimeout = 10_000
+StnLogic.setShortlinkSvrAddr(443)
+StnLogic.startTask(task)
+
+// 这个移植没有线程：队列由谁调用谁来排空
+var due = StnLogic.dueTime()
+while (due >= 0) {          // -1 是"没有要等的东西"
+    StnLogic.runPending()
+    due = StnLogic.dueTime()
+}
+```
+
+`ICallBack` 是 STN 跑一个任务时问的那十四个问题，它是一个没有默认实现的普通 interface，
+所以那个 object 要 App 自己填完。`dueTime()` 在没有要等的东西时回答 `-1`，`runPending()`
+就是那一趟：启动了却从来没被排空过的任务，就一直留在它的队列里。
+
+[任务链路](/zh/stn)是它的全部 —— 两条连接、一个任务的各个字段、任务怎么结束、长连接要
+App 做什么。
+
+## 网络诊断
+
+```kotlin
+import io.github.orangeboychen.marsrs.sdt.SdtLogic
+
+SdtLogic.setCallBack(object : SdtLogic.ICallBack {           // 报告送到哪
+    override fun reportSignalDetectResults(resultsJson: String?) { send(resultsJson) }
+})
+SdtLogic.setHttpNetcheckCGI("http://example.com/netcheck")
+SdtLogic.startActiveCheck(
+    arrayOf(SdtLogic.Link("default", arrayOf("1.2.3.4"), intArrayOf(80))),
+    emptyArray(),
+    0,      // 模式
+    10_000, // 超时
+)
+SdtLogic.runChecks(1, object : SdtLogic.IProbe {
+    override fun dns(host: String, timeoutMs: Int) =
+        SdtLogic.Answer.dns(errorCode = 0, rtt = 12, ips = arrayOf("1.2.3.4"))
+    override fun tcp(host: String, port: Int, timeoutMs: Int) =
+        SdtLogic.Answer.tcp(sent = 0, received = 0, isNoopResponse = true, rtt = 30)
+    override fun http(url: String, timeoutMs: Int) =
+        SdtLogic.Answer.http(errorCode = 0, statusCode = 200, rtt = 40)
+    override fun ping(host: String, timeoutSec: Int) =
+        SdtLogic.Answer.ping(errorCode = 0, rtt = 20, lossRate = 0f, averageRTT = 18f)
+})
+SdtLogic.takeReport()?.let { send(it) }   // 只回答一次，然后清空
+```
+
+四个探针是 App 的：这个移植不持有任何 socket，所以一次检查是向交给 `runChecks` 的那个
+`IProbe` 一个一个地问，都在调用它的那个线程上。C++ 是在自己的线程上开始一次诊断的 ——
+`com.tencent.mars.sdt.SdtLogic` 没有声明任何 start 方法 —— 所以这个面是这个移植自己的，
+不是对齐出来的。
+
+[网络诊断](/zh/sdt)是它的全部：那个模式、那份计划、以及报告的那份 JSON。
+
 ## 缩小发布包
 
 什么都不用加。`libmarsrsxlog.so` 和调用它的 Kotlin 互相按名字引用 —— native 的符号是

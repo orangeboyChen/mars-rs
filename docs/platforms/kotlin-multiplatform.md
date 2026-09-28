@@ -105,7 +105,9 @@ Fourteen Kotlin targets: Android — the AAR carries `libmarsrsxlog.so` for
 `linuxX64`, `linuxArm64` and `mingwX64`.
 
 Nothing is compiled from Rust when the shared module is built: each platform
-links the archive the release published for it.
+links the archive the release published for it — and `marsrs-kmp` links two per
+target, `libmars_ffi.a` for xlog and `libmars_net_ffi.a` for STN and SDT, which
+is what lets an app that takes `xlog-kmp` carry no byte of the task pipeline.
 
 ## What is not in it
 
@@ -114,3 +116,101 @@ declaration can only be. The process-wide appender of the C ABI —
 `mars_xlog_open`, `mars_xlog_close`, `mars_xlog_current_log_path` — is not in it,
 because the JNI bridge exports no equivalent: a caller who wants it is a caller
 of one platform, and writes it in that platform's source set.
+
+Four places the two `actual`s answer differently, and the shared API is what
+both can say:
+
+- `StnLogic.dueTime()` answers `Long?` — `null` when there is nothing to wait
+  for — because the JNI bridge answers `-1` and the C ABI its own
+  `MARS_STN_ERR_NO_DUE`.
+- `StnLogic.makesureLongLinkConnected()` answers nothing: the C ABI's symbol
+  answers 1 or 0 and the JNI one answers `void`, so a caller who wants to know
+  reads `Question.linkStatus` instead.
+- A `CgiProfile` an app reads on Android carries `0` and `""` for the two
+  readings only the C ABI has — `sendPacketFinishedTime` and `netType`.
+- `setApp` is asked all eighteen questions on Kotlin/Native and thirteen on
+  Android: the two network errors, the long link's status change, the task limit
+  and the DNS profile are five the JNI bridge answers itself.
+
+## The task pipeline
+
+`marsrs-kmp` carries the half of the port that talks to a server: `StnLogic` is
+one `expect object` in `commonMain`, with one `actual` per platform family — over
+the JNI bridge of `crates/marsrs-jni` on Android, over the C ABI of
+`crates/marsrs-ffi` through cinterop on every Kotlin/Native target.
+
+```kotlin
+import io.github.orangeboychen.marsrs.stn.Answer
+import io.github.orangeboychen.marsrs.stn.FailHandle
+import io.github.orangeboychen.marsrs.stn.Question
+import io.github.orangeboychen.marsrs.stn.StnLogic
+import io.github.orangeboychen.marsrs.stn.Task
+
+// one `ask` answers the thirteen questions that reach the app
+StnLogic.setApp { question ->
+    when (question.kind) {
+        Question.Kind.Req2Buf -> Answer.Encoded(encode(question.task))
+        Question.Kind.Buf2Resp -> {
+            handle(question.body)
+            Answer.Decoded(errorCode = 0, handle = FailHandle.Normal)
+        }
+        Question.Kind.OnTaskEnd -> Answer.Ended(errorCode = 0)
+        else -> Answer.None
+    }
+}
+
+val task = Task().apply {
+    taskID = StnLogic.genTaskID()
+    channelSelect = Task.E_BOTH
+    cmdID = 100
+    cgi = "/cgi-bin/hello"
+    shortLinkHostList = listOf("example.com")
+    totalTimeout = 10_000
+}
+StnLogic.startTask(task)
+
+// no threads in the port: the queues are drained by whoever calls this
+while (StnLogic.dueTime() != null) {   // null is "nothing to wait for"
+    StnLogic.runPending()
+}
+```
+
+[The task pipeline](/stn) is the whole of it — the two links, the fields of a
+task, how a task ends, and what a long link asks of an app.
+
+## The network diagnosis
+
+```kotlin
+import io.github.orangeboychen.marsrs.sdt.Link
+import io.github.orangeboychen.marsrs.sdt.ProbeAnswer
+import io.github.orangeboychen.marsrs.sdt.SdtLogic
+
+SdtLogic.setCallBack { resultsJson -> send(resultsJson) }   // where the report goes
+SdtLogic.setHttpNetcheckCGI("http://example.com/netcheck")
+SdtLogic.startActiveCheck(
+    arrayOf(Link("default", arrayOf("1.2.3.4"), intArrayOf(80))),
+    emptyArray(),
+    0,      // the mode
+    10_000, // the timeout
+)
+SdtLogic.runChecks(
+    1,
+    object : SdtLogic.IProbe {
+        override fun dns(host: String, timeoutMs: Int) =
+            ProbeAnswer.Dns(errorCode = 0, rtt = 12, addresses = listOf("1.2.3.4"))
+        override fun tcp(host: String, port: Int, timeoutMs: Int) =
+            ProbeAnswer.Tcp(sent = 0, received = 0, isNoopResponse = true, rtt = 30)
+        override fun http(url: String, timeoutMs: Int) =
+            ProbeAnswer.Http(errorCode = 0, statusCode = 200, rtt = 40)
+        override fun ping(host: String, timeoutSec: Int) =
+            ProbeAnswer.Ping(errorCode = 0, rtt = 20, lossRate = 0f, averageRTT = 18f)
+    },
+)
+SdtLogic.takeReport()?.let { send(it) }   // answers it once, and empties it
+```
+
+The four probes are the app's: this port owns no sockets, so a check is asked of
+the `IProbe` you hand to `runChecks`, one at a time, on the thread that called it.
+
+[The network diagnosis](/sdt) is the whole of it: the mode, the plan, and the
+JSON of the report.

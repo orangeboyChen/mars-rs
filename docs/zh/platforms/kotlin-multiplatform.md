@@ -97,7 +97,9 @@ appender，所以关掉一个就关掉了另一个正在写的 —— 应用里�
 `macosArm64`、`watchosArm64`、`watchosDeviceArm64`、`watchosSimulatorArm64`、
 `tvosArm64`、`tvosSimulatorArm64`、`linuxX64`、`linuxArm64`、`mingwX64`。
 
-编译共享模块时不编译任何 Rust：每个平台链接的是 release 已经为它发布的静态库。
+编译共享模块时不编译任何 Rust：每个平台链接的是 release 已经为它发布的静态库 ——
+而 `marsrs-kmp` 每个 target 链两个，`libmars_ffi.a` 给 xlog，`libmars_net_ffi.a` 给
+STN 和 SDT，这样只拿 `xlog-kmp` 的 App 才一个字节的任务链路都不带。
 
 ## 不在这里面的
 
@@ -105,3 +107,95 @@ appender，所以关掉一个就关掉了另一个正在写的 —— 应用里�
 appender —— `mars_xlog_open`、`mars_xlog_close`、`mars_xlog_current_log_path` —— 不在
 里面，因为 JNI 桥没有对应的东西：要用它们就是某个单一平台的调用方，写在那平台的
 source set 里。
+
+两个 `actual` 回答得不一样的有四处，共享 API 就是两边都能说的那个：
+
+- `StnLogic.dueTime()` 回答 `Long?` —— 没有要等的东西时是 `null` —— 因为 JNI 桥回答
+  `-1`，C ABI 回答它自己的 `MARS_STN_ERR_NO_DUE`。
+- `StnLogic.makesureLongLinkConnected()` 什么都不回答：C ABI 那个符号回答 1 或 0，JNI
+  那个回答 `void`，所以想知道的调用方去读 `Question.linkStatus`。
+- Android 上 App 读到的 `CgiProfile`，只有 C ABI 有的那两个读数 ——
+  `sendPacketFinishedTime` 和 `netType` —— 是 `0` 和 `""`。
+- `setApp` 在 Kotlin/Native 上被问到全部十八个问题，在 Android 上是十三个：两个网络错误、
+  长连接的状态变化、任务上限和 DNS profile 这五个，是 JNI 桥自己回答的。
+
+## 任务链路
+
+`marsrs-kmp` 带着这个移植里跟服务器说话的那半：`StnLogic` 是 `commonMain` 里一个
+`expect object`，每个平台族一个 `actual` —— Android 上走在 `crates/marsrs-jni` 的 JNI
+桥上，每个 Kotlin/Native target 上通过 cinterop 走在 `crates/marsrs-ffi` 的 C ABI 上。
+
+```kotlin
+import io.github.orangeboychen.marsrs.stn.Answer
+import io.github.orangeboychen.marsrs.stn.FailHandle
+import io.github.orangeboychen.marsrs.stn.Question
+import io.github.orangeboychen.marsrs.stn.StnLogic
+import io.github.orangeboychen.marsrs.stn.Task
+
+// 一个 `ask` 回答到 App 这里的那十三个问题
+StnLogic.setApp { question ->
+    when (question.kind) {
+        Question.Kind.Req2Buf -> Answer.Encoded(encode(question.task))
+        Question.Kind.Buf2Resp -> {
+            handle(question.body)
+            Answer.Decoded(errorCode = 0, handle = FailHandle.Normal)
+        }
+        Question.Kind.OnTaskEnd -> Answer.Ended(errorCode = 0)
+        else -> Answer.None
+    }
+}
+
+val task = Task().apply {
+    taskID = StnLogic.genTaskID()
+    channelSelect = Task.E_BOTH
+    cmdID = 100
+    cgi = "/cgi-bin/hello"
+    shortLinkHostList = listOf("example.com")
+    totalTimeout = 10_000
+}
+StnLogic.startTask(task)
+
+// 这个移植没有线程：队列由谁调用谁来排空
+while (StnLogic.dueTime() != null) {   // null 是"没有要等的东西"
+    StnLogic.runPending()
+}
+```
+
+[任务链路](/zh/stn)是它的全部 —— 两条连接、一个任务的各个字段、任务怎么结束、长连接要
+App 做什么。
+
+## 网络诊断
+
+```kotlin
+import io.github.orangeboychen.marsrs.sdt.Link
+import io.github.orangeboychen.marsrs.sdt.ProbeAnswer
+import io.github.orangeboychen.marsrs.sdt.SdtLogic
+
+SdtLogic.setCallBack { resultsJson -> send(resultsJson) }   // 报告送到哪
+SdtLogic.setHttpNetcheckCGI("http://example.com/netcheck")
+SdtLogic.startActiveCheck(
+    arrayOf(Link("default", arrayOf("1.2.3.4"), intArrayOf(80))),
+    emptyArray(),
+    0,      // 模式
+    10_000, // 超时
+)
+SdtLogic.runChecks(
+    1,
+    object : SdtLogic.IProbe {
+        override fun dns(host: String, timeoutMs: Int) =
+            ProbeAnswer.Dns(errorCode = 0, rtt = 12, addresses = listOf("1.2.3.4"))
+        override fun tcp(host: String, port: Int, timeoutMs: Int) =
+            ProbeAnswer.Tcp(sent = 0, received = 0, isNoopResponse = true, rtt = 30)
+        override fun http(url: String, timeoutMs: Int) =
+            ProbeAnswer.Http(errorCode = 0, statusCode = 200, rtt = 40)
+        override fun ping(host: String, timeoutSec: Int) =
+            ProbeAnswer.Ping(errorCode = 0, rtt = 20, lossRate = 0f, averageRTT = 18f)
+    },
+)
+SdtLogic.takeReport()?.let { send(it) }   // 只回答一次，然后清空
+```
+
+四个探针是 App 的：这个移植不持有任何 socket，所以一次检查是向交给 `runChecks` 的那个
+`IProbe` 一个一个地问，都在调用它的那个线程上。
+
+[网络诊断](/zh/sdt)是它的全部：那个模式、那份计划、以及报告的那份 JSON。

@@ -1,10 +1,12 @@
 # Flutter
 
 Two plugins, one API: `marsrs_flutter_xlog` for an app that only logs, and
-`marsrs_flutter` for the whole port — which today is the same thing, because the
-C ABI is 28 `mars_xlog_*` symbols and nothing else. STN and SDT land in
-`marsrs_flutter` and in nothing else. Take one of the two, not both: both carry
-the same native library, and an app with two of it does not build.
+`marsrs_flutter` for the whole port — which today is the same thing, because what
+the plugin exposes is the logger. STN and SDT land in `marsrs_flutter` and in
+nothing else: the C ABI behind both carries them — see
+[the C ABI](/platforms/c-abi#the-task-pipeline) — but neither is in the Dart
+yet. Take one of the two, not both: both carry the same native library, and an
+app with two of it does not build.
 
 ## Install
 
@@ -127,3 +129,10 @@ to name, and the C++ writes an empty one too. Where the current file is is not
 answered — no `mars_xlog_current_log_path` and no `Xlog.currentLogPath` — because
 the path is a thing the app asks of the directory it gave, and
 [the log files page](/log-files) is what names it.
+
+Neither [the task pipeline](/stn) nor [the network diagnosis](/sdt) is in it: no
+`StnLogic`, no `SdtLogic`, no task and no check. The C ABI the plugin is built
+over carries both, and the two AARs and frameworks it resolves carry both, so
+what is missing is the Dart — it lands in `marsrs_flutter` and nowhere else. An
+app that needs a task today starts it from the platform side of its own plugin,
+or waits for the call to land.
