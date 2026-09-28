@@ -10,7 +10,7 @@
 use std::borrow::Cow;
 use std::ffi::{c_char, c_int, c_longlong, c_uchar, c_uint, c_ulonglong, CString};
 use std::path::Path;
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 
 use marsrs_appender::{
     appender_close, appender_flush, appender_flush_sync, appender_get_current_log_path,
@@ -360,7 +360,6 @@ pub extern "C" fn mars_xlog_set_console_log(open: c_int) {
 /// keeps the same fields one by one. The record is handed over unformatted,
 /// so what a console record looks like on the platform is the callback's
 /// decision.
-///
 /// A callback that panics has its panic swallowed by the sink's `guard`, and
 /// one that is handed a `NULL` string sees an empty one instead.
 pub type MarsXLogConsoleFun =
@@ -369,6 +368,14 @@ pub type MarsXLogConsoleFun =
 /// `sg_console_fun` of `mars/xlog/objc/objc_console.mm`: the sink an app set
 /// through [`mars_xlog_set_console_fun`], `None` until it does.
 static CONSOLE_FUN: RwLock<Option<MarsXLogConsoleFun>> = RwLock::new(None);
+
+/// The lock [`mars_xlog_set_console_fun`] takes. It writes the callback here
+/// and the trampoline that reads it in `marsrs-appender`, and one thread
+/// writing between another thread's two writes leaves the pair crossed: a
+/// trampoline with no callback behind it takes the record and drops it
+/// instead of leaving it to stderr, and a callback with no trampoline is
+/// never called at all.
+static CONSOLE_FUN_LOCK: Mutex<()> = Mutex::new(());
 
 /// The Rust sink that stands in for the C callback: it is what
 /// `marsrs-appender` calls, and it is what hands the record over the boundary.
@@ -417,6 +424,15 @@ fn console_fun(info: &XLoggerInfo, log: &str) {
 #[no_mangle]
 pub extern "C" fn mars_xlog_set_console_fun(fun: Option<MarsXLogConsoleFun>) {
     guard((), || {
+        // One thread at a time, and in this order: the trampoline comes off
+        // before the callback it reads is changed, so no record can be handed
+        // to a pair that is half of one and half of the other. A record
+        // written in that window takes the built-in stderr line, which is
+        // what it would have taken with no sink set at all.
+        let _setting = CONSOLE_FUN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        set_console_fun(None);
         *CONSOLE_FUN
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = fun;
