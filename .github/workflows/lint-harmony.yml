@@ -5,29 +5,27 @@ name: Lint (Harmony)
 #
 # It reads platforms/harmonyos/ and nothing else: a pull request that touches
 # neither the module nor the scripts that check it is not a HarmonyOS pull
-# request, whatever else it is. So `harmony` skips when the commit touches none
-# of them — see the comment on `changes`.
+# request, whatever else it is. So every job here skips when the commit touches
+# none of them — see the comment on `changes`.
 #
-# What it runs is two checks and not `hvigor assembleHar`, and the reason is
-# the tool: HarmonyOS's own build is the DevEco Command Line Tools, which is a
-# 2 GB download carrying its own Node and SDK, wants a JDK 17 beside it, and
-# wants a DevEco *project* around this module — a project root, and an
-# `ohpm install` that fetches `@ohos/hvigor-ohos-plugin` out of HarmonyOS's
-# registry on every run. That is a lot of runner for the four ArkTS files of a
-# package whose .so is already built by rust.yml, and one more registry for a
-# gate to depend on. So the ArkTS is checked the two ways it can be checked
-# with what a Linux runner has:
+# What runs is one build and two reads, and the two reads are there because the
+# build is expensive: HarmonyOS's own ArkTS compiler arrives inside the DevEco
+# Command Line Tools, which is a 2.1 GB archive cached once per runner image
+# generation and a `hvigor assembleHar` that wants a DevEco *project* around
+# this module. So:
 #
-#   scripts/check_harmony_arkts.sh   the ArkTS read as TypeScript — tsc, and
-#                                    the NAPI declarations behind it — which is
-#                                    what catches a method `Xlog.ets` calls
-#                                    that `index.d.ts` does not declare
-#   scripts/check_harmony.sh         the manifests, the three lists of NAPI
-#                                    names, and the ArkTS rules tsc does not
-#                                    know (no `any`, no `unknown`, no `var`)
+#   assemble  scripts/assemble_harmony_har.sh   DevEco's own `hvigorw` over the
+#                                               module — the only ArkTS
+#                                               compiler in this repository
+#   harmony   scripts/check_harmony_arkts.sh    the ArkTS read as TypeScript
+#             scripts/check_harmony.sh          the manifests, the three lists
+#                                               of NAPI names, the ArkTS rules
 #
-# Between them they are a gate, and not a build: no ArkTS compiler has run over
-# this tree yet, and no app has loaded the module. Both scripts say so.
+# The two reads run in seconds and answer on every commit that touches the
+# module, and they are what tells you *which* line is wrong; `assembleHar` is
+# what tells you the module still builds, and writes the HAR ohpm publishes —
+# the one with `compatibleSdkVersion` in it, which the archive
+# scripts/package_harmony.sh assembles by hand does not have.
 
 on:
   # Every run starts, whatever the commit touched: what decides whether the job
@@ -57,6 +55,15 @@ env:
   # HarmonyOS compiler reads.
   TYPESCRIPT_VERSION: '5.9.3'
   NODE_VERSION: '20.19'
+  # DevEco Command Line Tools, the Linux one: `hvigorw`, `codelinter` and
+  # `ohpm`, with the OpenHarmony SDK and a Node of their own inside the same
+  # archive — which is why nothing here needs `ohpm install` to fetch
+  # `@ohos/hvigor-ohos-plugin` out of HarmonyOS's registry.
+  DEVECO_CLI_VERSION: '5.1.0.840'
+  DEVECO_CLI_URL: >-
+    https://repo.huaweicloud.com/openharmony/ohpm/5.1.0/commandline-tools-linux-x64-5.1.0.840.zip
+  DEVECO_CLI_SHA256: '1dcefa4741dc289277560b2802040e0c45b433898d8db453d711d5376e0478f1'
+  JAVA_VERSION: '17'
 
 jobs:
   changes:
@@ -78,6 +85,7 @@ jobs:
           .github/scripts/changed_paths.sh \
             'platforms/harmonyos/**' \
             'scripts/check_harmony.sh' 'scripts/check_harmony_arkts.sh' \
+            'scripts/assemble_harmony_har.sh' \
             'scripts/package_harmony.sh' '.github/scripts/**' \
             '.github/workflows/lint-harmony.yml'
 
@@ -109,3 +117,41 @@ jobs:
       # list, and the ArkTS rules tsc has never heard of.
       - name: Check the manifests, the names and the rules
         run: scripts/check_harmony.sh
+
+  assemble:
+    name: hvigor assembleHar (Harmony)
+    needs: changes
+    if: needs.changes.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # hvigor runs on the JVM. The DevEco Command Line Tools carry their own
+      # Node — `tool/node/` — and their own SDK, so the JDK is the one thing
+      # the runner has to bring.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      # 2.1 GB, downloaded and not cached: the extracted tree is several GB,
+      # and one cache entry of that size is most of the repository's whole
+      # cache budget — which the Rust and OHOS SDK caches are drawing on. A
+      # minute of download on the runs that touch this module is the cheaper
+      # half of that trade, and a run that does not touch it pays nothing.
+      - name: Download the DevEco Command Line Tools ${{ env.DEVECO_CLI_VERSION }}
+        run: |
+          set -euo pipefail
+          curl -sSfL -o "$RUNNER_TEMP/deveco.zip" "$DEVECO_CLI_URL"
+          # Pinned twice: the version is in the URL and the archive is checked
+          # against the .sha256 that sits beside it on the mirror, so a
+          # re-upload under the same name is a failed run and not a silent
+          # change of toolchain.
+          echo "$DEVECO_CLI_SHA256  $RUNNER_TEMP/deveco.zip" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/deveco"
+          unzip -q "$RUNNER_TEMP/deveco.zip" -d "$RUNNER_TEMP/deveco"
+          rm "$RUNNER_TEMP/deveco.zip"
+      # The real thing: DevEco's own ArkTS compiler over this module, and the
+      # HAR that comes out of it — the one with `compatibleSdkVersion`,
+      # `compatibleSdkType`, `obfuscated` and `nativeComponents` in it, which
+      # is what `ohpm publish` looks for and what
+      # scripts/package_harmony.sh assembles by hand without.
+      - run: DEVECO_HOME="$RUNNER_TEMP/deveco/command-line-tools" scripts/assemble_harmony_har.sh dist
