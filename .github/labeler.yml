@@ -169,16 +169,19 @@
   - any-glob-to-any-file:
     - .github/**
 
-# Versioning, packaging and publishing: the two workflows that cut a release
-# and push it somewhere, the JitPack build, and the scripts they run — the
-# version, the pub.dev and npm packages, and the JitPack build.
+# Versioning, packaging and publishing: the workflows that cut a release and
+# push it somewhere — publish.yml included, which gives a release that is out
+# the registry it missed — the JitPack build, and the scripts they run: the
+# version, the pub.dev, npm and crates.io packages, and the JitPack build.
 'meta: release':
 - changed-files:
   - any-glob-to-any-file:
     - .github/workflows/release.yml
     - .github/workflows/pub.yml
+    - .github/workflows/publish.yml
     - .github/scripts/release_version.sh
     - .github/scripts/jitpack_build.sh
+    - .github/scripts/publish_crates.sh
     - .github/scripts/publish_npm.sh
     - .github/scripts/publish_pub.sh
     - .github/scripts/publish_ohpm.sh
