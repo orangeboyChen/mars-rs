@@ -609,18 +609,18 @@ impl StnLogic {
     /// check and the timing sync ask the app about.
     fn wire(core: &mut NetCore, bridge: &Arc<Mutex<StnCallbackBridge>>) {
         let wired = Arc::clone(bridge);
-        core.longlink().set_req2buf(move |task| {
+        core.longlink().set_req2buf(move |task, channel| {
             locked(&wired).req2buf(
                 task.taskid,
                 &task.user_id,
-                task.channel_select,
+                channel,
                 host_of(&task.longlink_host_list),
                 task.client_sequence_id,
             )
         });
         let wired = Arc::clone(bridge);
-        core.longlink().set_buf2resp(move |task, body| {
-            locked(&wired).buf2resp(task.taskid, &task.user_id, body, task.channel_select)
+        core.longlink().set_buf2resp(move |task, body, channel| {
+            locked(&wired).buf2resp(task.taskid, &task.user_id, body, channel)
         });
         let wired = Arc::clone(bridge);
         core.longlink().set_make_sure_authed(move |host, user_id| {
@@ -631,18 +631,18 @@ impl StnLogic {
         core.longlink().set_gen_sequence_id(gen_sequence_id);
 
         let wired = Arc::clone(bridge);
-        core.shortlink().set_req2buf(move |task| {
+        core.shortlink().set_req2buf(move |task, channel| {
             locked(&wired).req2buf(
                 task.taskid,
                 &task.user_id,
-                task.channel_select,
+                channel,
                 host_of(&task.shortlink_host_list),
                 task.client_sequence_id,
             )
         });
         let wired = Arc::clone(bridge);
-        core.shortlink().set_buf2resp(move |task, body| {
-            locked(&wired).buf2resp(task.taskid, &task.user_id, body, task.channel_select)
+        core.shortlink().set_buf2resp(move |task, body, channel| {
+            locked(&wired).buf2resp(task.taskid, &task.user_id, body, channel)
         });
         let wired = Arc::clone(bridge);
         core.shortlink().set_make_sure_authed(move |host, user_id| {

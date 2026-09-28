@@ -2235,13 +2235,13 @@ mod tests {
             Some(RunId(u64::from(task.taskid)))
         });
         core.shortlink()
-            .set_req2buf(|task| Ok(task.cgi.as_bytes().to_vec()));
+            .set_req2buf(|task, _channel| Ok(task.cgi.as_bytes().to_vec()));
         core.longlink()
-            .set_req2buf(|task| Ok(task.cgi.as_bytes().to_vec()));
+            .set_req2buf(|task, _channel| Ok(task.cgi.as_bytes().to_vec()));
         core.shortlink()
-            .set_buf2resp(|_task, _body| (0, TaskFailHandleType::Normal));
+            .set_buf2resp(|_task, _body, _channel| (0, TaskFailHandleType::Normal));
         core.longlink()
-            .set_buf2resp(|_task, _body| (0, TaskFailHandleType::Normal));
+            .set_buf2resp(|_task, _body, _channel| (0, TaskFailHandleType::Normal));
         core.longlink().set_make_sure_connected(|_name| true);
         core.longlink().set_channel_profile(|name| {
             let mut profile = ConnectProfile::new();
@@ -2908,7 +2908,7 @@ mod tests {
         let (mut core, rec) = wired();
         up(&core, LongLinkStatus::Connected);
         core.longlink()
-            .set_buf2resp(|_task, _body| (9, TaskFailHandleType::TaskTimeout));
+            .set_buf2resp(|_task, _body, _channel| (9, TaskFailHandleType::TaskTimeout));
 
         assert!(core.start_task_at(NOW, task(7)));
         core.longlink()
@@ -2936,7 +2936,7 @@ mod tests {
         let (mut core, rec) = wired();
         up(&core, LongLinkStatus::Connected);
         core.longlink()
-            .set_buf2resp(|_task, _body| (9, TaskFailHandleType::TaskTimeout));
+            .set_buf2resp(|_task, _body, _channel| (9, TaskFailHandleType::TaskTimeout));
         assert!(core.start_task_at(NOW, task(7)));
         core.longlink()
             .on_response_at(NOW + 100, long_answer(7, profile_of("1.2.3.4")));
@@ -3012,7 +3012,7 @@ mod tests {
     fn a_core_that_does_not_use_the_long_link_fails_the_task_instead_of_keeping_it() {
         let (mut core, rec) = wired();
         core.shortlink()
-            .set_buf2resp(|_task, _body| (9, TaskFailHandleType::TaskTimeout));
+            .set_buf2resp(|_task, _body, _channel| (9, TaskFailHandleType::TaskTimeout));
 
         assert!(core.start_task_at(NOW, task(7)));
         core.set_need_use_long_link(false);
@@ -3036,7 +3036,7 @@ mod tests {
     fn a_session_timeout_is_a_follow_up_the_host_drains() {
         let (mut core, _rec) = wired();
         core.shortlink()
-            .set_buf2resp(|_task, _body| (0, TaskFailHandleType::SessionTimeout));
+            .set_buf2resp(|_task, _body, _channel| (0, TaskFailHandleType::SessionTimeout));
 
         assert!(core.start_task_at(NOW, task(7)));
         let handle = core.shortlink().on_response_at(
@@ -3086,7 +3086,7 @@ mod tests {
         let (mut core, rec) = wired();
         up(&core, LongLinkStatus::Connected);
         core.longlink()
-            .set_buf2resp(|_task, _body| (9, TaskFailHandleType::TaskTimeout));
+            .set_buf2resp(|_task, _body, _channel| (9, TaskFailHandleType::TaskTimeout));
         assert!(core.start_task_at(NOW, task(7)));
         core.longlink()
             .on_response_at(NOW + 100, long_answer(7, profile_of("1.2.3.4")));

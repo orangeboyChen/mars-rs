@@ -670,6 +670,9 @@ impl LongLinkTaskManager {
         let name = self.tasks[at].channel_name.clone();
 
         let task = self.tasks[at].task.clone();
+        // the channel the answer came back on, which is the one the task was
+        // put in this queue to go out on
+        let channel = self.link_type_of(&name);
         let len = response.body.len();
         {
             let profile = &mut self.tasks[at].transfer_profile;
@@ -678,7 +681,7 @@ impl LongLinkTaskManager {
             profile.last_receive_pkg_time = now;
         }
 
-        let (err_code, handle) = self.decode(&task, &response.body);
+        let (err_code, handle) = self.decode(&task, &response.body, channel);
         if self.should_intercept(err_code) {
             self.intercept
                 .add_intercept_task_at(now, &task.cgi, response.body.clone());
@@ -958,7 +961,7 @@ impl LongLinkTaskManager {
     /// `Req2Buf`.
     pub fn set_req2buf(
         &mut self,
-        req2buf: impl FnMut(&Task) -> Result<Vec<u8>, i32> + Send + 'static,
+        req2buf: impl FnMut(&Task, i32) -> Result<Vec<u8>, i32> + Send + 'static,
     ) {
         self.req2buf = Some(Box::new(req2buf));
     }
@@ -966,7 +969,7 @@ impl LongLinkTaskManager {
     /// `Buf2Resp`.
     pub fn set_buf2resp(
         &mut self,
-        buf2resp: impl FnMut(&Task, &[u8]) -> (i32, TaskFailHandleType) + Send + 'static,
+        buf2resp: impl FnMut(&Task, &[u8], i32) -> (i32, TaskFailHandleType) + Send + 'static,
     ) {
         self.buf2resp = Some(Box::new(buf2resp));
     }
@@ -1215,7 +1218,10 @@ impl LongLinkTaskManager {
                 task.client_sequence_id = sequence_id;
             }
 
-            let body = match self.encode(&task) {
+            // the channel the task goes out on, which is the one this queue
+            // keeps and not the one the task was last failed with
+            let channel = self.link_type_of(&name);
+            let body = match self.encode(&task, channel) {
                 Ok(body) => body,
                 Err(code) => {
                     let profile = self.profile_of(&name);
@@ -1292,7 +1298,8 @@ impl LongLinkTaskManager {
             // of it and the task goes out like any other
             if let Some(answer) = self.intercept.intercept_task_info_at(now, &task.cgi) {
                 let len = answer.len();
-                let (err_code, handle) = self.decode(&task, &answer);
+                let channel = self.link_type_of(&name);
+                let (err_code, handle) = self.decode(&task, &answer, channel);
                 {
                     let profile = &mut self.tasks[i].transfer_profile;
                     profile.received_size = len;
@@ -1542,6 +1549,20 @@ impl LongLinkTaskManager {
             .collect()
     }
 
+    /// `longlink->Config().link_type` — the kind of link a channel is, which is
+    /// what the C++ hands `Req2Buf` and `Buf2Resp` at all four of its calls.
+    /// The task's own `link_type` is not it: `__SingleRespHandle` writes the
+    /// profile of the try that ended over that one, and a profile that was
+    /// never filled in says `CHANNEL_LONG` — so a task with a try left in it
+    /// would be handed the channel of its failure, and not the one it is going
+    /// out on.
+    fn link_type_of(&self, name: &str) -> i32 {
+        self.channels
+            .iter()
+            .find(|channel| channel.name == name)
+            .map_or(Task::CHANNEL_LONG, |channel| channel.link_type)
+    }
+
     /// `__GetConnectionProfile` — the connect of a channel, or one that says
     /// the link is not there, which is what the C++ hands a task whose channel
     /// it could not find.
@@ -1591,16 +1612,16 @@ impl LongLinkTaskManager {
         }
     }
 
-    fn encode(&mut self, task: &Task) -> Result<Vec<u8>, i32> {
+    fn encode(&mut self, task: &Task, channel: i32) -> Result<Vec<u8>, i32> {
         match self.req2buf.as_mut() {
-            Some(req2buf) => req2buf(task),
+            Some(req2buf) => req2buf(task, channel),
             None => Ok(Vec::new()),
         }
     }
 
-    fn decode(&mut self, task: &Task, body: &[u8]) -> (i32, TaskFailHandleType) {
+    fn decode(&mut self, task: &Task, body: &[u8], channel: i32) -> (i32, TaskFailHandleType) {
         match self.buf2resp.as_mut() {
-            Some(buf2resp) => buf2resp(task, body),
+            Some(buf2resp) => buf2resp(task, body, channel),
             None => (0, TaskFailHandleType::Normal),
         }
     }
@@ -1814,6 +1835,8 @@ mod tests {
     const NOW: u64 = 100 * 1000;
     /// The one channel every test's queue has.
     const CHANNEL: &str = "long.weixin.qq.com";
+    /// A second channel, of the kind a task with `minorlong_host_list` gets.
+    const MINOR: &str = "minor.weixin.qq.com";
 
     /// What went out: the channel, the task, and how long the request was.
     type Sent = Arc<Mutex<Vec<(String, u32, usize)>>>;
@@ -2090,7 +2113,7 @@ mod tests {
     fn a_task_the_app_said_to_end_is_over() {
         let mut manager = manager();
         let (_, ended, _, _) = wire(&mut manager);
-        manager.set_buf2resp(|_task, _body| (0, TaskFailHandleType::TaskEnd));
+        manager.set_buf2resp(|_task, _body, _channel| (0, TaskFailHandleType::TaskEnd));
         manager.start_task_at(NOW, task(7), Task::CHANNEL_LONG);
 
         manager.on_response_at(NOW + 100, answered(7, b"hello"));
@@ -2115,7 +2138,7 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .push((err_type, err_code, handle, taskid, user_id.to_string()));
         });
-        manager.set_buf2resp(|_task, _body| (-13, TaskFailHandleType::SessionTimeout));
+        manager.set_buf2resp(|_task, _body, _channel| (-13, TaskFailHandleType::SessionTimeout));
         manager.start_task_at(NOW, task(7), Task::CHANNEL_LONG);
 
         assert_eq!(
@@ -2143,7 +2166,7 @@ mod tests {
         let (_, ended, notified, down) = wire(&mut manager);
         // `-7` is what the app read out of the body; only the task the answer
         // was about is failed with it
-        manager.set_buf2resp(|_task, _body| (-7, TaskFailHandleType::Default));
+        manager.set_buf2resp(|_task, _body, _channel| (-7, TaskFailHandleType::Default));
         manager.start_task_at(NOW, task(7), Task::CHANNEL_LONG);
         manager.start_task_at(NOW, task(8), Task::CHANNEL_LONG);
 
@@ -2176,7 +2199,7 @@ mod tests {
         let (_, _, notified, _) = wire(&mut manager);
         // `kTaskFailHandleTaskTimeout` is not one of the C++'s cases: it falls
         // into `default:`, which names the handle and not the code
-        manager.set_buf2resp(|_task, _body| (-7, TaskFailHandleType::TaskTimeout));
+        manager.set_buf2resp(|_task, _body, _channel| (-7, TaskFailHandleType::TaskTimeout));
         manager.start_task_at(NOW, task(7), Task::CHANNEL_LONG);
 
         manager.on_response_at(NOW + 100, answered(7, b"hello"));
@@ -2196,7 +2219,7 @@ mod tests {
     fn a_slient_task_end_leaves_without_the_app_being_told() {
         let mut manager = manager();
         let (_, ended, _, _) = wire(&mut manager);
-        manager.set_buf2resp(|_task, _body| (0, TaskFailHandleType::SlientTaskEnd));
+        manager.set_buf2resp(|_task, _body, _channel| (0, TaskFailHandleType::SlientTaskEnd));
         manager.start_task_at(NOW, task(7), Task::CHANNEL_LONG);
 
         assert_eq!(
@@ -2333,6 +2356,49 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
             vec![(ErrCmdType::Socket, -5001, TaskFailHandleType::Default, 7)],
             "the app hears about it and the task leaves the queue"
+        );
+    }
+
+    /// The channel `Req2Buf` is handed is the one the task is going out on and
+    /// not the one its last try was failed with: `__SingleRespHandle` writes
+    /// the profile of that try over the task's own `link_type`, and a profile
+    /// the app never filled in says `CHANNEL_LONG` — so a task with a try left
+    /// in it used to be encoded for a channel it was never going out on.
+    #[test]
+    fn a_task_given_another_try_is_encoded_for_the_channel_it_is_in() {
+        let mut manager = manager();
+        let mut minor = LonglinkConfig::new(MINOR);
+        minor.link_type = Task::CHANNEL_MINOR_LONG;
+        assert!(manager.add_long_link(minor));
+        let _ = wire(&mut manager);
+
+        let channels: Arc<Mutex<Vec<i32>>> = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&channels);
+        manager.set_req2buf(move |_task, channel| {
+            record
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(channel);
+            Ok(b"body".to_vec())
+        });
+
+        let mut task = task(7);
+        task.minorlong_host_list = vec![MINOR.to_string()];
+        manager.start_task_at(NOW, task, Task::CHANNEL_MINOR_LONG);
+        // A failure the task gets another try for, and the wait the queue owes
+        // before it hands that try out: the channel it comes in on is the one
+        // the task is queued on.
+        let mut failure = failed(7, ErrCmdType::EnDecode, -1);
+        failure.name = MINOR.to_string();
+        manager.on_response_at(NOW + 10, failure);
+        manager.run_loop_at(NOW + 10 + RETRY_INTERNAL);
+
+        assert_eq!(
+            *channels
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![Task::CHANNEL_MINOR_LONG, Task::CHANNEL_MINOR_LONG],
+            "every try is encoded for the link the task is queued on"
         );
     }
 
@@ -2712,7 +2778,7 @@ mod tests {
     fn a_task_the_app_could_not_encode_is_over() {
         let mut manager = manager();
         let (sent, ended, _, _) = wire(&mut manager);
-        manager.set_req2buf(|_task| Err(-1234));
+        manager.set_req2buf(|_task, _channel| Err(-1234));
         manager.start_task_at(NOW, task(7), Task::CHANNEL_LONG);
 
         assert!(sent
@@ -2895,7 +2961,7 @@ mod tests {
         });
         let made_with = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&made_with);
-        manager.set_req2buf(move |task| {
+        manager.set_req2buf(move |task, _channel| {
             record
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -2926,7 +2992,7 @@ mod tests {
         let mut manager = manager();
         let (sent, ended, _, _) = wire(&mut manager);
         manager.set_should_intercept(|_err_code| true);
-        manager.set_buf2resp(|_task, _body| (0, TaskFailHandleType::Normal));
+        manager.set_buf2resp(|_task, _body, _channel| (0, TaskFailHandleType::Normal));
 
         let mut first = task(7);
         first.cgi = "/cgi-bin/kept".to_string();

@@ -202,11 +202,15 @@ pub type NotifyRetryAllTasks = dyn FnMut(ErrCmdType, i32, TaskFailHandleType, u3
 pub type ResponseStatus = dyn FnMut(i32) + Send;
 
 /// `Req2Buf` — the app writes the body of the request. `Err` is its error code,
-/// which fails the task with `kEctEnDecode`.
-pub type Req2Buf = dyn FnMut(&Task) -> Result<Vec<u8>, i32> + Send;
+/// which fails the task with `kEctEnDecode`. The channel is the one the task is
+/// going out on, which here is always [`Task::CHANNEL_SHORT`]: the C++ hands
+/// `Task::kChannelShort` (`shortlink.cc`), and not the `channel_select` the app
+/// set on the task, which names every channel the task may use.
+pub type Req2Buf = dyn FnMut(&Task, i32) -> Result<Vec<u8>, i32> + Send;
 
-/// `Buf2Resp` — the app reads the body of an answer: `(err_code, handle_type)`.
-pub type Buf2Resp = dyn FnMut(&Task, &[u8]) -> (i32, TaskFailHandleType) + Send;
+/// `Buf2Resp` — the app reads the body of an answer: `(err_code, handle_type)`,
+/// with the channel the answer came back on.
+pub type Buf2Resp = dyn FnMut(&Task, &[u8], i32) -> (i32, TaskFailHandleType) + Send;
 
 /// `MakesureAuthed(host, user_id)` — whether the task may go out now, which for
 /// a task that needs it is the app's to answer.
@@ -559,6 +563,9 @@ impl ShortLinkTaskManager {
         // an answer is about
         let at = self.locate(run_id)?;
         let task = self.tasks[at].task.clone();
+        // the channel the answer came back on, which is the one the task was
+        // put in this queue to go out on
+        let channel = self.tasks[at].link_type;
         let err_type = response.err_type;
         let status = response.status;
         let body_len = response.body.len();
@@ -601,7 +608,7 @@ impl ShortLinkTaskManager {
         // the answer, which is what the app is handed as the decode times
         // (`shortlink_task_manager.cc:821,834`), and again off two readings
         self.tasks[at].transfer_profile.begin_buf2resp_time = now;
-        let (err_code, handle) = self.decode(&task, &response.body);
+        let (err_code, handle) = self.decode(&task, &response.body, channel);
         self.tasks[at].transfer_profile.end_buf2resp_time = gettickcount();
         self.socket_pool.report_at(
             now,
@@ -845,7 +852,7 @@ impl ShortLinkTaskManager {
     /// `Req2Buf`.
     pub fn set_req2buf(
         &mut self,
-        req2buf: impl FnMut(&Task) -> Result<Vec<u8>, i32> + Send + 'static,
+        req2buf: impl FnMut(&Task, i32) -> Result<Vec<u8>, i32> + Send + 'static,
     ) {
         self.req2buf = Some(Box::new(req2buf));
     }
@@ -853,7 +860,7 @@ impl ShortLinkTaskManager {
     /// `Buf2Resp`.
     pub fn set_buf2resp(
         &mut self,
-        buf2resp: impl FnMut(&Task, &[u8]) -> (i32, TaskFailHandleType) + Send + 'static,
+        buf2resp: impl FnMut(&Task, &[u8], i32) -> (i32, TaskFailHandleType) + Send + 'static,
     ) {
         self.buf2resp = Some(Box::new(buf2resp));
     }
@@ -1083,7 +1090,7 @@ impl ShortLinkTaskManager {
             // is a duration of nothing, and the app's encode is the one
             // reading of the run the port is not the one taking the time of
             self.tasks[i].transfer_profile.begin_req2buf_time = now;
-            let encoded = self.encode(&task);
+            let encoded = self.encode(&task, self.tasks[i].link_type);
             self.tasks[i].transfer_profile.end_req2buf_time = gettickcount();
 
             let body = match encoded {
@@ -1124,7 +1131,7 @@ impl ShortLinkTaskManager {
             // of it and the task goes out like any other
             if let Some(answer) = self.intercept.intercept_task_info_at(now, &task.cgi) {
                 let len = answer.len();
-                let (err_code, handle) = self.decode(&task, &answer);
+                let (err_code, handle) = self.decode(&task, &answer, self.tasks[i].link_type);
                 {
                     let profile = &mut self.tasks[i].transfer_profile;
                     profile.received_size = len;
@@ -1395,16 +1402,16 @@ impl ShortLinkTaskManager {
         }
     }
 
-    fn encode(&mut self, task: &Task) -> Result<Vec<u8>, i32> {
+    fn encode(&mut self, task: &Task, channel: i32) -> Result<Vec<u8>, i32> {
         match self.req2buf.as_mut() {
-            Some(req2buf) => req2buf(task),
+            Some(req2buf) => req2buf(task, channel),
             None => Ok(Vec::new()),
         }
     }
 
-    fn decode(&mut self, task: &Task, body: &[u8]) -> (i32, TaskFailHandleType) {
+    fn decode(&mut self, task: &Task, body: &[u8], channel: i32) -> (i32, TaskFailHandleType) {
         match self.buf2resp.as_mut() {
-            Some(buf2resp) => buf2resp(task, body),
+            Some(buf2resp) => buf2resp(task, body, channel),
             None => (0, TaskFailHandleType::Normal),
         }
     }
@@ -1921,7 +1928,7 @@ mod tests {
         });
         let written: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(Vec::new()));
         let recorder = Arc::clone(&written);
-        manager.set_req2buf(move |task| {
+        manager.set_req2buf(move |task, _channel| {
             recorder.lock().unwrap().push(task.client_sequence_id);
             Ok(b"body".to_vec())
         });
@@ -2010,7 +2017,7 @@ mod tests {
         let mut manager = ShortLinkTaskManager::new();
         runs(&mut manager);
         let ended = endings(&mut manager);
-        manager.set_buf2resp(|_task, body| {
+        manager.set_buf2resp(|_task, body, _channel| {
             assert_eq!(body, b"hello");
             (-11, TaskFailHandleType::Normal)
         });
@@ -2090,7 +2097,7 @@ mod tests {
                 user_id.to_string(),
             ));
         });
-        manager.set_buf2resp(|_task, _body| (0, TaskFailHandleType::SessionTimeout));
+        manager.set_buf2resp(|_task, _body, _channel| (0, TaskFailHandleType::SessionTimeout));
         let mut authed = task(7);
         authed.need_authed = true;
         manager.start_task_at(100_000, authed, prepare());
@@ -2261,7 +2268,7 @@ mod tests {
         let mut manager = ShortLinkTaskManager::new();
         runs(&mut manager);
         let ended = endings(&mut manager);
-        manager.set_req2buf(|_task| Err(-300));
+        manager.set_req2buf(|_task, _channel| Err(-300));
         manager.start_task_at(100_000, task(7), prepare());
 
         assert_eq!(

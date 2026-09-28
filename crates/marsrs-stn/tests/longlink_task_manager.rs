@@ -197,8 +197,8 @@ impl App {
 
         let answer = Arc::new(Mutex::new((0, TaskFailHandleType::Normal)));
         let decoder = answer.clone();
-        manager.set_buf2resp(move |_task, _body| *decoder.lock().unwrap());
-        manager.set_req2buf(|task| Ok(task.cgi.clone().into_bytes()));
+        manager.set_buf2resp(move |_task, _body, _channel| *decoder.lock().unwrap());
+        manager.set_req2buf(|task, _channel| Ok(task.cgi.clone().into_bytes()));
         manager.set_make_sure_authed(|_host, _user_id| true);
         manager.set_anti_avalanche_check(|_task, _body| true);
         manager.set_net_info(|| NetworkKind::Wifi);
