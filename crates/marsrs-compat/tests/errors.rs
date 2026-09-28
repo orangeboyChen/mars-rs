@@ -149,7 +149,21 @@ fn encoded_blocks(dir: &std::path::Path, name: &str, count: usize) -> Vec<u8> {
         ("out", out.to_str().unwrap()),
     ]))
     .unwrap();
-    std::fs::read(&out).unwrap()
+    let mut bytes = std::fs::read(&out).unwrap();
+
+    // Both hours of every header are written over with 0. An hour of 1 to 13 is
+    // a byte `getLogStartPos` takes for the start of a record, so a file the
+    // encoder wrote at such an hour carries a resync point in its own header:
+    // the walk lands there and reports where it came out, and not the damage
+    // these tests put in — which damage a run sees hung on the clock. `0` is no
+    // magic of any kind, and it is the hour `normalize_for_compare` writes over
+    // both of them with already.
+    let stride = bytes.len() / count;
+    for block in (0..bytes.len()).step_by(stride) {
+        bytes[block + 3] = 0;
+        bytes[block + 4] = 0;
+    }
+    bytes
 }
 
 #[test]
