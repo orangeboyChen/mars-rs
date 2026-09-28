@@ -1022,9 +1022,10 @@ impl ShortLink {
     /// `reads` is the socket: one `Recv` per item, each with the reading of the
     /// clock it came at, which is the `gettickcount()` the C++ reads inside its
     /// loop. The one reading this is handed is the start of the run, which the
-    /// C++ reads once for the connect and again for the write. [`None`] is a run whose reads ran out with the answer still not
-    /// whole, which is where the C++ would still be blocked on the socket —
-    /// [`ShortLink::end_run`] is still to be called for such a run.
+    /// C++ reads once for the connect and again for the write. [`None`] is a
+    /// run whose reads ran out with the answer still not whole, which is where
+    /// the C++ would still be blocked on the socket — [`ShortLink::end_run`]
+    /// is still to be called for such a run.
     ///
     /// The `req2buf` thread the C++ starts and waits for is not here: turning a
     /// task into a body is the app's own encoder, which comes with the task
