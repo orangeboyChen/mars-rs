@@ -57,10 +57,8 @@ internal final class XlogBackgroundFlush {
 
     /// Takes `xlog` into the appenders the next notification drains.
     ///
-    /// The one caller is [Xlog.init], and it calls this after `super.init()`:
-    /// `Xlog` is an `NSObject`, so the initializer Swift writes for it ends
-    /// with the `super.init()` it leaves unwritten — and `self` is not handed
-    /// over before that call, which is why this one is spelled out.
+    /// The one caller is [Xlog.init], and it calls this last: `self` is not
+    /// handed over before `super.init()` has run.
     ///
     /// - Parameter xlog: an appender to flush when the app leaves the screen.
     internal func add(_ xlog: Xlog) {

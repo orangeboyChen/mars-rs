@@ -59,7 +59,6 @@ public enum MarsStn {
         /// The `Task::CHANNEL_*` integers.
         public var rawValue: Int32
 
-        /// Wraps one of the `Task::CHANNEL_*` integers.
         public init(rawValue: Int32) {
             self.rawValue = rawValue
         }
@@ -92,12 +91,12 @@ public enum MarsStn {
 
     /// One header of a task: a name and a value.
     public struct Header {
-        /// The name.
         public var name: String
-        /// The value.
         public var value: String
 
-        /// The only way in: neither field has a default of its own.
+        /// The only public initializer: the memberwise one a struct gets is
+        /// internal, so without this one the type is one an app can read and
+        /// never write.
         public init(name: String, value: String) {
             self.name = name
             self.value = value
@@ -163,7 +162,8 @@ public enum MarsStn {
         case now = 0
         /// With the next connect.
         case nextConnect = 1
-        /// Never — which is any other integer, and stops STN asking.
+        /// The check never goes out, and STN stops asking: every integer but
+        /// `0` and `1` is read as this one.
         case never = 2
     }
 
@@ -338,9 +338,8 @@ public enum MarsStn {
     ///
     /// The C++ runs this on threads of its own; this port has none, so it is the
     /// app's loop that calls it, and [`dueTime`] is how long it may wait. The
-    /// two are one pair:
-    /// `MarsStn` that let an app start a task and not drain it would be a
-    /// pipeline an app can fill and never empty.
+    /// two are one pair: a `MarsStn` that let an app start a task and never
+    /// drain it would be a pipeline an app can fill and never empty.
     public static func runPending() {
         mars_stn_run_pending()
     }

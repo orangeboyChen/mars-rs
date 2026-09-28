@@ -147,7 +147,6 @@ public struct StnQuestion {
         }
     }
 
-    /// Which question.
     public let kind: Kind
     /// The host: `makesureAuthed`, `onNewDns`, `shortLinkNetworkError`.
     public let host: String

@@ -18,14 +18,12 @@ import Foundation
 /// The Swift probe of a run, behind the context `mars_sdt_run_checks` hands back
 /// with every question.
 internal final class ProbeBox {
-    /// The network the caller answered with.
     private let probe: (MarsSdt.Query) -> MarsSdt.Result
 
     /// What the answers of this run are made of, thrown away when the next
     /// question is asked: the diagnosis has read this one by then.
     private var held = Held()
 
-    /// Wraps the probe of one run.
     internal init(_ probe: @escaping (MarsSdt.Query) -> MarsSdt.Result) {
         self.probe = probe
     }
@@ -79,7 +77,6 @@ internal final class ProbeBox {
 }
 
 extension MarsSdt.Query {
-    /// What the diagnosis asked, as the Swift reads it.
     internal init(_ query: MarsSdtQuery) {
         self.init(
             probe: MarsSdt.Probe(rawValue: query.kind.rawValue) ?? .nothing,

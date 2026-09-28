@@ -119,7 +119,9 @@ public final class Xlog: NSObject {
         }
     }
 
-    /// How many seconds a log file is kept; `0` is the C++'s own ten days.
+    /// How many seconds a log file is written to before the next one is opened;
+    /// `0` is the C++'s own ten days. What keeps a file on disk is `cacheDays`
+    /// of the config, which is a different clock.
     @objc public var maxAliveTimeSeconds: Int64 = 0 {
         didSet {
             withHandle { mars_xlog_set_max_alive_duration_instance($0, maxAliveTimeSeconds) }
@@ -152,8 +154,6 @@ public final class Xlog: NSObject {
         guard isOpen else {
             return
         }
-        // `cTag` and friends: the same four strings as C pointers, which is
-        // what the closure hands back and what the C ABI copies out of.
         withCStrings(first: tag, second: file, third: function, fourth: message) { cTag, cFile, cFunction, cMessage in
             mars_xlog_write_instance(handle, level.rawValue, cTag, cFile, cFunction, line, cMessage)
         }
@@ -174,7 +174,6 @@ public final class Xlog: NSObject {
         log(level, message: message, tag: tag, file: "", function: "", line: 0)
     }
 
-    /// `LogLevel.verbose`.
     public func verbose(
         message: String,
         tag: String = "",
@@ -185,7 +184,6 @@ public final class Xlog: NSObject {
         log(.verbose, message: message, tag: tag, file: file, function: function, line: line)
     }
 
-    /// `LogLevel.debug`.
     public func debug(
         message: String,
         tag: String = "",
@@ -196,7 +194,6 @@ public final class Xlog: NSObject {
         log(.debug, message: message, tag: tag, file: file, function: function, line: line)
     }
 
-    /// `LogLevel.info`.
     public func info(
         message: String,
         tag: String = "",
@@ -207,7 +204,6 @@ public final class Xlog: NSObject {
         log(.info, message: message, tag: tag, file: file, function: function, line: line)
     }
 
-    /// `LogLevel.warning`.
     public func warning(
         message: String,
         tag: String = "",
@@ -218,7 +214,6 @@ public final class Xlog: NSObject {
         log(.warning, message: message, tag: tag, file: file, function: function, line: line)
     }
 
-    /// `LogLevel.error`.
     public func error(
         message: String,
         tag: String = "",
@@ -229,7 +224,6 @@ public final class Xlog: NSObject {
         log(.error, message: message, tag: tag, file: file, function: function, line: line)
     }
 
-    /// `LogLevel.fatal`.
     public func fatal(
         message: String,
         tag: String = "",

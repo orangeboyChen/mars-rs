@@ -7,10 +7,9 @@
 // that answers a length rather than a pointer is the C ABI's way of saying the
 // caller decides how much it can hold.
 //
-// It is here and not in [Xlog] because `platforms/apple/MarsRSXlog/Xlog.swift`
-// class an app is given, and [path(of:)] is the seam it reads a path through —
-// the same reason [withCStrings] is in `CStrings.swift` and not beside the call
-// that needs it.
+// It is here and not in [Xlog] because that file is the class an app is given,
+// and [path(of:)] is the seam it reads a path through — the same reason
+// [withCStrings] is in `CStrings.swift` and not beside the call that needs it.
 
 import Foundation
 

@@ -31,10 +31,11 @@ public enum MarsSdt {
     public struct HostPort {
         /// The host, as an IP or a name.
         public var host: String
-        /// The port.
         public var port: UInt16
 
-        /// The only way in: neither field has a default of its own.
+        /// The only public initializer: the memberwise one a struct gets is
+        /// internal, so without this one the type is one an app can read and
+        /// never write.
         public init(host: String, port: UInt16) {
             self.host = host
             self.port = port
@@ -44,12 +45,12 @@ public enum MarsSdt {
     /// One entry of the `CheckIPPorts` a diagnosis is started with: the hosts of
     /// one link, under the name that link is known by.
     public struct Link {
-        /// The name the hosts are known under.
         public var name: String
-        /// The host and port pairs of the link.
         public var ports: [HostPort]
 
-        /// The only way in: neither field has a default of its own.
+        /// The only public initializer: the memberwise one a struct gets is
+        /// internal, so without this one the type is one an app can read and
+        /// never write.
         public init(name: String, ports: [HostPort]) {
             self.name = name
             self.ports = ports
@@ -95,7 +96,6 @@ public enum MarsSdt {
 
     /// What one probe is asked.
     public struct Query {
-        /// Which probe.
         public var probe: Probe
         /// The domain for a resolve, the ip for a noop, the URL for the HTTP
         /// request and the host for a ping.
@@ -127,7 +127,6 @@ public enum MarsSdt {
         public var sent: Int32
         /// `tcp_receive` — `0` and above is an answer that came back.
         public var received: Int32
-        /// Whether what came back was the answer to the noop.
         public var isNoopResponse: Bool
 
         /// The readings of one noop, which is the only way an app answers

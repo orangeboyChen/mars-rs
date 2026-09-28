@@ -196,8 +196,8 @@ internal func withTask<R>(_ task: StnTask, body: (UnsafePointer<MarsStnTask>) ->
     }
 }
 
-/// Fills `lent` in from `strings` and `hosts`, which are in the order a task
-/// declares its own in.
+/// Fills `lent` from `strings` and `hosts`, which are ordered the way `StnTask`
+/// declares its strings and its host lists.
 private func fill(
     _ lent: inout LentTask,
     from task: StnTask,
@@ -211,9 +211,9 @@ private func fill(
         return value
     }
 
-    // Its own counter, and not `string`'s: the lists are a second array of
-    // theirs, five long, so a task whose seven strings have been taken reads
-    // past the end of it — `hosts[7]`, of five — before a host is ever lent.
+    // Its own counter, and not `string`'s: `hosts` is a second array, five
+    // long, so a counter left at the seven strings of a task would read
+    // `hosts[7]` — past its end — instead of the first host list.
     var host = 0
     func nextHosts(_ count: Int) -> MarsStnStrings {
         let value = hosts[host]
