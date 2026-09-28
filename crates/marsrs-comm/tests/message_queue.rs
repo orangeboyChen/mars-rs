@@ -379,10 +379,29 @@ fn the_run_loop_runs_until_its_breaker_says_stop() {
             duty_counter.fetch_add(1, Ordering::SeqCst);
         },
     );
-    // the breaker runs at the top of every turn, so there is exactly one duty
-    // per dispatched message and none on the turn that stops the loop
+    // the duty runs before the breaker is asked, so there is one duty per
+    // dispatched message and one more on the turn that stops the loop
     assert_eq!(handled.load(Ordering::SeqCst), 3);
-    assert_eq!(duties.load(Ordering::SeqCst), 3);
+    assert_eq!(duties.load(Ordering::SeqCst), 4);
+    destroy_message_queue(queue);
+}
+
+#[test]
+fn the_duty_runs_on_the_turn_that_stops_the_loop() {
+    // A loop that stops on its very first turn still runs its duty once: the
+    // duty is what a caller uses for a flush or a save, and the pass it would
+    // lose by asking the breaker first is the last one.
+    let queue = create_message_queue();
+    let duties = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&duties);
+    RunLoop::run(
+        queue,
+        || true,
+        move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+    assert_eq!(duties.load(Ordering::SeqCst), 1);
     destroy_message_queue(queue);
 }
 

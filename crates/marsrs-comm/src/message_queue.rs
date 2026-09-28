@@ -654,15 +654,23 @@ pub struct RunLoop;
 
 impl RunLoop {
     /// Runs until `breaker` returns `true`. `duty` is called once per turn,
-    /// before the queue is looked at, exactly like the C++ RunLoop.
+    /// before the queue is looked at and before the breaker is asked — the
+    /// order of the C++ RunLoop, so it also runs on the turn that stops the
+    /// loop.
     pub fn run(id: MessageQueueId, mut breaker: impl FnMut() -> bool, mut duty: impl FnMut()) {
         let Some(queue) = queue(id) else { return };
         set_current_thread_message_queue(id);
         loop {
+            // The duty runs before the breaker is asked, which is the order of
+            // `RunLoop::Run` in `comm/messagequeue/message_queue.cc`: the duty
+            // therefore also runs on the turn that stops the loop. A caller
+            // whose duty flushes or saves got one pass fewer than it asked for
+            // — the last one, on the turn the breaker said stop — while the
+            // breaker was asked first.
+            duty();
             if breaker() {
                 break;
             }
-            duty();
             Self::dispatch(&queue, Some(Duration::from_millis(1)));
         }
     }
