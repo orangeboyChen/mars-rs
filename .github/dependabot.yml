@@ -6,7 +6,7 @@
 #                    platforms/android/build.gradle.kts
 #
 # A pull request Dependabot raises is a pull request like any other, so it is
-# the gate rust.yml and lint.yml run on a hand-written branch: rustfmt, clippy
+# the gate rust.yml and the three lint workflows run on a hand-written branch: rustfmt, clippy
 # with `-D warnings`, the test suite on Linux/macOS/Windows in debug and in
 # release, the release build, the Android and Apple cross builds, 90 % of the
 # lines measured, `cargo doc`, and then swiftlint, ktlint and detekt. A

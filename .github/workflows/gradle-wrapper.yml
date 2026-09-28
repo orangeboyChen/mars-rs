@@ -10,7 +10,8 @@ name: Gradle wrapper
 # platforms/android/gradle/wrapper/gradle-wrapper.properties. So the wrapper
 # has an updater of its own: a `gradlew wrapper` against the newest Gradle
 # there is, and a pull request, which is what puts the branch through rust.yml
-# and lint.yml the way every other pull request goes through them.
+# and the three lint workflows the way every other pull request goes through
+# them.
 #
 # Nothing here runs a Gradle build: `wrapper` is a task of the distribution the
 # wrapper already points at, and all it rewrites is the wrapper.
@@ -40,7 +41,8 @@ jobs:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - uses: actions/checkout@v7
-      # Gradle 9 runs on 17 and up; 21 is the LTS the Kotlin jobs are on.
+      # Gradle 9 runs on 17 and up; 21 is the current LTS, and a job that runs
+      # once a week has no reason to sit on the 17 the build jobs ask for.
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
