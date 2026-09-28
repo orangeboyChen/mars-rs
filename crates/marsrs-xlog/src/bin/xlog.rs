@@ -465,9 +465,11 @@ fn encode(command: Command) -> Result<(), String> {
     }
 
     command.output(&bytes)?;
-    // A sync record is neither compressed nor encrypted — see the usage text —
-    // so a `--sync` file carries the key in its header-less records and none of
-    // the TEA: what is said here has to be true of what was written.
+    // A sync record is neither compressed nor encrypted — see the usage text
+    // — so a `--sync` file carries none of the TEA even when `--pubkey` was
+    // given, and the summary has to be true of what was written. Its records
+    // are headed like any other: the 73-byte header carries the client
+    // public key whatever mode the file was written in.
     eprintln!(
         "xlog: {} records -> {} bytes{}",
         records.len(),
