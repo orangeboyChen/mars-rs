@@ -1172,6 +1172,10 @@ impl LongLinkTaskManager {
                 continue;
             }
 
+            // `if (!first->antiavalanche_checked)` — the sequence id, the
+            // request and the avalanche check are the first pass's, and no
+            // pass but the first asks the app for a request of its own
+            let mut body = Vec::new();
             if !self.tasks[i].antiavalanche_checked {
                 // once: a retry is the same request, and the sequence id is
                 // what ties the task to the server-side report
@@ -1180,42 +1184,22 @@ impl LongLinkTaskManager {
                 // the C++ makes it on the task it then hands to `Req2Buf` and
                 // puts on the wire, not on a copy one number behind it
                 task.client_sequence_id = sequence_id;
-            }
 
-            let body = match self.encode(&task) {
-                Ok(body) => body,
-                Err(code) => {
-                    let profile = self.profile_of(&name);
-                    if !self.single_resp_handle_at(
-                        now,
-                        i,
-                        ErrCmdType::EnDecode,
-                        code,
-                        TaskFailHandleType::TaskEnd,
-                        profile,
-                    ) {
-                        i += 1;
+                match self.write_at(now, i, &name, &task) {
+                    Ok(written) => body = written,
+                    Err(still_queued) => {
+                        if still_queued {
+                            i += 1;
+                        }
+                        continue;
                     }
-                    continue;
                 }
-            };
-
-            if !self.allowed(&task, &body) {
-                let profile = self.profile_of(&name);
-                if !self.single_resp_handle_at(
-                    now,
-                    i,
-                    ErrCmdType::Local,
-                    LOCAL_ANTI_AVALANCHE,
-                    TaskFailHandleType::TaskEnd,
-                    profile,
-                ) {
-                    i += 1;
-                }
-                continue;
+                self.tasks[i].antiavalanche_checked = true;
             }
-            self.tasks[i].antiavalanche_checked = true;
 
+            // `longlink->Channel()->SvrTrigOff(); MakeSureConnected()` — and
+            // the connect is made before the task is handed to the app again,
+            // not after
             if !self.make_sure_connected(&name) {
                 if task.channel_id != 0 {
                     // a task that asked for a link that is not up is one that
@@ -1252,6 +1236,22 @@ impl LongLinkTaskManager {
                     i += 1;
                 }
                 continue;
+            }
+
+            // `if (0 == bufreq.Length())` — the request of a pass that never
+            // asked for one, which the C++'s `bufreq` being a local makes
+            // every pass after the first: the app is asked again on the first
+            // pass the link is up, under the sequence id it was given
+            if body.is_empty() {
+                match self.write_at(now, i, &name, &task) {
+                    Ok(written) => body = written,
+                    Err(still_queued) => {
+                        if still_queued {
+                            i += 1;
+                        }
+                        continue;
+                    }
+                }
             }
 
             // a cgi that was answered already: the C++ asks here too, and
@@ -1566,6 +1566,56 @@ impl LongLinkTaskManager {
         match self.anti_avalanche.as_mut() {
             Some(check) => check(task, body),
             None => true,
+        }
+    }
+
+    /// What `__RunOnStartTask` does with a task it cannot put on the wire:
+    /// end it, and answer whether it left the queue.
+    fn end_at(
+        &mut self,
+        now: u64,
+        at: usize,
+        name: &str,
+        err_type: ErrCmdType,
+        err_code: i32,
+        handle: TaskFailHandleType,
+    ) -> bool {
+        let profile = self.profile_of(name);
+        self.single_resp_handle_at(now, at, err_type, err_code, handle, profile)
+    }
+
+    /// `Req2Buf` and `fun_anti_avalanche_check_` in one step — the C++'s two
+    /// asks, which it makes in two places (`longlink_task_manager.cc:502-529`
+    /// and `:558-586`): the request the app wrote and the check let out, or
+    /// [`Err`] when the task was ended instead. The error is whether the task
+    /// is *still* in the queue, which is what the caller's index needs.
+    fn write_at(&mut self, now: u64, at: usize, name: &str, task: &Task) -> Result<Vec<u8>, bool> {
+        let body = match self.encode(task) {
+            Ok(body) => body,
+            Err(code) => {
+                let left = self.end_at(
+                    now,
+                    at,
+                    name,
+                    ErrCmdType::EnDecode,
+                    code,
+                    TaskFailHandleType::TaskEnd,
+                );
+                return Err(!left);
+            }
+        };
+        if self.allowed(task, &body) {
+            Ok(body)
+        } else {
+            let left = self.end_at(
+                now,
+                at,
+                name,
+                ErrCmdType::Local,
+                LOCAL_ANTI_AVALANCHE,
+                TaskFailHandleType::TaskEnd,
+            );
+            Err(!left)
         }
     }
 
@@ -2805,6 +2855,66 @@ mod tests {
             "and it kept its sequence id"
         );
         assert_eq!(manager.tasks()[0].task.client_sequence_id, 1);
+    }
+
+    /// `longlink_task_manager.cc:498-531` and `:558-587` — the app is asked
+    /// for the request on the first pass, and then again on the first pass the
+    /// link is up, because the `bufreq` it wrote into is a local. A link that
+    /// is not up is not a reason to ask on every pass: the avalanche check
+    /// counts every request it sees, so a task that cannot go out yet would
+    /// drive it to refuse one that could.
+    #[test]
+    fn a_link_that_is_not_up_does_not_ask_for_the_request_again() {
+        let mut manager = manager();
+        let (sent, _, _, _) = wire(&mut manager);
+        let up = Arc::new(Mutex::new(false));
+        let link_up = Arc::clone(&up);
+        manager.set_make_sure_connected(move |_name| {
+            *link_up
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        });
+        let mut next: u16 = 0;
+        manager.set_gen_sequence_id(move || {
+            next += 1;
+            next
+        });
+        let asked: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&asked);
+        manager.set_req2buf(move |task| {
+            record
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(task.client_sequence_id);
+            Ok(vec![0; 4])
+        });
+
+        manager.start_task_at(NOW, task(7), Task::CHANNEL_LONG);
+        manager.run_loop_at(NOW + 10);
+        manager.run_loop_at(NOW + 20);
+        assert_eq!(
+            *asked
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![1],
+            "the request was written once while the link was down"
+        );
+
+        *up.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+        manager.run_loop_at(NOW + 30);
+        assert_eq!(
+            *asked
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![1, 1],
+            "and again, under the same sequence id, once the link is up"
+        );
+        assert_eq!(
+            sent.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            1
+        );
     }
 
     #[test]
