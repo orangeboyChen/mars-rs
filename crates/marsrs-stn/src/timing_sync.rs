@@ -61,7 +61,13 @@ pub type NetInfo = dyn FnMut() -> i32 + Send;
 pub type RequestSync = dyn FnMut() + Send;
 
 /// The alarm that asks the app to sync: one due time a host reads off it,
-/// armed again whenever the app, the account or the network changes.
+/// armed by [`TimingSync::new`] and armed again when the host hands in one
+/// of the three callbacks the wait is read from, when the app's active
+/// state or the network changes, when the long link goes down, and when
+/// the alarm goes off. What those callbacks answer is read at each of
+/// those moments, not watched afterwards: an app that logs in and
+/// nothing else waits out the interval the alarm was armed with, and
+/// [`TimingSync::on_active_changed`] is what arms it again.
 pub struct TimingSync {
     /// `alarm_` — the reading it is due at, [`None`] for one that was
     /// cancelled.
