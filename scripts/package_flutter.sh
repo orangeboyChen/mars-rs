@@ -76,7 +76,11 @@ package_one() {
     unzip -q "$zip" -d "$pkg/ios/Frameworks"
     test -d "$pkg/ios/Frameworks/$framework" || { echo "::error::$zip held no $framework"; exit 1; }
     cp crates/marsrs-ffi/include/mars_xlog.h "$pkg/ios/include/"
-    # The licence of the port, which the podspec names.
+    # The licence of the port, which the podspec names as `../LICENSE` and
+    # pub.dev takes out of the package's root. It is checked in under
+    # platforms/flutter/ too — a checkout publishes without this script — so
+    # what this copy buys is that the two cannot drift: the one that is packed
+    # is always the one at the root of this repository.
     cp LICENSE "$pkg/LICENSE"
 
     python3 - "$version" "$pkg" "$name" "$aar" <<'PY'
