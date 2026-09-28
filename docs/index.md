@@ -27,6 +27,10 @@ features:
     details: zlib or zstd per file, ECDH + AES-GCM per record when you give it a public key, and a size or an age at which a file is closed and a new one opened.
 ---
 
+These pages are the xlog documentation: the logger, and every platform it ships
+to. STN and the SDT diagnosis come in the same packages and have no pages of
+their own yet.
+
 ## Pick your platform
 
 Every release ships a package per platform — except the two that go to a
