@@ -714,7 +714,9 @@ pub struct TaskProfile {
     /// which is what keeps a retry from being given another sequence id.
     pub antiavalanche_checked: bool,
     /// `prepare_profile` — what the caller did before the task was handed
-    /// over, which no retry does again.
+    /// over. A retry resets it rather than doing it again: the call time
+    /// becomes the retry's, both host readings are cleared, and what stands
+    /// here at the end is the last try's and not the first's.
     pub prepare_profile: PrepareProfile,
     /// `transfer_profile` — what the run that went out is: a retry resets
     /// this one and keeps the two above.
@@ -811,9 +813,9 @@ impl TaskProfile {
         self.history.push(self.transfer_profile.clone());
     }
 
-    /// `InitSendParam()` — what a retry starts from: the run is gone and the
-    /// readings of it are cleared, which is what makes the timeouts of the next
-    /// try start over.
+    /// `InitSendParam()` — what a retry starts from: the run is gone, the
+    /// readings of it are cleared, and the preparation is reset to this
+    /// moment, which is what makes the timeouts of the next try start over.
     pub fn init_send_param_at(&mut self, now: u64) {
         self.prepare_profile.reset_at(now);
         self.transfer_profile.reset();

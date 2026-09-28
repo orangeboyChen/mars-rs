@@ -281,7 +281,10 @@ pub struct DnsProfile {
     /// `err_type` — [`ErrCmdType::Ok`] until [`DnsProfile::failed`].
     pub err_type: ErrCmdType,
     /// `err_code` — the code for it: `-1` for a question that did not come
-    /// back, `0` for one that did.
+    /// back. `0` is not a question that did: it is what a profile is born
+    /// with, so a caller that wants to know whether the question is over
+    /// reads `end_time`, and not this — a question still out and one that
+    /// came back carry the same `0`.
     pub err_code: i32,
     /// `dnstype` — which dns it was.
     pub dnstype: DnsType,

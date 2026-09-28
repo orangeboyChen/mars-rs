@@ -106,8 +106,9 @@ pub struct Response {
     pub err_type: ErrCmdType,
     /// `_error_code` — and the code for it.
     pub err_code: i32,
-    /// `_cmdid` — the command the answer is for, which is what a long-link
-    /// task is matched to.
+    /// `_cmdid` — the command the answer carries. Nothing matches on it: a
+    /// task is found by `taskid`, and `cmdid` is handed to the push as it
+    /// came in.
     pub cmdid: u32,
     /// `_taskid` — what the queue finds the task by. [`Task::INVALID_TASK_ID`]
     /// is the server pushing.
@@ -966,7 +967,10 @@ impl LongLinkTaskManager {
 
     /// [`Buf2Resp`] — the app reads the body of an answer. Unset, every body
     /// is `0` and `kTaskFailHandleNormal`, which is a task that succeeded: a
-    /// host that hands none in gets a queue in which nothing ever fails.
+    /// host that hands none in gets one no answer of its own can fail. A
+    /// failure of any other kind is still one — a socket that went wrong,
+    /// an HTTP status, a queue that ran the task out of time — because none
+    /// of them reaches the decode this hook stands in for.
     pub fn set_buf2resp(
         &mut self,
         buf2resp: impl FnMut(&Task, &[u8]) -> (i32, TaskFailHandleType) + Send + 'static,
