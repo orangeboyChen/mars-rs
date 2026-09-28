@@ -61,7 +61,7 @@ pub const RUN_LOOP_TIMING: u64 = 1000;
 /// One of the five ways `__RunOnTimeout` notices a task that answered nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Timeout {
-    /// `kEctLocalTaskTimeout` — the task ran out of time, retries and all. It is
+    /// `kEctLocalTaskTimeout`— the task ran out of time, retries and all. It is
     /// the one timeout that applies to a task whose run never started.
     Task,
     /// `kEctHttpReadWriteTimeout` — the whole read took too long.
@@ -133,9 +133,10 @@ impl RespHandle {
 /// the host is handed to start one task on.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunRequest {
-    /// `bufreq` — what `Req2Buf` wrote, which is the same bytes the anti-avalanche
-    /// check weighed and the two timeouts were worked out from: the C++ hands
-    /// them to `SendRequest`, so a host does not encode the task twice.
+    /// `bufreq`— what `Req2Buf` wrote, which is the same bytes the
+    /// anti-avalanche check weighed and the two timeouts were worked out from:
+    /// the C++ hands them to `SendRequest`, so a host does not encode the task
+    /// twice.
     pub body: Vec<u8>,
     /// `use_proxy` — whether this try goes through a proxy.
     pub use_proxy: bool,
@@ -155,11 +156,11 @@ pub struct RunRequest {
 /// decoder reads out of the body.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Response {
-    /// `_err_type`.
+    /// `_err_type` — why the run ended, as an [`ErrCmdType`].
     pub err_type: ErrCmdType,
     /// `_status` — the error code, or the HTTP status of an answer.
     pub status: i32,
-    /// `_body`.
+    /// `_body` — what came back, which is what `Buf2Resp` is asked to read.
     pub body: Vec<u8>,
     /// `_cancel_retry` — a run that asked for the task not to be tried again.
     pub cancel_retry: bool,
@@ -187,9 +188,10 @@ pub type DestroyRun = dyn FnMut(RunId) + Send;
 pub type Callback =
     dyn FnMut(ErrCmdType, i32, TaskFailHandleType, &Task, u32, &ConnectProfile) -> i32 + Send;
 
-/// `fun_notify_network_err_` — an error the app is told about, and the pair it
-/// happened on. The C++ passes `__LINE__` too, which is its own bookkeeping and
-/// not a port's.
+/// `fun_notify_network_err_` — a task the queue is done with, and the pair it
+/// was tried on: the app hears of one that answered as well as one that did
+/// not. The C++ passes `__LINE__` too, which is its own bookkeeping and not a
+/// port's.
 pub type NotifyNetworkErr = dyn FnMut(ErrCmdType, i32, &str, &str, u16) + Send;
 
 /// `fun_notify_retry_all_tasks` — a session timeout, or an answer that could
@@ -227,21 +229,32 @@ pub type NetInfo = dyn FnMut() -> NetworkKind + Send;
 /// taken for the request it is a retry of.
 pub type GenSequenceId = dyn FnMut() -> u16 + Send;
 
-/// `ShortLinkTaskManager`.
+/// The queue the short-link tasks wait in: the order they go out in, the
+/// timeouts a task runs into, and the socket pool the ones that asked for
+/// it come back to.
+///
+/// A run is not a thread and not a socket here: the host starts one
+/// ([`StartRun`]) and answers with it, and [`RunId`] is the number it is
+/// known by.
 pub struct ShortLinkTaskManager {
     /// `lst_cmd_`, sorted by [`crate::task_profile::compare_task`].
     tasks: Vec<TaskProfile>,
-    /// `default_use_proxy_`.
+    /// `default_use_proxy_` — whether a task that said nothing either way is
+    /// tried through a proxy.
     default_use_proxy: bool,
-    /// `tasks_continuous_fail_count_`.
+    /// `tasks_continuous_fail_count_` — failures in a row, which is what the
+    /// dynamic timeout grows on.
     tasks_continuous_fail_count: u32,
-    /// `dynamic_timeout_`.
+    /// `dynamic_timeout_` — the timeout status of the network as the queue
+    /// has seen it, which is what a task's own timeouts come from.
     dynamic_timeout: DynamicTimeout,
-    /// `debug_host_`.
+    /// `debug_host_` — the host every task is pointed at instead of its own;
+    /// empty is "no override".
     debug_host: String,
-    /// `socket_pool_`.
+    /// `socket_pool_` — the sockets whose server said to keep them, and how
+    /// long each has left.
     socket_pool: SocketPool,
-    /// `task_intercept_`.
+    /// `task_intercept_` — who may look at a task before it goes out.
     intercept: TaskIntercept,
     /// What the next run an unset [`StartRun`] is asked for is called, so that
     /// two runs never answer for the same task.
@@ -330,12 +343,15 @@ impl ShortLinkTaskManager {
         true
     }
 
-    /// `HasTask(_taskid)`.
+    /// `HasTask(_taskid)` — whether a task of that id is still in the queue:
+    /// one that answered, or that was stopped, is not.
     pub fn has_task(&self, taskid: u32) -> bool {
         self.tasks.iter().any(|p| p.task.taskid == taskid)
     }
 
-    /// `ClearTasks()`.
+    /// `ClearTasks()` — every task leaves the queue, and the run each was on
+    /// is over. Nothing of it is reported: this is the queue being emptied,
+    /// and not a task that ended.
     pub fn clear_tasks(&mut self) {
         for at in 0..self.tasks.len() {
             self.stop_run_at(at);
@@ -640,12 +656,13 @@ impl ShortLinkTaskManager {
             })
     }
 
-    /// `lst_cmd_`.
+    /// `lst_cmd_` — the tasks in the order they go out in, and not in the
+    /// order they were asked for.
     pub fn tasks(&self) -> &[TaskProfile] {
         &self.tasks
     }
 
-    /// How many tasks are in the queue.
+    /// How many tasks are in the queue, whichever state each is in.
     pub fn len(&self) -> usize {
         self.tasks.len()
     }
@@ -684,12 +701,14 @@ impl ShortLinkTaskManager {
         self.debug_host = host.into();
     }
 
-    /// `debug_host_`.
+    /// `debug_host_` — the host every task is pointed at instead of its own;
+    /// empty when the app set none.
     pub fn debug_host(&self) -> &str {
         &self.debug_host
     }
 
-    /// `socket_pool_`.
+    /// `socket_pool_` — the sockets a server said to keep, which a host reads
+    /// to hand one to a run instead of making a new one.
     pub fn socket_pool(&mut self) -> &mut SocketPool {
         &mut self.socket_pool
     }
@@ -707,12 +726,14 @@ impl ShortLinkTaskManager {
         self.socket_pool.get_socket_at(now, item)
     }
 
-    /// `task_intercept_`.
+    /// `task_intercept_` — the answers the queue kept to hand out again, so
+    /// that a cgi that was answered once is not asked for twice.
     pub fn intercept(&mut self) -> &mut TaskIntercept {
         &mut self.intercept
     }
 
-    /// `dynamic_timeout_`.
+    /// `dynamic_timeout_` — the network's timeout status as this queue has
+    /// seen it, which is what a task's own two timeouts are worked out from.
     pub fn dynamic_timeout(&mut self) -> &mut DynamicTimeout {
         &mut self.dynamic_timeout
     }
@@ -726,12 +747,15 @@ impl ShortLinkTaskManager {
         self.start = Some(Box::new(start));
     }
 
-    /// `ShortLinkChannelFactory::Destory`.
+    /// [`DestroyRun`] — the queue is done with a run. Unset, nothing is
+    /// called: a host that keeps no run of its own needs none.
     pub fn set_destroy_run(&mut self, destroy: impl FnMut(RunId) + Send + 'static) {
         self.destroy = Some(Box::new(destroy));
     }
 
-    /// `fun_callback_`.
+    /// [`Callback`] — the app is asked about a task that is over. Unset, the
+    /// answer it would have given is `0`, which is the code a task that
+    /// answered is remembered with.
     pub fn set_callback(
         &mut self,
         callback: impl FnMut(ErrCmdType, i32, TaskFailHandleType, &Task, u32, &ConnectProfile) -> i32
@@ -741,7 +765,8 @@ impl ShortLinkTaskManager {
         self.callback = Some(Box::new(callback));
     }
 
-    /// `fun_notify_network_err_`.
+    /// [`NotifyNetworkErr`] — the app is told about a task the queue is done
+    /// with, whether it answered or did not. Unset, none of it is told.
     pub fn set_notify_network_err(
         &mut self,
         notify: impl FnMut(ErrCmdType, i32, &str, &str, u16) + Send + 'static,
@@ -749,7 +774,9 @@ impl ShortLinkTaskManager {
         self.notify_network_err = Some(Box::new(notify));
     }
 
-    /// `fun_notify_retry_all_tasks`.
+    /// [`NotifyRetryAllTasks`] — the app is asked to look at every task
+    /// again. Unset, the task that asked for it stays in the queue, and
+    /// [`RespHandle::Deferred`] is what the host is answered with.
     pub fn set_notify_retry_all_tasks(
         &mut self,
         notify: impl FnMut(ErrCmdType, i32, TaskFailHandleType, u32, &str) + Send + 'static,
@@ -757,12 +784,15 @@ impl ShortLinkTaskManager {
         self.notify_retry_all_tasks = Some(Box::new(notify));
     }
 
-    /// `fun_shortlink_response_`.
+    /// [`ResponseStatus`] — the status of every answer, including one about a
+    /// task the queue has forgotten: the C++ asks before it looks the worker
+    /// up, and so does this.
     pub fn set_response_status(&mut self, status: impl FnMut(i32) + Send + 'static) {
         self.response_status = Some(Box::new(status));
     }
 
-    /// `Req2Buf`.
+    /// [`Req2Buf`] — the app writes the body of a request. Unset, a task goes
+    /// out with an empty one, which is a body and not an error.
     pub fn set_req2buf(
         &mut self,
         req2buf: impl FnMut(&Task) -> Result<Vec<u8>, i32> + Send + 'static,
@@ -770,7 +800,9 @@ impl ShortLinkTaskManager {
         self.req2buf = Some(Box::new(req2buf));
     }
 
-    /// `Buf2Resp`.
+    /// [`Buf2Resp`] — the app reads the body of an answer. Unset, every body
+    /// is `0` and `kTaskFailHandleNormal`, which is a task that succeeded: a
+    /// host that hands none in gets a queue in which nothing ever fails.
     pub fn set_buf2resp(
         &mut self,
         buf2resp: impl FnMut(&Task, &[u8]) -> (i32, TaskFailHandleType) + Send + 'static,
@@ -787,7 +819,8 @@ impl ShortLinkTaskManager {
         self.make_sure_authed = Some(Box::new(make_sure_authed));
     }
 
-    /// `fun_anti_avalanche_check_`.
+    /// [`AntiAvalancheCheck`] — whether a task may go out at all. Unset,
+    /// every one may.
     pub fn set_anti_avalanche_check(
         &mut self,
         check: impl FnMut(&Task, &[u8]) -> bool + Send + 'static,
