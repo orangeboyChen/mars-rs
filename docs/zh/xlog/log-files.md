@@ -2,7 +2,7 @@
 
 ## 在哪，叫什么
 
-一个 appender 每天往配置里的日志目录写一个文件：
+一个 appender 一天写一个文件，写在配置给的日志目录里：
 
 ```text
 <logDir>/<namePrefix>_YYYYMMDD.xlog
@@ -38,10 +38,10 @@ mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK，或负的错�
 
 ## 异步：记录可能还在缓存里
 
-默认模式把记录交给写线程、先进 mmap 缓存文件，所以 write 返回时字节还没进日志文件。
-缓存放在 `cacheDir`，没给就放在日志文件旁边。
+默认模式下记录先落进一个 mmap 缓存文件，再由写线程搬进日志文件，所以 `write` 返回的时候
+字节还没进日志文件。缓存放在 `cacheDir`，没给就放在日志文件旁边。
 
-**读文件前、上传前要 flush** —— 本进程要读，或者另一个进程在本进程还在写的时候要读：
+**读之前、上传之前先 flush** —— 本进程自己要读，或者另一个进程在本进程还写着的时候要读：
 
 ::: code-group
 
