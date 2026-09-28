@@ -97,8 +97,11 @@ impl CachedSocket {
     }
 }
 
-/// The sockets short links leave behind, one per ip, port and host, for the
-/// next task that wants the same pair.
+/// The sockets short links leave behind, keyed by the transport, ip, port
+/// and host each was made for: a task is handed the one most recently put
+/// in that matches all four, and a key can hold more than one, because
+/// every [`SocketPool::add_cache`] is another entry in the deque rather
+/// than a replacement for the socket already under it.
 pub struct SocketPool {
     /// `use_cache_`
     use_cache: bool,
