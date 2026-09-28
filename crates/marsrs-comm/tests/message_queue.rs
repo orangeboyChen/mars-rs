@@ -3,6 +3,7 @@
 //! Every test uses its own queue: the default one is process-wide and the
 //! tests run in parallel.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Barrier, Mutex};
@@ -727,6 +728,128 @@ fn replacing_a_periodic_message_while_it_runs_reaches_the_next_run() {
         "the replacement never reached a run: {seen:?}"
     );
     cancel_message_by_handler(&handler);
+    destroy_message_queue(queue);
+}
+
+/// Two threads dispatching the same queue run two messages at once, and the
+/// C++ keeps one `runing_message_id` per run loop of the queue
+/// (`lst_runloop_info`, `comm/messagequeue/message_queue.cc`) — one per thread
+/// dispatching it. A single post for the whole queue is the second dispatch
+/// overwriting the first, and a handler asking about the message it is running
+/// being answered "it is not there" while the other dispatch is under way.
+#[test]
+fn two_dispatchers_at_once_each_find_the_message_they_are_running() {
+    let queue = create_message_queue();
+    let posts: Arc<Mutex<HashMap<u64, MessagePost>>> = Arc::new(Mutex::new(HashMap::new()));
+    let found: Arc<Mutex<HashMap<u64, bool>>> = Arc::new(Mutex::new(HashMap::new()));
+    // both handlers are inside their own message before either one asks
+    let both_running = Arc::new(Barrier::new(2));
+
+    let handler_posts = Arc::clone(&posts);
+    let handler_found = Arc::clone(&found);
+    let handler_barrier = Arc::clone(&both_running);
+    let handler = install_message_handler(
+        move |message: &mut Message| {
+            let post = handler_posts.lock().unwrap()[&message.title.0];
+            handler_barrier.wait();
+            let is_found = found_message(&post);
+            handler_found
+                .lock()
+                .unwrap()
+                .insert(message.title.0, is_found);
+        },
+        false,
+        queue,
+    );
+
+    for title in [1_u64, 2] {
+        let post = post_message(
+            &handler,
+            Message::new(MessageTitle(title), "running"),
+            MessageTiming::Immediate,
+        );
+        posts.lock().unwrap().insert(title, post);
+    }
+
+    let dispatchers: Vec<_> = (0..2)
+        .map(|_| {
+            thread::spawn(move || RunLoop::dispatch_timeout(queue, Duration::from_millis(2_000)))
+        })
+        .collect();
+    for dispatcher in dispatchers {
+        assert!(dispatcher.join().expect("the dispatcher panicked"));
+    }
+
+    assert_eq!(
+        *found.lock().unwrap(),
+        HashMap::from([(1, true), (2, true)]),
+        "a message the queue was running was not found"
+    );
+    destroy_message_queue(queue);
+}
+
+/// What a `wait_message` waits for is the post it was asked about, and not for
+/// the queue to go quiet. Clearing one queue-wide post reports both of two
+/// running messages as over, so a wait on the one that is still running
+/// returns while its handler has yet to finish.
+#[test]
+fn wait_message_waits_for_the_post_it_was_asked_about() {
+    let queue = create_message_queue();
+    let (started, running) = mpsc::channel();
+    let finished = Arc::new(Mutex::new(Vec::new()));
+    let handler_finished = Arc::clone(&finished);
+    let handler_started = started;
+    let both_running = Arc::new(Barrier::new(2));
+    let handler_barrier = Arc::clone(&both_running);
+    let handler = install_message_handler(
+        move |message: &mut Message| {
+            let title = message.title.0;
+            handler_barrier.wait();
+            handler_started.send(title).unwrap();
+            // the slow message: it is still running when the other one has
+            // already been handled
+            if title == 1 {
+                thread::sleep(Duration::from_millis(150));
+            }
+            handler_finished.lock().unwrap().push(title);
+        },
+        false,
+        queue,
+    );
+
+    let mut posts = HashMap::new();
+    for title in [1_u64, 2] {
+        posts.insert(
+            title,
+            post_message(
+                &handler,
+                Message::new(MessageTitle(title), "running"),
+                MessageTiming::Immediate,
+            ),
+        );
+    }
+
+    let dispatchers: Vec<_> = (0..2)
+        .map(|_| {
+            thread::spawn(move || RunLoop::dispatch_timeout(queue, Duration::from_millis(2_000)))
+        })
+        .collect();
+    // both handlers have reached their message, so neither post is pending
+    // any more and both are waiting for their handlers to finish
+    for _ in 0..2 {
+        running
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a message never ran");
+    }
+
+    assert!(wait_message(&posts[&1], 5_000));
+    assert!(
+        finished.lock().unwrap().contains(&1),
+        "the wait returned before the message it was asked about had been handled"
+    );
+    for dispatcher in dispatchers {
+        assert!(dispatcher.join().expect("the dispatcher panicked"));
+    }
     destroy_message_queue(queue);
 }
 
