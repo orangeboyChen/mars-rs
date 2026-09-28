@@ -976,6 +976,20 @@ impl LongLink {
             });
         }
 
+        // `com_connect.TryCount()` — how many of the candidates the dial was
+        // started on: every one up to the pair that won, and any after it
+        // that was still in the air when it did
+        // (`complexconnect.cc:681`). A connect that came back with no socket
+        // at all won no pair, and `index` is then whatever the operator left
+        // in the profile — the port must not read that as a winner, so what
+        // the dial was started on is not counted either.
+        if let Ok(winner) = usize::try_from(connected.index) {
+            let tried = (0..candidates.len())
+                .filter(|index| *index <= winner || connected.is_connecting(*index))
+                .count();
+            self.profile.tryip_count = i32::try_from(tried).unwrap_or(i32::MAX);
+        }
+
         self.profile.ip_index = connected.index;
         if let Some(candidate) =
             candidates.get(usize::try_from(connected.index).unwrap_or(usize::MAX))
@@ -2192,6 +2206,65 @@ mod tests {
         assert_eq!(profile.dns_endtime, 1_000);
         assert!(!profile.nat64, "the local stack is v4");
         assert_eq!(profile.ip_items.len(), 2);
+    }
+
+    /// `longlink.cc:684` — the profile the app is handed says how many of the
+    /// candidates the dial was started on, which is `TryCount()` and not the
+    /// pair that won: a winner that came late means several were dialled.
+    #[test]
+    fn a_connect_counts_the_pairs_the_dial_was_started_on() {
+        let (mut link, _) = link();
+        link.set_longlink_items(|_| {
+            vec![
+                item("1.1.1.1", 443, "long.example"),
+                item("2.2.2.2", 80, "long.example"),
+                item("3.3.3.3", 80, "long.example"),
+            ]
+        });
+        link.make_sure_connected();
+
+        // the second pair won, and the third one's dial was already in the air
+        let mut profile = SocketProfile {
+            index: 1,
+            ..SocketProfile::default()
+        };
+        profile.set_connecting(2, true);
+        link.operator = Some(Box::new(Host {
+            profile,
+            ..Host::new(Seen::default())
+        }));
+        assert!(link.connect_at(1_000).is_ok());
+        assert_eq!(link.profile().tryip_count, 3);
+
+        // a first pair that answered at once is a dial of one
+        link.running = true;
+        link.operator = Some(Box::new(Host::new(Seen::default())));
+        assert!(link.connect_at(2_000).is_ok());
+        assert_eq!(link.profile().tryip_count, 1);
+    }
+
+    #[test]
+    fn a_connect_that_won_no_socket_counts_no_pair() {
+        let (mut link, _) = link();
+        link.set_longlink_items(|_| {
+            vec![
+                item("1.1.1.1", 443, "long.example"),
+                item("2.2.2.2", 80, "long.example"),
+            ]
+        });
+        link.make_sure_connected();
+        // an operator that never came back with a socket: its profile keeps
+        // the `index` it was built with, and reading that as the pair that
+        // won would count a dial that got nowhere
+        link.operator = Some(Box::new(Host {
+            profile: SocketProfile {
+                error_code: ETIMEDOUT,
+                ..SocketProfile::default()
+            },
+            ..Host::new(Seen::default())
+        }));
+        assert!(link.connect_at(1_000).is_err());
+        assert_eq!(link.profile().tryip_count, 0);
     }
 
     #[test]
