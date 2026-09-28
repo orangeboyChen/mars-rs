@@ -968,8 +968,15 @@ impl AppenderInner {
         // `boost::filesystem::space(cachedir).available >= 1 GiB`.
         match crate::sys::available_space(cachedir) {
             Some(available) => available >= MIN_FREE_SPACE,
-            // The query failed: a disk whose space is unknown is not a reason
-            // to keep the records in the cache directory.
+            // A failed query leaves the space unknown, and unknown is read
+            // as roomy rather than full: the value boost's own non-throwing
+            // overload reports, `uintmax_t(-1)` for `available`, clears the
+            // threshold, and the C++ has no arm to mirror — its `space()`
+            // throws and the exception escapes `__Log2File`. An unreadable
+            // disk therefore caches, and [`Self::log2file`] holds a cached
+            // record back: it writes the cache file and returns without
+            // moving it into the log directory, which a later call that can
+            // read the disk does.
             None => true,
         }
     }
