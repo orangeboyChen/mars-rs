@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 #
 # Packages the two CocoaPods pods that carry a binary — MarsRSXlog and MarsRSNet
-# — as <asset-dir>/marsrs-cocoapods-<half>-<version>.zip, which is what
-# `pod install` downloads for them.
+# — as marsrs-cocoapods-<half>-<version>.zip, which is what `pod install`
+# downloads for them.
 #
 #   scripts/package_cocoapods.sh <version> <asset-dir>
 #
-# <asset-dir> is where release.yml downloaded the apple job's artifact to — the
-# directory marsrs-xlog.xcframework.zip and marsrs-net.xcframework.zip are in.
+# <asset-dir> is read and dist/ is written: the first is where release.yml
+# downloaded the apple job's artifact to — the directory
+# marsrs-xlog.xcframework.zip and marsrs-net.xcframework.zip are in — and the
+# second is the directory the release publishes out of, so an archive left
+# beside what it was made from would still have to be moved there. In the
+# release the two are one directory; run by hand, dist/ is where it lands.
 # Nothing is built here and no Rust toolchain is needed: the frameworks are the
 # apple job's, and the Swift is the port's own, taken out of Sources/ rather
 # than compiled — the app's Xcode is what compiles it.
@@ -44,6 +48,7 @@ case "$assets" in
     *) assets="$root/$assets" ;;
 esac
 
+# what the release publishes out of — see the header
 out="$root/dist"
 mkdir -p "$out"
 
