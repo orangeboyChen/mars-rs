@@ -216,6 +216,48 @@ fn the_key_pair_goes_where_out_says() {
 }
 
 #[test]
+fn the_key_file_is_the_owners_alone_and_is_not_written_over() {
+    let dir = scratch("keygen-file");
+    let key = dir.join("xlog.key");
+
+    let (ok, _, err) = run(&["keygen", "-o", &key.display().to_string()]);
+    assert!(ok, "keygen failed: {err}");
+    let first = std::fs::read_to_string(&key).expect("read the key file");
+
+    // The private key is not given away with the file: on Unix it is created
+    // for its owner alone, and not with the `0666 & umask` a plain `fs::write`
+    // would leave it with.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = std::fs::metadata(&key)
+            .expect("the key file")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "the private key is readable by more than its owner"
+        );
+    }
+
+    // And it is not replaced: a pair is the only thing that reads every log it
+    // was the key of, so a second run over the same file is refused.
+    let (ok, _, err) = run(&["keygen", "-o", &key.display().to_string()]);
+    assert!(!ok, "a second keygen overwrote the first pair");
+    assert!(
+        err.contains("is already there"),
+        "the error does not say why: {err}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&key).expect("read the key file"),
+        first,
+        "the first pair was replaced"
+    );
+}
+
+#[test]
 fn keygen_takes_no_other_option_and_no_input() {
     // An option of another subcommand: the answer names the one that takes it.
     for (arg, why) in [

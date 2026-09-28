@@ -60,6 +60,11 @@ every platform. The private key is what `xlog decode --privkey` takes, and the
 only thing that reads those logs back: it is not in the app, and it is not in the
 file either, so a pair nobody wrote down is a log nobody can read.
 
+`--out` creates that file for you alone — `0600` on Unix — and will not write
+over one that is already there. A private key is the only thing that reads every
+log it was the pair of, so giving it away with the file, or replacing it, is
+losing them.
+
 Two runs make two pairs — a pair is drawn from the system's generator and kept
 nowhere — so make one and keep it, the way a deploy key is kept.
 

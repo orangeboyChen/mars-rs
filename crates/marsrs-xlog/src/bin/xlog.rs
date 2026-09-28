@@ -22,7 +22,8 @@
 //!   with, and the 64 that `decode` reads what it wrote back with. It is drawn
 //!   from the system's generator and kept nowhere, so a pair that was not
 //!   written down is a file nobody can read — give it `--out`, or keep what it
-//!   printed.
+//!   printed. `--out` creates the file for its owner alone, and never over one
+//!   that is already there.
 //!
 //! An async record is compressed whichever `--compress` says: it is framed as
 //! zlib or zstd, there is no framing for one that is not, and every decoder
@@ -102,7 +103,8 @@ argument, `-o FILE`.
 characters a `pubKey` is configured with, and the 64 that `xlog decode
 --privkey` reads the file back with. It is made of nothing but the system's
 randomness and is kept nowhere, so a pair nobody wrote down is a log nobody can
-read.";
+read. `--out=PATH` writes those two lines to a file made for you alone — 0600
+on Unix — and refuses to write over one that is already there.";
 
 /// The subcommand the command line named — which options belong to the command
 /// line at all, and what a `Command` is parsed for.
@@ -503,7 +505,20 @@ fn keygen(command: Command) -> Result<(), String> {
         to_hex(public),
         to_hex(&private.to_bytes())
     );
-    command.output(pair.as_bytes())?;
+
+    // A file the private half is written to is not the same destination a `.xlog`
+    // is: it is created for its owner alone, and it is never written over — see
+    // [`create_key_file`]. The terminal has neither a mode nor a file to lose.
+    match command.out.as_deref() {
+        Some(path) if path != "-" => {
+            let mut file = create_key_file(path)?;
+            file.write_all(pair.as_bytes())
+                .map_err(|e| format!("write {path}: {e}"))?;
+        }
+        _ => std::io::stdout()
+            .write_all(pair.as_bytes())
+            .map_err(|e| format!("write standard output: {e}"))?,
+    }
     eprintln!(
         "xlog: a key pair{} — the public key goes in the config, the private one \
          reads the file back",
@@ -513,6 +528,45 @@ fn keygen(command: Command) -> Result<(), String> {
         }
     );
     Ok(())
+}
+
+/// Creates the file a key pair is written to: for its owner alone, and only when
+/// there is nothing at `path` yet.
+///
+/// The two things `fs::write` would do wrong, both because what lands in the
+/// file is the one thing that reads every log an app ever wrote: it creates with
+/// the ordinary `0666 & umask`, which under the usual `022` leaves the private
+/// key readable by every user of the machine, and it truncates a file that is
+/// already there, which is how the only copy of a pair — and with it every log
+/// it was the key of — is lost. The mode is given to the `open` that creates the
+/// file, so there is no window in which it is permissive.
+fn create_key_file(path: &str) -> Result<std::fs::File, String> {
+    #[cfg(unix)]
+    let opened = {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+    };
+    #[cfg(not(unix))]
+    let opened = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path);
+
+    opened.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            format!(
+                "`{path}` is already there: `xlog keygen` will not overwrite a key, because \
+                 a pair nobody wrote down is a log nobody can read"
+            )
+        } else {
+            format!("write {path}: {e}")
+        }
+    })
 }
 
 /// The 32 bytes of a `--privkey`, which is 64 hex characters.
