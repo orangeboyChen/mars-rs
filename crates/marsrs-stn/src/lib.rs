@@ -3,8 +3,8 @@
 //! The first slice is the part that has no sockets and no callbacks: the task
 //! model and the three policies that decide whether a task may go out at all
 //! (anti-avalanche: frequency, flow, and the dynamic timeout status). They are
-//! pure logic over [`marsrs_comm::tickcount::gettickcount`], which is what makes
-//! them testable here.
+//! pure logic over [`marsrs_comm::tickcount::gettickcount`], which is what
+//! makes them testable here.
 //!
 //! The second slice is the long link: its wire format ([`longlink`]) and the
 //! heartbeat interval that keeps it alive ([`smart_heartbeat`]). Neither needs
@@ -93,8 +93,8 @@
 //! the profile the connect writes as it goes.
 //!
 //! The nineteenth slice is the run on the socket that connect made
-//! ([`short_link`]): the request the task goes out as, one read at a time of the
-//! answer that comes back, the fork on its status, and the socket itself —
+//! ([`short_link`]): the request the task goes out as, one read at a time of
+//! the answer that comes back, the fork on its status, and the socket itself—
 //! handed back to the pool when both the task and the server asked for it, and
 //! closed when one of them did not.
 //!
@@ -103,12 +103,12 @@
 //! `GET` and judges the status that comes back — which is what the C++ asks of
 //! a proxy before it routes anything through it.
 //!
-//! The twenty-first slice is the one value a long link and the three things that
-//! keep it up are kept in ([`longlink_metadata`]), and the channels those links
-//! come from ([`net_channel_factory`]): the three helpers ask the link things,
-//! so the link is one `Arc<Mutex<..>>` all four of them share, and which link a
-//! config is made into is a hook the app can replace with its own — which is
-//! what the C++'s weak `Create` symbols are for.
+//! The twenty-first slice is the one value a long link and the three things
+//! that keep it up are kept in ([`longlink_metadata`]), and the channels those
+//! links come from ([`net_channel_factory`]): the three helpers ask the link
+//! things, so the link is one `Arc<Mutex<..>>` all four of them share, and
+//! which link a config is made into is a hook the app can replace with its own—
+//! which is what the C++'s weak `Create` symbols are for.
 //!
 //! The twenty-second slice is the queue the short-link tasks wait in
 //! ([`shortlink_task_manager`]): the order they go out in, the five timeouts a
@@ -120,13 +120,13 @@
 //! [`RunId`] the host hands out with the task and hands back with the answer.
 //!
 //! The twenty-third slice is the queue the long-link tasks wait in
-//! ([`longlink_task_manager`]): the channels they go out on, the four timeouts a
-//! task that answered nothing runs into, and the difference from the short-link
-//! queue — an answer here is for a *channel*, so one task that heard nothing
-//! fails with everything else that was out on the same link, and takes the link
-//! down with it. The C++'s `LongLinkMetaData` is the host's here too, so what a
-//! channel *is* is a name the host wires the link's profile, send, stop and
-//! disconnect to.
+//! ([`longlink_task_manager`]): the channels they go out on, the four timeouts
+//! a task that answered nothing runs into, and the difference from the
+//! short-link queue— an answer here is for a *channel*, so one task that heard
+//! nothing fails with everything else that was out on the same link, and takes
+//! the link down with it. The C++'s `LongLinkMetaData` is the host's here too,
+//! so what a channel *is* is a name the host wires the link's profile, send,
+//! stop and disconnect to.
 //!
 //! The twenty-fourth slice is the net core itself ([`net_core`]): the two
 //! queues and the pieces they share, which queue a task is started on, and
@@ -156,11 +156,6 @@
 //! What is left of the port is the app's own pieces: the encoder and the
 //! signalling it keeps up.
 
-/// The `static`s of this crate are one value for the whole process —
-/// `sg_client_version` in [`longlink`], `outer_setted_heart_` in
-/// [`smart_heartbeat`], and `g_period` / `g_keepTime` in
-/// [`signalling_keeper`] — so the unit tests that move them need **one** lock
-/// for the crate, not one per module.
 /// `rand()` — the port's own, so a test does not have to care which numbers the
 /// platform would have handed out.
 ///
@@ -184,6 +179,11 @@ pub(crate) fn xorshift(seed: u64) -> impl FnMut(usize) -> usize + Send + 'static
     }
 }
 
+/// The `static`s of this crate are one value for the whole process —
+/// `sg_client_version` in [`longlink`], `outer_setted_heart_` in
+/// [`smart_heartbeat`], and `g_period` / `g_keepTime` in
+/// [`signalling_keeper`] — so the unit tests that move them need **one** lock
+/// for the crate, not one per module.
 #[cfg(test)]
 pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
