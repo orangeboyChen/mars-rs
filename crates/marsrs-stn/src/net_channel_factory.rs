@@ -7,8 +7,8 @@
 //! replacing a hook, which is what [`ChannelFactory`] is: two of them, one per
 //! kind of channel, and mars's own channel behind each until it is replaced.
 //!
-//! `Destory` is not ported: it is `delete` in the C++, and a value in Rust needs
-//! nothing to drop it.
+//! `Destory` is not ported: it is `delete` in the C++, and a value in Rust
+//! needs nothing to drop it.
 
 use crate::{LongLink, LonglinkConfig, ShortLink, Task};
 

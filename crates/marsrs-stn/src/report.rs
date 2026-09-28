@@ -70,8 +70,9 @@ mod tests {
         DynamicTimeoutStatus, ErrCmdType, IpSourceType, PrepareProfile, Task, TransferProfile,
     };
 
-    /// A task that ran: one try in its history, which is the `historyNetLinkers`
-    /// of the report. Only the readings the json writes are set.
+    /// A task that ran: one try in its history, which is the
+    /// `historyNetLinkers` of the report. Only the readings the json writes
+    /// are set.
     fn report() -> TaskProfile {
         let task = Task::new(7, 8);
         let mut profile = TaskProfile::new_at(
