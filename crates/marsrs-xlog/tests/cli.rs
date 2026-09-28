@@ -12,6 +12,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use marsrs_crypt::{HEADER_LEN, TAILER_LEN};
+
 /// The pair of `crates/marsrs-compat/fixtures/manifest.json` — the public key
 /// the C++ encoders were configured with, and the private key every decoder of
 /// those files needs.
@@ -38,6 +40,32 @@ fn write(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
     let path = dir.join(name);
     std::fs::write(&path, bytes).expect("write the scratch file");
     path
+}
+
+/// Writes an hour no magic is spelt with over the two hour bytes of every
+/// header in `bytes`.
+///
+/// A header carries the hour of the day the record was written at, and
+/// `getLogStartPos` takes any byte from `MAGIC_CRYPT_START` — `0x01` — on as
+/// the start of a record, so a file written at an hour of 1 to 13 — one in the
+/// morning to one in the afternoon — holds a byte in its own header that the
+/// walk resyncs into when it goes looking for the record behind the damage.
+/// What the tests below assert is the damage they put in and not where the
+/// walk came out of it, so the hour is `0`: no magic of any kind, and the one
+/// `marsrs_compat::normalize_for_compare` writes over both of them with as
+/// well, so that a run that crosses an hour is not a file that changed.
+fn no_magic_hours(bytes: &mut [u8]) {
+    let mut offset = 0;
+    while offset + HEADER_LEN + TAILER_LEN <= bytes.len() {
+        bytes[offset + 3] = 0;
+        bytes[offset + 4] = 0;
+        let length = u32::from_le_bytes(
+            bytes[offset + 5..offset + 9]
+                .try_into()
+                .expect("four bytes of length"),
+        ) as usize;
+        offset += HEADER_LEN + length + TAILER_LEN;
+    }
 }
 
 /// Runs `xlog` with `args` and returns whether it succeeded, what it wrote to
@@ -313,6 +341,7 @@ fn a_record_that_declares_more_than_the_file_holds_is_reported() {
     // the offset wraps on a 32-bit target and panics on the slice, so what is
     // checked is the length against what is left of the input.
     let mut bytes = std::fs::read(&file).expect("read the .xlog");
+    no_magic_hours(&mut bytes);
     bytes[5..9].copy_from_slice(&u32::MAX.to_le_bytes());
     let broken = write(&dir, "broken.xlog", &bytes);
 
@@ -450,7 +479,8 @@ fn a_file_cut_short_still_yields_the_records_before_the_cut() {
     ]);
     assert!(ok, "encode failed: {err}");
 
-    let bytes = std::fs::read(&file).expect("read the .xlog");
+    let mut bytes = std::fs::read(&file).expect("read the .xlog");
+    no_magic_hours(&mut bytes);
     let stride = bytes.len() / 5;
     // Halfway into the last block, past its header: what a process killed
     // between two writes leaves in the file.
