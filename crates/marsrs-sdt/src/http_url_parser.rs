@@ -6,8 +6,9 @@
 //! [`HttpUrlParser::path`] that is still empty, is all a caller can see of that.
 //! The C++ keeps the `bool` `Parse()` returns to itself; so does this.
 //!
-//! `strutil::Trim` is here as the private `trim`: this crate has no `marsrs-comm` to ask, and
-//! the C++ trims the URL it was given and the host it read out of it.
+//! `strutil::Trim` is here as the private `trim`: this crate has no
+//! `marsrs-comm` to ask, and the C++ trims the URL it was given and the host it
+//! read out of it.
 
 /// `kHttpSchema` — the scheme the parser understands, and the only one it does.
 const HTTP_SCHEME: &str = "http://";

@@ -80,7 +80,8 @@ impl Default for SdtCore {
 }
 
 impl SdtCore {
-    /// `SdtCore(context)`.
+    /// `SdtCore()` — a core that is not checking, with a default request,
+    /// nothing cancelled and no CGI.
     pub fn new() -> Self {
         Self {
             check_list: Vec::new(),

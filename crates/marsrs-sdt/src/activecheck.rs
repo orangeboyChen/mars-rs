@@ -10,10 +10,11 @@
 //!
 //! Not ported: the `#if defined(ANDROID) || defined(__APPLE__)` around
 //! `PingChecker::StartDoCheck` (whether a host can ping is its own business
-//! here, and a ping it cannot send is answered [`crate::checkimpl::Answer::Nothing`], like any
-//! other probe nobody made), and the three check types the C++ has no checker
-//! for — `kNewDnsCheck`, `kTracerouteCheck`, `kReqBufCheck` — which
-//! [`Check::start_do_check`] leaves alone.
+//! here, and a ping it cannot send is answered
+//! [`crate::checkimpl::Answer::Nothing`], like any other probe nobody made),
+//! and the three check types the C++ has no checker for — `kNewDnsCheck`,
+//! `kTracerouteCheck`, `kReqBufCheck` — which [`Check::start_do_check`] leaves
+//! alone.
 
 use crate::checkimpl::{Ask, Query};
 use crate::constants::{
