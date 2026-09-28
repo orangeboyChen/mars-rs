@@ -748,8 +748,23 @@ jobs:
           # the layout is the whole point of the step, so it is checked here and
           # not by whoever unpacks the zip a month from now
           for ARTIFACT in "$KMP_ARTIFACT" "$KMP_ARTIFACT_XLOG"; do
-            unzip -l "$ZIP" | grep -q "io/github/orangeboychen/marsrs/$ARTIFACT/" \
-              || { echo "::error::$ZIP holds no io/github/orangeboychen/marsrs/$ARTIFACT"; exit 1; }
+            # Read whole and matched with `case`, and not piped into a
+            # `grep -q`: one that matches stops reading at the line it
+            # matched, `unzip` is left writing the rest of the listing into a
+            # pipe nobody is reading, and the SIGPIPE it dies of is — under
+            # the `pipefail` this step asks for — a "holds no <artifact>" over
+            # an archive that holds one. The listing is two hundred lines of a
+            # repository of fourteen targets, which is what makes it a race
+            # and not a certainty: a pipe holds 16 KiB on a macOS runner
+            # before it is grown, and that is about what the listing is.
+            listing="$(unzip -l "$ZIP")"
+            case "$listing" in
+              *"io/github/orangeboychen/marsrs/$ARTIFACT/"*) ;;
+              *)
+                echo "::error::$ZIP holds no io/github/orangeboychen/marsrs/$ARTIFACT"
+                exit 1
+                ;;
+            esac
           done
       - name: Package the native archives
         run: (cd platforms/kmp/native && zip -q -r "$GITHUB_WORKSPACE/dist/$KMP_NATIVE_ZIP" .)
