@@ -11,11 +11,11 @@ use std::time::{Duration, Instant};
 
 use marsrs_comm::message_queue::{
     broadcast_message, cancel_message, cancel_message_by_handler, cancel_message_by_handler_title,
-    create_message_queue, destroy_message_queue, faster_message, found_message,
-    get_def_message_queue, install_async_handler, install_message_handler,
+    create_message_queue, current_thread_message_queue, destroy_message_queue, faster_message,
+    found_message, get_def_message_queue, install_async_handler, install_message_handler,
     install_message_handler as install, pending_message_count, post_message, post_message_at_first,
     singleton_message, uninstall_message_handler, wait_message, Message, MessageHandler,
-    MessagePost, MessageTiming, MessageTitle, RunLoop, NULL_POST,
+    MessagePost, MessageTiming, MessageTitle, RunLoop, INVALID_QUEUE_ID, NULL_POST,
 };
 
 #[test]
@@ -383,6 +383,34 @@ fn the_run_loop_runs_until_its_breaker_says_stop() {
     // per dispatched message and none on the turn that stops the loop
     assert_eq!(handled.load(Ordering::SeqCst), 3);
     assert_eq!(duties.load(Ordering::SeqCst), 3);
+    destroy_message_queue(queue);
+}
+
+#[test]
+fn a_thread_with_no_queue_of_its_own_answers_the_invalid_id() {
+    let queue = create_message_queue();
+    let (sender, receiver) = mpsc::channel();
+    // Both readings are taken on the worker and not on the thread this test
+    // runs on: a thread keeps the queue a `RunLoop` bound it to, so a test
+    // thread that has already run one would not answer the invalid id.
+    let worker = thread::spawn(move || {
+        sender.send(current_thread_message_queue()).unwrap();
+        let mut turns = 0;
+        RunLoop::run(
+            queue,
+            move || {
+                turns += 1;
+                turns > 1
+            },
+            move || {
+                sender.send(current_thread_message_queue()).unwrap();
+            },
+        );
+    });
+
+    assert_eq!(receiver.recv().unwrap(), INVALID_QUEUE_ID);
+    assert_eq!(receiver.recv().unwrap(), queue);
+    worker.join().unwrap();
     destroy_message_queue(queue);
 }
 

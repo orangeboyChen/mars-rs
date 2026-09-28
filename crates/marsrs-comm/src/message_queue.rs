@@ -239,7 +239,7 @@ static QUEUES: Mutex<Option<HashMap<MessageQueueId, Arc<Queue>>>> = Mutex::new(N
 static NEXT_QUEUE_ID: Mutex<MessageQueueId> = Mutex::new(DEFAULT_QUEUE_ID + 1);
 
 thread_local! {
-    static CURRENT_QUEUE: std::cell::Cell<MessageQueueId> = const { std::cell::Cell::new(DEFAULT_QUEUE_ID) };
+    static CURRENT_QUEUE: std::cell::Cell<MessageQueueId> = const { std::cell::Cell::new(INVALID_QUEUE_ID) };
 }
 
 fn queues() -> &'static Mutex<Option<HashMap<MessageQueueId, Arc<Queue>>>> {
@@ -268,6 +268,15 @@ fn queue(id: MessageQueueId) -> Option<Arc<Queue>> {
 }
 
 /// `MessageQueue::CurrentThreadMessageQueue()`.
+///
+/// [`INVALID_QUEUE_ID`] when the calling thread owns no queue. The C++
+/// (`comm/messagequeue/message_queue.cc`) derives the id from the thread id
+/// and answers `KInvalidQueueID` for a thread that is not one of its queues,
+/// so "am I the thread this queue runs on" is a question the answer names a
+/// queue for. Starting the thread-local at [`DEFAULT_QUEUE_ID`] answered
+/// "yes, the default one" on every thread instead, and a caller that posts
+/// work to be run asynchronously then ran it inline — the wrong thread, and
+/// not asynchronous.
 pub fn current_thread_message_queue() -> MessageQueueId {
     CURRENT_QUEUE.with(|cell| cell.get())
 }
