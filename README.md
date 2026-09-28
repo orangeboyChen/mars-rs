@@ -43,7 +43,8 @@ else, and an app drops them into its module and reaches them through NAPI of its
 own. `scripts/build_harmony.sh <dir>` builds the same three from source.
 
 Every release also ships the `xlog` CLI, which writes and reads those files from
-a shell — `cargo install marsrs-xlog`.
+a shell and makes the key pair that decides who can — `cargo install marsrs-xlog`,
+`xlog keygen`.
 
 ## Use it
 

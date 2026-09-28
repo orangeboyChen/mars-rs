@@ -24,7 +24,7 @@ features:
   - title: 写日志不卡在磁盘上
     details: "默认的异步模式把记录交给 mmap 缓存和写线程，write 不等待落盘就返回；`flush(sync: true)` 才是把缓存排空的那一下。"
   - title: 压缩、加密、轮转
-    details: 每个文件 zlib 或 zstd 压缩，给了公钥就按 ECDH + AES-GCM 加密每条记录，还可以按大小或时间关掉旧文件、开新文件。
+    details: 每个文件 zlib 或 zstd 压缩，给了公钥就按 ECDH + TEA 加密每条记录，还可以按大小或时间关掉旧文件、开新文件。
 ---
 
 这几页是 xlog 的文档：日志库，以及它发到的每个平台。STN 与 SDT 诊断目前还没有自己的

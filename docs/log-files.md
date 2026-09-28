@@ -114,4 +114,7 @@ without it. `xlog encode` is the other half: it writes a `.xlog` out of one
 record per line of its input, and encrypts it when it is given the public key
 of that pair with `--pubkey`.
 
-`xlog help` spells the whole command line out.
+The [CLI](/cli) page is the whole command line — installing it, making that pair,
+reading a file back and writing one. `xlog help` prints the same thing in a
+terminal, and [configuration](/configuration#compression-and-encryption) says
+what the public key does to a record.
