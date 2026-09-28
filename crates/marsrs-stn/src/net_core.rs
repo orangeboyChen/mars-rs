@@ -1076,9 +1076,20 @@ impl NetCore {
     }
 
     /// `HasTask(_taskid)`.
+    ///
+    /// `need_use_longlink_` gates the long link's queue and the zombies' in the
+    /// C++: a core that was told not to use the long link finds nothing on
+    /// either, whatever went out on them while it still used one — which is
+    /// not the same as forgetting those tasks, since `StopTask` and
+    /// `ClearTasks` leave them where they are.
     pub fn has_task(&self, taskid: u32) -> bool {
-        let saved = self.zombie.lock().unwrap_or_else(poisoned).has_task(taskid);
-        saved || self.longlink.has_task(taskid) || self.shortlink.has_task(taskid)
+        if self.use_long_link {
+            let saved = self.zombie.lock().unwrap_or_else(poisoned).has_task(taskid);
+            if saved || self.longlink.has_task(taskid) {
+                return true;
+            }
+        }
+        self.shortlink.has_task(taskid)
     }
 
     /// `ClearTasks()` — the long link's and the zombies' only while the core
@@ -3394,6 +3405,32 @@ mod tests {
         short.channel_select = Task::CHANNEL_SHORT;
         assert!(core.start_task_at(NOW, short));
         assert!(core.stop_task(8));
+    }
+
+    /// `if (need_use_longlink_)` in the C++'s `HasTask`, which is the same gate
+    /// `StopTask` and `ClearTasks` carry: a task that went out on the long link
+    /// while the core used one is still queued after the core was told not to
+    /// — both of those leave it where it is — and it is one the C++ answers
+    /// `false` about, because it no longer asks the queue that holds it.
+    #[test]
+    fn a_core_with_no_long_link_finds_the_short_links_tasks_only() {
+        let (mut core, _rec) = wired();
+        up(&core, LongLinkStatus::Connected);
+        assert!(core.start_task_at(NOW, task(7)));
+        assert!(core.has_task(7));
+        core.set_need_use_long_link(false);
+
+        assert!(
+            !core.has_task(7),
+            "the C++ does not ask the long link once the core does not use one"
+        );
+        assert!(core.longlink().has_task(7), "the task is still queued");
+
+        // ... and a short-link task is still found
+        let mut short = task(8);
+        short.channel_select = Task::CHANNEL_SHORT;
+        assert!(core.start_task_at(NOW, short));
+        assert!(core.has_task(8));
     }
 
     #[test]
