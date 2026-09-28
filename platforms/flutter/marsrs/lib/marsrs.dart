@@ -21,7 +21,7 @@
 // them. What one of them answers is what this side last wrote, and not what the
 // appender holds: a getter answers in the call it is read in, and what the
 // platform side holds is a channel call away. [Xlog.isLoggable] asks the
-// appender itself, which is why it is the one of the six an app awaits.
+// appender itself, which is why it is the only one of the six an app awaits.
 
 import 'package:flutter/services.dart';
 
@@ -217,7 +217,9 @@ class Xlog {
     _send('setMaxFileSize', <String, Object?>{'bytes': bytes});
   }
 
-  /// How many seconds a log file is kept; `0` is the C++'s own ten days.
+  /// How many seconds a log file is written to before the appender opens the
+  /// next one; `0` is the C++'s own ten days. How long a file then stays on
+  /// disk is [XlogConfig.cacheDays], which is a different clock.
   int get maxAliveTimeSeconds => _maxAliveTimeSeconds;
 
   set maxAliveTimeSeconds(int seconds) {
@@ -281,13 +283,12 @@ class Xlog {
     await _invoke<void>('flush', <String, Object?>{'sync': sync});
   }
 
-  /// Drains what is left and closes this appender. Writing through it afterwards
-  /// writes nothing, and calling it twice closes nothing twice: what the second
-  /// call answers is the drain the first one started, so an app that awaits
-  /// either one has awaited the one drain, and not a future that was already
-  /// done while the files were still being written — the answer an app waiting
-  /// to read or upload them would have been given by a second call that
-  /// returned at once.
+  /// Drains what is left and closes this appender: writing through it
+  /// afterwards writes nothing.
+  ///
+  /// A second call answers the drain the first one started, so an app that
+  /// awaits either call has awaited the one drain, and not a future that was
+  /// already done while the files were still being written.
   Future<void> close() async {
     final closing = _closing;
     if (closing != null) {
