@@ -9,22 +9,27 @@ async.
 ```ts
 import { Xlog, LogLevel } from 'marsrs-react-native-xlog';
 
-const xlog = await Xlog.open({
+const xlog = Xlog.open({
   logDir: RNFS.DocumentDirectoryPath,
   namePrefix: 'marsrs',
   pubKey: '...',
 });
-await xlog.i('Net', 'hello');
-await xlog.log(LogLevel.Debug, 'Net', 'a debug line');
-await xlog.flush(true);
-await xlog.close();
+xlog.i('Net', 'hello');
+xlog.log(LogLevel.Debug, 'Net', 'a debug line');
+xlog.flush(true);
+xlog.close();
 ```
 
 `Xlog` is one appender: `Xlog.open(config)` opens it and `close()` closes it —
 the same class, under the same name, the Swift package, `kmp/marsrs-xlog` and
-the Android AAR publish. Every call answers a `Promise`, because every one of
-them crosses the bridge; the settings are methods for the same reason, and not
-the properties they are in Kotlin and in Swift.
+the Android AAR publish. Nothing here answers a `Promise` and nothing needs an
+`await`: the module is a TurboModule, so a call is made on the JS thread and
+returned from, and the settings are the properties they are in Kotlin and in
+Swift — `xlog.level = LogLevel.Debug` — and not `setLevel` / `getLevel` pairs.
+
+That is what the New Architecture buys, and it is the only thing asked for in
+return: a TurboModule is not a bridge module, so an app still on the old
+architecture has no module to `TurboModuleRegistry.getEnforcing`.
 
 ## Installing it
 
@@ -39,14 +44,16 @@ cd ios && pod install
 | | |
 |---|---|
 | version | the version of the release; `npm install` takes the newest published one |
-| React Native | >= 0.73 |
+| React Native | >= 0.74, on the New Architecture |
 | iOS | 12.0 |
 | Android | `minSdk` 24 |
 
 The package ships its TypeScript as the `main` entry, which is what Metro
 compiles — there is no build step, and `npm run typecheck` is the only script.
-A consumer outside React Native, or one whose bundler does not take TypeScript,
-wants `src/index.ts` compiled first.
+`src/NativeXlog.ts` is the spec React Native's codegen reads, and
+`codegenConfig` in `package.json` is what points it at `src`: `NativeXlogSpec`
+is generated into the app's `React-Codegen` pod and into the Android build, and
+neither half of the module has to be told the eleven signatures twice.
 
 ## What each platform resolves
 

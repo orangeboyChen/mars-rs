@@ -21,7 +21,7 @@ import io.github.orangeboychen.marsrs.xlog.LogLevel
 import io.github.orangeboychen.marsrs.xlog.Xlog
 import io.github.orangeboychen.marsrs.xlog.XlogConfig
 
-val xlog = Xlog(
+val xlog = Xlog.open(
     XlogConfig(
         logDir = File(context.filesDir, "xlog/log").path,
         cacheDir = File(context.filesDir, "xlog/cache").path,
@@ -58,8 +58,8 @@ xlog.f("login", "…")
 xlog.log(LogLevel.DEBUG, "net", "…")
 ```
 
-Java writes the same thing — `new Xlog(config)` and `xlog.i(tag, message)` — with
-nothing else to learn.
+Java writes the same thing — `Xlog.open(config)` and `xlog.i(tag, message)` —
+with nothing else to learn.
 
 A message that is expensive to build is worth asking about first, because a
 record the level drops still costs the caller the `String`:
@@ -105,6 +105,6 @@ Log.setLogImp(Xlog())
 Log.d("net", "…")
 
 // after
-val xlog = Xlog(XlogConfig(logDir = dir, namePrefix = "marsrs"))
+val xlog = Xlog.open(XlogConfig(logDir = dir, namePrefix = "marsrs"))
 xlog.d("net", "…")
 ```

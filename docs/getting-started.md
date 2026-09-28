@@ -75,7 +75,7 @@ appender_close();
 ```swift [Swift]
 import MarsRSXlog
 
-let log = try Xlog(
+let log = try Xlog.open(
     XlogConfig(
         logDirectory: logDirectory.path,
         namePrefix: "marsrs",
@@ -90,7 +90,7 @@ log.flush(sync: true)    // the records are on disk when this returns
 ```
 
 ```kotlin [Android]
-val xlog = Xlog(
+val xlog = Xlog.open(
     XlogConfig(
         logDir = File(context.filesDir, "xlog/log").path,
         namePrefix = "marsrs",
@@ -105,7 +105,7 @@ xlog.flush(sync = true)  // the records are on disk when this returns
 ```
 
 ```kotlin [Kotlin Multiplatform]
-val xlog = Xlog(
+val xlog = Xlog.open(
     XlogConfig(
         logDir = logDirectory,
         namePrefix = "marsrs",
@@ -137,17 +137,17 @@ await xlog.close();
 ```
 
 ```ts [React Native]
-const xlog = await Xlog.open({
+const xlog = Xlog.open({
     logDir: `${directory}/xlog`,
     namePrefix: "marsrs",
     level: LogLevel.info,
 });
-await xlog.setConsoleLogEnabled(__DEV__);
+xlog.consoleLogEnabled = __DEV__;
 
-await xlog.i("startup", "hello from mars");
+xlog.i("startup", "hello from mars");
 
-await xlog.flush(true);        // the records are on disk when this returns
-await xlog.close();
+xlog.flush(true);        // the records are on disk when this returns
+xlog.close();
 ```
 
 ```c [C]

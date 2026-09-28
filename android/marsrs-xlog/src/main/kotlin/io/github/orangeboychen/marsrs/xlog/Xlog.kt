@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap
  * through it from wherever there is something to say.
  *
  * ```kotlin
- * val xlog = Xlog(
+ * val xlog = Xlog.open(
  *     XlogConfig(
  *         logDir = File(context.filesDir, "xlog/log").path,
  *         cacheDir = File(context.filesDir, "xlog/cache").path,
@@ -63,8 +63,8 @@ import java.util.concurrent.ConcurrentHashMap
  * `logWrite` and the `LEVEL_*` constants are the API the C++ project's Java
  * spelled. They are deprecated, and they work: an app that calls them gets the
  * process-wide appender `open` opens, and the `Xlog` it hands `Log.setLogImp` is
- * the one [Xlog] with no argument builds. An app that migrates builds an
- * `Xlog(XlogConfig(...))` and writes through it instead.
+ * the one [Xlog] with no argument builds. An app that migrates calls
+ * [Xlog.open] with an [XlogConfig] and writes through what it answers.
  */
 class Xlog : Log.LogImp {
 
@@ -145,9 +145,9 @@ class Xlog : Log.LogImp {
      * The `Log.LogImp` of the process-wide appender: what an app hands to
      * `Log.setLogImp`, and what [open] opens that appender with.
      *
-     * @deprecated build the appender an app writes through: `Xlog(XlogConfig(...))`.
+     * @deprecated build the appender an app writes through: `Xlog.open(XlogConfig(...))`.
      */
-    @Deprecated("Build the appender you write through: Xlog(XlogConfig(...))")
+    @Deprecated("Build the appender you write through: Xlog.open(XlogConfig(...))")
     constructor() {
         namePrefix = ""
         handle = PROCESS_WIDE
@@ -291,7 +291,7 @@ class Xlog : Log.LogImp {
      */
     private fun requireOpen(): Long {
         check(isOpen) {
-            "no appender of this Xlog is open ('$namePrefix'): build another Xlog(XlogConfig(...)) to log again"
+            "no appender of this Xlog is open ('$namePrefix'): Xlog.open(XlogConfig(...)) another to log again"
         }
         return handle
     }
@@ -327,14 +327,35 @@ class Xlog : Log.LogImp {
         const val ZSTD_MODE = 1
 
         /**
+         * Opens an appender of its own: its own log directory, file name prefix,
+         * key, mode and cache file, all of them [config]'s.
+         *
+         * The one call every platform of the port opens one with, under the one
+         * name — `Xlog.open(config)` in the Kotlin Multiplatform module, in
+         * Swift, in TypeScript and in Dart. Kotlin has a constructor that does
+         * the same thing, and this is still the name an app wants: an appender is
+         * opened for the process, and not for an expression.
+         *
+         * `@JvmStatic` is what puts a `static` on [Xlog] itself — the class JNI
+         * looks the symbols up under — so a Java caller writes `Xlog.open(config)`
+         * and not `Xlog.Companion.open(config)`.
+         *
+         * @param config what to open it with
+         * @throws IllegalArgumentException when `marsrs-jni` opens nothing, which
+         *                                  is what a directory it cannot create
+         *                                  comes to
+         */
+        @JvmStatic
+        fun open(config: XlogConfig): Xlog = Xlog(config)
+
+        /**
          * Loads `libmarsrsxlog.so` and opens the process-wide appender — the one
          * `Log` writes through, and the one [Xlog] with no argument writes
          * through.
          *
-         * @deprecated open the appender an app writes through:
-         *             `Xlog(XlogConfig(...))`.
+         * @deprecated open the appender an app writes through: [Xlog.open].
          */
-        @Deprecated("Open the appender you write through: Xlog(XlogConfig(...))")
+        @Deprecated("Open the appender you write through: Xlog.open(XlogConfig(...))")
         @Suppress("DEPRECATION") // `Xlog()` is what `Log` is handed, and this is the call that opens it
         @JvmStatic
         fun open(

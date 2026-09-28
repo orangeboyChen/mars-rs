@@ -8,7 +8,7 @@ package io.github.orangeboychen.marsrs.xlog
  * so the only one an app has to give is [logDir]:
  *
  * ```kotlin
- * val xlog = Xlog(
+ * val xlog = Xlog.open(
  *     XlogConfig(
  *         logDir = File(context.filesDir, "xlog/log").path,
  *         cacheDir = File(context.filesDir, "xlog/cache").path,

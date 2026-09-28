@@ -27,7 +27,7 @@ import io.github.orangeboychen.marsrs.xlog.LogLevel
 import io.github.orangeboychen.marsrs.xlog.Xlog
 import io.github.orangeboychen.marsrs.xlog.XlogConfig
 
-val xlog = Xlog(
+val xlog = Xlog.open(
     XlogConfig(
         logDir = logDirectory,
         namePrefix = "marsrs",
@@ -46,7 +46,8 @@ xlog.close()
 `logDir` 是唯一没有默认值的选项，其余都在[配置项](/zh/configuration)那页。
 
 这就是 [Android](/zh/platforms/android) 那个 `Xlog`：同一个构造函数、同样的成员、
-同样的名字，所以在 `xlog-kmp` 和 `xlog` 之间搬动的共享模块什么都不用改。
+同样的名字，应用调用的名字是 `Xlog.open(config)`，所以在 `xlog-kmp` 和 `xlog`
+之间搬动的共享模块什么都不用改。
 
 ## 写
 

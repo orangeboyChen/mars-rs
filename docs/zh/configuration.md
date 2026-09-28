@@ -18,7 +18,7 @@
 一份 appender 没法接受的配置会在你构造它的地方就被拒绝，而不是被库悄悄吞掉：
 Swift 抛 `XlogError`，Kotlin 抛 `IllegalArgumentException`，Rust 返回 `Err`，C 返回负的
 `MARS_XLOG_ERR_*`；两个要跨桥的平台上，打开它的那次调用失败 —— Dart 是
-`PlatformException`，TypeScript 是被 reject 的 `Promise`。
+`PlatformException`，TypeScript 是抛出的 `Error`。
 
 ## 级别
 
@@ -64,8 +64,8 @@ if (await xlog.isLoggable(LogLevel.debug)) {
 ```
 
 ```ts [React Native]
-if (await xlog.isLoggable(LogLevel.debug)) {
-  await xlog.d("net", expensiveDescription());
+if (xlog.isLoggable(LogLevel.debug)) {
+  xlog.d("net", expensiveDescription());
 }
 ```
 
@@ -92,15 +92,15 @@ if (await xlog.isLoggable(LogLevel.debug)) {
 
 ## 打开之后
 
-下面这些不在配置里，而是 appender 上的 setter，都从下一条记录开始生效：
+下面这些不在配置里，而是 appender 上的 setter 或属性，都从下一条记录开始生效：
 
-| 作用 | Rust | Swift | Android | Kotlin Multiplatform | Flutter / React Native | C |
-|---|---|---|---|---|---|---|
-| 改级别 | `set_level` | `log.level` | `xlog.level` | `xlog.level` | `await xlog.setLevel(…)` | `mars_xlog_set_level` |
-| 切异步 / 同步 | `appender_set_mode` | `log.mode` | `xlog.mode` | `xlog.mode` | `await xlog.setMode(…)` | `mars_xlog_set_mode` |
-| 同时打到控制台 | `appender_set_console_log` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `await xlog.setConsoleLogEnabled(…)` | `mars_xlog_set_console_log` |
-| 到 N 字节就换文件 | `appender_set_max_file_size` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `await xlog.setMaxFileSize(…)` | `mars_xlog_set_max_file_size` |
-| 超过 N 秒就删文件 | `appender_set_max_alive_duration` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `await xlog.setMaxAliveTime(…)` | `mars_xlog_set_max_alive_duration` |
-| 当前文件在哪 | `appender_get_current_log_path` | `Xlog.currentLogPath` | — | — | — | `mars_xlog_current_log_path` |
+| 作用 | Rust | Swift | Android | Kotlin Multiplatform | Flutter | React Native | C |
+|---|---|---|---|---|---|---|---|
+| 改级别 | `set_level` | `log.level` | `xlog.level` | `xlog.level` | `await xlog.setLevel(…)` | `xlog.level` | `mars_xlog_set_level` |
+| 切异步 / 同步 | `appender_set_mode` | `log.mode` | `xlog.mode` | `xlog.mode` | `await xlog.setMode(…)` | `xlog.mode` | `mars_xlog_set_mode` |
+| 同时打到控制台 | `appender_set_console_log` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `await xlog.setConsoleLogEnabled(…)` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log` |
+| 到 N 字节就换文件 | `appender_set_max_file_size` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `await xlog.setMaxFileSize(…)` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size` |
+| 超过 N 秒就删文件 | `appender_set_max_alive_duration` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `await xlog.setMaxAliveTime(…)` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration` |
+| 当前文件在哪 | `appender_get_current_log_path` | `Xlog.currentLogPath` | — | — | — | — | `mars_xlog_current_log_path` |
 
 大小和时间的 `0` 都表示"不限制"：文件永不切分、永不删除 —— C++ 那边自己保留十天。

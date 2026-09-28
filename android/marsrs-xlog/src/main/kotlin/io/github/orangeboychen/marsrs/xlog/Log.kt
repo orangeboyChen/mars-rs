@@ -15,12 +15,12 @@ import android.widget.Toast
  * `@JvmStatic`: an app that calls this from Java writes `Log.d(...)` and not
  * `Log.INSTANCE.d(...)`.
  *
- * @deprecated build an `Xlog(XlogConfig(...))` and write through it:
+ * @deprecated build an `Xlog.open(XlogConfig(...))` and write through it:
  *             `xlog.i(tag, message)`. This facade writes through the
- *             process-wide appender `Xlog.open` of seven arguments opens, and
+ *             process-wide appender the seven-argument `Xlog.open` opens, and
  *             stays for the app that already calls it.
  */
-@Deprecated("Build an Xlog(XlogConfig(...)) and write through it: xlog.i(tag, message)")
+@Deprecated("Build an Xlog.open(XlogConfig(...)) and write through it: xlog.i(tag, message)")
 object Log {
     private const val TAG = "mars.xlog.log"
 

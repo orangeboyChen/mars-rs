@@ -120,12 +120,18 @@ public actual class Xlog actual constructor(config: XlogConfig) {
      */
     private fun requireOpen(): Long {
         check(isOpen) {
-            "no appender of this Xlog is open ('$namePrefix'): build another Xlog(XlogConfig(...)) to log again"
+            "no appender of this Xlog is open ('$namePrefix'): Xlog.open(XlogConfig(...)) another to log again"
         }
         return handle
     }
 
-    private companion object {
+    public actual companion object {
+        /**
+         * Opens an appender of its own: the constructor of this actual, under the
+         * one name every platform of the port opens one with.
+         */
+        public actual fun open(config: XlogConfig): Xlog = Xlog(config)
+
         /** What `mars_xlog_new_instance` answers for a config it opened nothing for. */
         const val NO_HANDLE = 0L
 

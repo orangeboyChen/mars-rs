@@ -55,7 +55,7 @@ appender_close();
 ```
 
 ```kotlin
-val xlog = Xlog(
+val xlog = Xlog.open(
     XlogConfig(
         logDir = File(context.filesDir, "xlog/log").path,
         namePrefix = "marsrs",

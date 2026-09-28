@@ -7,7 +7,7 @@ package io.github.orangeboychen.marsrs.xlog
  * `crates/marsrs-jni` or into an iOS, watchOS, tvOS, macOS, Linux or Windows one
  * over the C ABI of `crates/marsrs-ffi`.
  *
- * It is the same class the Android AAR publishes — `Xlog(XlogConfig(...))`,
+ * It is the same class the Android AAR publishes — `Xlog.open(XlogConfig(...))`,
  * `xlog.i(tag, message)` — because the two of them are one API: what a shared
  * module writes compiles unchanged against `xlog-kmp` and against `xlog`, and
  * the only thing that changes is which bridge answers. The `androidMain` and
@@ -106,4 +106,23 @@ public expect class Xlog(config: XlogConfig) {
      * its own.
      */
     public fun close()
+
+    public companion object {
+        /**
+         * Opens an appender of its own: its own log directory, file name prefix,
+         * key, mode and cache file, all of them [config]'s.
+         *
+         * The one call every platform of the port opens one with, under the one
+         * name — `Xlog.open(config)` in Swift, in TypeScript and in Dart, and in
+         * the Kotlin of the Android AAR. Kotlin has a constructor that does the
+         * same thing, and this is still the name an app wants: an appender is
+         * opened for the process, and not for an expression.
+         *
+         * @param config what to open it with
+         * @throws IllegalArgumentException when the bridge answers no appender,
+         *                                  which is what a directory it cannot
+         *                                  create comes to
+         */
+        public fun open(config: XlogConfig): Xlog
+    }
 }

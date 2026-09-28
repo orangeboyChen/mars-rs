@@ -20,7 +20,7 @@ A config the appender cannot honour is refused where you build it and not
 silently by the library: Swift throws an `XlogError`, Kotlin raises
 `IllegalArgumentException`, Rust returns an `Err`, C answers a negative
 `MARS_XLOG_ERR_*`, and on the two bridging platforms the call that opened it
-fails — a `PlatformException` in Dart, a rejected `Promise` in TypeScript.
+fails — a `PlatformException` in Dart, a thrown `Error` in TypeScript.
 
 ## Levels
 
@@ -69,8 +69,8 @@ if (await xlog.isLoggable(LogLevel.debug)) {
 ```
 
 ```ts [React Native]
-if (await xlog.isLoggable(LogLevel.debug)) {
-  await xlog.d("net", expensiveDescription());
+if (xlog.isLoggable(LogLevel.debug)) {
+  xlog.d("net", expensiveDescription());
 }
 ```
 
@@ -100,17 +100,17 @@ empty writes a file any mars log reader can open.
 
 ## After it is open
 
-These are not in the config — they are setters on the appender, and every one of
-them takes effect from the next record:
+These are not in the config — they are setters or properties on the appender, and
+every one of them takes effect from the next record:
 
-| what it does | Rust | Swift | Android | Kotlin Multiplatform | Flutter / React Native | C |
-|---|---|---|---|---|---|---|
-| move the level | `set_level` | `log.level` | `xlog.level` | `xlog.level` | `await xlog.setLevel(…)` | `mars_xlog_set_level` |
-| switch async / sync | `appender_set_mode` | `log.mode` | `xlog.mode` | `xlog.mode` | `await xlog.setMode(…)` | `mars_xlog_set_mode` |
-| mirror records to the console | `appender_set_console_log` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `await xlog.setConsoleLogEnabled(…)` | `mars_xlog_set_console_log` |
-| close a file after N bytes | `appender_set_max_file_size` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `await xlog.setMaxFileSize(…)` | `mars_xlog_set_max_file_size` |
-| drop a file older than N seconds | `appender_set_max_alive_duration` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `await xlog.setMaxAliveTime(…)` | `mars_xlog_set_max_alive_duration` |
-| where the current file is | `appender_get_current_log_path` | `Xlog.currentLogPath` | — | — | — | `mars_xlog_current_log_path` |
+| what it does | Rust | Swift | Android | Kotlin Multiplatform | Flutter | React Native | C |
+|---|---|---|---|---|---|---|---|
+| move the level | `set_level` | `log.level` | `xlog.level` | `xlog.level` | `await xlog.setLevel(…)` | `xlog.level` | `mars_xlog_set_level` |
+| switch async / sync | `appender_set_mode` | `log.mode` | `xlog.mode` | `xlog.mode` | `await xlog.setMode(…)` | `xlog.mode` | `mars_xlog_set_mode` |
+| mirror records to the console | `appender_set_console_log` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `await xlog.setConsoleLogEnabled(…)` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log` |
+| close a file after N bytes | `appender_set_max_file_size` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `await xlog.setMaxFileSize(…)` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size` |
+| drop a file older than N seconds | `appender_set_max_alive_duration` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `await xlog.setMaxAliveTime(…)` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration` |
+| where the current file is | `appender_get_current_log_path` | `Xlog.currentLogPath` | — | — | — | — | `mars_xlog_current_log_path` |
 
 `0` is "no limit" for both sizes and ages: a file is never split and never
 dropped — the C++ keeps its own ten days.
