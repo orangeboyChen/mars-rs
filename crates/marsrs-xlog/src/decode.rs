@@ -37,7 +37,7 @@ use std::path::Path;
 
 use marsrs_crypt::{magic, CLIENT_PUBKEY_LEN, HEADER_LEN, TAILER_LEN, TEA_BLOCK_LEN};
 
-/// `LogCrypt::CryptSyncLog` delta, and the round count both halves loop over.
+/// The round count both halves of `LogCrypt::CryptSyncLog` loop over.
 const TEA_ROUNDS: u32 = 16;
 const TEA_DELTA: u32 = 0x9e37_79b9;
 
