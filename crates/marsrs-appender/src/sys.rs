@@ -53,8 +53,15 @@ pub(crate) fn raw_thread_id() -> i64 {
 fn os_thread_id() -> i64 {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        // `gettid` never fails and needs no errno handling.
-        unsafe { libc::gettid() as i64 }
+        // The syscall and not `libc::gettid()`: that wrapper is glibc 2.30 and
+        // later, and a Kotlin/Native klib is linked against its own sysroot,
+        // which is glibc 2.19 — a strong `gettid` is an undefined symbol in
+        // every Linux archive this crate is embedded in, which is what ended
+        // the release's `linuxX64Test`. `std` takes the symbol weakly for the
+        // same reason and falls back to this call. The syscall is Linux 2.4.11,
+        // and it cannot fail, so there is no errno to read.
+        let tid: libc::pid_t = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
+        tid as i64
     }
 
     #[cfg(any(
