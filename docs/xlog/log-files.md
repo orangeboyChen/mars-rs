@@ -14,6 +14,10 @@ prefix is what the appender is known by: two appenders that share one share the
 file, and closing one of them closes what the other writes through. Give a part
 of an app whose logs are read apart from the rest a prefix of its own.
 
+One file per day becomes more than one when `maxFileSizeBytes` is not `0`: the
+file is closed at that size and the next part opens as
+`<namePrefix>_YYYYMMDD_1.xlog`, then `_2`, and so on.
+
 Where the file that is being written right now is:
 
 ::: code-group
@@ -35,8 +39,9 @@ mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK, or a negative 
 :::
 
 Flutter, React Native and HarmonyOS answer no path — the appender carries no
-`currentLogPath` on any of the three — so an app on them reads the directory it
-gave and the name above.
+`currentLogPath` on any of the three — so an app on them lists the directory it
+gave and takes every name in it that starts `<namePrefix>_YYYYMMDD` and ends
+`.xlog`, numbered parts included.
 
 ## Async: the record may still be in the cache
 

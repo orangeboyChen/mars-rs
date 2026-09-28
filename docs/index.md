@@ -4,7 +4,7 @@ layout: home
 hero:
   name: mars-rs
   text: mars, in Rust
-  tagline: The .xlog logger, the STN task pipeline and the SDT network diagnosis of Tencent/mars — from Rust, Swift, Kotlin, Kotlin Multiplatform, Flutter, React Native, HarmonyOS or plain C.
+  tagline: The .xlog logger, the STN task pipeline and the SDT network diagnosis of Tencent/mars — from Rust, Swift, Kotlin, Kotlin Multiplatform or plain C, and the logger from Flutter, React Native and HarmonyOS as well.
   actions:
     - theme: brand
       text: Get started

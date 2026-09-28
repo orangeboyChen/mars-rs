@@ -13,6 +13,9 @@
 appender 用了同一个前缀就写同一个文件，关掉其中一个，另一个也就写不了了。
 哪一块日志要单独读取，就给它一个自己的前缀。
 
+`maxFileSizeBytes` 不是 `0` 时，一天就不止一个文件：到那个大小就关掉、开下一个，
+名字是 `<namePrefix>_YYYYMMDD_1.xlog`、`_2`，依次往后。
+
 当前正在写的那个文件在哪：
 
 ::: code-group
@@ -34,7 +37,8 @@ mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK，或负的错�
 :::
 
 Flutter、React Native 和 HarmonyOS 都不回答路径 —— 这三个上的 appender 没有
-`currentLogPath` —— 所以这三个上的 App 读的是自己给的那个目录，加上上面那个名字。
+`currentLogPath` —— 所以这三个上的 App 要列出自己给的那个目录，取其中以
+`<namePrefix>_YYYYMMDD` 开头、以 `.xlog` 结尾的每个名字，带编号的那些也算。
 
 ## 异步：记录可能还在缓存里
 

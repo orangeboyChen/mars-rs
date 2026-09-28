@@ -4,7 +4,7 @@ layout: home
 hero:
   name: mars-rs
   text: mars 的 Rust 实现
-  tagline: Tencent/mars 的 .xlog 日志、STN 任务链路和 SDT 网络诊断 —— 从 Rust、Swift、Kotlin、Kotlin Multiplatform、Flutter、React Native、HarmonyOS 或 C 调用。
+  tagline: Tencent/mars 的 .xlog 日志、STN 任务链路和 SDT 网络诊断 —— 从 Rust、Swift、Kotlin、Kotlin Multiplatform 或 C 调用；Flutter、React Native 和 HarmonyOS 只有日志。
   actions:
     - theme: brand
       text: 快速开始
