@@ -1,0 +1,76 @@
+name: pub.dev
+
+# The two Flutter plugins of a release, published to pub.dev with no credential:
+# the job asks for `id-token: write`, and pub.dev exchanges this run's OIDC token
+# for a publish of its own.
+#
+# pub.dev asks two things of a workflow that publishes to it, and this workflow
+# is shaped around both:
+#
+#   * the run has to be triggered by a tag — "Pub.dev rejects publishing from
+#     GitHub Actions triggered without a tag" — and the tag has to match the
+#     tag-pattern the package's Admin tab was given, `v{{version}}` for these.
+#     The release workflow pushes that tag, and this is what it triggers; the
+#     release itself is a `workflow_dispatch`, which is why it cannot publish
+#     here itself.
+#   * the package has to be on pub.dev already. Automation cannot create one, so
+#     the first version of `marsrs_flutter` and `marsrs_flutter_xlog` is
+#     published by hand, once, and "Enable publishing from GitHub Actions" is
+#     clicked in the Admin tab then. Until that day this workflow warns and
+#     publishes nothing, which is a release that is complete either way.
+#
+# What is published is the plugin the release carries and not the one the tag's
+# tree holds: a checkout has neither the stamped version nor the xcframework the
+# podspec names, and the release has both.
+
+on:
+  push:
+    tags:
+      # `v{{version}}` on pub.dev, and pre-releases are versions too
+      - 'v[0-9]*'
+
+# One publish per tag, and no cancelling: a tag that is pushed twice is pushed
+# over a release that exists, and the second run has nothing to do.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  # `gh release download`, for the plugins of this tag's release
+  contents: read
+  # the OIDC token pub.dev is asked to trust
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dart-lang/setup-dart@v1
+      - name: Install the Flutter SDK
+        # `dart pub publish` resolves the package before it uploads it, and a
+        # plugin depends on the Flutter SDK, which a Dart SDK alone cannot
+        # resolve — the dart binary of a Flutter SDK is the one that publishes
+        # these, the way dart-lang's own reusable workflow does it.
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Take the plugins off the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            echo "::warning::$TAG has no release; nothing to publish"
+            exit 0
+          fi
+          gh release download "$TAG" --pattern 'marsrs-flutter-*.tar.gz' --dir dist
+          ls -l dist
+          for archive in dist/*.tar.gz; do
+            tar -xzf "$archive"
+          done
+      - name: Publish the two plugins
+        env:
+          TAG: ${{ github.ref_name }}
+        run: .github/scripts/publish_pub.sh "${TAG#v}" marsrs marsrs-xlog
