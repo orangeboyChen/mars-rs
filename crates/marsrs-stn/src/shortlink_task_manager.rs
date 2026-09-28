@@ -27,10 +27,16 @@
 //!   call the loop, and [`None`] when it never has to;
 //! * `Req2Buf` / `Buf2Resp` / `MakesureAuthed` — the app's own encoder and
 //!   decoder — are hooks, and so is `fun_callback_`;
-//! * the QUIC branch of `__RunOnStartTask`, the tls and handshake callbacks,
-//!   `get_real_host_` and `task_connection_detail_`, are not ported; nor is the
-//!   weak-network bookkeeping of `__OnRecv`, which is `net_source_`'s and comes
-//!   with `net_core`.
+//! * the QUIC branch of `__RunOnStartTask`, tls and handshake callbacks,
+//!   `can_use_tls_`, `get_real_host_` and `task_connection_detail_` are
+//!   not ported; nor is the weak-network bookkeeping of `__OnRecv`, which
+//!   `net_source_`'s and comes with `net_core`;
+//! * the half of the class that only a worker reaches — the
+//!   `is_handle_reqresp_buff_in_worker_` branch and the `On*` callbacks
+//!   `__RunOnStartTask` wires a worker to, by which one raises the retry
+//!   count, forces no retry or moves the fail count — has nothing to answer
+//!   here: the run is the host's, so the queue draws the sequence and times
+//!   the encode and keeps those counts itself.
 
 use marsrs_comm::tickcount::gettickcount;
 
