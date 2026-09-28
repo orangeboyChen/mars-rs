@@ -1179,6 +1179,13 @@ impl ShortLink {
             if let Some(item) = item {
                 self.pool_cache(&item);
             }
+            // the C++ says the same after it has read the answer: the socket
+            // received one and the answer was read out of it, which is what
+            // unbans a pool a socket that failed had banned. There is no
+            // `Buf2Resp` here to say the answer could not be read, so the
+            // decode is one that went well.
+            let is_reused_fd = self.profile.is_reused_fd;
+            self.pool_report(is_reused_fd, true, true);
         }
     }
 
@@ -2656,6 +2663,39 @@ mod tests {
             reported.lock().unwrap().as_slice(),
             &[(true, false, false)],
             "reused, and no answer was decoded out of it"
+        );
+    }
+
+    /// The C++ tells the pool how a socket it handed out went on both paths:
+    /// `OnSocketPoolReport(_conn_profile.is_reused_fd, true, ...)` on the
+    /// `kEctOK` one, which is what clears a ban an earlier failure set. Without
+    /// it a pool that was banned stays banned, however well its sockets work.
+    #[test]
+    fn an_answer_that_came_back_is_one_the_pool_hears_went_well() {
+        let seen = Seen::default();
+        let (mut link, socket) = reused(&seen);
+        let reported = Arc::new(Mutex::new(Vec::new()));
+        link.set_pool_report({
+            let reported = reported.clone();
+            move |is_reused, has_received, is_decode_ok| {
+                reported
+                    .lock()
+                    .unwrap()
+                    .push((is_reused, has_received, is_decode_ok))
+            }
+        });
+        link.write_at(1100, socket, b"hello").unwrap();
+
+        let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: Keep-Alive\r\n\r\n\
+                       hello";
+        assert_eq!(
+            link.read_at(1200, socket, Ok(answer)),
+            Read::Done(Ok(b"hello".to_vec()))
+        );
+        assert_eq!(
+            reported.lock().unwrap().as_slice(),
+            &[(true, true, true)],
+            "reused, and it answered: the pool is credited with it"
         );
     }
 
