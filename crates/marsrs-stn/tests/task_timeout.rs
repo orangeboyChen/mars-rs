@@ -273,6 +273,12 @@ fn the_whole_task_wait_grows_with_every_try_the_task_has_in_it() {
             task.long_polling = true;
             task.long_polling_timeout = 20_000;
         }),
+        // a long-polling task that set nothing, which is `-1` in the C++: the
+        // margin is added to it, so it waits 4 999 and not 5 000
+        budget(4_999, "a long-polling task that set no timeout", |task| {
+            task.long_polling = true;
+            task.long_polling_timeout = -1;
+        }),
         // `total_timeout` is a ceiling: it cuts a wait down and never grows one
         budget(10_000, "a ceiling under the wait", |task| {
             task.retry_count = 2;
