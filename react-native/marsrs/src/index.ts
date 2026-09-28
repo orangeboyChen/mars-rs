@@ -95,6 +95,18 @@ export interface XlogConfig {
  * opened with when a caller gives none. */
 const DEFAULT_NAME_PREFIX = 'xlog';
 
+/** The appender of every `namePrefix` `Xlog.open` has opened and `close` has
+ * not closed, by the prefix: what makes two `Xlog.open`s of one prefix one
+ * appender, which the native side already is — one module, one appender per
+ * prefix, and every call carrying the prefix it is about.
+ *
+ * The second `open` answers the appender the first made, so the two names an
+ * app holds are one `Xlog`: `close` on either is `close` on both, and nothing
+ * writes through an appender that is gone — which is what it would do, and in
+ * silence, if the second call were a second instance the first one's `close`
+ * did not know about. */
+const openAppenders = new Map<string, Xlog>();
+
 /** The appender of one `namePrefix`: the `Xlog` of the Swift and the Kotlin of
  * the port. `Xlog.open` makes it, and `close` releases the appender it made. */
 export class Xlog {
@@ -124,15 +136,26 @@ export class Xlog {
   /** `mars_xlog_new_instance`: opens the appender of `config` and answers the
    * `Xlog` that writes through it.
    *
+   * The appender of a `namePrefix` this has already opened is answered as it
+   * is, and not opened again: the native side is one appender per prefix, and a
+   * second one over the first would be a handle nothing releases. So two calls
+   * of one prefix are one `Xlog`, and `close` on it is `close` on both.
+   *
    * Throws when the appender would not take the configuration — an empty
    * `logDir` or `namePrefix`, or a directory it cannot write to. */
   static open(config: XlogConfig): Xlog {
+    const namePrefix = config.namePrefix ?? DEFAULT_NAME_PREFIX;
+    const alreadyOpen = openAppenders.get(namePrefix);
+    if (alreadyOpen) {
+      return alreadyOpen;
+    }
     const xlog = new Xlog(config);
     if (!NativeXlog.open(config)) {
       throw new Error(
         `marsrs-react-native: the appender of '${xlog.namePrefix}' refused ${config.logDir}`
       );
     }
+    openAppenders.set(namePrefix, xlog);
     return xlog;
   }
 
@@ -280,12 +303,14 @@ export class Xlog {
 
   /** `mars_xlog_release_instance`: closes the appender `Xlog.open` made.
    * Nothing is closed twice: an `Xlog` that is already closed answers `false`
-   * from `isOpen` and drops what it is asked to write. */
+   * from `isOpen` and drops what it is asked to write — and an appender two
+   * names hold is closed for both, because `Xlog.open` gave them one `Xlog`. */
   close(): void {
     if (!this.open) {
       return;
     }
     this.open = false;
+    openAppenders.delete(this.namePrefix);
     NativeXlog.close(this.namePrefix);
   }
 }

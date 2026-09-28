@@ -1,6 +1,6 @@
 // The iOS half of `marsrs-react-native-xlog`: the eleven methods of the `Xlog`
 // native module, each of them a straight call of a `mars_xlog_*` symbol — the
-// C ABI of `crates/marsrs-ffi`, in the `MarsRSXlog.xcframework` the pod carries.
+// C ABI of `crates/marsrs-ffi`, in the `marsrs-xlog.xcframework` the pod carries.
 //
 // Swift, and not Objective-C — except for `Xlog.mm`, which is the one file of
 // the module Swift cannot be, and which says why in its own header: a
@@ -61,6 +61,14 @@ internal final class Xlog: NSObject {
         let namePrefix = string(config, "namePrefix").isEmpty
             ? Self.defaultNamePrefix
             : string(config, "namePrefix")
+        // One appender per prefix: a prefix this module has already opened is
+        // answered as it is, and not opened again over the first, which would be
+        // a handle nothing releases. `src/index.ts` keeps the same map, so the
+        // two names an app holds for one prefix are one appender, and `close` on
+        // either is `close` on both.
+        guard handles[namePrefix] == nil else {
+            return true
+        }
         let level = int(config, "level", Int32(MarsLevelInfo.rawValue))
         let mode = int(config, "mode", Int32(MarsAppenderAsync.rawValue))
         let compressMode = int(config, "compressMode", Int32(MarsCompressZlib.rawValue))

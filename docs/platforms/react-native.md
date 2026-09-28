@@ -22,7 +22,7 @@ cd ios && pod install
 The package is published to npm — publishing is not switched on yet, and until it
 is, `scripts/package_react_native.sh <version> <asset-dir>` writes the same module
 as `marsrs-react-native-xlog-<version>.tgz`: `npm pack`, the version stamped into
-`package.json`, the apple job's `MarsRSXlog.xcframework` copied in. `npm install
+`package.json`, the apple job's `marsrs-xlog.xcframework` copied in. `npm install
 ./marsrs-react-native-xlog-<version>.tgz` installs that one.
 
 What the package carries that a checkout does not is that framework: CocoaPods
@@ -128,8 +128,11 @@ if (xlog.isLoggable(LogLevel.debug)) {
 
 `close()` drains what is left and closes the appender. Two `Xlog`s of one
 `namePrefix` are one appender — the native side is one module holding one
-appender per prefix, and every call carries the prefix it is about — so give a
-part of the app whose logs are read apart from the rest a prefix of its own.
+appender per prefix, and every call carries the prefix it is about — and an
+`Xlog.open` of a prefix that is already open answers the appender it made
+rather than a second one over it, so two names hold one `Xlog` and `close` on
+either closes it for both. A part of the app whose logs are read apart from the
+rest wants a prefix of its own.
 
 ## What is not in it
 

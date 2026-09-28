@@ -53,6 +53,12 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * `Xlog.open(XlogConfig(...))`: opens the appender of the configuration
      * `src/index.ts` sent, and answers whether it took it.
      *
+     * One appender per prefix: a prefix [appenders] already holds is answered
+     * as `true` without a second `Xlog` over the first, which would be a handle
+     * nothing releases. `src/index.ts` does the same, so the two names an app
+     * holds for one prefix are one appender and `close` on either closes it for
+     * both.
+     *
      * [Xlog.open] is what refuses a configuration the appender cannot honour —
      * a blank `logDir` or `namePrefix`, a compression level out of range — and
      * its `IllegalArgumentException` is what would cross back into JS as a
@@ -60,9 +66,13 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * to throw on, and not one to take the app with.
      */
     override fun open(config: ReadableMap): Boolean {
+        val namePrefix = config.string("namePrefix").ifBlank { DEFAULT_NAME_PREFIX }
+        if (appenders.containsKey(namePrefix)) {
+            return true
+        }
         val xlogConfig = XlogConfig(
             logDir = config.string("logDir"),
-            namePrefix = config.string("namePrefix").ifBlank { DEFAULT_NAME_PREFIX },
+            namePrefix = namePrefix,
             level = LogLevel.of(config.int("level", LogLevel.INFO.ordinal)),
             mode = appenderModeOf(config.int("mode", AppenderMode.ASYNC.ordinal)),
             pubKey = config.string("pubKey"),

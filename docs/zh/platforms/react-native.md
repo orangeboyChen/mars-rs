@@ -20,7 +20,7 @@ cd ios && pod install
 包发在 npm 上 —— 发布那一步还没开，在那之前，
 `scripts/package_react_native.sh <version> <asset-dir>` 写出来的
 `marsrs-react-native-xlog-<version>.tgz` 就是同一个模块：`npm pack`，版本号打进
-`package.json`、apple 那个 job 的 `MarsRSXlog.xcframework` 拷进去。`npm install
+`package.json`、apple 那个 job 的 `marsrs-xlog.xcframework` 拷进去。`npm install
 ./marsrs-react-native-xlog-<version>.tgz` 装的就是它。
 
 包里有、checkout 里没有的是那个 framework —— CocoaPods 解析不了 `Package.swift`
@@ -120,7 +120,9 @@ if (xlog.isLoggable(LogLevel.debug)) {
 
 `close()` 排掉剩下的、关掉这个 appender。同一个 `namePrefix` 的两个 `Xlog` 是同
 一个 appender —— native 那边是一个模块、每个 prefix 存一个 appender，每个调用都
-带上它说的是哪个 prefix —— 所以日志要单独读的那部分 App，给它一个自己的 prefix。
+带上它说的是哪个 prefix —— 而且一个已经开着的 prefix 再 `Xlog.open` 一次，得到的
+是已经开着的那个 appender，不是压在它上面的第二个：两个名字拿的是同一个 `Xlog`，
+任意一个 `close` 就是两个都关。日志要单独读的那部分 App，给它一个自己的 prefix。
 
 ## 里面没有什么
 
