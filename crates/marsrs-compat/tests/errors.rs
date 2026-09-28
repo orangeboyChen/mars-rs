@@ -78,21 +78,7 @@ fn encode_reports_a_record_that_does_not_fit() {
 
 /// Encodes one record so the damage tests start from a real `.xlog`.
 fn encoded(dir: &std::path::Path, name: &str) -> Vec<u8> {
-    let records = dir.join("records.bin");
-    // long enough that a header + tailer always fit in the encoded file
-    let record: Vec<u8> = std::iter::repeat_n(b'x', 256)
-        .chain(b"\n".iter().copied())
-        .collect();
-    std::fs::write(&records, &record).unwrap();
-    let out = dir.join(name);
-    encode(&opts(&[
-        ("mode", "zlib"),
-        ("sync", "1"),
-        ("records", records.to_str().unwrap()),
-        ("out", out.to_str().unwrap()),
-    ]))
-    .unwrap();
-    std::fs::read(&out).unwrap()
+    encoded_blocks(dir, name, 1)
 }
 
 #[test]
@@ -118,22 +104,73 @@ fn decode_records_reports_every_kind_of_damage() {
     let key = [0u8; 32];
 
     // nothing at all
-    assert!(decode_records(&[], &key).unwrap_err().contains("no record"));
+    let error = decode_records(&[], &key).unwrap_err().reason;
+    assert!(error.contains("no record"), "{error}");
     // bad magic
-    let error = decode_records(&[0u8; 128], &key).unwrap_err();
+    let error = decode_records(&[0u8; 128], &key).unwrap_err().reason;
     assert!(error.contains("bad magic"), "{error}");
 
     // a real file cut short
     let mut bytes = encoded(&dir, "a.xlog");
     bytes.truncate(bytes.len() - 1);
-    let error = decode_records(&bytes, &key).unwrap_err();
+    let error = decode_records(&bytes, &key).unwrap_err().reason;
     assert!(error.contains("truncated"), "{error}");
 
     // a real file whose tailer was overwritten
     let mut bytes = encoded(&dir, "b.xlog");
     let last = bytes.len() - 1;
     bytes[last] = 0x7f;
-    let error = decode_records(&bytes, &key).unwrap_err();
+    let error = decode_records(&bytes, &key).unwrap_err().reason;
     assert!(error.contains("bad tailer"), "{error}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `count` copies of one record, encoded in sync mode: a file of `count` blocks
+/// of the same size, so where a block starts is arithmetic and not a guess.
+fn encoded_blocks(dir: &std::path::Path, name: &str, count: usize) -> Vec<u8> {
+    let records = dir.join("records.bin");
+    // long enough that a header + tailer always fit in the encoded file
+    let record: Vec<u8> = std::iter::repeat_n(b'x', 256)
+        .chain(b"\n".iter().copied())
+        .collect();
+    std::fs::write(&records, record.repeat(count)).unwrap();
+    let out = dir.join(name);
+    encode(&opts(&[
+        ("mode", "zlib"),
+        ("sync", "1"),
+        ("records", records.to_str().unwrap()),
+        ("out", out.to_str().unwrap()),
+    ]))
+    .unwrap();
+    std::fs::read(&out).unwrap()
+}
+
+#[test]
+fn a_file_cut_short_keeps_the_records_before_the_cut() {
+    let dir = scratch("cut-short");
+    let key = [0u8; 32];
+
+    let bytes = encoded_blocks(&dir, "a.xlog", 3);
+    let stride = bytes.len() / 3;
+    // Inside the third block, past its header: what a write that was cut off
+    // halfway leaves in the file.
+    let mut cut = bytes;
+    cut.truncate(2 * stride + 150);
+
+    // The damage is reported, and the two whole blocks before it are handed
+    // back with it: `parseFile` writes the output it has either way, and the
+    // records in front of a broken one are not less true for what follows.
+    let error = decode_records(&cut, &key).expect_err("a file with a broken tail decoded");
+    assert!(error.reason.contains("truncated"), "{}", error.reason);
+    // Two of the three records, and not a byte of the third: `read_records`
+    // hands the encoder one line per record, newline excluded, so that line is
+    // what one whole block decodes to.
+    let records = std::fs::read(dir.join("records.bin")).expect("read the records");
+    let line: Vec<u8> = records[..records.len() / 3]
+        .iter()
+        .copied()
+        .filter(|byte| *byte != b'\n')
+        .collect();
+    assert_eq!(error.recovered, line.repeat(2));
     std::fs::remove_dir_all(&dir).ok();
 }

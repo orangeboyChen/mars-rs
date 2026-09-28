@@ -29,7 +29,7 @@
 //!
 //! // a file written with no public key: no private key is asked for
 //! let plain = marsrs_xlog::decode_log_file(Path::new("marsrs_20260927.xlog"), None)?;
-//! # Ok::<(), String>(())
+//! # Ok::<(), marsrs_xlog::DecodeError>(())
 //! ```
 
 use std::fs;
@@ -45,26 +45,68 @@ const TEA_DELTA: u32 = 0x9e37_79b9;
 ///
 /// `privkey` is the private key of the pair whose public key the writer was
 /// configured with — `None` for a file that was written with none.
-pub fn decode_log_file(path: &Path, privkey: Option<&[u8; 32]>) -> Result<Vec<u8>, String> {
-    let bytes = fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+///
+/// A record that cannot be read is [`DecodeError`], and the text of the records
+/// before it comes back with the error.
+pub fn decode_log_file(path: &Path, privkey: Option<&[u8; 32]>) -> Result<Vec<u8>, DecodeError> {
+    let bytes = fs::read(path).map_err(|e| DecodeError {
+        recovered: Vec::new(),
+        reason: format!("read {}: {e}", path.display()),
+    })?;
     decode_records(&bytes, privkey)
 }
+
+/// Why [`decode_records`] stopped, and what it had read by then.
+///
+/// The C decoder answers the same question with both halves: `decodeBuffer`
+/// appends its `[F]decode_log_file.py decode error len=N` marker to the output
+/// it has already produced and carries on, and `parseFile` writes that output to
+/// the `.log` file whether or not the walk ended in an error. A file whose end
+/// is missing — a process killed between two writes, a block copied out by
+/// halves — therefore still yields every record before the damage.
+///
+/// Returning the reason alone is what this port used to do, and it cost the
+/// whole file for the sake of one record: the operator was told
+/// `record at 1096 is truncated` and got none of the days of log that were
+/// sitting intact in front of it.
+#[derive(Debug)]
+pub struct DecodeError {
+    /// The log text of the records that decoded before the damage. Empty when
+    /// the very first record is the one that is broken.
+    pub recovered: Vec<u8>,
+    /// What stopped the walk, named by the offset of the record it stopped at.
+    pub reason: String,
+}
+
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
+impl std::error::Error for DecodeError {}
 
 /// Walks every record of `data` and concatenates the recovered log text, the
 /// way `decode_log_file.c` does over a buffer of its own.
 ///
 /// A record whose magic says it is encrypted is an error when `privkey` is
-/// `None`; everything else in the file is decoded up to the first record that
-/// is malformed, which is named by its offset.
-pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>, String> {
+/// `None`, and so is a record that is malformed; the walk stops at the first of
+/// them, and [`DecodeError::recovered`] is what it had decoded by then.
+pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>, DecodeError> {
     let mut plain = Vec::new();
     let mut offset = 0;
     let mut blocks = 0;
 
-    while data.len() - offset >= HEADER_LEN + TAILER_LEN {
+    // `Some` is the record that could not be read, `None` the end of the input.
+    // The text decoded before either is the point: it is kept, and handed back
+    // with the error, rather than dropped with it.
+    let stopped = loop {
+        if data.len() - offset < HEADER_LEN + TAILER_LEN {
+            break None;
+        }
         let magic_start = data[offset];
         if !magic::magic_start_is_valid(magic_start) {
-            return Err(format!("bad magic 0x{magic_start:02x} at {offset}"));
+            break Some(format!("bad magic 0x{magic_start:02x} at {offset}"));
         }
         let len = u32::from_le_bytes(data[offset + 5..offset + 9].try_into().expect("slice of 4"))
             as usize;
@@ -74,45 +116,62 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
         // `u32::MAX` wraps that sum on a 32-bit target, which would panic on the
         // slices below instead of being reported as a truncated record.
         if len > data.len() - body_start - TAILER_LEN {
-            return Err(format!("record at {offset} is truncated"));
+            break Some(format!("record at {offset} is truncated"));
         }
         let body_end = body_start + len;
         if data[body_end] != magic::END {
-            return Err(format!("bad tailer 0x{:02x} at {body_end}", data[body_end]));
+            break Some(format!("bad tailer 0x{:02x} at {body_end}", data[body_end]));
         }
 
         let body = &data[body_start..body_end];
-        match magic_start {
+        let text = match magic_start {
             // `LogCrypt::CryptSyncLog` stores sync records verbatim: no TEA,
             // no compression (the C++ has the TEA loop commented out).
             magic::SYNC_ZLIB_START
             | magic::SYNC_NOCRYPT_ZLIB_START
             | magic::SYNC_ZSTD_START
-            | magic::SYNC_NOCRYPT_ZSTD_START => plain.extend_from_slice(body),
+            | magic::SYNC_NOCRYPT_ZSTD_START => Ok(body.to_vec()),
             magic::ASYNC_ZLIB_START | magic::ASYNC_ZSTD_START => {
-                let privkey = privkey.ok_or_else(|| {
-                    format!("record at {offset} is encrypted, and no private key was given")
-                })?;
+                let Some(privkey) = privkey else {
+                    break Some(format!(
+                        "record at {offset} is encrypted, and no private key was given"
+                    ));
+                };
                 let mut client_pubkey = [0u8; CLIENT_PUBKEY_LEN];
                 client_pubkey.copy_from_slice(&data[body_start - CLIENT_PUBKEY_LEN..body_start]);
-                let tea_key = tea_key(privkey, &client_pubkey)?;
-                let decrypted = tea_decrypt_all(body, &tea_key);
-                plain.extend_from_slice(&inflate(magic_start, &decrypted)?);
+                let tea_key = match tea_key(privkey, &client_pubkey) {
+                    Ok(key) => key,
+                    Err(reason) => break Some(reason),
+                };
+                inflate(magic_start, &tea_decrypt_all(body, &tea_key))
             }
             magic::ASYNC_NOCRYPT_ZLIB_START | magic::ASYNC_NOCRYPT_ZSTD_START => {
-                plain.extend_from_slice(&inflate(magic_start, body)?);
+                inflate(magic_start, body)
             }
-            other => return Err(format!("unhandled magic 0x{other:02x}")),
+            other => break Some(format!("unhandled magic 0x{other:02x}")),
+        };
+        match text {
+            Ok(text) => plain.extend_from_slice(&text),
+            Err(reason) => break Some(reason),
         }
 
         offset = body_end + TAILER_LEN;
         blocks += 1;
-    }
+    };
 
-    if blocks == 0 {
-        return Err("no record found".into());
+    match stopped {
+        // Every record decoded — or a tail too short to hold one, which is not
+        // damage: a block the writer never finished is not in the file.
+        None if blocks > 0 => Ok(plain),
+        None => Err(DecodeError {
+            recovered: plain,
+            reason: "no record found".into(),
+        }),
+        Some(reason) => Err(DecodeError {
+            recovered: plain,
+            reason,
+        }),
     }
-    Ok(plain)
 }
 
 /// Raw DEFLATE (`inflateInit2(-MAX_WBITS)` + `Z_SYNC_FLUSH`) or zstd, matching

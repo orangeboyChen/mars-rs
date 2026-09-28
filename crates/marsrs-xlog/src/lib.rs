@@ -51,7 +51,7 @@ pub use marsrs_core as bytes;
 /// Reading a `.xlog` back: the port of upstream's `decode_log_file.c`.
 pub mod decode;
 
-pub use decode::{decode_log_file, decode_records};
+pub use decode::{decode_log_file, decode_records, DecodeError};
 
 #[cfg(test)]
 mod tests {
