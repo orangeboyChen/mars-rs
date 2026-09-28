@@ -37,6 +37,14 @@ android {
         // `marsrs-jni` is built against NDK 27 / API 24; 21 is the floor the C++
         // project ships with.
         minSdk = 21
+
+        // The rules an app's R8 needs to keep the JNI interface whole, carried
+        // in the AAR as `proguard.txt` and merged into the app's own rules by
+        // AGP: the .so and this Kotlin name each other, and a release build
+        // that shrinks renames both halves. Without them an app that sets
+        // `minifyEnabled true` — which is what a release build is — gets
+        // `UnsatisfiedLinkError` and `NoSuchFieldError` at the first call.
+        consumerProguardFiles("consumer-rules.pro")
     }
 
     sourceSets {

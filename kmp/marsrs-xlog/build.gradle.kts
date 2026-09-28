@@ -125,6 +125,13 @@ android {
         // `marsrs-jni` is built against NDK 27 / API 24; 21 is the floor the C++
         // project ships with.
         minSdk = 21
+
+        // The Android target of this module is JNI and not cinterop, so it
+        // needs the same rules `android/marsrs-xlog` ships: carried in the
+        // Android AAR as `proguard.txt`, and merged into the app's own rules
+        // by AGP. `kmp/marsrs` needs no file of its own — it is this module's
+        // API re-exported, and consumer rules travel with the dependency.
+        consumerProguardFiles("consumer-rules.pro")
     }
 
     sourceSets {
