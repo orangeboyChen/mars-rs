@@ -12,7 +12,7 @@
 # here: as text, by this script, and as TypeScript, by
 # scripts/check_harmony_arkts.sh. Between them:
 #
-#   * the four `json5` files parse — `oh-package.json5`, `build-profile.json5`,
+#   * the three `json5` files parse — `oh-package.json5`, `build-profile.json5`,
 #     `src/main/module.json5` — which is the manifest a publish reads and the
 #     two hvigor reads;
 #   * `oh-package.json5` carries the four fields ohpm requires and the two files
