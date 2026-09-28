@@ -208,3 +208,7 @@ appender 把日志写进你给的那个目录，名字是 `<namePrefix>_YYYYMMDD
 - [日志文件](/zh/log-files) —— 在哪、叫什么、怎么读回来。
 - [你那个平台](/zh/platforms/rust)的页面 —— 完整 API、级别与模式、包里还有什么。
 - [任务链路](/zh/stn)和[网络诊断](/zh/sdt) —— 这个移植里不是日志的那半，给带着它的那些平台。
+- [从 mars-xlog 迁移](/zh/migrating-from-mars-xlog) —— 已经在用 C++ 实现的日志库写
+  日志的 App 看这里。
+- [从 mars 迁移](/zh/migrating-from-mars) —— 除了日志库还要搬任务链路和网络诊断的
+  App 看这里。

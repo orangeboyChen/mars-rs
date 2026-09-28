@@ -214,3 +214,7 @@ Nothing has to be called when the app goes away — see [log files](/log-files).
   the modes, and what else the package carries.
 - [The task pipeline](/stn) and [the network diagnosis](/sdt) — the half of the
   port that is not the logger, for the platforms that carry it.
+- [Migrating from mars-xlog](/migrating-from-mars-xlog) — for an app that
+  already writes through the C++ implementation's logger.
+- [Migrating from mars](/migrating-from-mars) — the same for the task pipeline
+  and the network diagnosis.
