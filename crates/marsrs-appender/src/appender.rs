@@ -1799,9 +1799,39 @@ impl Appender {
             guard.write_sec = sec;
             guard.write_sync(len);
         } else {
-            // A block is filed whole, and the day it is filed under is the day of
-            // the records it holds.
-            if sec.is_some() {
+            // A block reaches a file **whole**, so it must not hold records of
+            // two days: what is in the cache is yesterday's, and the file the
+            // block would be filed under is the one this record's day names, so
+            // yesterday's last records would land in today's file and today's
+            // file would hold records that are not today's. Handing the block
+            // over before the new day's record joins it costs one drain per
+            // midnight and keeps each day's records in that day's file.
+            //
+            // `write_sec` is the block's: it carries the second of the last
+            // record that joined it and a drain clears it (see
+            // [`AppenderInner::buffer_drained`]), so it is `None` until the
+            // block has a record of its own.
+            let rolled = match sec.map(|sec| local_time(sec).date) {
+                Some(day)
+                    if guard
+                        .write_sec
+                        .is_some_and(|sec| local_time(sec).date != day) =>
+                {
+                    // A drain that did not reach a file leaves the block in the
+                    // region, for the next drain to write again (see
+                    // [`AppenderInner::drain_buffer`]) — yesterday's records and
+                    // today's both, once this record has joined it. Dating the
+                    // block by this record anyway files the whole of it under
+                    // today's name, which is the disagreement the drain is here
+                    // to prevent; so the day stays until a drain has actually
+                    // taken the block away.
+                    guard.drain_buffer(false)
+                }
+                _ => true,
+            };
+            // A record with no day of its own leaves the block's alone: it is the
+            // day of the records the block already holds.
+            if rolled && sec.is_some() {
                 guard.write_sec = sec;
             }
             guard.write_async(info, len);
@@ -2319,6 +2349,121 @@ mod tests {
         assert!(path.exists(), "{path:?} missing");
         let text = decoded_text(&fs::read(&path).unwrap());
         assert!(text.contains("no timeval on this one"), "{text}");
+    }
+
+    /// A block reaches a file whole, so it must not hold records of two days.
+    ///
+    /// The block is filed under the day of the last record that joined it, so
+    /// one that was started before midnight and drained after it puts the
+    /// earlier day's records in the later day's file — the file's date and the
+    /// timestamps of the records inside it disagree, which is what an app that
+    /// uploads one file per day sees as a day's logs being in the wrong file.
+    #[test]
+    fn a_block_does_not_hold_records_of_two_days() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Async), 0, 0).unwrap();
+
+        let first_day = now_secs() - 3 * SECONDS_PER_DAY;
+        let next_day = first_day + SECONDS_PER_DAY;
+        assert_ne!(
+            local_time(first_day).date,
+            local_time(next_day).date,
+            "the two records have to fall on different days"
+        );
+        let name = |dir: &Path, tv: i64| {
+            let prefix = crate::file_util::make_log_file_name_prefix(tv, "Mars");
+            dir.join(format!("{prefix}.xlog"))
+        };
+
+        let earlier = XLoggerInfo {
+            timeval: (first_day, 0),
+            ..info(LogLevel::Info)
+        };
+        appender.write(Some(&earlier), "written on the earlier day");
+        let later = XLoggerInfo {
+            timeval: (next_day, 0),
+            ..info(LogLevel::Info)
+        };
+        appender.write(Some(&later), "written on the later day");
+        appender.flush_sync();
+        appender.close();
+
+        let earlier_file = name(tmp.path(), first_day);
+        let later_file = name(tmp.path(), next_day);
+        assert!(earlier_file.exists(), "{earlier_file:?} missing");
+        assert!(later_file.exists(), "{later_file:?} missing");
+
+        let earlier_text = decoded_text(&fs::read(&earlier_file).unwrap());
+        let later_text = decoded_text(&fs::read(&later_file).unwrap());
+        assert!(
+            earlier_text.contains("written on the earlier day"),
+            "{earlier_text}"
+        );
+        assert!(
+            !earlier_text.contains("written on the later day"),
+            "{earlier_text}"
+        );
+        assert!(
+            later_text.contains("written on the later day"),
+            "{later_text}"
+        );
+        assert!(
+            !later_text.contains("written on the earlier day"),
+            "the whole block went to the later day's file: {later_text}"
+        );
+    }
+
+    /// A roll-over drain the log directory refuses leaves the block in the region
+    /// — with the day it carries, which is the day of the records it holds. The
+    /// record that crossed midnight must not re-date it: the block would then be
+    /// filed, whole, under the later day, which is the disagreement the drain is
+    /// there to prevent.
+    #[test]
+    fn a_block_the_drain_could_not_hand_over_keeps_its_day() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Async), 0, 0).unwrap();
+
+        let first_day = now_secs() - 3 * SECONDS_PER_DAY;
+        let name = |dir: &Path, tv: i64| {
+            let prefix = crate::file_util::make_log_file_name_prefix(tv, "Mars");
+            dir.join(format!("{prefix}.xlog"))
+        };
+
+        let earlier = XLoggerInfo {
+            timeval: (first_day, 0),
+            ..info(LogLevel::Info)
+        };
+        appender.write(Some(&earlier), "written on the earlier day");
+
+        // The file the block would be handed over to cannot be opened, so the
+        // roll-over drain fails — what a full or read-only file system looks
+        // like from here.
+        let blocked = name(tmp.path(), first_day);
+        fs::create_dir(&blocked).unwrap();
+        let later = XLoggerInfo {
+            timeval: (now_secs(), 0),
+            ..info(LogLevel::Info)
+        };
+        appender.write(Some(&later), "written on the later day");
+
+        // It can be written again, and the block is handed over with the day it
+        // carries.
+        fs::remove_dir(&blocked).unwrap();
+        appender.flush_sync();
+        appender.close();
+
+        let text = decoded_text(&fs::read(&blocked).unwrap());
+        assert!(text.contains("written on the earlier day"), "{text}");
+        assert!(text.contains("written on the later day"), "{text}");
+
+        let today = name(tmp.path(), now_secs());
+        if today.exists() {
+            let today_text = decoded_text(&fs::read(&today).unwrap());
+            assert!(
+                !today_text.contains("written on the earlier day"),
+                "the block was filed under the later day: {today_text}"
+            );
+        }
     }
 
     /// A block's second dates that block and nothing after it.
