@@ -621,6 +621,22 @@ pub struct TransferProfile {
     pub begin_buf2resp_time: u64,
     /// `end_buf2resp_time` — when it was done reading it.
     pub end_buf2resp_time: u64,
+    /// `begin_make_sure_auth_time` — when the app was asked whether this host
+    /// is authed; `0` for a task that needs no auth.
+    pub begin_make_sure_auth_time: u64,
+    /// `end_make_sure_auth_time` — when the app answered, which with
+    /// [`TransferProfile::begin_make_sure_auth_time`] is how long the app
+    /// took to say yes. The C++ reads the pair the moment it comes back, and
+    /// it is the only reading of the app's own login that a task carries.
+    pub end_make_sure_auth_time: u64,
+    /// `begin_check_auth_time` — when the queue first asked about auth for
+    /// this try, which is not moved by a later pass: a task whose auth is
+    /// still being waited for spans every loop it failed to go out on.
+    pub begin_check_auth_time: u64,
+    /// `end_check_auth_time` — when auth was done being checked, which is
+    /// after the app said yes and only then: a pass that went no further
+    /// because auth was not there yet leaves this at `0`.
+    pub end_check_auth_time: u64,
     /// `read_write_timeout` — how long the whole read may take.
     pub read_write_timeout: u64,
     /// `first_pkg_timeout` — how long the first package may take.
@@ -655,6 +671,10 @@ impl TransferProfile {
             end_req2buf_time: 0,
             begin_buf2resp_time: 0,
             end_buf2resp_time: 0,
+            begin_make_sure_auth_time: 0,
+            end_make_sure_auth_time: 0,
+            begin_check_auth_time: 0,
+            end_check_auth_time: 0,
             read_write_timeout: 0,
             first_pkg_timeout: 0,
             sent_size: 0,
@@ -675,12 +695,28 @@ impl TransferProfile {
     }
 }
 
+/// `FirstAuthFlag` (`mars/stn/task_profile.h`) — what the first time the queue
+/// asked about this task's auth came to, which an app's own report reads to
+/// tell a task that never went out because the app was not logged in from one
+/// that was not asked for auth at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FirstAuthFlag {
+    /// `kInitAuthFlag` — nothing has been asked yet.
+    Init,
+    /// `kAlreadyAuth` — the app said it was authed the first time it was asked.
+    AlreadyAuth,
+    /// `kNoNeedAuth` — the task needs no auth.
+    NoNeedAuth,
+    /// `kWaitAuth` — the app said it was not, so the task is waiting for a
+    /// login that has not happened yet.
+    WaitAuth,
+}
+
 /// `TaskProfile` — one task, from the moment it was asked for to the moment it
 /// was answered, and everything its retries left behind.
 ///
-/// The C++ has a few fields this does not: `is_weak_network` and
-/// `first_auth_flag`, which only the report reads. They come with the code that
-/// writes the report.
+/// The C++ has one field this does not: `is_weak_network`, which only the
+/// report reads and which comes with the code that writes the report.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskProfile {
     /// `task`.
@@ -729,6 +765,14 @@ pub struct TaskProfile {
     /// `allow_sessiontimeout_retry` — whether a session timeout may still give
     /// this task another try; one try each.
     pub allow_sessiontimeout_retry: bool,
+    /// `first_auth_flag` — what the first time the queue asked about auth came
+    /// to, which is set once and never moved again: the queue keeps asking
+    /// while the app is not logged in, and the report is told about the first
+    /// of those, not the last.
+    pub first_auth_flag: FirstAuthFlag,
+    /// `is_first_check_auth` — whether [`TaskProfile::first_auth_flag`] is
+    /// still the one to write.
+    pub is_first_check_auth: bool,
     /// `history_transfer_profiles` — every try but the one that is out. Not
     /// empty is what makes the next try a fallback one.
     pub history: Vec<TransferProfile>,
@@ -763,6 +807,8 @@ impl TaskProfile {
             err_code: 0,
             link_type: 0,
             allow_sessiontimeout_retry: true,
+            first_auth_flag: FirstAuthFlag::Init,
+            is_first_check_auth: true,
             history: Vec::new(),
         }
     }
