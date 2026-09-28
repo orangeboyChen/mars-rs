@@ -1,7 +1,7 @@
 # 从 mars-stn 迁移
 
-跑过 C++ 项目任务链路的 App 有两样东西要挪：发起任务的那几个调用，以及它这么做的
-时候接过去的那两件事。一个任务还是那个 struct，App 在它跑着的时候回答的还是那些问
+App 从 C++ 项目的任务链路迁过来，要挪的有两样东西：发起任务的那几个调用，以及发起
+时要接过去的那两件事。一个任务还是那个 struct，App 在它跑着的时候回答的还是那些问
 题，一个任务怎么结束也没有变 —— 一个错误类型、一个错误码和一个 profile。
 
 | 你用的那一块 | 这里拿什么 | 写在哪一页 |
@@ -14,7 +14,7 @@
 
 **队列是靠一次调用排空的，不是靠一个线程。** C++ 用自己的一个 message-queue 线程跑
 队列；这个移植里没有线程，所以本该是一个线程的地方，是宿主的一次调用 ——
-`run_pending()`，以及告诉它这一趟最多还能等多久的 `due_time()`。一个循环就是全部：
+`run_pending()`，以及 `due_time()`，告诉它这一趟最多还能等多久。一个循环就是全部：
 
 ::: code-group
 
@@ -49,11 +49,11 @@ while (due != null) {
 `wait` 是 App 写的一个 `expect` —— Android 上 `Thread.sleep(due)`，native 目标上
 `usleep(due * 1000)`。
 
-一个发起了却从没被排空的任务会一直待在它的队列里 —— `has_task` 对一个哪儿也去不了
+一个发起了却一直没排空的任务会一直待在它的队列里 —— `has_task` 对一个哪儿也去不了
 的任务照样回答 `true`。
 
 **socket 是 App 的。** 短连接和长连接就是 socket，而这个移植一个都不拥有。在 Rust
-里，接线是造链路时给它的一个 `SocketOperator`，通过 net core 的 factory —— 也就是
+里，接线就是造链路时给它一个 `SocketOperator`，走 net core 的 factory —— 也就是
 C++ 里 `net_channel_factory.cc` 那两个钩子。Kotlin、Swift 和 C 的绑定都没有给它留
 口子，所以在 Rust 之外，一个任务是以一次 socket 错误（`ErrCmdType::Socket`）结束
 的，而不是真的发出去：那些平台上的 App 能拿到的是队列、链路的选择、连接前的 DNS、
@@ -79,11 +79,11 @@ C++ 里 `net_channel_factory.cc` 那两个钩子。Kotlin、Swift 和 C 的绑�
 
 ## 那些问题
 
-C++ 作为 `mars::stn::Callback` 的虚函数问的那十八个问题，在每个平台上有一种形状：
+C++ 把那十八个问题写成 `mars::stn::Callback` 的虚函数，每个平台上换一种形状：
 Rust 里一个 `App` trait，Android 上一个 `ICallBack`，共享 Kotlin 模块里一个 `ask`
 闭包，Swift 里一个闭包，C 里一个回调。每一个都为 App 没回答的问题准备了默认值 ——
-只有 Android 那个例外，它是 C++ 项目的 Java 声明的那个普通 interface，所以那个对象
-得由 App 补完。
+只有 Android 那个例外，它是 C++ 项目的 Java 声明出来的一个普通 interface，所以那个
+对象要 App 自己补全。
 
 名字是 C++ 用的那几个：`req2Buf` 是任务要发的字节，`buf2Resp` 是回答，`onTaskEnd`
 是结束，`onPush` 是服务器从长连接上推下来的东西，`onNewDns` 是一个 host 的地址。见
@@ -91,8 +91,8 @@ Rust 里一个 `App` trait，Android 上一个 `ICallBack`，共享 Kotlin 模�
 
 任务的两个默认值不是 `Task::Task()` 给的那两个，其中一个还不是任何 Java 给的：
 `need_authed` 是 `true` 而不是 `false`，那是 C++ 项目的 Java 的回答；`channel_select`
-是 `CHANNEL_BOTH` 而不是 `0` —— 后者会被 net core 判为失败 —— 而 C++ 的 Java 把通道
-当成参数收，让 App 自己说，所以 `CHANNEL_BOTH` 是这个移植自己的。
+是 `CHANNEL_BOTH` 而不是 `0` —— 后者 net core 会判为失败 —— 而 C++ 的 Java 把通道当作
+一个参数，让 App 自己说，所以 `CHANNEL_BOTH` 是这个移植自己的。
 
 ## Android 上的启动
 
@@ -105,7 +105,7 @@ Rust 里一个 `App` trait，Android 上一个 `ICallBack`，共享 Kotlin 模�
 
 - [快速开始](/zh/stn/getting-started) —— 每个带着 STN 的平台上的依赖和一个跑起来的
   任务。
-- [从 mars-xlog 迁移](/zh/xlog/migrating-from-mars-xlog) —— 日志，给任务链路不是它
-  唯一拿的那块的应用。
+- [从 mars-xlog 迁移](/zh/xlog/migrating-from-mars-xlog) —— 日志，给那些除了任务
+  链路还拿了别的东西的应用。
 - [从 mars-sdt 迁移](/zh/sdt/migrating-from-mars-sdt) —— 网络诊断，和链路在同一个
   包里。

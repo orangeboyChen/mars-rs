@@ -1,7 +1,7 @@
 # 长连接
 
-长连接是一条连接，不是一个请求，而且它由 App 来保持：它承载你的任务、服务器推下来
-的东西，以及告诉中间那些盒子这条连接还要用的 noop。
+长连接是一条连接，不是一个请求，而且要 App 自己保持：它承载你的任务、服务器推下来
+的东西，以及 noop，它告诉中间那些盒子这条连接还要用。
 
 | 什么 | Rust | Swift | Android、KMP | C |
 |---|---|---|---|---|
@@ -21,9 +21,9 @@
 | 丢掉重来 | `reset` / `reset_with_encoder` | `reset` / `resetAndInitEncoderVersion` | `reset` / `resetAndInitEncoderVersion` | `mars_stn_reset` / `mars_stn_reset_and_init_encoder_version` |
 
 上面这些调用的都是默认那条长连接。要再开一条，应用得给它一个名字 —— `create_long_link`
-加一个 `LonglinkConfig`：名字、host 列表、要不要自己重连、要不要由它向应用报状态。之
-后就按这个名字找它：`destroy_long_link` 把它丢掉、并让正在它上面跑的任务全部失败，
-`mark_main_longlink` 让它成为应用听到状态的那一条。`group` 留空、`link_type` 给 `0`，拿
+加一个 `LonglinkConfig`：名字、host 列表、要不要自己重连、要不要向应用报状态。之后
+就按这个名字找它：`destroy_long_link` 把它丢掉、并让正在它上面跑的任务全部失败，
+`mark_main_longlink` 让它成为给应用报状态的那一条。`group` 留空、`link_type` 给 `0`，拿
 到的就是长连接的默认值。
 
 `makesureLongLinkConnected()` 在 Android 和共享 Kotlin 上什么也不回答 —— C ABI 的
@@ -39,10 +39,10 @@
 | Rust | `stn.on_network_change { … }` —— 闭包里是宿主自己的变更，它比 STN 的先跑 |
 | 其余每个平台 | `reset` —— 连的地方变了的话，再加上上面那两个地址 |
 
-一次网络变化做的事不止是记一笔：每条长连接都会被拆掉、重新去连 —— 立刻，或者
-等它自己的 monitor 走到下一个间隔 —— 走在那条连接上的任务会被取消再发起一次，
+一次网络变化做的事不止是记一笔：STN 会把每条长连接拆掉、重新去连 —— 立刻，或者
+等它自己的 monitor 走到下一个间隔 —— 走在那条连接上的任务会先取消、再发起一次，
 这样它们才会落到一条已经起来的链路上。C ABI、HarmonyOS、Swift 和共享 Kotlin
-模块上的 App 没有这个调用，在那里 `reset` 就是一次变化能要求的全部。
+模块上的 App 没有这个调用，在那里一次变化能要求的只有 `reset`。
 
 短连接不需要告诉：一个任务会走第一条已经起来的链路，`Task::new` 两条都要。
 
