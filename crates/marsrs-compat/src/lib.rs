@@ -266,9 +266,11 @@ pub fn decode(opts: &Opts) -> Result<(), String> {
 /// always asks for one: every fixture the C++ wrote is encrypted, and the
 /// golden files are only comparable when each record was decrypted.
 ///
-/// A record that cannot be read stops the walk, and
-/// [`marsrs_xlog::DecodeError::recovered`] is the text of the records before
-/// it.
+/// A record that cannot be read is skipped and marked rather than ending the
+/// walk, so a damaged file still yields the records behind the damage. What
+/// does end it is a file with no record left in it at all, and
+/// [`marsrs_xlog::DecodeError::recovered`] is then the text of the records
+/// before that point.
 pub fn decode_records(
     data: &[u8],
     privkey: &[u8; 32],
