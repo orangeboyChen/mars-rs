@@ -19,9 +19,17 @@ Kotlin — draws the shape for you, so what an app names is the path, the hosts 
 the timeout. `gen_task_id()` / `MarsStn.generateTaskID()` /
 `StnLogic.genTaskID()` is there when the id is wanted before the task.
 
-Two defaults are the ones the C++ project's own Java gives its `Task`:
-`channel_select` is `CHANNEL_BOTH` and not `0` — which a net core fails a task
-for — and `need_authed` is `true`.
+The channel is the one field an app names first: a task with `channel_select`
+`0` goes nowhere, because that is what a net core refuses — and of the three
+above only Rust's `Task::new` fills it in, with `CHANNEL_BOTH`. `StnTask`
+starts with no channel and `Task()` in the shared Kotlin with `0`, which is
+what the C++'s `Task::Task()` gives and what its Java makes the app set, so on
+those the app names it: `MarsStn.Channel.both`, or `Task.E_BOTH`, or on Android
+the first argument of `Task(channelselect, cmdid, cgi, hostList)`.
+
+`need_authed` is `true` in Rust, in Swift, and in that four-argument Android
+`Task` — the C++ project's own Java answers `true` there too. A `Task()` an app
+builds with no arguments leaves it `false`.
 
 ## Starting, stopping, and whether one is there
 

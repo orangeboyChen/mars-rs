@@ -89,9 +89,10 @@ Rust 里一个 `App` trait，Android 上一个 `ICallBack`，共享 Kotlin 模�
 是结束，`onPush` 是服务器从长连接上推下来的东西，`onNewDns` 是一个 host 的地址。见
 [那些问题](/zh/stn/callbacks)。
 
-任务的两个默认值不是 `Task::Task()` 给的那两个，都是 C++ 项目的 Java 给它的 `Task`
-的那两个：`channel_select` 是 `CHANNEL_BOTH` 而不是 `0` —— 后者会被 net core 判为
-失败 —— 以及 `need_authed` 是 `true` 而不是 `false`。
+任务的两个默认值不是 `Task::Task()` 给的那两个，其中一个还不是任何 Java 给的：
+`need_authed` 是 `true` 而不是 `false`，那是 C++ 项目的 Java 的回答；`channel_select`
+是 `CHANNEL_BOTH` 而不是 `0` —— 后者会被 net core 判为失败 —— 而 C++ 的 Java 把通道
+当成参数收，让 App 自己说，所以 `CHANNEL_BOTH` 是这个移植自己的。
 
 ## Android 上的启动
 

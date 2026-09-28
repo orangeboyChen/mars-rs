@@ -95,10 +95,11 @@ The names are the ones the C++ used: `req2Buf` for the bytes a task sends,
 sends down the long link, `onNewDns` for the addresses of a host. See
 [the questions](/stn/callbacks).
 
-Two defaults of a task are not the ones `Task::Task()` gives it, and both are the
-ones the C++ project's Java gives its `Task`: `channel_select` is `CHANNEL_BOTH`
-and not `0`, which a net core fails a task for, and `need_authed` is `true` and
-not `false`.
+Two defaults of a task are not the ones `Task::Task()` gives it, and one of them
+is not one any Java gives: `need_authed` is `true` and not `false`, which is
+what the C++ project's Java answers, and `channel_select` is `CHANNEL_BOTH` and
+not `0`, which a net core fails a task for — the C++'s Java takes the channel as
+an argument and makes the app name it, so `CHANNEL_BOTH` is this port's own.
 
 ## The boot, on Android
 

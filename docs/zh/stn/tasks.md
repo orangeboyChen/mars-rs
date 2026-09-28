@@ -17,9 +17,16 @@ Rust 的 `Task::new`、Swift 的 `StnTask(channelSelect:)`、共享 Kotlin 的 `
 会把这个形状给你画好，所以 App 要说的是路径、hosts 和超时。想先拿到 id 的时候有
 `gen_task_id()` / `MarsStn.generateTaskID()` / `StnLogic.genTaskID()`。
 
-两个默认值是 C++ 项目自己的 Java 给它的 `Task` 的那两个：`channel_select` 是
-`CHANNEL_BOTH` 而不是 `0` —— 后者会被 net core 判为失败 —— 以及 `need_authed` 是
-`true`。
+通道是 App 第一个要说的字段：`channel_select` 为 `0` 的任务哪也去不了，因为那正是
+net core 会判为失败的那个值 —— 上面三个里只有 Rust 的 `Task::new` 会填上它，填的是
+`CHANNEL_BOTH`。`StnTask` 一开始一条通道都没有，共享 Kotlin 的 `Task()` 是 `0`，也
+就是 C++ 的 `Task::Task()` 给的值、它的 Java 让 App 自己去设的那个值，所以这两处要
+由 App 来说：`MarsStn.Channel.both`、`Task.E_BOTH`，Android 上则是
+`Task(channelselect, cmdid, cgi, hostList)` 的第一个参数。
+
+`need_authed` 在 Rust 和 Swift 里是 `true`，在 Android 那个四参数的 `Task` 里也是
+—— C++ 项目自己的 Java 在那里同样回答 `true`。App 用无参 `Task()` 建出来的那个把它
+留在 `false`。
 
 ## 发起、停下，以及它还在不在
 
