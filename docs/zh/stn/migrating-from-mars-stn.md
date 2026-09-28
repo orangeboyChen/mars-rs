@@ -1,0 +1,89 @@
+# 从 mars-stn 迁移
+
+跑过 C++ 项目任务链路的 App 有两样东西要挪：发起任务的那几个调用，以及它这么做的
+时候接过去的那两件事。一个任务还是那个 struct，App 在它跑着的时候回答的还是那些问
+题，一个任务怎么结束也没有变 —— 一个错误类型、一个错误码和一个 profile。
+
+| 你用的那一块 | 这里拿什么 | 写在哪一页 |
+|---|---|---|
+| `mars/stn` | crates.io 和 JitPack 上的 `marsrs`，共享 Kotlin 模块的 `marsrs-kmp`，Apple 上的 `MarsRSNet` | [快速开始](/zh/stn/getting-started) |
+| `mars/xlog` | `xlog` —— 日志，在自己的一个包里 | [从 mars-xlog 迁移](/zh/xlog/migrating-from-mars-xlog) |
+| `mars/sdt` | 同一个 `marsrs`，和链路在同一个包里 | [从 mars-sdt 迁移](/zh/sdt/migrating-from-mars-sdt) |
+
+## App 接过去的那两件事
+
+**队列是靠一次调用排空的，不是靠一个线程。** C++ 用自己的一个 message-queue 线程跑
+队列；这个移植里没有线程，所以本该是一个线程的地方，是宿主的一次调用 ——
+`run_pending()`，以及告诉它这一趟最多还能等多久的 `due_time()`。一个循环就是全部：
+
+::: code-group
+
+```rust [Rust]
+while let Some(wait) = stn.due_delay() {      // 这一趟还能等多久，毫秒
+    std::thread::sleep(std::time::Duration::from_millis(wait));
+    stn.run_pending();
+}
+```
+
+```kotlin [Android]
+var due = StnLogic.dueTime()                  // -1 是"没有可等的东西"
+while (due >= 0) {
+    Thread.sleep(due)
+    StnLogic.runPending()
+    due = StnLogic.dueTime()
+}
+```
+
+:::
+
+一个发起了却从没被排空的任务会一直待在它的队列里 —— `has_task` 对一个哪儿也去不了
+的任务照样回答 `true`。
+
+**socket 是 App 的。** 短连接和长连接就是 socket，而这个移植一个都不拥有。在 Rust
+里，接线是造链路时给它的一个 `SocketOperator`，通过 net core 的 factory —— 也就是
+C++ 里 `net_channel_factory.cc` 那两个钩子。Kotlin、Swift 和 C 的绑定都没有给它留
+口子，所以在 Rust 之外，一个任务是以一次 socket 错误（`ErrCmdType::Socket`）结束
+的，而不是真的发出去：那些平台上的 App 能拿到的是队列、链路的选择、连接前的 DNS、
+重试、超时，以及最后的报告。
+
+## 那几个调用叫什么
+
+| C++ | Rust | Android | Swift | C |
+|---|---|---|---|---|
+| `mars::stn::StartTask` | `stn.start_task(task)` | `StnLogic.startTask(task)` | `MarsStn.start(task)` | `mars_stn_start_task(&task)` |
+| `mars::stn::StopTask` | `stn.stop_task(id)` | `StnLogic.stopTask(id)` | `MarsStn.stop(taskID:)` | `mars_stn_stop_task(id)` |
+| `mars::stn::HasTask` | `stn.has_task(id)` | `StnLogic.hasTask(id)` | `MarsStn.hasTask(id)` | `mars_stn_has_task(id)` |
+| `mars::stn::SetCallback` | `stn.set_callback(app)` | `StnLogic.setCallBack(cb)` | `MarsStn.setApp { … }` | `mars_stn_set_app(ctx, ask)` |
+| `mars::stn::MakesureLonglinkConnected` | `stn.make_sure_long_link_connected("default")` | `StnLogic.makesureLongLinkConnected()` | `MarsStn.makeSureLongLinkConnected()` | `mars_stn_makesure_longlink_connected()` |
+| 队列那个线程 | `stn.run_pending()` | `StnLogic.runPending()` | `MarsStn.runPending()` | `mars_stn_run_pending()` |
+
+## 那些问题
+
+C++ 作为 `mars::stn::Callback` 的虚函数问的那十八个问题，在 Rust 里是一个 `App`
+trait，在 Kotlin 里是一个 `ICallBack`，在 Swift 里是一个闭包，每一个都为 App 没回
+答的问题准备了默认值 —— 只有 Android 那个例外，它是 C++ 项目的 Java 声明的那个普通
+interface，所以那个对象得由 App 补完。
+
+名字是 C++ 用的那几个：`req2Buf` 是任务要发的字节，`buf2Resp` 是回答，`onTaskEnd`
+是结束，`onPush` 是服务器从长连接上推下来的东西，`onNewDns` 是一个 host 的地址。见
+[那些问题](/zh/stn/callbacks)。
+
+任务的两个默认值不是 `Task::Task()` 给的那两个，都是 C++ 项目的 Java 给它的 `Task`
+的那两个：`channel_select` 是 `CHANNEL_BOTH` 而不是 `0` —— 后者会被 net core 判为
+失败 —— 以及 `need_authed` 是 `true` 而不是 `false`。
+
+## Android 上的启动
+
+启动这一步也一样：`Mars.init(context, handler)` 和 `Mars.onCreate(true)` 起两座
+桥，屏幕或网络变了的时候 `BaseEvent.onForeground` 和 `BaseEvent.onNetworkChange`，
+`AppLogic.setCallBack` 给的是 STN 问的账号和设备 —— C++ 项目的 Java 拼的那几个名字，
+在这个移植的包里。
+
+## 接着看
+
+- [快速开始](/zh/stn/getting-started) —— 每个带着 STN 的平台上的依赖和一个跑起来的
+  任务。
+- [从 mars-xlog 迁移](/zh/xlog/migrating-from-mars-xlog) —— 日志，给任务链路不是它
+  唯一拿的那块的应用。
+- [从 mars-sdt 迁移](/zh/sdt/migrating-from-mars-sdt) —— 网络诊断，和链路在同一个
+  包里。
