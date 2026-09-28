@@ -118,7 +118,9 @@ pub enum ActiveState {
     Inactive = 4,
 }
 
-/// `LongLinkConnectMonitor`.
+/// Decides when a long link that is not up is tried again: an interval out of
+/// [`INTERVALS`] while the app is doing something, and a rung of
+/// [`RECONNECT_INTERVAL`] while it is not.
 pub struct LongLinkConnectMonitor {
     /// `status_`
     status: LongLinkStatus,
