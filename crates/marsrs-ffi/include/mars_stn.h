@@ -243,6 +243,11 @@ typedef struct {
     int longlink_host;
     int check_type;
     const MarsStnTask* task;
+    /* Behind `task`, and not beside `check_type`: a pointer is four bytes wide
+     * on the 32-bit C ABI, so a field put in front of one moves it, and an app
+     * built against the header this struct used to have reads `task` at the
+     * offset it had. */
+    unsigned int param;       /* what `check_type` refused the task by        */
 } MarsStnQuestion;
 
 /**

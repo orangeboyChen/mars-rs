@@ -133,6 +133,14 @@ public class Question internal constructor() {
     public var checkType: Int = 0
         internal set
 
+    /**
+     * `reportTaskLimited` — what the task was refused by: how long ago the
+     * same body went out last for the frequency limit, the length of the body
+     * for the flow one.
+     */
+    public var param: Int = 0
+        internal set
+
     /** `reportTaskLimited` — the task itself. */
     public var task: Task? = null
         internal set

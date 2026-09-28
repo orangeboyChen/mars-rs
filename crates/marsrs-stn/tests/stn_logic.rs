@@ -14,10 +14,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use marsrs_stn::task_profile::TaskFailHandleType;
+use marsrs_stn::frequency_limit::RESET_RECORD_INTERVAL;
+use marsrs_stn::task_profile::{TaskFailHandleType, LOCAL_ANTI_AVALANCHE};
 use marsrs_stn::{
-    App, CgiProfile as Cgi, ConnectProfile, ErrCmdType, LongLinkStatus, LonglinkConfig, NetStatus,
-    RespHandle, RunId, StnLogic, Task, DEFAULT_LONGLINK_NAME, NET_TYPE_WIFI,
+    App, CgiProfile as Cgi, ConnectProfile, ErrCmdType, LimitKind, LongLinkStatus, LonglinkConfig,
+    NetStatus, RespHandle, RunId, StnLogic, Task, DEFAULT_LONGLINK_NAME, NET_TYPE_WIFI,
 };
 
 /// The channel every sample starts on.
@@ -40,6 +41,8 @@ struct Said {
     pushed: Vec<(String, u32, Vec<u8>)>,
     status: Vec<(NetStatus, NetStatus)>,
     authed: Vec<(String, String)>,
+    /// The task a gate refused: what it was refused for, and by how much.
+    limited: Vec<(i32, u32)>,
 }
 
 /// An app that answers every question the way a sample wants, and writes down
@@ -123,6 +126,12 @@ impl App for Rec {
 
     fn report_connect_status(&mut self, all: NetStatus, longlink: NetStatus) {
         self.said.lock().unwrap().status.push((all, longlink));
+    }
+
+    fn report_task_limited(&mut self, check_type: i32, _task: &Task, param: u32) -> u32 {
+        self.said.lock().unwrap().limited.push((check_type, param));
+        // the limit the app would rather be held to
+        0
     }
 }
 
@@ -326,6 +335,44 @@ fn pair(ip: &str, port: u16) -> ConnectProfile {
     profile.ip = ip.to_string();
     profile.port = port;
     profile
+}
+
+#[test]
+fn a_task_a_gate_refused_is_one_the_app_is_asked_about() {
+    let mut host = Host::new();
+    // one body for every task, which is what the frequency gate counts
+    host.write(Some(b"avalanche"));
+    host.bring_up(MAIN, LongLinkStatus::Connected);
+
+    // 105 sends of one body go out, and the app hears nothing of them
+    for taskid in 1..=105 {
+        host.start_long(taskid);
+    }
+    assert_eq!(host.sent().len(), 105);
+    assert!(
+        host.said().limited.is_empty(),
+        "a task that went out is not one the app is asked about"
+    );
+
+    // the 106th is the avalanche: the app is told which gate refused it, and
+    // how long ago the same body went out last — under the interval that
+    // would have started a new burst instead
+    host.start_long(106);
+    assert_eq!(host.sent().len(), 105, "the refused task did not go out");
+    let said = host.said();
+    assert_eq!(said.limited.len(), 1);
+    assert_eq!(said.limited[0].0, LimitKind::Frequency.check_type());
+    assert!(
+        u64::from(said.limited[0].1) < RESET_RECORD_INTERVAL,
+        "the span is the age of the burst, {} ticks",
+        said.limited[0].1
+    );
+
+    // ... and the task ends the way the C++ ends one the gate refused
+    assert_eq!(
+        said.ended,
+        vec![(106, ErrCmdType::Local, LOCAL_ANTI_AVALANCHE, String::new())]
+    );
 }
 
 #[test]

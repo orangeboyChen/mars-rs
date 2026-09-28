@@ -158,6 +158,7 @@ fn header_declares_the_types_and_their_fields() {
         "link_status;",
         "longlink_host;",
         "check_type;",
+        "param;",
         "task;",
         "yes;",
         "ips;",

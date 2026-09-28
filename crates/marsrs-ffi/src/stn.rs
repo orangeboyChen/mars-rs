@@ -426,6 +426,15 @@ pub struct MarsStnQuestion {
     pub check_type: c_int,
     /// `ReportTaskLimited` — the task itself.
     pub task: *const MarsStnTask,
+    /// `ReportTaskLimited` — what the task was refused by: how long ago the
+    /// same body went out last for the frequency gate, the length of the body
+    /// for the flow one. The caller answers with the limit it wants instead.
+    ///
+    /// It stands behind `task`, and not beside `check_type` where it would read
+    /// better: a pointer is four bytes wide on a 32-bit C ABI, so a field put
+    /// in front of one moves it, and an app built against the header this
+    /// struct used to have reads `task` at the offset it has always had.
+    pub param: c_uint,
 }
 
 impl Default for MarsStnQuestion {
@@ -459,6 +468,7 @@ impl Default for MarsStnQuestion {
             longlink_host: 0,
             check_type: 0,
             task: std::ptr::null(),
+            param: 0,
         }
     }
 }
@@ -1210,11 +1220,12 @@ impl StnApp for CApp {
         });
     }
 
-    fn report_task_limited(&mut self, check_type: i32, task: &Task) -> u32 {
+    fn report_task_limited(&mut self, check_type: i32, task: &Task, param: u32) -> u32 {
         let task = TaskView::of(task);
         let answer = self.ask(&MarsStnQuestion {
             kind: MarsStnQuestionKind::ReportTaskLimited,
             check_type,
+            param,
             task: task.task(),
             ..Default::default()
         });
@@ -1740,7 +1751,7 @@ mod tests {
             app.buf2resp(7, "user", b"answer", 0),
             (0, TaskFailHandleType::Normal)
         );
-        assert_eq!(app.report_task_limited(0, &Task::new(7, 8)), 0);
+        assert_eq!(app.report_task_limited(0, &Task::new(7, 8), 0), 0);
         assert_eq!(
             app.identify_check_buffer("longlink", 0),
             IdentifyBuffer::next(Vec::new())

@@ -198,6 +198,10 @@ public struct StnQuestion {
     public let isLongLinkHost: Bool
     /// `reportTaskLimited` — what the task is being weighed against.
     public let checkType: Int32
+    /// `reportTaskLimited` — what the task was refused by: how long ago the
+    /// same body went out last for the frequency limit, the length of the body
+    /// for the flow one.
+    public let param: UInt32
     /// `reportTaskLimited` — the task itself.
     public let task: StnTask?
 
@@ -230,6 +234,7 @@ public struct StnQuestion {
         linkStatus = MarsStn.LinkStatus(rawValue: question.link_status)
         isLongLinkHost = question.longlink_host != 0
         checkType = question.check_type
+        param = question.param
         task = question.task.map { StnTask($0.pointee) }
     }
 }

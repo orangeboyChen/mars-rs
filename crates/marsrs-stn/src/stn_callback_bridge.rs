@@ -170,7 +170,12 @@ pub trait App: Send {
 
     /// `ReportTaskLimited` — a task the app asked to have limited, and the
     /// answer is what the limit is: `0` is "go ahead".
-    fn report_task_limited(&mut self, _check_type: i32, _task: &Task) -> u32 {
+    ///
+    /// `_param` is what the task was refused by — how long ago the same body
+    /// went out last for the frequency gate, the length of the body for the
+    /// flow one — and an app that answers less than it was handed is one that
+    /// shrinks the limit it is held to.
+    fn report_task_limited(&mut self, _check_type: i32, _task: &Task, _param: u32) -> u32 {
         0
     }
 
@@ -561,10 +566,13 @@ impl StnCallbackBridge {
     }
 
     /// `ReportTaskLimited` — `0` while there is no app, which is "go ahead".
-    pub fn report_task_limited(&mut self, check_type: i32, task: &Task) -> u32 {
+    ///
+    /// `param` is the measure the gate refused the task by, which is the
+    /// `_param` the C++ hands in; the answer is the one it hands back out.
+    pub fn report_task_limited(&mut self, check_type: i32, task: &Task, param: u32) -> u32 {
         self.app
             .as_mut()
-            .map_or(0, |app| app.report_task_limited(check_type, task))
+            .map_or(0, |app| app.report_task_limited(check_type, task, param))
     }
 
     /// `ReportDnsProfile`.
@@ -781,8 +789,8 @@ mod tests {
             self.said.lock().unwrap().profiles += 1;
         }
 
-        fn report_task_limited(&mut self, check_type: i32, _task: &Task) -> u32 {
-            self.said.lock().unwrap().limited.push((check_type, 1));
+        fn report_task_limited(&mut self, check_type: i32, _task: &Task, param: u32) -> u32 {
+            self.said.lock().unwrap().limited.push((check_type, param));
             1
         }
 
@@ -851,7 +859,7 @@ mod tests {
             0
         );
         assert_eq!(bridge.net_check_shortlink_hosts(), Vec::<String>::new());
-        assert_eq!(bridge.report_task_limited(1, &Task::new(7, 12)), 0);
+        assert_eq!(bridge.report_task_limited(1, &Task::new(7, 12), 4), 0);
         assert!(!bridge.identify_response("channel", b"resp", b"hash"));
         // a check that nobody answered is put off, not failed
         assert_eq!(
@@ -916,7 +924,7 @@ mod tests {
             Task::new(7, 12),
             crate::PrepareProfile::new(),
         ));
-        assert_eq!(bridge.report_task_limited(2, &Task::new(7, 12)), 1);
+        assert_eq!(bridge.report_task_limited(2, &Task::new(7, 12), 1), 1);
         bridge.report_dns_profile(&DnsProfile::new("host"));
 
         let said = said.lock().unwrap().clone();

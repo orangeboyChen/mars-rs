@@ -650,6 +650,14 @@ impl StnLogic {
         let wired = Arc::clone(bridge);
         core.timing_sync()
             .set_request_sync(move || locked(&wired).request_sync());
+        // the anti-avalanche gates: the C++'s gate reaches the manager from the
+        // boot context it was made with, so this is where the port hands it the
+        // app to ask
+        let wired = Arc::clone(bridge);
+        core.anti_avalanche()
+            .set_on_limited(move |kind, task, param| {
+                locked(&wired).report_task_limited(kind.check_type(), task, param)
+            });
     }
 }
 
