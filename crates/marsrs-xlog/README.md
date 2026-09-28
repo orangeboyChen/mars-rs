@@ -39,15 +39,19 @@ cannot depend on a crate that is not on crates.io.
 of the format, for a shell that has a `.xlog` and no Rust in it.
 
 ```bash
+xlog keygen --out=xlog.key     # the pair: a pubkey for the config, a privkey for decode
 xlog decode --privkey=<hex> marsrs_20260927.xlog --out=marsrs.plain
 xlog encode --pubkey=<hex> records.txt --out=marsrs_20260927.xlog
 xlog help
 ```
 
-`decode` is what upstream's `decode_mars_log_file.py` does over the same bytes,
-and the same `decode_records` the crate exports; `encode` writes one record per
-line of its input, and encrypts it when it is given the public key of the pair
-whose private key `decode` takes.
+`keygen` makes the pair those two halves share: the 128 hex characters a `pubKey`
+is configured with, and the 64 that read what it wrote back — nothing in the port
+holds a pair of its own, so this is the one to make and keep. `decode` is what
+upstream's `decode_mars_log_file.py` does over the same bytes, and the same
+`decode_records` the crate exports; `encode` writes one record per line of its
+input, and encrypts it when it is given the public key of the pair whose private
+key `decode` takes.
 
 Every subcommand and option has a one-letter spelling — `xlog d -k <hex>
 marsrs_20260927.xlog`, `xlog e -p <hex> -o marsrs_20260927.xlog` — and `xlog

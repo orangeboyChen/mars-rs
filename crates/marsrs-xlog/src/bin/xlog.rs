@@ -6,6 +6,7 @@
 //!               [--pubkey|-p=HEX] [--level|-l=N] [--region|-r=N]
 //!               [--out|-o=PATH] [--in|-i=PATH] [INPUT]
 //! xlog decode|d [--privkey|-k=HEX] [--out|-o=PATH] [--in|-i=PATH] [INPUT]
+//! xlog keygen|k [--out|-o=PATH]
 //! xlog help|h
 //! ```
 //!
@@ -17,6 +18,12 @@
 //!   private key of that pair, without which an encrypted record is an error
 //!   and not a silent skip. This is upstream's `decode_mars_log_file.py` over
 //!   the same bytes.
+//! * `keygen` makes that pair: the 128 hex characters a `pubKey` is configured
+//!   with, and the 64 that `decode` reads what it wrote back with. It is drawn
+//!   from the system's generator and kept nowhere, so a pair that was not
+//!   written down is a file nobody can read — give it `--out`, or keep what it
+//!   printed. `--out` creates the file for its owner alone, and never over one
+//!   that is already there.
 //!
 //! An async record is compressed whichever `--compress` says: it is framed as
 //! zlib or zstd, there is no framing for one that is not, and every decoder
@@ -63,11 +70,13 @@ xlog — write and read the .xlog files of mars/xlog
 usage:
   xlog encode|e [OPTIONS] [INPUT]   one record per line of INPUT -> a .xlog
   xlog decode|d [OPTIONS] [INPUT]   a .xlog -> the log text it holds
+  xlog keygen|k [OPTIONS]           a public key for a config, and the private
+                                    key that reads what it wrote
   xlog help|h                       this text
 
 options:
   -o, --out=PATH         where the output goes; `-`, or left out, is standard
-                         output
+                         output. `keygen` takes this one and no other
   -i, --in=PATH          the input, for when a positional argument reads badly
   -k, --privkey=HEX      decode: the 64 hex characters of the private key of the
                          pair whose public key the file was written with
@@ -88,7 +97,23 @@ options:
 
 INPUT of `-`, or none at all, is standard input; so is `--out=-`. A short
 option takes its value attached — `-oFILE`, `-o=FILE` — or as the next
-argument, `-o FILE`.";
+argument, `-o FILE`.
+
+`xlog keygen` prints the pair as `pubkey=HEX` and `privkey=HEX`: the 128 hex
+characters a `pubKey` is configured with, and the 64 that `xlog decode
+--privkey` reads the file back with. It is made of nothing but the system's
+randomness and is kept nowhere, so a pair nobody wrote down is a log nobody can
+read. `--out=PATH` writes those two lines to a file made for you alone — 0600
+on Unix — and refuses to write over one that is already there.";
+
+/// The subcommand the command line named — which options belong to the command
+/// line at all, and what a `Command` is parsed for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum What {
+    Encode,
+    Decode,
+    Keygen,
+}
 
 /// What the command line asked for.
 struct Command {
@@ -126,8 +151,9 @@ fn main() -> ExitCode {
     // `cargo b` is `cargo build`. The dash is what makes `-o` an option, so
     // `xlog -e` is refused as one instead of being read as the command.
     let result = match args.first().map(String::as_str) {
-        Some("encode" | "e") => Command::parse(true, &args[1..]).and_then(encode),
-        Some("decode" | "d") => Command::parse(false, &args[1..]).and_then(decode),
+        Some("encode" | "e") => Command::parse(What::Encode, &args[1..]).and_then(encode),
+        Some("decode" | "d") => Command::parse(What::Decode, &args[1..]).and_then(decode),
+        Some("keygen" | "k") => Command::parse(What::Keygen, &args[1..]).and_then(keygen),
         Some(other) => {
             let what = if other.starts_with('-') {
                 "option"
@@ -154,7 +180,7 @@ fn main() -> ExitCode {
 impl Command {
     /// Parses `--key=value` and `-k value` options, and at most one positional
     /// argument.
-    fn parse(is_encode: bool, args: &[String]) -> Result<Self, String> {
+    fn parse(what: What, args: &[String]) -> Result<Self, String> {
         let mut command = Self {
             input: None,
             out: None,
@@ -179,7 +205,7 @@ impl Command {
                     Some(pair) => pair,
                     None => (rest, value_of(arg, rest, &mut index, args)?),
                 };
-                command.set(key, value)?;
+                command.set(what, key, value)?;
             } else if let Some(cluster) = arg.strip_prefix('-').filter(|it| !it.is_empty()) {
                 // `-o PATH`, `-o=PATH` and `-oPATH` are the three spellings of
                 // `--out=PATH`: one short option, whose value is the rest of the
@@ -195,7 +221,7 @@ impl Command {
                 } else {
                     attached
                 };
-                command.set(key, value)?;
+                command.set(what, key, value)?;
             } else if command.input.replace(arg.clone()).is_some() {
                 return Err(format!("two inputs given, the second one `{arg}`"));
             }
@@ -204,19 +230,36 @@ impl Command {
         if command.pubkey.as_deref() == Some("") {
             command.pubkey = None;
         }
-        // An option of the other subcommand is a mistake and not a default: a
+        // An option of another subcommand is a mistake and not a default: a
         // `--privkey` that `encode` ignores writes a file nobody asked for.
-        if !is_encode && command.pubkey.is_some() {
+        if what != What::Encode && command.pubkey.is_some() {
             return Err("--pubkey is an option of `xlog encode`".into());
         }
-        if is_encode && command.privkey.is_some() {
+        if what != What::Decode && command.privkey.is_some() {
             return Err("--privkey is an option of `xlog decode`".into());
+        }
+        // `keygen` makes a key of its own, so there is nothing for it to read:
+        // `xlog keygen a.xlog` is one command line saying two things.
+        if what == What::Keygen {
+            if let Some(input) = command.input.take() {
+                return Err(format!(
+                    "`xlog keygen` takes no input, but `{input}` was given"
+                ));
+            }
         }
         Ok(command)
     }
 
     /// One `--key=value`, whichever of the two spellings it was written in.
-    fn set(&mut self, key: &str, value: &str) -> Result<(), String> {
+    fn set(&mut self, what: What, key: &str, value: &str) -> Result<(), String> {
+        // A key pair is made of nothing but randomness, so `--out` is the one
+        // option `keygen` can be given: a `--mode` or a `--region` it would
+        // ignore is a command line that does not say what it does. The two key
+        // options fall through to the check above, which is where the answer
+        // names the subcommand that does take them.
+        if what == What::Keygen && !matches!(key, "out" | "pubkey" | "privkey") {
+            return Err(format!("--{key} is not an option of `xlog keygen`"));
+        }
         match key {
             "in" | "records" => self.input = Some(value.to_owned()),
             "out" => self.out = Some(value.to_owned()),
@@ -438,6 +481,94 @@ fn decode(command: Command) -> Result<(), String> {
     Ok(())
 }
 
+/// Makes a key pair: the 128 hex characters a `pubKey` is configured with, and
+/// the 64 that read what it wrote back.
+///
+/// The curve is the one the appender's own handshake is over: `LogCrypt` draws
+/// a client key of it per file and agrees a TEA key with the public key it was
+/// given, so what a config is handed is the *public* half of a pair and what
+/// reads a file back is the private one — which is why this command prints both
+/// and keeps neither.
+fn keygen(command: Command) -> Result<(), String> {
+    use k256::elliptic_curve::{sec1::ToSec1Point, Generate};
+
+    // `uECC_make_key` over the same generator `LogCrypt` reaches for: two runs
+    // draw two pairs, so a pair is written down and not remembered.
+    let private = k256::SecretKey::try_generate().map_err(|e| format!("make a key: {e}"))?;
+    // uECC stores a point as `X || Y` with no leading tag, and that — 64 bytes,
+    // 128 hex characters — is the shape a `pubKey` has in every config.
+    let point = private.public_key().to_sec1_point(false);
+    let public = &point.as_bytes()[1..];
+
+    let pair = format!(
+        "pubkey={}\nprivkey={}\n",
+        to_hex(public),
+        to_hex(&private.to_bytes())
+    );
+
+    // A file the private half is written to is not the same destination a `.xlog`
+    // is: it is created for its owner alone, and it is never written over — see
+    // [`create_key_file`]. The terminal has neither a mode nor a file to lose.
+    match command.out.as_deref() {
+        Some(path) if path != "-" => {
+            let mut file = create_key_file(path)?;
+            file.write_all(pair.as_bytes())
+                .map_err(|e| format!("write {path}: {e}"))?;
+        }
+        _ => std::io::stdout()
+            .write_all(pair.as_bytes())
+            .map_err(|e| format!("write standard output: {e}"))?,
+    }
+    eprintln!(
+        "xlog: a key pair{} — the public key goes in the config, the private one \
+         reads the file back",
+        match command.out.as_deref() {
+            Some(path) if path != "-" => format!(" -> {path}"),
+            _ => String::new(),
+        }
+    );
+    Ok(())
+}
+
+/// Creates the file a key pair is written to: for its owner alone, and only when
+/// there is nothing at `path` yet.
+///
+/// The two things `fs::write` would do wrong, both because what lands in the
+/// file is the one thing that reads every log an app ever wrote: it creates with
+/// the ordinary `0666 & umask`, which under the usual `022` leaves the private
+/// key readable by every user of the machine, and it truncates a file that is
+/// already there, which is how the only copy of a pair — and with it every log
+/// it was the key of — is lost. The mode is given to the `open` that creates the
+/// file, so there is no window in which it is permissive.
+fn create_key_file(path: &str) -> Result<std::fs::File, String> {
+    #[cfg(unix)]
+    let opened = {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+    };
+    #[cfg(not(unix))]
+    let opened = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path);
+
+    opened.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            format!(
+                "`{path}` is already there: `xlog keygen` will not overwrite a key, because \
+                 a pair nobody wrote down is a log nobody can read"
+            )
+        } else {
+            format!("write {path}: {e}")
+        }
+    })
+}
+
 /// The 32 bytes of a `--privkey`, which is 64 hex characters.
 fn privkey(hex: &str) -> Result<[u8; 32], String> {
     let raw = hex_to_bytes(hex)
@@ -450,6 +581,18 @@ fn number<T: std::str::FromStr>(key: &str, value: &str) -> Result<T, String> {
     value
         .parse::<T>()
         .map_err(|_| format!("--{key} must be a number, got `{value}`"))
+}
+
+/// The hex of `bytes` — two lowercase characters per byte, the spelling every
+/// key on this command line has.
+fn to_hex(bytes: &[u8]) -> String {
+    const DIGITS: [u8; 16] = *b"0123456789abcdef";
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        hex.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        hex.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    hex
 }
 
 fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {

@@ -107,4 +107,6 @@ python3 decode_mars_log_file.py marsrs_20260927.xlog      # Tencent/mars
 一条记录，它把这些记录写成一个 `.xlog`，给了 `--pubkey`（那对密钥里的公钥）
 就顺带加密。
 
-`xlog help` 会把它整个命令行列出来。
+[命令行](/zh/cli)那一页是整条命令行 —— 怎么装、怎么造这对密钥、怎么读回一个文件、
+怎么写一个。终端里 `xlog help` 打出来的是同样的东西；公钥到底对一条记录做了什么，
+在[配置项](/zh/configuration#压缩与加密)。

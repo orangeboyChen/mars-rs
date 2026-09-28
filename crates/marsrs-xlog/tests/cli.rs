@@ -1,5 +1,6 @@
 //! The `xlog` CLI, driven end to end: every combination of compressor, sync
-//! and key it can be given, and the ways a command line is refused.
+//! and key it can be given, the pair `keygen` makes, and the ways a command
+//! line is refused.
 //!
 //! What it cannot check on its own is the one thing the format is for — that a
 //! file the **C++** implementation wrote decodes to the text that went in.
@@ -139,6 +140,159 @@ fn an_encrypted_file_is_not_read_without_the_private_key() {
         "the error does not say why: {err}"
     );
     assert!(!out.exists(), "the text was written anyway");
+}
+
+/// The two halves of what `xlog keygen` printed, `pubkey=` and `privkey=`.
+fn pair(out: &[u8]) -> (String, String) {
+    let mut pubkey = None;
+    let mut privkey = None;
+    for line in String::from_utf8_lossy(out).lines() {
+        match line.split_once('=') {
+            Some(("pubkey", hex)) => pubkey = Some(hex.to_owned()),
+            Some(("privkey", hex)) => privkey = Some(hex.to_owned()),
+            _ => {}
+        }
+    }
+    (pubkey.unwrap_or_default(), privkey.unwrap_or_default())
+}
+
+#[test]
+fn a_key_pair_is_made_and_reads_what_it_wrote() {
+    let dir = scratch("keygen");
+    let input = write(&dir, "records.txt", RECORDS);
+    let file = dir.join("a.xlog");
+
+    let (ok, out, err) = run(&["keygen"]);
+    assert!(ok, "keygen failed: {err}");
+    let (pubkey, privkey) = pair(&out);
+    assert_eq!(pubkey.len(), 128, "`{pubkey}` is not 128 hex characters");
+    assert_eq!(privkey.len(), 64, "`{privkey}` is not 64 hex characters");
+
+    // The pair is one the appender's own handshake is over: `encode` takes the
+    // public key — which is what says it is a key of the right curve, and not a
+    // string of the right length — and the private key is the only thing that
+    // gives the records back.
+    let (ok, _, err) = run(&[
+        "encode",
+        &format!("--pubkey={pubkey}"),
+        &input.display().to_string(),
+        "--out",
+        &file.display().to_string(),
+    ]);
+    assert!(ok, "encode with the pair keygen made failed: {err}");
+    let (ok, out, err) = run(&[
+        "decode",
+        &format!("--privkey={privkey}"),
+        &file.display().to_string(),
+    ]);
+    assert!(ok, "decode with the pair keygen made failed: {err}");
+    assert_eq!(out, RECORDS, "the records did not come back");
+
+    // And it is a fresh pair and not a fixed one: two runs agree on nothing, so
+    // a pair is written down and not remembered.
+    let (ok, second, err) = run(&["keygen"]);
+    assert!(ok, "the second keygen failed: {err}");
+    let (again, _) = pair(&second);
+    assert_ne!(again, pubkey, "two runs made the same public key");
+}
+
+#[test]
+fn the_key_pair_goes_where_out_says() {
+    let dir = scratch("keygen-out");
+    let key = dir.join("xlog.key");
+
+    // `xlog k` is `xlog keygen`, and `--out` the one option it takes.
+    let (ok, out, err) = run(&["k", "-o", &key.display().to_string()]);
+    assert!(ok, "keygen failed: {err}");
+    assert!(
+        out.is_empty(),
+        "the pair went to the terminal as well as the file"
+    );
+
+    let written = std::fs::read_to_string(&key).expect("read the key file");
+    let (pubkey, privkey) = pair(written.as_bytes());
+    assert_eq!(pubkey.len(), 128, "the file does not hold a public key");
+    assert_eq!(privkey.len(), 64, "the file does not hold a private key");
+}
+
+#[test]
+fn the_key_file_is_the_owners_alone_and_is_not_written_over() {
+    let dir = scratch("keygen-file");
+    let key = dir.join("xlog.key");
+
+    let (ok, _, err) = run(&["keygen", "-o", &key.display().to_string()]);
+    assert!(ok, "keygen failed: {err}");
+    let first = std::fs::read_to_string(&key).expect("read the key file");
+
+    // The private key is not given away with the file: on Unix it is created
+    // for its owner alone, and not with the `0666 & umask` a plain `fs::write`
+    // would leave it with.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = std::fs::metadata(&key)
+            .expect("the key file")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "the private key is readable by more than its owner"
+        );
+    }
+
+    // And it is not replaced: a pair is the only thing that reads every log it
+    // was the key of, so a second run over the same file is refused.
+    let (ok, _, err) = run(&["keygen", "-o", &key.display().to_string()]);
+    assert!(!ok, "a second keygen overwrote the first pair");
+    assert!(
+        err.contains("is already there"),
+        "the error does not say why: {err}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&key).expect("read the key file"),
+        first,
+        "the first pair was replaced"
+    );
+}
+
+#[test]
+fn keygen_takes_no_other_option_and_no_input() {
+    // An option of another subcommand: the answer names the one that takes it.
+    for (arg, why) in [
+        (
+            format!("--pubkey={PUBKEY}"),
+            "--pubkey is an option of `xlog encode`",
+        ),
+        (
+            format!("--privkey={PRIVKEY}"),
+            "--privkey is an option of `xlog decode`",
+        ),
+    ] {
+        let (ok, _, err) = run(&["keygen", &arg]);
+        assert!(!ok, "`{arg}` was accepted by keygen");
+        assert!(err.contains(why), "the error does not say why: {err}");
+    }
+
+    // An option no subcommand of this one has: a `--mode` or a `--region` a key
+    // pair has nothing to do with.
+    for arg in ["--mode=zstd", "--region=4096", "--in=records.txt"] {
+        let (ok, _, err) = run(&["keygen", arg]);
+        assert!(!ok, "`{arg}` was accepted by keygen");
+        assert!(
+            err.contains("not an option of `xlog keygen`"),
+            "the error does not say why: {err}"
+        );
+    }
+
+    // And an input: `keygen` makes a key of its own and reads nothing.
+    let (ok, _, err) = run(&["keygen", "a.xlog"]);
+    assert!(!ok, "an input was accepted by keygen");
+    assert!(
+        err.contains("takes no input"),
+        "the error does not say why: {err}"
+    );
 }
 
 #[test]
@@ -479,6 +633,7 @@ fn the_version_and_the_usage_are_printed() {
         for word in [
             "xlog encode",
             "xlog decode",
+            "xlog keygen",
             "-o, --out",
             "-k, --privkey",
             "-p, --pubkey",

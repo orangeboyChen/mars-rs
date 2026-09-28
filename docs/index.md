@@ -24,7 +24,7 @@ features:
   - title: Off the logging thread
     details: "The default async mode hands the record to a writer thread through a memory-mapped cache, so a write returns without waiting for the disk. `flush(sync: true)` is what drains it."
   - title: Compressed, encrypted, rotated
-    details: zlib or zstd per file, ECDH + AES-GCM per record when you give it a public key, and a size or an age at which a file is closed and a new one opened.
+    details: zlib or zstd per file, ECDH + TEA per record when you give it a public key, and a size or an age at which a file is closed and a new one opened.
 ---
 
 These pages are the xlog documentation: the logger, and every platform it ships

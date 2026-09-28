@@ -235,6 +235,7 @@ export default defineConfig({
               { text: 'Getting started', link: '/getting-started' },
               { text: 'Configuration', link: '/configuration' },
               { text: 'Log files', link: '/log-files' },
+              { text: 'The CLI', link: '/cli' },
               { text: 'Platforms', link: '/platforms/rust' },
             ],
           },
@@ -248,6 +249,7 @@ export default defineConfig({
               { text: 'Getting started', link: '/getting-started' },
               { text: 'Configuration', link: '/configuration' },
               { text: 'Log files', link: '/log-files' },
+              { text: 'The CLI', link: '/cli' },
             ],
           },
           {
@@ -288,6 +290,7 @@ export default defineConfig({
               { text: '快速开始', link: '/zh/getting-started' },
               { text: '配置项', link: '/zh/configuration' },
               { text: '日志文件', link: '/zh/log-files' },
+              { text: '命令行', link: '/zh/cli' },
               { text: '各平台', link: '/zh/platforms/rust' },
             ],
           },
@@ -301,6 +304,7 @@ export default defineConfig({
               { text: '快速开始', link: '/zh/getting-started' },
               { text: '配置项', link: '/zh/configuration' },
               { text: '日志文件', link: '/zh/log-files' },
+              { text: '命令行', link: '/zh/cli' },
             ],
           },
           {

@@ -94,7 +94,8 @@ the last lines before an exit.
 when the file is closed. The level is the compressor's own knob: `0` keeps the
 default (6 for zlib), `9` is the zlib ceiling and `22` the zstd one.
 
-A `pubKey` encrypts each record's body with ECDH + AES-GCM. What you put there is
+A `pubKey` encrypts each record's body with ECDH + TEA — the cipher the C++
+implementation uses, over a key the writer and the reader agree on. What you put there is
 the *public* key of the pair whose private key reads the file back; leaving it
 empty writes a file any mars log reader can open.
 
