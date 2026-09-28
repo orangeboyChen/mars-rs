@@ -59,7 +59,8 @@ marsrs-<version>-<host>.zip      （Windows）
 ```
 
 ```bash [HarmonyOS]
-ohpm install marsrs-harmonyos-xlog
+ohpm install ./marsrs-harmonyos-xlog-<version>.har
+# 从 release 取：ohpm 还没开始发布 —— 见 /zh/platforms/harmonyos
 ```
 
 :::
