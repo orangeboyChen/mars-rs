@@ -21,10 +21,11 @@
 //!
 //! Two things of the C++ are not ported. `__UpdateProfile`, which copies a
 //! profile into another one and keeps the two tls flags doing so: this link
-//! *is* the profile it fills in, so there is nothing to copy — the flags are
-//! simply never cleared, which [`ConnectProfile::reset`] does not do either.
-//! And the `#ifdef _WIN32` block that drops the v6 pairs when the proxy is a
-//! v4 one.
+//! *is* the profile it fills in, so there is nothing to copy, and the two
+//! flags go with every other field — which is what
+//! [`ConnectProfile::reset`] does, and what the C++'s own `Reset` does. And
+//! the `#ifdef _WIN32` block that drops the v6 pairs when the proxy is a v4
+//! one.
 
 use marsrs_comm::http::{Parser, RecvStatus};
 use marsrs_comm::tickcount::gettickcount;
