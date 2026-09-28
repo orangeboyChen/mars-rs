@@ -1,9 +1,9 @@
 # 快速开始
 
 SDT 回答一个问题：*这台手机为什么连不上服务器？* 它拿两条链路的 hosts，对它们跑
-**ping**、**DNS**、**TCP** 和 **HTTP** 四项检查，然后把每一项记下了什么的 JSON 报告
-交给 App。STN 是 App 一直在跑的东西，SDT 是它想知道 STN 为什么不工作的时候跑的
-东西。
+**ping**、**DNS**、**TCP** 和 **HTTP** 四项检查，然后把 JSON 报告交给 App，报告里
+记着每一项查到了什么。STN 是 App 一直在跑的东西，SDT 是它想知道 STN 为什么不工作
+的时候才跑的。
 
 ## 它在哪里
 
@@ -23,9 +23,9 @@ Flutter 插件和 React Native 模块目前都只有日志：两个都起不了�
 1. **开启**一次诊断，给它两条链路的 hosts、一个 mode 和一个超时。这时还没有探测任
    何东西 —— 这个调用只是写下计划，[检查项](/zh/sdt/checks)那页讲的是这个 mode 会
    变成什么。
-2. **跑**这个计划，你的探测是在这里被问到的 —— 一项检查一个，按顺序，在调用它的那
-   个线程上。见[探测](/zh/sdt/probes)。
-3. **取报告**，把它送到你日志去的地方 —— 或者装一个回调，让这一趟跑完直接递给你。
+2. **跑**这个计划，你的探测是在这里问的 —— 一项检查一个，按顺序，在调用它的那个
+   线程上。见[探测](/zh/sdt/probes)。
+3. **取报告**，把它送到你送日志的地方 —— 或者装一个回调，让这一趟跑完直接递给你。
    见[报告](/zh/sdt/report)。
 
 ## Rust
@@ -63,9 +63,9 @@ let results = sdt.run_checks(&mut ask, 1 /* comm::getNetInfo() */);
 println!("{}", report_json(&results));
 ```
 
-`sdt.plan()` 在跑起来问任何东西之前，按检查要跑的顺序把计划交回来。在 Rust 里一趟
-会独占借用这个 logic，所以取消一趟要用在它之前造好的 `CancelHandle` —— 见
-[报告](/zh/sdt/report)。
+`sdt.plan()` 在这一趟问任何东西之前，按检查要跑的顺序把计划交回来。在 Rust 里一趟
+会独占借用这个 logic，所以取消一趟要用 `CancelHandle`，而且得在这一趟之前就造好 ——
+见[报告](/zh/sdt/report)。
 
 ## Swift
 
@@ -234,8 +234,8 @@ if (mars_sdt_take_report(buffer, sizeof buffer) >= 0) { send(buffer); }
 拿 `marsrs-harmonyos-xlog` 的 App 拿到的是日志：那个包的 ArkTS 没有伸到 SDT。带着
 它的是同一个 `libmars_ffi.so`，在默认的 `xlog` 之上开了 `sdt` feature —— 所以要跑
 诊断的 App 取 `marsrs-harmony-<version>.tar.gz`，把 `libmars_ffi.so` 放进模块的
-`libs/<abi>/`，再写那个伸到 `mars_sdt.h` 的 NAPI shim。它和[那一节](#c-abi)为
-Linux、macOS 和 Windows 发布的是同一个 C ABI。
+`libs/<abi>/`，再写那个伸到 `mars_sdt.h` 的 NAPI shim。它就是[那一节](#c-abi)为
+Linux、macOS 和 Windows 发布的那个 C ABI。
 
 ## 接着看
 

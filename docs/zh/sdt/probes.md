@@ -1,6 +1,6 @@
 # 探测
 
-这一件事要在其余之前知道。一项检查就是一个 **socket** —— 一次解析、一次连接、一个
+这一件事要先知道。一项检查就是一个 **socket** —— 一次解析、一次连接、一个
 HTTP 请求、一个 ICMP echo —— 而这个移植一个都不拥有。所以一次诊断是一个一个地向
 App 要网络，App 回答什么，报告就记下什么：
 
@@ -16,7 +16,7 @@ App 要网络，App 回答什么，报告就记下什么：
 
 ## App 把探测交到哪里
 
-| 你的 App 是 | 探测被问到谁头上 |
+| 你的 App 是 | 探测交给谁 |
 |---|---|
 | Rust | `sdt.run_checks(&mut ask, net)` 的那个 `Ask` |
 | iOS / watchOS，Swift | `MarsSdt.runChecks(networkType:) { … }` 的那个闭包 |
@@ -41,8 +41,8 @@ App 要网络，App 回答什么，报告就记下什么：
 | tcp | `Answer::Tcp { sent, received, is_noop_resp, rtt }` | `.tcp(errorCode:rtt:noop:)` | `ProbeAnswer.Tcp` | `SdtLogic.Answer.tcp(…)` | `MarsSdtTcp` |
 | http | `Answer::Http { error_code, status_code, rtt }` | `.http(errorCode:rtt:statusCode:)` | `ProbeAnswer.Http` | `SdtLogic.Answer.http(…)` | `MarsSdtHttp` |
 
-一个不是被问到的那个探测的回答，不是它的回答：报告记下的是跑的那一项检查回来的
-东西。
+一个探测如果不是这一趟问的那个，它的回答就不算：报告记下的是跑起来的那一项检查
+带回来的东西。
 
 ## 接着看
 
