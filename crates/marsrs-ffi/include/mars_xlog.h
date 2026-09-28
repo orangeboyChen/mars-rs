@@ -163,6 +163,31 @@ void mars_xlog_set_level(int level);
 /** Replaces `appender_set_console_log(bool)`; `open` != 0 means on. */
 void mars_xlog_set_console_log(int open);
 
+/**
+ * Replaces `appender_set_console_fun(TConsoleFun)` of `mars/xlog/appender.h`
+ * — where a console record goes instead of the built-in sink, which is stderr
+ * on every platform here.
+ *
+ * The C++ `TConsoleFun` is an Apple-only enum of three sinks of its own
+ * (`kConsolePrintf` / `kConsoleNSLog` / `kConsoleOSLog`), and
+ * `os_log_with_type` is a macro with no symbol to link against, so the port
+ * takes the sink instead: a callback handed the same fields `mars_xlog_write`
+ * takes, unformatted, so what a console record looks like is the caller's
+ * decision and not the port's.
+ *
+ * Pass NULL to take the callback away again. The callback may be called from
+ * any thread, the writer thread of an async appender included; a panic inside
+ * it is swallowed, and a NULL string is never handed to it.
+ */
+typedef void (*MarsXLogConsoleFun)(int level,
+                                   const char* tag,
+                                   const char* filename,
+                                   const char* func_name,
+                                   int line,
+                                   const char* log);
+
+void mars_xlog_set_console_fun(MarsXLogConsoleFun fun);
+
 /** Replaces `appender_set_max_file_size(uint64_t)`; 0 means "do not split". */
 void mars_xlog_set_max_file_size(unsigned long long bytes);
 

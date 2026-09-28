@@ -8,16 +8,18 @@
 //! [`crate::cstr`].
 
 use std::borrow::Cow;
-use std::ffi::{c_char, c_int, c_longlong, c_uchar, c_uint, c_ulonglong};
+use std::ffi::{c_char, c_int, c_longlong, c_uchar, c_uint, c_ulonglong, CString};
 use std::path::Path;
+use std::sync::{Mutex, RwLock};
 
 use marsrs_appender::{
     appender_close, appender_flush, appender_flush_sync, appender_get_current_log_path,
     appender_open, appender_set_console_log, appender_set_max_alive_duration,
     appender_set_max_file_size, appender_write,
     category_set_max_alive_duration as set_max_alive_duration,
-    category_set_max_file_size as set_max_file_size, flush_all, set_console_log_open, set_level,
-    xlogger_assert, AppenderMode, LogLevel, XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
+    category_set_max_file_size as set_max_file_size, flush_all, set_console_fun,
+    set_console_log_open, set_level, xlogger_assert, AppenderMode, ConsoleFun, LogLevel,
+    XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
 };
 use marsrs_buffer::CompressMode;
 
@@ -348,6 +350,99 @@ pub extern "C" fn mars_xlog_set_level(level: c_int) {
 #[no_mangle]
 pub extern "C" fn mars_xlog_set_console_log(open: c_int) {
     guard((), || appender_set_console_log(open != 0));
+}
+
+/// `mars::xlog::TConsoleFun` as a C callback — where a console record goes
+/// instead of the built-in sink, which is stderr on every platform here.
+///
+/// The fields are the ones [`mars_xlog_write`] takes, because that is all a C
+/// caller has ever been handed: the C++ keeps an `XLoggerInfo` and the header
+/// keeps the same fields one by one. The record is handed over unformatted,
+/// so what a console record looks like on the platform is the callback's
+/// decision.
+///
+/// A callback must not unwind. `extern "C"` is not an unwind boundary, so a
+/// Rust one that panics ends the process at the shim of its own definition
+/// before there is anything to catch on this side, and a C++ one that throws
+/// is undefined behaviour for the same reason. What the port can promise is
+/// narrower: the record is already on its way to the log file, so what a
+/// callback that panicked loses is the console copy of that one record.
+pub type MarsXLogConsoleFun =
+    unsafe extern "C" fn(c_int, *const c_char, *const c_char, *const c_char, c_int, *const c_char);
+
+/// `sg_console_fun` of `mars/xlog/objc/objc_console.mm`: the sink an app set
+/// through [`mars_xlog_set_console_fun`], `None` until it does.
+static CONSOLE_FUN: RwLock<Option<MarsXLogConsoleFun>> = RwLock::new(None);
+
+/// The lock [`mars_xlog_set_console_fun`] takes. It writes the callback here
+/// and the trampoline that reads it in `marsrs-appender`, and one thread
+/// writing between another thread's two writes leaves the pair crossed: a
+/// trampoline with no callback behind it takes the record and drops it
+/// instead of leaving it to stderr, and a callback with no trampoline is
+/// never called at all.
+static CONSOLE_FUN_LOCK: Mutex<()> = Mutex::new(());
+
+/// The Rust sink that stands in for the C callback: it is what
+/// `marsrs-appender` calls, and it is what hands the record over the boundary.
+///
+/// The strings are copied, because the C++ `ConsoleLog` hands its callback
+/// pointers that live at least as long as the call and a Rust `&str` borrowed
+/// from a `CString` on this stack is exactly that.
+fn console_fun(info: &XLoggerInfo, log: &str) {
+    let Some(fun) = *CONSOLE_FUN
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    else {
+        return;
+    };
+
+    let field = |value: Option<&str>| CString::new(value.unwrap_or("")).unwrap_or_default();
+    let (tag, filename, func_name) = (
+        field(info.tag.as_deref()),
+        field(info.filename.as_deref()),
+        field(info.func_name.as_deref()),
+    );
+    let log = CString::new(log).unwrap_or_default();
+
+    // SAFETY: `fun` is the callback the caller handed to
+    // `mars_xlog_set_console_fun`, and every pointer below is that of a
+    // `CString` that outlives the call.
+    unsafe {
+        fun(
+            info.level as c_int,
+            tag.as_ptr(),
+            filename.as_ptr(),
+            func_name.as_ptr(),
+            info.line,
+            log.as_ptr(),
+        );
+    }
+}
+
+/// `appender_set_console_fun` — takes the sink every console record is handed
+/// to instead of the built-in one, or takes it away again with `NULL`.
+///
+/// The C++ declares it under `#ifdef __APPLE__`, because that is where its own
+/// default sink is one an app wants to replace; the port's default sink is
+/// stderr on every platform, so there is no platform on which an app has more
+/// reason to replace it than on another.
+#[no_mangle]
+pub extern "C" fn mars_xlog_set_console_fun(fun: Option<MarsXLogConsoleFun>) {
+    guard((), || {
+        // One thread at a time, and in this order: the trampoline comes off
+        // before the callback it reads is changed, so no record can be handed
+        // to a pair that is half of one and half of the other. A record
+        // written in that window takes the built-in stderr line, which is
+        // what it would have taken with no sink set at all.
+        let _setting = CONSOLE_FUN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        set_console_fun(None);
+        *CONSOLE_FUN
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = fun;
+        set_console_fun(fun.map(|_| console_fun as ConsoleFun));
+    });
 }
 
 /// `mars::xlog::appender_set_max_file_size(uint64_t)`; 0 means "never split".

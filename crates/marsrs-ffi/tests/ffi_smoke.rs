@@ -15,11 +15,11 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_ffi::{
     mars_xlog_assert, mars_xlog_close, mars_xlog_current_log_path, mars_xlog_flush,
-    mars_xlog_flush_sync, mars_xlog_open, mars_xlog_set_console_log, mars_xlog_set_level,
-    mars_xlog_set_max_alive_duration, mars_xlog_set_max_file_size, mars_xlog_write, MarsXLogConfig,
-    MARS_XLOG_ERR_BAD_COMPRESS, MARS_XLOG_ERR_BAD_MODE, MARS_XLOG_ERR_EMPTY_LOG_DIR,
-    MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_CONFIG,
-    MARS_XLOG_ERR_NULL_OUT, MARS_XLOG_OK,
+    mars_xlog_flush_sync, mars_xlog_open, mars_xlog_set_console_fun, mars_xlog_set_console_log,
+    mars_xlog_set_level, mars_xlog_set_max_alive_duration, mars_xlog_set_max_file_size,
+    mars_xlog_write, MarsXLogConfig, MARS_XLOG_ERR_BAD_COMPRESS, MARS_XLOG_ERR_BAD_MODE,
+    MARS_XLOG_ERR_EMPTY_LOG_DIR, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE,
+    MARS_XLOG_ERR_NULL_CONFIG, MARS_XLOG_ERR_NULL_OUT, MARS_XLOG_OK,
 };
 
 /// Closes the appender when the test ends, even if it failed.
@@ -139,6 +139,31 @@ fn assert_expr(expression: &str, message: &str) {
             message.as_ptr(),
         );
     }
+}
+
+/// The last record the C console callback was handed, written by
+/// [`console_seen`].
+static SEEN: Mutex<String> = Mutex::new(String::new());
+
+/// A `MarsXLogConsoleFun` — the sink an app hands to
+/// `mars_xlog_set_console_fun`.
+///
+/// # Safety
+///
+/// Every pointer is the one the port's own sink passes, and none of them is
+/// null.
+unsafe extern "C" fn console_seen(
+    level: c_int,
+    tag: *const c_char,
+    _filename: *const c_char,
+    _func_name: *const c_char,
+    line: c_int,
+    log: *const c_char,
+) {
+    let tag = CStr::from_ptr(tag).to_string_lossy().into_owned();
+    let log = CStr::from_ptr(log).to_string_lossy().into_owned();
+    *SEEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
+        format!("{level}:{tag}:{line}:{log}");
 }
 
 /// The `.xlog` file the appender produced in `dir` (the exact day-stamped name
@@ -423,6 +448,31 @@ fn an_assert_is_written_whatever_the_level_is() {
 
     mars_xlog_set_level(0); // back to Verbose
     mars_xlog_close();
+}
+
+#[test]
+fn a_console_callback_an_app_set_is_handed_the_record() {
+    let _g = lock();
+    let _close = CloseOnDrop;
+    let dir = tempfile::tempdir().unwrap();
+    open_sync(dir.path());
+    mars_xlog_set_console_log(1);
+    mars_xlog_set_console_fun(Some(console_seen));
+
+    write(2, "console", "to-the-callback");
+    mars_xlog_flush_sync();
+
+    let seen = SEEN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    // Both are process-wide, so take them away again before the assertion:
+    // a panic here must not leave the next test writing through the callback.
+    mars_xlog_set_console_fun(None);
+    mars_xlog_set_console_log(0);
+    mars_xlog_close();
+
+    assert_eq!(seen, "2:console:42:to-the-callback");
 }
 
 #[test]
