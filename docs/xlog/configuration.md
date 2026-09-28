@@ -49,6 +49,28 @@ HarmonyOS is the Kotlin spelling in a different case: `LogLevel.Verbose` and not
 `none` writes nothing, not even `fatal` — it is how an appender is quieted
 without being closed.
 
+An assert is the one record the level does not gate: it is written at `fatal`
+whatever the appender's level is, because what an assert names is a condition
+that is not supposed to be possible.
+
+Neither call ends the process, and that is the one thing the C++ does here that
+this port does not: upstream raises `SIGTRAP` on Android and calls
+`__assert_rtn` on Apple once the record is written. An app that wants its
+process stopped on an assert stops it itself — `std::process::abort()`, or a
+platform trap — after the write.
+
+::: code-group
+
+```rust [Rust]
+marsrs::xlog::xlogger_assert(None, "fd >= 0", "the socket was already closed");
+```
+
+```c [C]
+mars_xlog_assert("net", __FILE__, __func__, __LINE__, "fd >= 0", "the socket was already closed");
+```
+
+:::
+
 A message that is expensive to build is worth asking about first, because a
 record the level drops still costs the caller the string:
 
@@ -132,3 +154,43 @@ every one of them takes effect from the next record:
 
 `0` is "no limit" for both sizes and ages: a file is never split and never
 dropped — the C++ keeps its own ten days.
+
+## Where the console copy goes
+
+`appender_set_console_log(true)` — `xlog.consoleLogEnabled = true` on the
+platforms that spell it that way — mirrors every record to the console as well
+as to the file, a record that carries an `XLoggerInfo` that is: a Rust
+`appender_write(None, …)` hands none in, and no copy is made of it.
+
+The built-in sink is standard error, on every platform and in every package —
+nothing here writes to `os_log` or to logcat. Where the system log is what an
+app wants, it is the app's own sink below that puts it there.
+
+An app that wants it somewhere else hands the logger a sink of its own, and
+what was going to the console goes to that instead:
+
+::: code-group
+
+```rust [Rust]
+use marsrs::xlog::set_console_fun;
+
+set_console_fun(Some(|info, log| println!("{:?}: {log}", info.level)));
+set_console_fun(None);   // the console has it again
+```
+
+```c [C]
+static void to_my_console(int level, const char* tag, const char* filename,
+                          const char* func_name, int line, const char* log) {
+    my_console_write(level, log);
+}
+
+mars_xlog_set_console_fun(to_my_console);
+mars_xlog_set_console_fun(NULL);   /* the console has it again */
+```
+
+:::
+
+There is one sink and it is the appender's, not a config: setting it again
+replaces it. What it is handed is the record unformatted — the level, the tag,
+where the call site is, and the message — which is the whole point: on Apple
+that is where `os_log` goes, and only the app's own code can call it.

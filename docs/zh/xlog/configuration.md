@@ -44,6 +44,25 @@ HarmonyOS 那一列也是 Kotlin 的拼法，只是大小写不同：`LogLevel.V
 
 `none` 什么都不写，连 `fatal` 也不写 —— 想让 appender 安静下来又不关掉它，用这个。
 
+assert 是唯一不受级别管的一条记录：不管 appender 开在哪一级，它都按 `fatal` 写进去
+—— assert 说的是一件不该发生的事。
+
+两个调用都不结束进程，这也是 C++ 在这里做了、而本移植没做的唯一一件事：上游写完这条
+记录之后会在 Android 上 `raise(SIGTRAP)`、在 Apple 上调 `__assert_rtn`。想让进程停在
+assert 上的 App 得自己停 —— `std::process::abort()`，或者平台自己的陷阱 —— 写完再停。
+
+::: code-group
+
+```rust [Rust]
+marsrs::xlog::xlogger_assert(None, "fd >= 0", "socket 已经关掉了");
+```
+
+```c [C]
+mars_xlog_assert("net", __FILE__, __func__, __LINE__, "fd >= 0", "socket 已经关掉了");
+```
+
+:::
+
 构造起来很贵的消息值得先问一句：被级别挡掉的记录也是一样 —— 那串字符串你已经拼好了。
 
 ::: code-group
@@ -119,3 +138,39 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 | 当前文件在哪 | `appender_get_current_log_path` | `Xlog.currentLogPath` | — | — | — | — | `mars_xlog_current_log_path` | — |
 
 大小和时间的 `0` 都表示“不限制”：文件永不切分、永不删除 —— C++ 那边自己保留十天。
+
+## 控制台那一副本去哪
+
+`appender_set_console_log(true)` —— 在那些这么拼的平台上写作
+`xlog.consoleLogEnabled = true` —— 让每条记录除了进文件，还抄一份到控制台；是“带着
+`XLoggerInfo` 的每条记录”：Rust 的 `appender_write(None, …)` 没给 info，它就没有副本。
+
+内置的出口是标准错误，每个平台、每个包都是 —— 这里没有任何一处写进 `os_log` 或
+logcat。App 想要的是系统日志的话，得靠下面那个自己的出口把记录送过去。
+
+想让它去别处的 App 可以给 logger 一个自己的出口，原本要进控制台的那一份就改去那里：
+
+::: code-group
+
+```rust [Rust]
+use marsrs::xlog::set_console_fun;
+
+set_console_fun(Some(|info, log| println!("{:?}: {log}", info.level)));
+set_console_fun(None);   // 又回到控制台
+```
+
+```c [C]
+static void to_my_console(int level, const char* tag, const char* filename,
+                          const char* func_name, int line, const char* log) {
+    my_console_write(level, log);
+}
+
+mars_xlog_set_console_fun(to_my_console);
+mars_xlog_set_console_fun(NULL);   /* 又回到控制台 */
+```
+
+:::
+
+出口只有一个，挂在 appender 上而不是写在配置里：再设一次就是换掉。交给它的是没排过版
+的那条记录 —— 级别、tag、调用点在哪、还有消息本身 —— 这正是要它的原因：在 Apple 上
+`os_log` 就在那里，而只有 App 自己的代码调得到它。
