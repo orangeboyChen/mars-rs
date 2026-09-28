@@ -11,11 +11,8 @@
 flutter pub add marsrs_flutter_xlog        # 要整个端口就 marsrs_flutter
 ```
 
-插件发在 pub.dev 上 —— 发布那一步还没开，在那之前，
-`scripts/package_flutter.sh <version> <asset-dir>` 写出来的
-`marsrs-flutter-xlog-<version>.tar.gz` 就是同一个插件：版本号打进 pubspec 和
-podspec、apple 那个 job 的 `MarsRSXlog.xcframework` 拷进去。用 `path:` 依赖压缩包
-里那个目录装的就是它：
+插件在 pub.dev 上：`flutter pub add` 装的是上面最新的版本。release 里也带着插件本身，
+就是 `marsrs-flutter-xlog-<version>.tar.gz`，用 `path:` 依赖压缩包里那个目录装的就是它：
 
 ```yaml
 # pubspec.yaml

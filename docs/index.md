@@ -53,9 +53,8 @@ registry of their own:
 network diagnosis — the same pair the crates on crates.io are. An app that only
 logs takes the first.
 
-The Flutter plugin and the React Native module are published to pub.dev and to
-npm, and are not in the release archive; neither registry is being published to
-yet.
+The Flutter plugin and the React Native module are on pub.dev and on npm:
+`flutter pub add` and `npm install` take the newest version there.
 
 ## What the rest of these pages are
 

@@ -17,10 +17,8 @@ npm install marsrs-react-native-xlog        # 要整个端口就 marsrs-react-na
 cd ios && pod install
 ```
 
-包发在 npm 上 —— 发布那一步还没开，在那之前，
-`scripts/package_react_native.sh <version> <asset-dir>` 写出来的
-`marsrs-react-native-xlog-<version>.tgz` 就是同一个模块：`npm pack`，版本号打进
-`package.json`、apple 那个 job 的 `marsrs-xlog.xcframework` 拷进去。`npm install
+包在 npm 上：`npm install` 装的是上面最新的版本。release 里也带着这个模块本身，就是
+`marsrs-react-native-xlog-<version>.tgz`。`npm install
 ./marsrs-react-native-xlog-<version>.tgz` 装的就是它。
 
 包里有、checkout 里没有的是那个 framework —— CocoaPods 解析不了 `Package.swift`
