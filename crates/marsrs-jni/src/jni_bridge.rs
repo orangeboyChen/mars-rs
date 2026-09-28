@@ -401,6 +401,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logWrite<'l
             tid,
             maintid,
             timeval: now_timeval(),
+            trace_log: 0,
         };
         log_write_impl(Some(info), &log);
     })

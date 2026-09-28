@@ -1792,6 +1792,21 @@ impl Appender {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// `consolelog_open_`, and the one other way a record reaches the console
+    /// with the switch off.
+    ///
+    /// `XloggerAppender::Write` reads `_info->traceLog == 1` under
+    /// `#ifdef ANDROID` — `XLogger::ForwardToSysTrace` is what an app sets it
+    /// with — so a trace record is echoed where every other check of the
+    /// switch is bypassed. No other platform of the C++ does it, and neither
+    /// does this port: the console sink here is stderr everywhere (there is no
+    /// portable `os_log`), and echoing a trace record to it on iOS or a
+    /// desktop is a behaviour the C++ has nowhere.
+    fn console_echoes(console_log_open: bool, info: Option<&XLoggerInfo>) -> bool {
+        console_log_open
+            || (cfg!(target_os = "android") && info.is_some_and(|info| info.trace_log == 1))
+    }
+
     /// `XloggerAppender::Write`.
     ///
     /// Everything up to the [`format_record`] call runs with no lock held,
@@ -1806,7 +1821,10 @@ impl Appender {
             return;
         }
 
-        if self.shared.flags.console_log_open.load(Ordering::Relaxed) {
+        if Self::console_echoes(
+            self.shared.flags.console_log_open.load(Ordering::Relaxed),
+            info,
+        ) {
             console_log(info, log);
         }
 
@@ -2210,6 +2228,35 @@ mod tests {
     use marsrs_crypt::{magic, LogCrypt, HEADER_LEN, TAILER_LEN};
     use std::collections::HashSet;
 
+    /// A trace record — one an app marked with
+    /// `XLogger::ForwardToSysTrace` — is echoed only where the C++ echoes
+    /// it, which is Android and nowhere else.
+    #[cfg(target_os = "android")]
+    #[test]
+    fn a_trace_record_is_echoed_with_console_logging_off() {
+        let info = XLoggerInfo {
+            trace_log: 1,
+            ..XLoggerInfo::default()
+        };
+        assert!(Appender::console_echoes(false, Some(&info)));
+        assert!(!Appender::console_echoes(
+            false,
+            Some(&XLoggerInfo::default())
+        ));
+        assert!(Appender::console_echoes(true, Some(&info)));
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn a_trace_record_is_not_echoed_off_android() {
+        let info = XLoggerInfo {
+            trace_log: 1,
+            ..XLoggerInfo::default()
+        };
+        assert!(!Appender::console_echoes(false, Some(&info)));
+        assert!(Appender::console_echoes(true, Some(&info)));
+    }
+
     /// Inflates a raw-DEFLATE body; returns `None` when the sibling crate's
     /// buffer did not compress the payload.
     fn inflate(data: &[u8]) -> Option<Vec<u8>> {
@@ -2226,7 +2273,6 @@ mod tests {
             Some(out)
         }
     }
-
     /// Splits a `.xlog` file into `[header_len + len + tailer_len]` records.
     fn records(bytes: &[u8]) -> Vec<&[u8]> {
         let mut out = Vec::new();

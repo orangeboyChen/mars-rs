@@ -429,6 +429,7 @@ mod tests {
             tid: 200,
             maintid: 200,
             timeval: (1_700_000_000, 123_456),
+            trace_log: 0,
         }
     }
 

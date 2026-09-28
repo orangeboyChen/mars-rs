@@ -247,6 +247,7 @@ pub unsafe extern "C" fn mars_xlog_write(
             tid: state::tid(),
             maintid: state::main_tid(),
             timeval: state::now_timeval(),
+            trace_log: 0,
         };
 
         // The appender returns whether anything was written; a C caller has no
@@ -558,6 +559,7 @@ pub unsafe extern "C" fn mars_xlog_write_instance(
             tid: -1,
             maintid: -1,
             timeval: state::now_timeval(),
+            trace_log: 0,
         };
         marsrs_appender::xlogger_write(instance as u64, Some(&info), Some(log));
         0

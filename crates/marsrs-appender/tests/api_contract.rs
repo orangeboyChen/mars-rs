@@ -62,6 +62,7 @@ fn struct_and_enum_shapes_match_the_contract() {
         tid: 0,
         maintid: 0,
         timeval: (0, 0),
+        trace_log: 0,
     };
     assert_eq!(info.level, LogLevel::Fatal);
     assert_eq!(info.timeval, (0, 0));
