@@ -13,11 +13,13 @@ in one process has two appenders writing the same file.
 ohpm install marsrs-harmonyos-xlog
 ```
 
-The package is published to ohpm — publishing is not switched on yet, and until
-it is, `scripts/package_harmony.sh <version> <asset-dir>` writes the same module
-as `marsrs-harmonyos-xlog-<version>.har`, with the version stamped into
-`oh-package.json5` and the three `.so` in `libs/`. `ohpm install
-./marsrs-harmonyos-xlog-<version>.har` installs that one.
+ohpm is not published to yet, so until it is, a release is where the package
+comes from: take `marsrs-harmonyos-xlog-<version>.har` off it and install that
+file.
+
+```bash
+ohpm install ./marsrs-harmonyos-xlog-<version>.har
+```
 
 ```text
 marsrs-harmonyos-xlog-<version>.har
@@ -32,13 +34,10 @@ marsrs-harmonyos-xlog-<version>.har
 
 `libmarsrs_xlog.so` is `libmars_ffi` — the staticlib of the C ABI — with
 `napi_init.cpp` linked around it, so an app that takes the HAR resolves nothing
-else. That shim is C and not C++, and that is a choice: a NAPI module that
+else. That shim is C and not C++, and that matters to an app: a NAPI module that
 reaches for `std::mutex` asks the process loading it for a C++ runtime it would
-otherwise never load, and the SDK this is built with does not carry libc++'s
-headers in the tree `scripts/build_harmony.sh` unpacks. `scripts/build_harmony_napi.sh <dir>` builds it with the SDK's own
-clang, one per ABI, which is why a Linux runner can build a HarmonyOS package
-without DevEco Studio: no CMake is involved, and what ships is a binary and not
-a native project the app's build has to run.
+otherwise never load. What ships is a binary and not a native project the app's
+build has to run.
 
 The NAPI module is `marsrs_xlog`, which is the name `import xlogNapi from
 'libmarsrs_xlog.so'` resolves, and the declarations of what it exports are
@@ -179,18 +178,14 @@ mars_xlog_open(&config);
 mars_xlog_write(MarsLevelInfo, "startup", __FILE__, __func__, __LINE__, "hello");
 ```
 
-`scripts/build_harmony.sh <dir>` builds those three from source — which is what a
-release runs, and the way to get them out of a commit that has none. The SDK is
-the public OpenHarmony one, and the script downloads it when `OHOS_SDK_HOME` is
-not set. Everything on [the C ABI page](/platforms/c-abi) applies: the config,
-the levels, the instances and the error codes are the same symbols.
+Everything on [the C ABI page](/platforms/c-abi) applies: the config, the
+levels, the instances and the error codes are the same symbols.
 
 ## The mars half
 
-`libmars_ffi.so` is the whole port and not the logger alone: `build_harmony.sh`
-builds `marsrs-ffi` with the `sdt,stn` features on top of the default `xlog`, and
-what the script writes next to the library is all three of `mars_xlog.h`,
-`mars_sdt.h` and `mars_stn.h`. So a HarmonyOS app can run a task, or a
+`libmars_ffi.so` is the whole port and not the logger alone: it is built with the
+`sdt` and `stn` features on top of the default `xlog`, and what sits next to the
+library is all three of `mars_xlog.h`, `mars_sdt.h` and `mars_stn.h`. So a HarmonyOS app can run a task, or a
 diagnosis, through the same NAPI shim it writes for the logger:
 
 ```c
@@ -201,7 +196,7 @@ mars_stn_start_task(&task);
 
 /* the answer is how many milliseconds the pass may wait */
 long long due = mars_stn_due_time();
-while (due >= 0) {                    /* no threads in the port: the app drains the queues */
+while (due >= 0) {                    /* the app drains the queues */
     usleep(due * 1000);
     mars_stn_run_pending();
     due = mars_stn_due_time();
