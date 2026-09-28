@@ -47,8 +47,8 @@ pub fn default_packer() -> Box<Packer> {
 
 /// `shortlink_pack` — the request, head first and then the body.
 ///
-/// The five fields are the C++'s own, in its order; `Content-Length` is the
-/// length of the body, and the headers after it are the ones the caller asked
+/// The five fields are the C++'s own, and the head comes out sorted by name;
+/// `Content-Length` is the length of the body, and the headers after it are the ones the caller asked
 /// for, which is why a `Content-Length` or a `Connection` of theirs is the one
 /// that goes out.
 ///
@@ -249,12 +249,12 @@ mod tests {
             String::from_utf8_lossy(&request),
             "POST /cgi-bin/micromsg-bin/short HTTP/1.1\r\n\
              Accept: */*\r\n\
-             User-Agent: MicroMessenger Client\r\n\
              Cache-Control: no-cache\r\n\
-             Content-Type: application/octet-stream\r\n\
              Connection: close\r\n\
              Content-Length: 5\r\n\
+             Content-Type: application/octet-stream\r\n\
              Host: short.weixin.qq.com\r\n\
+             User-Agent: MicroMessenger Client\r\n\
              \r\n\
              hello"
         );
@@ -264,7 +264,11 @@ mod tests {
     fn a_request_of_no_body_says_how_long_it_is() {
         let request = pack("/cgi-bin/micromsg-bin/short", &Headers::new(), b"");
         assert!(
-            request.ends_with("Content-Length: 0\r\n\r\n".as_bytes()),
+            request.ends_with(
+                "Content-Length: 0\r\nContent-Type: application/octet-stream\r\n\
+                 User-Agent: MicroMessenger Client\r\n\r\n"
+                    .as_bytes()
+            ),
             "a head that says how long a body it has, and no body"
         );
     }

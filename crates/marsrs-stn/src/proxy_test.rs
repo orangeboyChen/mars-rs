@@ -938,10 +938,10 @@ mod tests {
             seen.only_request(),
             "GET http://short.weixin.qq.com/ HTTP/1.1\r\n\
              Accept: */*\r\n\
-             User-Agent: MicroMessenger Client\r\n\
              Cache-Control: no-cache\r\n\
              Connection: close\r\n\
              Host: short.weixin.qq.com\r\n\
+             User-Agent: MicroMessenger Client\r\n\
              \r\n"
         );
     }
