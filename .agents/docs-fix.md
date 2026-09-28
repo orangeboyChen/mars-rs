@@ -48,11 +48,19 @@ mars — nothing else is allowed to be one:
 | STN | the task pipeline |
 | SDT | the network diagnosis |
 
-Getting started, Configuration, Log files and Platforms are pages *of* Xlog, so
-they sit in Xlog's dropdown or in the sidebar — never as a tab of their own. A
-module with one page links straight to it; a module with several carries them.
+Getting started, Configuration, Log files and the migration are pages *of*
+Xlog, so they sit in Xlog's dropdown or in the sidebar — never as a tab of
+their own. A module with one page links straight to it; a module with several
+carries them.
 
-The sidebar is the same shape: one group per module, its pages inside it.
+A **platform is a section and not a page**: it is a `##` of the module's
+getting started page — `## Rust`, `## SwiftPM`, `## CocoaPods`, `## Android`,
+`## Kotlin Multiplatform`, `## Flutter`, `## React Native`, `## The C ABI`,
+`## HarmonyOS` — spelled in English in both locales, which is what lets one
+fragment reach the same section in either language.
+
+Each module has its own sidebar, keyed by the prefix of its pages, so a reader
+who picked a tab is handed the pages of that module and not the other two.
 
 ## One page is two pages
 
@@ -66,9 +74,10 @@ Every page exists twice, and the two are the same page:
   — but **never the same fragment**: VitePress slugs a heading out of its
   text, so a translated heading has a translated slug. `## Open, write,
   flush, close` is `#open-write-flush-close`; its twin `## 打开、写、flush、
-  关闭` is not, and `/zh/platforms/rust#open-write-flush-close` is a link to
-  an anchor no Chinese page carries. Take the fragment from the heading of
-  the page being linked *to*, or give both headings the same explicit `{#id}`;
+  关闭` is not, and `/zh/xlog/getting-started#open-write-flush-close` is a
+  link to an anchor no Chinese page carries. Take the fragment from the heading
+  of the page being linked *to*, or give both headings the same explicit
+  `{#id}`;
 - both registered: `nav` and `sidebar` of **both** locales in `config.ts`, and
   the sidebar of the locale it was added to.
 

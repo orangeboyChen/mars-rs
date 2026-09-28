@@ -8,7 +8,7 @@ hero:
   actions:
     - theme: brand
       text: Get started
-      link: /getting-started
+      link: /xlog/getting-started
     - theme: alt
       text: On GitHub
       link: https://github.com/orangeboyChen/mars-rs

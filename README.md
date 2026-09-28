@@ -19,10 +19,11 @@ without a conversion step.
 
 **Documentation** — [English](https://orangeboychen.github.io/mars-rs/) ·
 [简体中文](https://orangeboychen.github.io/mars-rs/zh/) — install, configure,
-write, and read the files back. The site is one page per piece: the logger,
-[the task pipeline](https://orangeboychen.github.io/mars-rs/stn) and [the network
-diagnosis](https://orangeboychen.github.io/mars-rs/sdt). Not every package
-carries the last two — [where it runs](#where-it-runs) says which do.
+write, and read the files back. The site is one tab per piece: the logger,
+[the task pipeline](https://orangeboychen.github.io/mars-rs/stn/getting-started)
+and [the network
+diagnosis](https://orangeboychen.github.io/mars-rs/sdt/getting-started). Not every
+package carries the last two — [where it runs](#where-it-runs) says which do.
 
 ## Where it runs
 
@@ -121,9 +122,9 @@ xlog.flush(sync = true)  // before the app reads or uploads the files
 The file is `<logDir>/<namePrefix>_YYYYMMDD.xlog` — `marsrs_20260927.xlog` above.
 The default mode is async, so a record can sit in the cache for a moment: flush
 before the file is read or uploaded. Every option, and its name on each platform,
-is on [the configuration page](https://orangeboychen.github.io/mars-rs/configuration);
+is on [the configuration page](https://orangeboychen.github.io/mars-rs/xlog/configuration);
 what has to happen when the app goes away is on
-[log files](https://orangeboychen.github.io/mars-rs/log-files).
+[log files](https://orangeboychen.github.io/mars-rs/xlog/log-files).
 
 ## License
 

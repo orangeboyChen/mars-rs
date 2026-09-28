@@ -224,65 +224,105 @@ export default defineConfig({
       themeConfig: {
         ...en,
         // Three tabs, one per piece of the port: a tab is a piece of mars and
-        // not a kind of page, so the task pipeline and the diagnosis are a tab
-        // beside the logger and not four more links in the same bar. Each one
-        // is a link and not a menu of them — the pages under a piece are the
-        // pages the sidebar carries, in the same order, and a reader who wants
-        // one of them is one click from it in the sidebar already.
+        // not a kind of page, so the logger, the task pipeline and the
+        // diagnosis are three tabs and not one tab with three kinds of page
+        // under it. Each is a menu of the pages of that piece — the same pages,
+        // in the same order, as the sidebar the reader lands on — and the home
+        // page is in none of them, because it is about the port and not about
+        // one piece of it.
         nav: [
-          { text: 'Xlog', link: '/getting-started' },
-          { text: 'The task pipeline (STN)', link: '/stn' },
-          { text: 'The network diagnosis (SDT)', link: '/sdt' },
-        ],
-
-        sidebar: [
           {
-            text: 'Using mars-rs',
+            text: 'Xlog',
             items: [
-              { text: 'Overview', link: '/' },
-              { text: 'Getting started', link: '/getting-started' },
-              { text: 'Configuration', link: '/configuration' },
-              { text: 'Log files', link: '/log-files' },
-              { text: 'The CLI', link: '/cli' },
-              // Two pages, because the app that arrives here is one of two:
-              // the one that took the logger and nothing else, and the one
-              // that took all three.
+              { text: 'Getting started', link: '/xlog/getting-started' },
+              { text: 'Configuration', link: '/xlog/configuration' },
+              { text: 'Log files', link: '/xlog/log-files' },
+              { text: 'The CLI', link: '/xlog/cli' },
               {
                 text: 'Migrating from mars-xlog',
-                link: '/migrating-from-mars-xlog',
+                link: '/xlog/migrating-from-mars-xlog',
               },
-              { text: 'Migrating from mars', link: '/migrating-from-mars' },
-            ],
-          },
-          // The two pages of the half that is not the logger: they are a pair,
-          // the way xlog and the rest of it are a pair in the crate, and they
-          // sit together because a reader who wants one of them usually wants
-          // to know whether the other is there too.
-          {
-            text: 'The mars half',
-            items: [
-              { text: 'The task pipeline (STN)', link: '/stn' },
-              { text: 'The network diagnosis (SDT)', link: '/sdt' },
             ],
           },
           {
-            text: 'Platforms',
+            text: 'STN',
             items: [
-              { text: 'Rust', link: '/platforms/rust' },
-              { text: 'SwiftPM', link: '/platforms/swift' },
-              { text: 'CocoaPods', link: '/platforms/cocoapods' },
-              { text: 'Android', link: '/platforms/android' },
+              { text: 'Getting started', link: '/stn/getting-started' },
+              { text: 'The task', link: '/stn/tasks' },
+              { text: 'The questions', link: '/stn/callbacks' },
+              { text: 'The long link', link: '/stn/long-link' },
               {
-                text: 'Kotlin Multiplatform',
-                link: '/platforms/kotlin-multiplatform',
+                text: 'Migrating from mars-stn',
+                link: '/stn/migrating-from-mars-stn',
               },
-              { text: 'Flutter', link: '/platforms/flutter' },
-              { text: 'React Native', link: '/platforms/react-native' },
-              { text: 'The C ABI', link: '/platforms/c-abi' },
-              { text: 'HarmonyOS', link: '/platforms/harmonyos' },
+            ],
+          },
+          {
+            text: 'SDT',
+            items: [
+              { text: 'Getting started', link: '/sdt/getting-started' },
+              { text: 'The checks', link: '/sdt/checks' },
+              { text: 'The probes', link: '/sdt/probes' },
+              { text: 'The report', link: '/sdt/report' },
+              {
+                text: 'Migrating from mars-sdt',
+                link: '/sdt/migrating-from-mars-sdt',
+              },
             ],
           },
         ],
+
+        // One sidebar per piece, so a reader who picked a tab is not handed the
+        // pages of the other two beside it. The platforms are in none of them:
+        // a platform is a section of the page the reader is already on, and not
+        // a page of its own.
+        sidebar: {
+          '/xlog/': [
+            {
+              text: 'Xlog',
+              items: [
+                { text: 'Getting started', link: '/xlog/getting-started' },
+                { text: 'Configuration', link: '/xlog/configuration' },
+                { text: 'Log files', link: '/xlog/log-files' },
+                { text: 'The CLI', link: '/xlog/cli' },
+                {
+                  text: 'Migrating from mars-xlog',
+                  link: '/xlog/migrating-from-mars-xlog',
+                },
+              ],
+            },
+          ],
+          '/stn/': [
+            {
+              text: 'STN',
+              items: [
+                { text: 'Getting started', link: '/stn/getting-started' },
+                { text: 'The task', link: '/stn/tasks' },
+                { text: 'The questions', link: '/stn/callbacks' },
+                { text: 'The long link', link: '/stn/long-link' },
+                {
+                  text: 'Migrating from mars-stn',
+                  link: '/stn/migrating-from-mars-stn',
+                },
+              ],
+            },
+          ],
+          '/sdt/': [
+            {
+              text: 'SDT',
+              items: [
+                { text: 'Getting started', link: '/sdt/getting-started' },
+                { text: 'The checks', link: '/sdt/checks' },
+                { text: 'The probes', link: '/sdt/probes' },
+                { text: 'The report', link: '/sdt/report' },
+                {
+                  text: 'Migrating from mars-sdt',
+                  link: '/sdt/migrating-from-mars-sdt',
+                },
+              ],
+            },
+          ],
+        },
       },
     },
 
@@ -294,53 +334,84 @@ export default defineConfig({
         'Tencent/mars 的 xlog 日志链路、STN 任务模型与 SDT 网络诊断的 Rust 实现。',
       themeConfig: {
         ...zh,
-        // 同上：一个 tab 是 mars 的哪一块，不是哪一类页面 —— 所以日志是一块，
-        // 任务链路和网络诊断是它旁边的一块。每个 tab 是一个链接，不是一个
-        // 下拉：一块下面的那几页就是侧边栏里的那几页，顺序也一样。
+        // 同上：一个 tab 是 mars 的哪一块，不是哪一类页面 —— 所以日志、任务链路
+        // 和网络诊断是三个 tab，不是一个 tab 下面三类页面。每个 tab 是那一块
+        // 的页面菜单，顺序和读者点进去看到的侧边栏一致；首页不在任何一个
+        // tab 里，因为它讲的是这个移植本身，不是其中一块。
         nav: [
-          { text: 'Xlog', link: '/zh/getting-started' },
-          { text: '任务链路（STN）', link: '/zh/stn' },
-          { text: '网络诊断（SDT）', link: '/zh/sdt' },
+          {
+            text: 'Xlog',
+            items: [
+              { text: '快速开始', link: '/zh/xlog/getting-started' },
+              { text: '配置项', link: '/zh/xlog/configuration' },
+              { text: '日志文件', link: '/zh/xlog/log-files' },
+              { text: '命令行', link: '/zh/xlog/cli' },
+              { text: '从 mars-xlog 迁移', link: '/zh/xlog/migrating-from-mars-xlog' },
+            ],
+          },
+          {
+            text: '任务链路（STN）',
+            items: [
+              { text: '快速开始', link: '/zh/stn/getting-started' },
+              { text: '任务', link: '/zh/stn/tasks' },
+              { text: '回调', link: '/zh/stn/callbacks' },
+              { text: '长连接', link: '/zh/stn/long-link' },
+              { text: '从 mars-stn 迁移', link: '/zh/stn/migrating-from-mars-stn' },
+            ],
+          },
+          {
+            text: '网络诊断（SDT）',
+            items: [
+              { text: '快速开始', link: '/zh/sdt/getting-started' },
+              { text: '检查项', link: '/zh/sdt/checks' },
+              { text: '探测', link: '/zh/sdt/probes' },
+              { text: '报告', link: '/zh/sdt/report' },
+              { text: '从 mars-sdt 迁移', link: '/zh/sdt/migrating-from-mars-sdt' },
+            ],
+          },
         ],
 
-        sidebar: [
-          {
-            text: '使用 mars-rs',
-            items: [
-              { text: '总览', link: '/zh/' },
-              { text: '快速开始', link: '/zh/getting-started' },
-              { text: '配置项', link: '/zh/configuration' },
-              { text: '日志文件', link: '/zh/log-files' },
-              { text: '命令行', link: '/zh/cli' },
-              { text: '从 mars-xlog 迁移', link: '/zh/migrating-from-mars-xlog' },
-              { text: '从 mars 迁移', link: '/zh/migrating-from-mars' },
-            ],
-          },
-          {
-            text: 'mars 的另一半',
-            items: [
-              { text: '任务链路（STN）', link: '/zh/stn' },
-              { text: '网络诊断（SDT）', link: '/zh/sdt' },
-            ],
-          },
-          {
-            text: '各平台',
-            items: [
-              { text: 'Rust', link: '/zh/platforms/rust' },
-              { text: 'SwiftPM', link: '/zh/platforms/swift' },
-              { text: 'CocoaPods', link: '/zh/platforms/cocoapods' },
-              { text: 'Android', link: '/zh/platforms/android' },
-              {
-                text: 'Kotlin Multiplatform',
-                link: '/zh/platforms/kotlin-multiplatform',
-              },
-              { text: 'Flutter', link: '/zh/platforms/flutter' },
-              { text: 'React Native', link: '/zh/platforms/react-native' },
-              { text: 'C ABI', link: '/zh/platforms/c-abi' },
-              { text: 'HarmonyOS', link: '/zh/platforms/harmonyos' },
-            ],
-          },
-        ],
+        // 一块一个侧边栏：点了哪个 tab，旁边就只有那一块的页面，不会把另外
+        // 两块也摆出来。各平台不在任何一个里面 —— 平台是读者所在页面上
+        // 的一节，不是单独一页。
+        sidebar: {
+          '/zh/xlog/': [
+            {
+              text: 'Xlog',
+              items: [
+                { text: '快速开始', link: '/zh/xlog/getting-started' },
+                { text: '配置项', link: '/zh/xlog/configuration' },
+                { text: '日志文件', link: '/zh/xlog/log-files' },
+                { text: '命令行', link: '/zh/xlog/cli' },
+                { text: '从 mars-xlog 迁移', link: '/zh/xlog/migrating-from-mars-xlog' },
+              ],
+            },
+          ],
+          '/zh/stn/': [
+            {
+              text: '任务链路（STN）',
+              items: [
+                { text: '快速开始', link: '/zh/stn/getting-started' },
+                { text: '任务', link: '/zh/stn/tasks' },
+                { text: '回调', link: '/zh/stn/callbacks' },
+                { text: '长连接', link: '/zh/stn/long-link' },
+                { text: '从 mars-stn 迁移', link: '/zh/stn/migrating-from-mars-stn' },
+              ],
+            },
+          ],
+          '/zh/sdt/': [
+            {
+              text: '网络诊断（SDT）',
+              items: [
+                { text: '快速开始', link: '/zh/sdt/getting-started' },
+                { text: '检查项', link: '/zh/sdt/checks' },
+                { text: '探测', link: '/zh/sdt/probes' },
+                { text: '报告', link: '/zh/sdt/report' },
+                { text: '从 mars-sdt 迁移', link: '/zh/sdt/migrating-from-mars-sdt' },
+              ],
+            },
+          ],
+        },
       },
     },
   },
