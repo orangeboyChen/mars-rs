@@ -402,6 +402,52 @@ pub fn xlogger_write(handle: XloggerHandle, info: Option<&XLoggerInfo>, log: Opt
     }
 }
 
+/// `mars::comm::__ASSERTV2` — the body of an assert record: the expression it
+/// failed on in `[ASSERT(...)]`, and the message behind it.
+///
+/// The C++ writes it into `char assertlog[4096]` and replaces the whole thing
+/// with `"[ASSERT] FAILED!!!"` when `snprintf` cannot fit it; `format!` cannot
+/// fail, so what goes out here is always the whole message.
+fn assert_log(expression: &str, log: &str) -> String {
+    format!("[ASSERT({expression})]{log}")
+}
+
+/// `xlogger_Assert` of `mars/comm/xlogger/xloggerbase.h` — the record an
+/// assert writes.
+///
+/// The C++ builds a fresh `XLoggerInfo` for it — level `kLevelFatal`, the
+/// file, function and line of the caller — and writes it with
+/// `xlogger_Write`, so no instance's level filter is asked and the record
+/// goes out through the process-wide appender.
+///
+/// What the port does not take over is what the C++ does after the write:
+/// `raise(SIGTRAP)` on Android, `__assert_rtn` on Apple and `_assert` on
+/// Windows, each of them when `NDEBUG` is not defined. None of the three has
+/// a portable counterpart here, and a caller that wants its process stopped
+/// has `std::process::abort()` for it.
+pub fn xlogger_assert(info: Option<&XLoggerInfo>, expression: &str, log: &str) -> bool {
+    write_assert(info, &assert_log(expression, log))
+}
+
+/// `xlogger_AssertP` — the same record with a message the caller formatted,
+/// which is what `mars::comm::__ASSERTV2` runs through `vsnprintf`.
+pub fn xlogger_assert_p(
+    info: Option<&XLoggerInfo>,
+    expression: &str,
+    args: std::fmt::Arguments<'_>,
+) -> bool {
+    write_assert(info, &assert_log(expression, &args.to_string()))
+}
+
+/// What both end with: a `kLevelFatal` record through `xlogger_Write`, i.e.
+/// through the process-wide appender and past whatever level an instance was
+/// given.
+fn write_assert(info: Option<&XLoggerInfo>, log: &str) -> bool {
+    let mut info = info.cloned().unwrap_or_default();
+    info.level = LogLevel::Fatal;
+    write_default(Some(&info), Some(log))
+}
+
 /// `mars::xlog::IsEnabledFor`.
 ///
 /// `false` for an unknown non-zero handle, so nothing is written through it.
@@ -722,6 +768,48 @@ mod tests {
 
         release_xlogger_instance("quiet");
         release_xlogger_instance("loud");
+    }
+
+    /// `xlogger_Assert` writes a `kLevelFatal` record whose body is the
+    /// expression in `[ASSERT(...)]` and the message behind it, and no
+    /// instance's level filter is asked: the C++ writes it with
+    /// `xlogger_Write`, i.e. through the process-wide appender.
+    #[test]
+    fn an_assert_is_a_fatal_record_that_names_the_expression() {
+        let _guard = serial();
+        let dir = tempfile::tempdir().unwrap();
+        crate::appender_open(config("assert", dir.path())).unwrap();
+        set_appender_mode(DEFAULT_HANDLE, AppenderMode::Sync);
+        // A level no record of a lower one would survive.
+        set_level(DEFAULT_HANDLE, LogLevel::None);
+
+        let info = XLoggerInfo {
+            level: LogLevel::Verbose,
+            ..XLoggerInfo::default()
+        };
+        assert!(xlogger_assert(
+            Some(&info),
+            "x == y",
+            "the two are not equal"
+        ));
+        assert!(xlogger_assert_p(
+            Some(&info),
+            "x == y",
+            format_args!("{} is not {}", 1, 2)
+        ));
+        flush(DEFAULT_HANDLE, true);
+
+        let text = log_text(dir.path());
+        // `[F]` is the level string of `kLevelFatal` in the record header.
+        assert!(text.contains("[F]"), "the record is not fatal: {text}");
+        assert!(
+            text.contains("[ASSERT(x == y)]the two are not equal"),
+            "{text}"
+        );
+        assert!(text.contains("[ASSERT(x == y)]1 is not 2"), "{text}");
+
+        crate::appender_close();
+        set_level(DEFAULT_HANDLE, LogLevel::None);
     }
 
     #[test]
