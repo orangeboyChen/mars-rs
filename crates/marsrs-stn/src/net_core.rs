@@ -66,8 +66,8 @@ use crate::longlink_identify_checker::{
 };
 use crate::net_source::NO_NET;
 use crate::task_profile::{
-    ConnectProfile, ErrCmdType, PrepareProfile, TaskFailHandleType, LOCAL_CHANNEL_SELECT,
-    LOCAL_NO_NET, LOCAL_RESET, LOCAL_START_TASK_FAIL, LOCAL_TASK_PARAM,
+    ConnectProfile, ErrCmdType, PrepareProfile, TaskFailHandleType, TaskProfile,
+    LOCAL_CHANNEL_SELECT, LOCAL_NO_NET, LOCAL_RESET, LOCAL_START_TASK_FAIL, LOCAL_TASK_PARAM,
 };
 use crate::{
     ChannelFactory, DisconnectInternalCode, LongLinkEncoder, LongLinkMetaData, LongLinkStatus,
@@ -193,6 +193,12 @@ pub type IsForeground = dyn FnMut() -> bool + Send;
 /// whether the app is in front at all is [`IsForeground`]'s to answer.
 pub type LastForegroundChangeTime = dyn FnMut() -> u64 + Send;
 
+/// `StnManager::ReportTaskProfile` — the finished task, which both queues hand
+/// out once a task is over (`mars/stn/src/shortlink_task_manager.cc:1206`,
+/// `mars/stn/src/longlink_task_manager.cc:760`): the app's own report is made
+/// of it, and the queue is the only thing that has the whole of it.
+pub type ReportTaskProfile = dyn FnMut(&TaskProfile) + Send;
+
 fn poisoned<T>(poisoned: PoisonError<T>) -> T {
     poisoned.into_inner()
 }
@@ -240,14 +246,15 @@ enum FollowUp {
 }
 
 /// The hooks the two queues reach themselves, without the net core being asked:
-/// a task that ended, and a push. Everything else the app is told comes from
-/// [`NetCore`] itself.
+/// a task that ended, the profile of one that is over, and a push. Everything
+/// else the app is told comes from [`NetCore`] itself.
 #[derive(Default)]
 struct Hooks {
     task_callback: Option<Box<TaskCallback>>,
     on_task_end: Option<Box<OnTaskEnd>>,
     push_preprocess: Option<Box<PushPreprocess>>,
     on_push: Option<Box<OnPush>>,
+    report_task_profile: Option<Box<ReportTaskProfile>>,
 }
 
 impl std::fmt::Debug for Hooks {
@@ -257,6 +264,7 @@ impl std::fmt::Debug for Hooks {
             .field("on_task_end", &self.on_task_end.is_some())
             .field("push_preprocess", &self.push_preprocess.is_some())
             .field("on_push", &self.on_push.is_some())
+            .field("report_task_profile", &self.report_task_profile.is_some())
             .finish()
     }
 }
@@ -569,6 +577,29 @@ impl NetCore {
             anti_avalanche_check(&avalanche, &net_info, task, body)
         });
 
+        let hooks = Arc::clone(&self.hooks);
+        self.shortlink.set_report_profile(move |profile| {
+            if let Some(report) = hooks
+                .lock()
+                .unwrap_or_else(poisoned)
+                .report_task_profile
+                .as_mut()
+            {
+                report(profile);
+            }
+        });
+        let hooks = Arc::clone(&self.hooks);
+        self.longlink.set_report_profile(move |profile| {
+            if let Some(report) = hooks
+                .lock()
+                .unwrap_or_else(poisoned)
+                .report_task_profile
+                .as_mut()
+            {
+                report(profile);
+            }
+        });
+
         let net_info = Arc::clone(&self.net_info);
         self.net_source
             .set_net_info(move || net_info.lock().unwrap_or_else(poisoned)());
@@ -628,6 +659,17 @@ impl NetCore {
     /// `StnManager::OnPush`.
     pub fn set_on_push(&mut self, push: impl FnMut(&str, u32, u32, &[u8]) + Send + 'static) {
         self.hooks.lock().unwrap_or_else(poisoned).on_push = Some(Box::new(push));
+    }
+
+    /// `StnManager::ReportTaskProfile` — the finished task, which the queue a
+    /// task ended in hands out: the whole [`TaskProfile`], history and all, is
+    /// what the app's own report is made of, and there is no other way out of
+    /// the queue for it. Unset, and a task that is over is reported nowhere.
+    pub fn set_report_task_profile(&mut self, report: impl FnMut(&TaskProfile) + Send + 'static) {
+        self.hooks
+            .lock()
+            .unwrap_or_else(poisoned)
+            .report_task_profile = Some(Box::new(report));
     }
 
     /// `StnManager::ReportConnectStatus`.

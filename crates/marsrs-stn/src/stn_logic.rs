@@ -661,6 +661,8 @@ impl StnLogic {
             locked(&wired).on_push(channel, cmdid, taskid, body)
         });
         let wired = Arc::clone(bridge);
+        core.set_report_task_profile(move |profile| locked(&wired).report_task_profile(profile));
+        let wired = Arc::clone(bridge);
         core.set_report_connect_status(move |all: NetStatus, longlink: NetStatus| {
             locked(&wired).report_connect_status(all, longlink)
         });
@@ -716,9 +718,10 @@ fn host_of(hosts: &[String]) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dynamic_timeout::NetworkKind;
     use crate::longlink_identify_checker::IdentifyBuffer;
-    use crate::task_profile::TaskFailHandleType;
-    use crate::{CgiProfile, ErrCmdType, DEFAULT_LONGLINK_NAME};
+    use crate::task_profile::{ConnectProfile, TaskFailHandleType, TaskProfile};
+    use crate::{CgiProfile, ErrCmdType, RespHandle, RunId, DEFAULT_LONGLINK_NAME};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
 
@@ -812,6 +815,13 @@ mod tests {
                 .unwrap()
                 .push(format!("end {taskid} {user_id}"));
             0
+        }
+
+        fn report_task_profile(&mut self, profile: &TaskProfile) {
+            self.asked
+                .lock()
+                .unwrap()
+                .push(format!("profile {}", profile.task.taskid));
         }
     }
 
@@ -973,6 +983,49 @@ mod tests {
         assert!(!logic.start_task_at(1000, task));
 
         assert_eq!(asked_of(&asked), vec!["end 7 user".to_string()]);
+    }
+
+    /// `shortlink_task_manager.cc:1206` — the finished task is the app's own
+    /// report's, and it comes out of the queue the task ended in: the bridge is
+    /// what the two queues are wired to.
+    #[test]
+    fn a_task_that_is_over_is_handed_to_the_app_through_the_bridge() {
+        let (mut logic, asked) = logic();
+        let core = logic.net_core().expect("no core");
+        core.shortlink()
+            .set_start_run(|task, _request| Some(RunId(u64::from(task.taskid))));
+        core.shortlink().set_net_info(|| NetworkKind::Wifi);
+        let mut task = Task::new(7, 12);
+        task.cgi = "/cgi-bin/7".to_string();
+        task.channel_select = Task::CHANNEL_SHORT;
+        task.shortlink_host_list = vec!["short.host".to_string()];
+        task.user_id = "user".to_string();
+        assert!(core.start_task_at(1000, task));
+
+        let answer = crate::shortlink_task_manager::Response {
+            err_type: ErrCmdType::Ok,
+            status: 200,
+            body: b"hello".to_vec(),
+            cancel_retry: false,
+            profile: ConnectProfile::new(),
+        };
+        assert_eq!(
+            core.shortlink().on_response_at(1_500, RunId(7), answer),
+            Some(RespHandle::Ended)
+        );
+
+        assert_eq!(
+            asked_of(&asked),
+            vec![
+                "authed short.host".to_string(),
+                "req2buf 7 short.host".to_string(),
+                "buf2resp 7".to_string(),
+                // the app is told the task is over, and then given the whole
+                // of it for its own report
+                "end 7 user".to_string(),
+                "profile 7".to_string(),
+            ]
+        );
     }
 
     #[test]

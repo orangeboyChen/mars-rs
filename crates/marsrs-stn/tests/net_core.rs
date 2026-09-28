@@ -52,6 +52,9 @@ type LongErr = Vec<(ErrCmdType, i32, String, u16)>;
 type ShortErr = Vec<(ErrCmdType, i32, String, u16)>;
 /// What the server pushed, and with which cmdid.
 type Pushed = Vec<(String, u32, Vec<u8>)>;
+/// What the app's own report was given for a task that is over: the task, how
+/// it ended, and how many tries it took.
+type Reported = Vec<(u32, ErrCmdType, i32, usize)>;
 
 /// The net core, with the two queues and the app wired the way a host wires
 /// them.
@@ -63,6 +66,7 @@ struct App {
     long_err: Arc<Mutex<LongErr>>,
     short_err: Arc<Mutex<ShortErr>>,
     pushed: Arc<Mutex<Pushed>>,
+    reported: Arc<Mutex<Reported>>,
     /// How the app shall read the next answer.
     answer: Arc<Mutex<(i32, TaskFailHandleType)>>,
 }
@@ -158,6 +162,16 @@ impl App {
                 .unwrap()
                 .push((name.to_string(), cmdid, body.to_vec()));
         });
+        let reported: Arc<Mutex<Reported>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = reported.clone();
+        core.set_report_task_profile(move |profile| {
+            recorder.lock().unwrap().push((
+                profile.task.taskid,
+                profile.err_type,
+                profile.err_code,
+                profile.history.len(),
+            ));
+        });
 
         Self {
             core,
@@ -167,6 +181,7 @@ impl App {
             long_err,
             short_err,
             pushed,
+            reported,
             answer,
         }
     }
@@ -259,6 +274,11 @@ impl App {
     fn pushed(&self) -> Pushed {
         self.pushed.lock().unwrap().clone()
     }
+
+    /// What the app's own report was given for the tasks that are over.
+    fn reported(&self) -> Reported {
+        self.reported.lock().unwrap().clone()
+    }
 }
 
 #[test]
@@ -322,6 +342,25 @@ fn a_task_that_asked_for_the_long_link_is_ended_on_the_answer_it_came_in_on() {
             "2.2.2.2".to_string()
         )]
     );
+}
+
+/// `shortlink_task_manager.cc:1206` and `longlink_task_manager.cc:760` — a task
+/// that is over is handed to the app's own report once, whole: both queues keep
+/// the profile to themselves until then.
+#[test]
+fn a_task_that_is_over_is_handed_to_the_apps_own_report() {
+    let mut app = App::new();
+    app.bring_up(MAIN, LongLinkStatus::Connected);
+    app.start(7);
+    assert_eq!(app.answered(7), Some(RespHandle::Ended));
+    assert_eq!(app.reported(), vec![(7, ErrCmdType::Ok, 0, 1)]);
+
+    // the short link's own: a link that is down is what sends a task the app
+    // asked for `kChannelAll` of out on the short link
+    let mut app = App::new();
+    app.start(7);
+    assert_eq!(app.answered_short(7), Some(RespHandle::Ended));
+    assert_eq!(app.reported(), vec![(7, ErrCmdType::Ok, 0, 1)]);
 }
 
 #[test]
