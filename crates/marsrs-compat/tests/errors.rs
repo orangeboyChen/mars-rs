@@ -104,23 +104,23 @@ fn decode_records_reports_every_kind_of_damage() {
     let key = [0u8; 32];
 
     // nothing at all
-    let error = decode_records(&[], &key).unwrap_err().reason;
+    let error = decode_records(&[], Some(&key)).unwrap_err().reason;
     assert!(error.contains("no record"), "{error}");
     // bad magic
-    let error = decode_records(&[0u8; 128], &key).unwrap_err().reason;
+    let error = decode_records(&[0u8; 128], Some(&key)).unwrap_err().reason;
     assert!(error.contains("bad magic"), "{error}");
 
     // a real file cut short
     let mut bytes = encoded(&dir, "a.xlog");
     bytes.truncate(bytes.len() - 1);
-    let error = decode_records(&bytes, &key).unwrap_err().reason;
+    let error = decode_records(&bytes, Some(&key)).unwrap_err().reason;
     assert!(error.contains("truncated"), "{error}");
 
     // a real file whose tailer was overwritten
     let mut bytes = encoded(&dir, "b.xlog");
     let last = bytes.len() - 1;
     bytes[last] = 0x7f;
-    let error = decode_records(&bytes, &key).unwrap_err().reason;
+    let error = decode_records(&bytes, Some(&key)).unwrap_err().reason;
     assert!(error.contains("bad tailer"), "{error}");
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -182,7 +182,7 @@ fn a_file_cut_short_keeps_the_records_before_the_cut() {
     // The damage is reported, and the two whole blocks before it are handed
     // back with it: `parseFile` writes the output it has either way, and the
     // records in front of a broken one are not less true for what follows.
-    let error = decode_records(&cut, &key).expect_err("a file with a broken tail decoded");
+    let error = decode_records(&cut, Some(&key)).expect_err("a file with a broken tail decoded");
     assert!(error.reason.contains("truncated"), "{}", error.reason);
     // Two of the three records, and not a byte of the third: `read_records`
     // hands the encoder one line per record, newline excluded, so that line is

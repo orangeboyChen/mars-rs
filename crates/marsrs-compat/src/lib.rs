@@ -10,7 +10,7 @@
 //! ```text
 //! xlog-compat encode --mode=zlib --compress=1 --sync=0 --pubkey=<hex> \
 //!     --records=records.bin --out=a.xlog
-//! xlog-compat decode --privkey=<hex> --in=a.xlog --out=a.plain
+//! xlog-compat decode [--privkey=<hex>] --in=a.xlog --out=a.plain
 //! ```
 //!
 //! * `encode` runs the real [`LogBuffer`] (`log_base_buffer.cc` +
@@ -235,16 +235,29 @@ pub fn count_blocks(bytes: &[u8]) -> Result<usize, String> {
 /// an error, so this does too: a file whose last record is missing its end is
 /// still written out up to the damage, and the error is what comes back.
 pub fn decode(opts: &Opts) -> Result<(), String> {
-    let privkey_hex = required(opts, "privkey")?;
     let input = required(opts, "in")?;
     let out_path = required(opts, "out")?;
 
-    let privkey = hex_to_bytes(&privkey_hex)
-        .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
-        .ok_or_else(|| format!("--privkey must be 64 hex chars, got `{privkey_hex}`"))?;
+    // `--privkey=` (empty) means "no key", the way `--pubkey=` does: upstream
+    // reads its `PRIV_KEY` only where a record is encrypted
+    // (`decode_log_file.c:437`), so a file written with no key is read with
+    // none. A key that is given and is not 64 hex digits is still an error,
+    // because a wrong one costs every crypt record in the file.
+    let given = opts
+        .get("privkey")
+        .map(String::as_str)
+        .filter(|hex| !hex.is_empty());
+    let privkey = match given {
+        Some(hex) => Some(
+            hex_to_bytes(hex)
+                .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
+                .ok_or_else(|| format!("--privkey must be 64 hex chars, got `{hex}`"))?,
+        ),
+        None => None,
+    };
 
     let bytes = fs::read(&input).map_err(|e| format!("read {input}: {e}"))?;
-    match decode_records(&bytes, &privkey) {
+    match decode_records(&bytes, privkey.as_ref()) {
         Ok(plain) => {
             fs::write(&out_path, &plain).map_err(|e| format!("write {out_path}: {e}"))?;
             println!("decode: {} bytes -> {} bytes", bytes.len(), plain.len());
@@ -262,9 +275,12 @@ pub fn decode(opts: &Opts) -> Result<(), String> {
 /// The reader every decoder of this workspace reads through:
 /// `marsrs_xlog::decode_records`, the port of `decode_log_file.c`.
 ///
-/// It takes the private key by value and not in an `Option`, because this CLI
-/// always asks for one: every fixture the C++ wrote is encrypted, and the
-/// golden files are only comparable when each record was decrypted.
+/// It takes the key the way `marsrs_xlog::decode_records` does — an `Option`,
+/// because upstream's is one too: `PRIV_KEY` is read only where a record is
+/// encrypted, so a file written with no key is read with `None`, and a file
+/// that is encrypted is what `None` cannot read past — where upstream's
+/// `exit(7)` costs the whole file, this costs the records behind that point
+/// and keeps the ones in front of it.
 ///
 /// A record that cannot be read is skipped and marked rather than ending the
 /// walk, so a damaged file still yields the records behind the damage. What
@@ -273,9 +289,9 @@ pub fn decode(opts: &Opts) -> Result<(), String> {
 /// before that point.
 pub fn decode_records(
     data: &[u8],
-    privkey: &[u8; 32],
+    privkey: Option<&[u8; 32]>,
 ) -> Result<Vec<u8>, marsrs_xlog::DecodeError> {
-    marsrs_xlog::decode_records(data, Some(privkey))
+    marsrs_xlog::decode_records(data, privkey)
 }
 
 fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
