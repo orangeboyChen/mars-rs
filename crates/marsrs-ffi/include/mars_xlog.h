@@ -127,6 +127,27 @@ void mars_xlog_write(int level,
                      int line,
                      const char* message);
 
+/**
+ * Replaces `xlogger_Assert(...)` of `mars/comm/xlogger/xloggerbase.h` — the
+ * record an assert writes, with the same flattened fields `mars_xlog_write`
+ * takes plus the expression that failed.
+ *
+ * The record is written at `MarsLevelFatal` and its body is
+ * `[ASSERT(<expression>)]` followed by `message`. `xloggerbase.h` annotates
+ * `xlogger_Assert` "no level filter", so no level an app set is asked here:
+ * the gate the C++ has lives in its own `xassert2` macro, and a caller that
+ * wants it has `mars_xlog_is_enabled_for`.
+ *
+ * `tag`, `filename`, `func_name`, `expression` and `message` may be NULL;
+ * NULL and invalid UTF-8 are treated as an empty string.
+ */
+void mars_xlog_assert(const char* tag,
+                      const char* filename,
+                      const char* func_name,
+                      int line,
+                      const char* expression,
+                      const char* message);
+
 /** Replaces `mars::xlog::appender_flush()` — signals the writer thread. */
 void mars_xlog_flush(void);
 

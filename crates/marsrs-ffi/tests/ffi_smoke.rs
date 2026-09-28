@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_ffi::{
-    mars_xlog_close, mars_xlog_current_log_path, mars_xlog_flush, mars_xlog_flush_sync,
-    mars_xlog_open, mars_xlog_set_console_log, mars_xlog_set_level,
+    mars_xlog_assert, mars_xlog_close, mars_xlog_current_log_path, mars_xlog_flush,
+    mars_xlog_flush_sync, mars_xlog_open, mars_xlog_set_console_log, mars_xlog_set_level,
     mars_xlog_set_max_alive_duration, mars_xlog_set_max_file_size, mars_xlog_write, MarsXLogConfig,
     MARS_XLOG_ERR_BAD_COMPRESS, MARS_XLOG_ERR_BAD_MODE, MARS_XLOG_ERR_EMPTY_LOG_DIR,
     MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_CONFIG,
@@ -116,6 +116,26 @@ fn write(level: c_int, tag: &str, message: &str) {
             file.as_ptr(),
             func.as_ptr(),
             42,
+            message.as_ptr(),
+        );
+    }
+}
+
+/// `xlogger_Assert` through the C ABI: the expression goes into the body, and
+/// the record is written whatever level the app set.
+fn assert_expr(expression: &str, message: &str) {
+    let tag = CString::new("smoke").unwrap();
+    let file = CString::new("ffi_smoke.rs").unwrap();
+    let func = CString::new("assert_expr").unwrap();
+    let expression = CString::new(expression).unwrap();
+    let message = CString::new(message).unwrap();
+    unsafe {
+        mars_xlog_assert(
+            tag.as_ptr(),
+            file.as_ptr(),
+            func.as_ptr(),
+            42,
+            expression.as_ptr(),
             message.as_ptr(),
         );
     }
@@ -378,6 +398,34 @@ fn level_filter_gates_writes() {
 }
 
 #[test]
+fn an_assert_is_written_whatever_the_level_is() {
+    let _g = lock();
+    let _close = CloseOnDrop;
+    let dir = tempfile::tempdir().unwrap();
+    open_sync(dir.path());
+
+    // A level no record below it survives — and `xlogger_Assert` is annotated
+    // "no level filter" in `xloggerbase.h`, so it goes out anyway.
+    mars_xlog_set_level(5); // Fatal
+    write(0, "smoke", "this-verbose-record-must-be-dropped");
+    assert_expr("x == y", "the two are not equal");
+    mars_xlog_flush_sync();
+
+    let bytes = fs::read(log_file(dir.path())).unwrap();
+    assert!(any_view_contains(
+        &bytes,
+        "[ASSERT(x == y)]the two are not equal"
+    ));
+    assert!(
+        !any_view_contains(&bytes, "this-verbose-record-must-be-dropped"),
+        "the level did not gate the write"
+    );
+
+    mars_xlog_set_level(0); // back to Verbose
+    mars_xlog_close();
+}
+
+#[test]
 fn null_pointers_are_never_dereferenced() {
     let _g = lock();
     let _close = CloseOnDrop;
@@ -433,6 +481,17 @@ fn null_pointers_are_never_dereferenced() {
             std::ptr::null(),
             std::ptr::null(),
             0,
+            std::ptr::null(),
+        );
+    }
+    // An assert with every pointer null.
+    unsafe {
+        mars_xlog_assert(
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
             std::ptr::null(),
         );
     }

@@ -17,7 +17,7 @@ use marsrs_appender::{
     appender_set_max_file_size, appender_write,
     category_set_max_alive_duration as set_max_alive_duration,
     category_set_max_file_size as set_max_file_size, flush_all, set_console_log_open, set_level,
-    AppenderMode, LogLevel, XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
+    xlogger_assert, AppenderMode, LogLevel, XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
 };
 use marsrs_buffer::CompressMode;
 
@@ -253,6 +253,63 @@ pub unsafe extern "C" fn mars_xlog_write(
         // The appender returns whether anything was written; a C caller has no
         // channel for it (the C++ `xlogger_AssertP` family did not check either).
         let _written = appender_write(Some(&info), message);
+    });
+}
+
+/// `xlogger_Assert` of `mars/comm/xlogger/xloggerbase.h` — the record an
+/// assert writes, with the flattened fields [`mars_xlog_write`] takes instead
+/// of an `XLoggerInfo`.
+///
+/// The record is `kLevelFatal` and its body is `[ASSERT(<expression>)]`
+/// followed by `message`. No level is asked: `xloggerbase.h` writes "no level
+/// filter" over `xlogger_Assert`, and the gate the C++ has is the one in its
+/// own `xassert2` macro, not in the function — a caller that wants it has
+/// [`mars_xlog_is_enabled_for`].
+///
+/// `tag`, `filename`, `func_name`, `expression` and `message` may be null;
+/// null and invalid UTF-8 become an empty string.
+///
+/// # Safety
+///
+/// `tag`, `filename`, `func_name`, `expression` and `message` must each be
+/// null, or a NUL-terminated C string that stays alive for the duration of the
+/// call.
+#[no_mangle]
+pub unsafe extern "C" fn mars_xlog_assert(
+    tag: *const c_char,
+    filename: *const c_char,
+    func_name: *const c_char,
+    line: c_int,
+    expression: *const c_char,
+    message: *const c_char,
+) {
+    guard((), || {
+        // SAFETY: each pointer is null-checked inside the helper and otherwise
+        // points to a caller-owned NUL-terminated string.
+        let (tag, filename, func_name, expression, message) = unsafe {
+            (
+                cstr::ptr_to_str_or_empty(tag),
+                cstr::ptr_to_str_or_empty(filename),
+                cstr::ptr_to_str_or_empty(func_name),
+                cstr::ptr_to_str_or_empty(expression),
+                cstr::ptr_to_str_or_empty(message),
+            )
+        };
+
+        let info = XLoggerInfo {
+            level: LogLevel::Fatal,
+            tag: opt_string(tag),
+            filename: opt_string(filename),
+            func_name: opt_string(func_name),
+            line,
+            pid: state::pid(),
+            tid: state::tid(),
+            maintid: state::main_tid(),
+            timeval: state::now_timeval(),
+            trace_log: 0,
+        };
+
+        let _written = xlogger_assert(Some(&info), expression, message);
     });
 }
 

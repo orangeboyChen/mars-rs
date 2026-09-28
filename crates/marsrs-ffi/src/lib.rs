@@ -76,8 +76,8 @@ pub mod stn;
 
 #[cfg(feature = "xlog")]
 pub use abi::{
-    mars_xlog_close, mars_xlog_current_log_path, mars_xlog_flush, mars_xlog_flush_sync,
-    mars_xlog_open, mars_xlog_set_console_log, mars_xlog_set_level,
+    mars_xlog_assert, mars_xlog_close, mars_xlog_current_log_path, mars_xlog_flush,
+    mars_xlog_flush_sync, mars_xlog_open, mars_xlog_set_console_log, mars_xlog_set_level,
     mars_xlog_set_max_alive_duration, mars_xlog_set_max_file_size, mars_xlog_write, MarsXLogConfig,
 };
 #[cfg(feature = "xlog")]

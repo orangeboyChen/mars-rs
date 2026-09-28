@@ -23,6 +23,7 @@ fn header_declares_every_exported_symbol() {
     for symbol in [
         "mars_xlog_open",
         "mars_xlog_write",
+        "mars_xlog_assert",
         "mars_xlog_flush",
         "mars_xlog_flush_sync",
         "mars_xlog_flush_all",
