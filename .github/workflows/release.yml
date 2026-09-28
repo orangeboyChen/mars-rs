@@ -541,15 +541,25 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      # Gradle's downloads, and Kotlin/Native's: the dependency cache of the
-      # module and the ~1 GB toolchain `kotlin-native` unpacks into `~/.konan`,
-      # which every job that asks Gradle for a Kotlin target fetches again.
+      # Kotlin/Native's compiler: the ~1 GB toolchain `kotlin-native` unpacks
+      # into `~/.konan`, which every job that asks Gradle for a Kotlin target
+      # fetches again. Cached apart from Gradle's own, because what changes it
+      # is the Kotlin version and not the build: under one key for the two, an
+      # edit to a `.gradle.kts` was a download of the toolchain over again.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle/libs.versions.toml') }}
+          restore-keys: konan-${{ runner.os }}-
+      # Gradle's own: the wrapper, and the dependencies of a module with an
+      # Android target and thirteen Kotlin/Native ones in it — which is what
+      # the key is the hash of. No build cache is kept in it, and
+      # `platforms/kmp/gradle.properties` says why.
       - uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-            ~/.konan
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle.properties', '**/gradle/libs.versions.toml', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
       # The Android SDK, for the `androidTarget` of the module: Gradle will not
@@ -638,16 +648,20 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      # Gradle's and Kotlin/Native's downloads; the comment in `kmp-host` says
-      # what they are. This job and that one are the two that ask Gradle for a
-      # Kotlin target, and they pay for the toolchain separately on separate
-      # runners.
+      # The two caches `kmp-host` has, for the same reason and in the same
+      # shape — its comment says what they are. This job and that one are the
+      # two that ask Gradle for a Kotlin target, and they pay for the toolchain
+      # separately on separate runners.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle/libs.versions.toml') }}
+          restore-keys: konan-${{ runner.os }}-
       - uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-            ~/.konan
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle.properties', '**/gradle/libs.versions.toml', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
       - name: Install the Android SDK components
@@ -694,7 +708,12 @@ jobs:
         # instead of a failed release. It builds and runs the test of the host's
         # own target: macosArm64 here, the one Kotlin/Native target this runner
         # can execute.
-        run: (cd platforms/kmp && ./gradlew --no-daemon :marsrs-xlog:macosArm64Test)
+        #
+        # No `--no-daemon`, the way the two steps after it are not either: this
+        # job asks Gradle three times, and a daemon is what keeps the compiled
+        # build scripts and the resolved dependencies of the first call for the
+        # two that follow.
+        run: (cd platforms/kmp && ./gradlew :marsrs-xlog:macosArm64Test)
       - name: Publish to GitHub Packages
         # `continue-on-error`, for the reason the npm step gives: GitHub
         # Packages refusing a version is about GitHub Packages, and a release
@@ -705,7 +724,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          (cd platforms/kmp && ./gradlew --no-daemon -PpublishedVersion="${{ needs.version.outputs.version }}" \
+          (cd platforms/kmp && ./gradlew -PpublishedVersion="${{ needs.version.outputs.version }}" \
             -PmavenUser="$GITHUB_ACTOR" -PmavenPassword="$GITHUB_TOKEN" \
             :marsrs:publishAllPublicationsToGitHubPackagesRepository \
             :marsrs-xlog:publishAllPublicationsToGitHubPackagesRepository)
@@ -713,7 +732,7 @@ jobs:
         # GitHub Packages is immutable — a version it has cannot be overwritten
         # — so a tag that exists already is only ever republished as the zip.
         run: |
-          (cd platforms/kmp && ./gradlew --no-daemon -PpublishedVersion="${{ needs.version.outputs.version }}" \
+          (cd platforms/kmp && ./gradlew -PpublishedVersion="${{ needs.version.outputs.version }}" \
             :marsrs:publishToMavenLocal :marsrs-xlog:publishToMavenLocal)
       - name: Package the maven repository
         # Zipped from the root of the repository and not from the group's
