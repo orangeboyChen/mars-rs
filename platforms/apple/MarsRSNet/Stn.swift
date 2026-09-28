@@ -92,9 +92,9 @@ public enum MarsStn {
 
     /// One header of a task: a name and a value.
     public struct Header {
-        /// The name.
+        /// The name, which is the one the request writes on the line.
         public var name: String
-        /// The value.
+        /// The value the server reads for that name.
         public var value: String
 
         /// The only way in: neither field has a default of its own.

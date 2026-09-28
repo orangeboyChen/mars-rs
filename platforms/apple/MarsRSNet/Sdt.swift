@@ -31,7 +31,7 @@ public enum MarsSdt {
     public struct HostPort {
         /// The host, as an IP or a name.
         public var host: String
-        /// The port.
+        /// The port, which is the one a check dials on that host.
         public var port: UInt16
 
         /// The only way in: neither field has a default of its own.
@@ -44,9 +44,10 @@ public enum MarsSdt {
     /// One entry of the `CheckIPPorts` a diagnosis is started with: the hosts of
     /// one link, under the name that link is known by.
     public struct Link {
-        /// The name the hosts are known under.
+        /// The name the link is known by, which is the one the `_ext` calls ask
+        /// with.
         public var name: String
-        /// The host and port pairs of the link.
+        /// The hosts of that link, in the order a check tries them.
         public var ports: [HostPort]
 
         /// The only way in: neither field has a default of its own.
@@ -95,7 +96,8 @@ public enum MarsSdt {
 
     /// What one probe is asked.
     public struct Query {
-        /// Which probe.
+        /// Which probe it is: one of the four of `mars/sdt/src/checkimpl/`, or
+        /// `nothing` for one nobody answered.
         public var probe: Probe
         /// The domain for a resolve, the ip for a noop, the URL for the HTTP
         /// request and the host for a ping.
@@ -127,7 +129,8 @@ public enum MarsSdt {
         public var sent: Int32
         /// `tcp_receive` — `0` and above is an answer that came back.
         public var received: Int32
-        /// Whether what came back was the answer to the noop.
+        /// Whether what came back was the answer to *this* noop: one that was
+        /// not is `kTcpRespErr`, and not a failure of the socket.
         public var isNoopResponse: Bool
 
         /// The readings of one noop, which is the only way an app answers

@@ -147,7 +147,8 @@ public struct StnQuestion {
         }
     }
 
-    /// Which question.
+    /// Which of the eighteen STN asked: the readings below are the ones this
+    /// one names, and the rest are the zeros they start out as.
     public let kind: Kind
     /// The host: `makesureAuthed`, `onNewDns`, `shortLinkNetworkError`.
     public let host: String
