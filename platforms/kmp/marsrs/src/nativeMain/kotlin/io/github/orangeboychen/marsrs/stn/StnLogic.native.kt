@@ -384,6 +384,7 @@ private fun MarsStnQuestion.toQuestion(): Question = Question().apply {
     linkStatus = this@toQuestion.link_status
     isLongLinkHost = this@toQuestion.longlink_host != 0
     checkType = this@toQuestion.check_type
+    limit = this@toQuestion.limit.toInt()
     task = this@toQuestion.task?.pointed?.toTask()
 }
 

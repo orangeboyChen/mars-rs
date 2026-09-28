@@ -199,6 +199,9 @@ public struct StnQuestion {
     public let isLongLinkHost: Bool
     /// `reportTaskLimited` — what the task is being weighed against.
     public let checkType: Int32
+    /// `reportTaskLimited` — what that gate weighed it against: how long ago
+    /// the same body went out, or how many bytes the funnel would not take.
+    public let limit: UInt32
     /// `reportTaskLimited` — the task itself.
     public let task: StnTask?
 
@@ -231,6 +234,7 @@ public struct StnQuestion {
         linkStatus = MarsStn.LinkStatus(rawValue: question.link_status)
         isLongLinkHost = question.longlink_host != 0
         checkType = question.check_type
+        limit = question.limit
         task = question.task.map { StnTask($0.pointee) }
     }
 }
