@@ -2,7 +2,7 @@
 # but for its name, because the port is xlog today and the two plugins are the
 # same package under two names.
 #
-# `MarsRSXlog.xcframework` is carried here and not resolved: CocoaPods cannot
+# `marsrs-xlog.xcframework` is carried here and not resolved: CocoaPods cannot
 # take the SwiftPM binary target of Package.swift, and there is no pod for it,
 # so `.github/workflows/release.yml` drops the release's framework into
 # `Frameworks/` before the plugin is packaged. `include/mars_xlog.h` is the C
@@ -24,7 +24,7 @@ Pod::Spec.new do |s|
   # What Package.swift declares for iOS; the framework's own floor.
   s.platform         = :ios, '12.0'
   s.source_files     = 'Classes/**/*.{h,m}'
-  s.vendored_frameworks = 'Frameworks/MarsRSXlog.xcframework'
+  s.vendored_frameworks = 'Frameworks/marsrs-xlog.xcframework'
   s.preserve_paths   = 'include/mars_xlog.h'
   s.xcconfig         = { 'HEADER_SEARCH_PATHS' => '"$(PODS_TARGET_SRCROOT)/include"' }
   # `iana-time-zone` calls `CFTimeZone*`, and a Rust static library carries no

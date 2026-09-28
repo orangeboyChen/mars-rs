@@ -7,7 +7,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/orangeboyChen/mars-rs.git",
-    "directory": "react-native/marsrs-react-native-xlog"
+    "directory": "react-native/marsrs-xlog"
   },
   "bugs": {
     "url": "https://github.com/orangeboyChen/mars-rs/issues"

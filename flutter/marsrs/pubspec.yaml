@@ -9,7 +9,7 @@
 #
 #   dependencies:
 #     marsrs_flutter:
-#       path: marsrs_flutter           # the directory in the plugin's tarball
+#       path: marsrs           # the directory in the plugin's tarball
 #
 # `.github/workflows/release.yml` publishes it as
 # `marsrs-flutter-<version>.tar.gz` on the release of the same tag, and

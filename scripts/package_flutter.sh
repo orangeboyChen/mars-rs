@@ -47,19 +47,27 @@ case "$assets" in
     *) assets="$root/$assets" ;;
 esac
 
-framework=MarsRSXlog.xcframework
-zip="$assets/$framework.zip"
+# The framework the two plugins carry: the one the apple job built, named by the
+# zip it came in. Both are lower-case, the way every archive of this port's own
+# is spelled — what is CamelCase is the module inside, `MarsRSXlogFFI`, because
+# that is the name an app writes after `import`.
+framework_zip="${XCFRAMEWORK_ZIP:-marsrs-xlog.xcframework.zip}"
+framework="${framework_zip%.zip}"
+zip="$assets/$framework_zip"
 test -f "$zip" || { echo "::error::$zip is missing, nothing to package"; exit 1; }
 
 out="$root/dist"
 mkdir -p "$out"
 
-# <directory> <AAR> <archive>: the pair, whole port first. The only thing either
+# <directory> <package> <AAR> <archive>: the pair, whole port first. The
+# directory is the one in the repository and the one in the tarball; the package
+# is the name of pubspec.yaml and of the podspec, which is not the same
+# spelling — `flutter/marsrs` publishes `marsrs_flutter`. The only thing the AAR
 # argument changes is which AAR the Android half of the plugin resolves.
 package_one() {
-    local pkg="$1" aar="$2" archive="$3"
-    # The plugin's own directory, and the name the archive holds it under.
-    local name="${pkg##*/}"
+    local pkg="$1" name="$2" aar="$3" archive="$4"
+    # The name the tarball holds the plugin under.
+    local dir="${pkg##*/}"
 
     rm -rf "$pkg/ios/Frameworks" "$pkg/ios/include"
     mkdir -p "$pkg/ios/Frameworks" "$pkg/ios/include"
@@ -69,13 +77,12 @@ package_one() {
     # The licence of the port, which the podspec names.
     cp LICENSE "$pkg/LICENSE"
 
-    python3 - "$version" "$pkg" "$aar" <<'PY'
+    python3 - "$version" "$pkg" "$name" "$aar" <<'PY'
 import re
 import sys
 
-version, pkg, aar = sys.argv[1], sys.argv[2], sys.argv[3]
+version, pkg, name, aar = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 prefix = pkg + "/"
-name = pkg.rsplit("/", 1)[-1]
 
 # The version of the package itself: pub's, and the podspec's, which CocoaPods
 # reads on its own because there is no pub to ask.
@@ -104,9 +111,9 @@ assert n == 1, "android/build.gradle.kts has no AAR coordinate to stamp"
 open(path, "w").write(src)
 PY
 
-    tar -czf "$out/$archive-$version.tar.gz" -C flutter "$name"
+    tar -czf "$out/$archive-$version.tar.gz" -C flutter "$dir"
     ls -l "$out/$archive-$version.tar.gz"
 }
 
-package_one flutter/marsrs_flutter marsrs marsrs-flutter
-package_one flutter/marsrs_flutter_xlog xlog marsrs-flutter-xlog
+package_one flutter/marsrs marsrs_flutter marsrs marsrs-flutter
+package_one flutter/marsrs-xlog marsrs_flutter_xlog xlog marsrs-flutter-xlog

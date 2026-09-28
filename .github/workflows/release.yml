@@ -10,7 +10,28 @@ name: Release
 #   * marsrs-<version>-<host>.tar.gz / .zip -> the C ABI for Linux/macOS/Windows
 #   * marsrs-kmp-native.zip  -> the archives the Kotlin module is built out of
 #   * marsrs-kmp-maven.zip   -> the Kotlin module itself, as a maven repository
+#   * marsrs-flutter-<version>.tar.gz / marsrs-flutter-xlog-<version>.tar.gz
+#                           -> the two Flutter plugins
+#   * marsrs-react-native-<version>.tgz / marsrs-react-native-xlog-<version>.tgz
+#                           -> the two React Native modules, named by `npm pack`
+#   * marsrs-harmony-<version>.tar.gz -> the three HarmonyOS `.so` files
 #   * crates.io: `marsrs` and `marsrs-xlog`, at the version of the tag
+#
+# The four plugin packages are packaged on every release, which is what the docs
+# tell a consumer to install while publishing is not switched on. Publishing
+# them is optional, and neither registry is given a secret: both take this run's
+# OIDC token instead, which is what `id-token: write` is for.
+#
+#   * npm, from this workflow — the registry exchanges the token for a publish
+#     token of its own. What it needs is this repository named as a trusted
+#     publisher of the package, which is set on npmjs.com and not here.
+#   * pub.dev, from pub.yml: pub.dev rejects a run that is not one of a tag,
+#     and this workflow is a `workflow_dispatch` that creates the tag itself, so
+#     it hands the publish to a run whose ref is that tag.
+#
+# A package a registry has never seen has no settings to put a trusted publisher
+# in, so its first version is published by hand and the release says so rather
+# than fail. `CARGO_REGISTRY_TOKEN` is the one credential left, in `crates`.
 #
 # Everything this port packages itself is named `marsrs`, the way the crates
 # are: the two AARs, the archives a consumer downloads, and the group of the
@@ -96,6 +117,9 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  # `gh workflow run pub.yml`, for the two Flutter plugins: a tag this workflow
+  # pushed cannot start a run of its own, so it is asked for instead.
+  actions: write
   # `packages: write` is what lets the `kmp` job publish the Kotlin
   # Multiplatform pair to GitHub Packages; the default token of a run that does
   # not ask for it is refused with a 403 at the first `PUT`.
@@ -206,6 +230,18 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      # Gradle's own downloads — the dependency cache of every module, and the
+      # wrapper it is invoked through — which a job without them fetches from
+      # scratch. The key is the manifest of the build, so a Gradle that moved is
+      # a key that missed and a cache that is filled again rather than a stale
+      # one that is restored.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle.properties', '**/gradle/libs.versions.toml', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
       # The NDK, and the SDK platform and the build tools the AAR is assembled
       # with. `android-actions/setup-android` is deliberately not used, and why
       # is written down in .github/scripts/install_android_ndk.sh.
@@ -351,6 +387,17 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      # Gradle's downloads, and Kotlin/Native's: the dependency cache of the
+      # module and the ~1 GB toolchain `kotlin-native` unpacks into `~/.konan`,
+      # which every job that asks Gradle for a Kotlin target fetches again.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.konan
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle.properties', '**/gradle/libs.versions.toml', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
       # The Android SDK, for the `androidTarget` of the module: Gradle will not
       # even configure a project that has one without it, whether or not the
       # task it is asked for is Android's.
@@ -377,7 +424,15 @@ jobs:
           name: release-android
           path: dist
       - name: Unpack the JNI libraries
-        run: unzip -q -o "dist/$NATIVE_ZIP" -d kmp/native/android
+        run: |
+          set -euo pipefail
+          # `kmp/native/` is not of the repository — .gitignore keeps out what
+          # these jobs assemble into it — so there is nothing to unpack into
+          # yet, and `unzip -d` makes the directory it is given and not the one
+          # above it. Hence the `mkdir`, and hence a step that failed on a
+          # runner and never on a machine that had built the module before.
+          mkdir -p kmp/native/android
+          unzip -q -o "dist/$NATIVE_ZIP" -d kmp/native/android
       - name: Collect the Apple archives
         # Every one of them, for a test of the Linux one: cinterop is
         # commonized, so the klib of a single target cannot be built without the
@@ -414,6 +469,18 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      # Gradle's and Kotlin/Native's downloads; the comment in `kmp-host` says
+      # what they are. This job and that one are the two that ask Gradle for a
+      # Kotlin target, and they pay for the toolchain separately on separate
+      # runners.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.konan
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle.properties', '**/gradle/libs.versions.toml', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
       - name: Install the Android SDK components
         # The module has an Android target, so every `./gradlew` of it needs the
         # SDK — the test step as much as the publishing one. The macOS image
@@ -449,6 +516,7 @@ jobs:
       - name: Unpack the JNI libraries
         run: |
           set -euo pipefail
+          mkdir -p kmp/native/android
           unzip -q -o "dist/$NATIVE_ZIP" -d kmp/native/android
           find kmp/native -name '*.a' -o -name '*.so' | sort
       - name: Prove an archive links
@@ -499,8 +567,118 @@ jobs:
             dist/${{ env.KMP_MAVEN_ZIP }}
             dist/${{ env.KMP_NATIVE_ZIP }}
 
+  # The four packages of the two plugin ecosystems: the two Flutter plugins and
+  # the two React Native modules, stamped with the version of this release and
+  # carrying the one thing a consumer cannot resolve for itself — the apple
+  # job's xcframework, which CocoaPods cannot take out of Package.swift.
+  #
+  # Nothing is compiled here: the framework is the apple job's, and the AAR the
+  # Android half of each package resolves is JitPack's. So this is the one job
+  # of the release with no toolchain to install, and it does not wait for the
+  # Android or the Kotlin half of it.
+  #
+  # Packaging needs no credential and is never skipped: it is what the docs tell
+  # a consumer to install while publishing is not switched on. The registries
+  # need none either — both take this run's OIDC token.
+  plugins:
+    needs: [version, apple]
+    if: needs.version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      # A job-level `permissions` is a whole block and not an addition: every
+      # permission it does not name is `none`, and `actions/checkout` needs
+      # `contents: read` for the repository it checks out.
+      contents: read
+      # npm's trusted publishing: `npm publish` asks the registry for a token
+      # and answers with this run's own identity, so there is no token here to
+      # keep, rotate or leak.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      # Node 24, which is npm 11: trusted publishing is npm 11.5.1 and later.
+      # No `registry-url`, on purpose — setup-node answers it by writing an
+      # `_authToken` of the (empty) token into .npmrc, and an empty token is
+      # exactly what stops npm from asking for one of its own.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Collect the Apple frameworks
+        uses: actions/download-artifact@v8
+        with:
+          name: release-apple
+          path: dist
+      - name: Package the Flutter plugins
+        run: scripts/package_flutter.sh "${{ needs.version.outputs.version }}" dist
+      - name: Package the React Native modules
+        run: scripts/package_react_native.sh "${{ needs.version.outputs.version }}" dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-plugins
+          path: |
+            dist/marsrs-flutter-*.tar.gz
+            dist/marsrs-react-native-*.tgz
+      # The registry, last, and only for a tag that is new: what is published to
+      # it is immutable, so a version it has cannot be published over, and the
+      # release is complete — assets, tag, checksums — before it is asked for
+      # anything. pub.dev is not asked here, and pub.yml says why.
+      - name: Publish the React Native modules to npm
+        if: needs.version.outputs.is_new == 'true'
+        run: .github/scripts/publish_npm.sh "${{ needs.version.outputs.version }}"
+
+  # HarmonyOS: the three `libmars_ffi.so` a HarmonyOS module carries, one per
+  # ABI, as marsrs-harmony-<version>.tar.gz. There is no package and no ArkTS
+  # wrapper — the docs say so, and an app reaches the C ABI through NAPI of its
+  # own — so what the release has to give that platform is the natives and the
+  # header, and nothing else.
+  #
+  # No credential gates this one: the OpenHarmony SDK is public and the script
+  # downloads it. What does gate it is the 2.7 GB that download is, which a
+  # cache answers once and not once per release.
+  harmony:
+    needs: version
+    if: needs.version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    env:
+      # No `RUSTFLAGS: '-D warnings'` here, the way the apple jobs have it: a
+      # target of a tier 2 platform is a target whose warnings this port has
+      # never had to answer for, and rust.yml's harmony job builds it without.
+      OHOS_SDK_VERSION: 6.1-Release
+      # Outside `target/`, so that the rust cache below does not carry the SDK
+      # a second time — the same reason rust.yml's harmony job keeps it here.
+      OHOS_SDK_CACHE: ${{ github.workspace }}/.ohos-sdk
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: >-
+            aarch64-unknown-linux-ohos
+            armv7-unknown-linux-ohos
+            x86_64-unknown-linux-ohos
+      - name: Cache the OHOS SDK
+        uses: actions/cache@v6
+        with:
+          path: .ohos-sdk
+          key: ohos-sdk-${{ env.OHOS_SDK_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build and package the HarmonyOS libraries
+        run: |
+          set -euo pipefail
+          version="${{ needs.version.outputs.version }}"
+          stage="dist/marsrs-harmony-$version"
+          scripts/build_harmony.sh "$stage"
+          # the header of the C ABI the app calls, and the licence it is under
+          mkdir -p "$stage/include"
+          cp crates/marsrs-ffi/include/mars_xlog.h "$stage/include/"
+          cp LICENSE README.md "$stage/"
+          tar -czf "$stage.tar.gz" -C dist "marsrs-harmony-$version"
+          ls -l "$stage.tar.gz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-harmony
+          path: dist/marsrs-harmony-*.tar.gz
+
   publish:
-    needs: [version, apple, android, host, kmp]
+    needs: [version, apple, android, host, kmp, plugins, harmony]
     if: needs.version.outputs.skip != 'true'
     # macOS so that the checksum is the one SwiftPM itself computes, the same
     # way orangeboyChen/mars does it
@@ -624,6 +802,19 @@ jobs:
           git tag -f "$TAG" "$SHA"
           git push -f origin "$TAG"
 
+      - name: Ask pub.yml to publish the plugins
+        # A tag this workflow pushed is a tag GitHub will not let start another
+        # run: what the default token does is not an event that triggers one. So
+        # pub.yml's tag-push trigger would never fire, and it is dispatched
+        # instead — with the tag as its ref, which is what pub.dev asks of a run
+        # that publishes ("Pub.dev rejects publishing from GitHub Actions
+        # triggered without a tag").
+        if: needs.version.outputs.is_new == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh workflow run pub.yml --ref "$TAG"
+
       - name: Trigger the JitPack build
         # JitPack builds lazily, so nothing would publish the AAR until a
         # consumer asks for it. .github/scripts/jitpack_build.sh kicks the build off
@@ -662,6 +853,23 @@ jobs:
             echo '```kotlin'
             echo "implementation(\"$KMP_GROUP:$KMP_ARTIFACT:${TAG#v}\")"
             echo "implementation(\"$KMP_GROUP:$KMP_ARTIFACT_XLOG:${TAG#v}\")"
+            echo '```'
+            echo ""
+            # the four plugin packages: on the release as an archive always, and
+            # on the registry once it knows this repository as a trusted
+            # publisher of them
+            echo "React Native — npm:"
+            echo ""
+            echo '```bash'
+            echo "npm install marsrs-react-native@${TAG#v}"
+            echo "npm install marsrs-react-native-xlog@${TAG#v}"
+            echo '```'
+            echo ""
+            echo "Flutter — pub.dev:"
+            echo ""
+            echo '```bash'
+            echo "flutter pub add marsrs_flutter@${TAG#v}"
+            echo "flutter pub add marsrs_flutter_xlog@${TAG#v}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

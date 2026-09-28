@@ -50,8 +50,13 @@ case "$assets" in
     *) assets="$root/$assets" ;;
 esac
 
-framework=MarsRSXlog.xcframework
-zip="$assets/$framework.zip"
+# The framework the two modules carry: the one the apple job built, named by the
+# zip it came in. Both are lower-case, the way every archive of this port's own
+# is spelled — what is CamelCase is the module inside, `MarsRSFFI`, because that
+# is the name an app writes after `import`.
+framework_zip="${XCFRAMEWORK_ZIP:-marsrs-xlog.xcframework.zip}"
+framework="${framework_zip%.zip}"
+zip="$assets/$framework_zip"
 test -f "$zip" || { echo "::error::$zip is missing, nothing to package"; exit 1; }
 
 out="$root/dist"
@@ -63,10 +68,13 @@ mkdir -p "$out"
 
 # <directory> <AAR>: the pair, whole port first. The only thing either argument
 # changes is which AAR the Android half of the module resolves; the tarball is
-# named by `npm pack`, after the name of package.json.
+# named by `npm pack`, after the name of package.json — which is the name of the
+# module and not the name of the directory, `marsrs-react-native` for
+# `react-native/marsrs`.
 package_one() {
     local pkg="$1" aar="$2"
-    local name="${pkg##*/}"
+    local name
+    name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])' "$pkg/package.json")"
 
     rm -rf "$pkg/ios/Frameworks" "$pkg/ios/include"
     mkdir -p "$pkg/ios/Frameworks" "$pkg/ios/include"
@@ -112,5 +120,5 @@ PY
     ls -l "$archive"
 }
 
-package_one react-native/marsrs-react-native marsrs
-package_one react-native/marsrs-react-native-xlog xlog
+package_one react-native/marsrs marsrs
+package_one react-native/marsrs-xlog xlog
