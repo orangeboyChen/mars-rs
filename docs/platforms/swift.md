@@ -117,10 +117,12 @@ them.
 **Nothing to call.** An `Xlog` flushes itself when the app leaves the screen: it
 watches for `didEnterBackground` — the scene's, when the app has scenes, because
 an app with them is sent no `UIApplication` lifecycle notification at all — and
-for `willTerminate`, and each of them runs a `flush(sync: true)` on the spot.
+for `willTerminate`, and each of them runs a `flush(sync: true)` on the spot. On
+watchOS there is no UIKit, so what it watches is `WKExtension`'s
+`applicationDidEnterBackground` instead.
 
-That is the moment to drain because it is the last one iOS says anything: an app
-killed out of the background is told nothing, so there is no later place a
+That is the moment to drain because it is the last one the OS says anything: an
+app killed out of the background is told nothing, so there is no later place a
 `flush` could run. Nothing is lost without it either — the records stay in the
 cache file, and the next `Xlog` of the same `namePrefix` drains them into its log
 file when it opens — but the file of the session that is ending is complete only

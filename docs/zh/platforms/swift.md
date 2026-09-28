@@ -108,8 +108,9 @@ C 的那些符号也在：`import MarsRSXlog` 重新导出了 `MarsRSFFI`，所�
 **什么都不用调用。** App 离开屏幕时，`Xlog` 自己会 flush：它监听 `didEnterBackground`
 —— 有 scene 的 App 监听的是 scene 的那个，因为这类 App 根本收不到 `UIApplication` 的
 生命周期通知 —— 以及 `willTerminate`，两个通知都会当场跑一次 `flush(sync: true)`。
+watchOS 上没有 UIKit，监听的是 `WKExtension` 的 `applicationDidEnterBackground`。
 
-那是排空的时刻，因为它是 iOS 最后一次开口：从后台被杀掉的 App 一个通知都收不到，之后再
+那是排空的时刻，因为它是系统最后一次开口：从后台被杀掉的 App 一个通知都收不到，之后再
 没有 `flush` 能跑的地方。没有它也什么都不丢 —— 记录留在缓存文件里，下一个同 `namePrefix`
 的 `Xlog` 打开时会把它们排进日志文件 —— 但本次会话那个文件要等它跑完才算完整。
 见[日志文件](/zh/log-files)。

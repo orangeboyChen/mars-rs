@@ -15,6 +15,8 @@
 import Foundation
 #if os(iOS)
 import UIKit
+#elseif os(watchOS)
+import WatchKit
 #endif
 
 /// The flush every `Xlog` of this process gives itself when the app leaves the
@@ -76,9 +78,10 @@ internal final class XlogBackgroundFlush {
     }
 
     /// The notifications that say the app's UI is no longer on screen — the last
-    /// thing iOS says before it can end the process without another word. A
+    /// thing the OS says before it can end the process without another word. A
     /// scene-based app is never sent the `UIApplication` lifecycle ones, so both
-    /// are watched from iOS 13 on.
+    /// are watched from iOS 13 on; watchOS has no UIKit at all, and its own
+    /// `WKExtension` posts the one it does have.
     private static var names: [Notification.Name] {
         #if os(iOS)
         if #available(iOS 13.0, *) {
@@ -89,6 +92,8 @@ internal final class XlogBackgroundFlush {
             ]
         }
         return [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification]
+        #elseif os(watchOS)
+        return [WKExtension.applicationDidEnterBackgroundNotification]
         #else
         return []
         #endif
