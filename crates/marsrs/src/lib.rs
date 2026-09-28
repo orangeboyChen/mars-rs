@@ -1,25 +1,28 @@
-//! `marsrs` — the Rust port of [Tencent's mars](https://github.com/Tencent/mars):
-//! the xlog appender, the STN task pipeline and the SDT network diagnosis.
+//! `marsrs` — the Rust port of [Tencent's
+//! mars](https://github.com/Tencent/mars): the xlog appender, the STN task
+//! pipeline and the SDT network diagnosis.
 //!
 //! The C++ project publishes two artifacts, `mars-core` (everything) and
 //! `mars-xlog` (the logger alone), and this port publishes the same pair
 //! under names of its own: this crate is the whole port, and
-//! [`marsrs-xlog`](https://crates.io/crates/marsrs-xlog) is the logger alone.
-//! An app that only logs takes that one and carries none of STN's or SDT's
-//! bytes; this one re-exports it as [`xlog`].
+//! [`marsrs-xlog`](https://crates.io/crates/marsrs-xlog) is the logger
+//! alone. An app that only logs takes that one and carries none of STN's or
+//! SDT's bytes; this one re-exports it as [`xlog`].
 //!
-//! | module          | what it is                                          | C++                    |
-//! |-----------------|-----------------------------------------------------|------------------------|
-//! | [`xlog`]        | the logger: open, write, flush, close                | `mars/xlog`            |
-//! | [`stn`]         | the task pipeline: anti-avalanche, dynamic timeout   | `mars/stn`             |
-//! | [`sdt`]         | the diagnosis: ping, DNS, TCP and HTTP               | `mars/sdt`             |
-//! | [`comm`]        | the utilities the other two are written over         | `mars/comm`            |
-//! | [`bytes`]       | `AutoBuffer` and `PtrBuffer`                         | `comm/autobuffer.h`    |
+//! * [`xlog`] — the logger: open, write, flush, close. Ports `mars/xlog`.
+//! * [`stn`] — the task pipeline: anti-avalanche, dynamic timeout. Ports
+//!   `mars/stn`.
+//! * [`sdt`] — the diagnosis: ping, DNS, TCP and HTTP. Ports `mars/sdt`.
+//! * [`comm`] — what the two above are written over. Ports `mars/comm`.
+//! * [`bytes`] — `AutoBuffer` and `PtrBuffer`. Ports
+//!   `mars/comm/autobuffer.h`.
 //!
-//! Every module is a re-export of a crate of this workspace — `marsrs_xlog`,
-//! `marsrs_stn`, `marsrs_sdt`, `marsrs_comm`, `marsrs_core` — and each one is
-//! behind a feature of its own, so `--no-default-features --features xlog` is
-//! the build an app that only logs gets.
+//! Four of the five are optional crates of this workspace behind a feature
+//! of their own, so `--no-default-features --features xlog` is the build an
+//! app that only logs gets. [`bytes`] is `marsrs_core`, and it is the one
+//! that is not: the formatter of [`xlog`] and the profile of [`sdt`] are
+//! written in `AutoBuffer`, so there is no build of this crate that does
+//! without it.
 //!
 //! ```no_run
 //! use marsrs::xlog::{appender_close, appender_flush_sync, appender_open, appender_write, XLogConfig};
@@ -46,10 +49,11 @@ pub use marsrs_xlog as xlog;
 mod tests {
     #[test]
     fn every_module_is_reachable_through_the_facade() {
-        // One name per re-export, so that a rename in a crate behind this one
-        // breaks this test rather than a caller's build. Each one is behind the
-        // feature that carries it, because a build that leaves a module out is
-        // a build this test has to pass in too.
+        // One name per re-export, so that a rename in a crate behind this
+        // one breaks this test rather than a caller's build. The four
+        // optional ones are named behind the feature that carries them,
+        // because a build that leaves a module out is a build this test
+        // has to pass in too.
         assert!(std::any::type_name::<crate::bytes::AutoBuffer>().ends_with("AutoBuffer"));
         #[cfg(feature = "comm")]
         assert!(std::any::type_name::<crate::comm::LocalIpStack>().ends_with("LocalIpStack"));
