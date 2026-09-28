@@ -127,6 +127,7 @@ app killed out of the background is told nothing, so there is no later place a
 cache file, and the next `Xlog` of the same `namePrefix` drains them into its log
 file when it opens — but the file of the session that is ending is complete only
 once this has run. See [log files](/log-files#when-the-app-goes-away).
+
 ## The task pipeline
 
 `MarsRSNet` carries the half of the port that talks to a server: `MarsStn` is
