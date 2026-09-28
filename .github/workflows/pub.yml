@@ -4,15 +4,19 @@ name: pub.dev
 # the job asks for `id-token: write`, and pub.dev exchanges this run's OIDC token
 # for a publish of its own.
 #
-# pub.dev asks two things of a workflow that publishes to it, and this workflow
-# is shaped around both:
+# pub.dev asks three things of a workflow that publishes to it, and this
+# workflow is shaped around all three:
 #
-#   * the run has to be triggered by a tag — "Pub.dev rejects publishing from
+#   * the run has to be one whose ref is a tag — "Pub.dev rejects publishing from
 #     GitHub Actions triggered without a tag" — and the tag has to match the
 #     tag-pattern the package's Admin tab was given, `v{{version}}` for these.
-#     The release workflow pushes that tag, and this is what it triggers; the
-#     release itself is a `workflow_dispatch`, which is why it cannot publish
-#     here itself.
+#     The release is a `workflow_dispatch`, which is why it cannot publish the
+#     plugins itself.
+#   * it has to be a run something starts. A tag the release pushed is a tag
+#     GitHub will not let start another run, because what the default token does
+#     is not an event that triggers one. So the release dispatches this workflow
+#     with the tag as its ref, and the tag-push trigger below is what is left for
+#     a tag pushed by hand.
 #   * the package has to be on pub.dev already. Automation cannot create one, so
 #     the first version of `marsrs_flutter` and `marsrs_flutter_xlog` is
 #     published by hand, once, and "Enable publishing from GitHub Actions" is
@@ -28,6 +32,7 @@ on:
     tags:
       # `v{{version}}` on pub.dev, and pre-releases are versions too
       - 'v[0-9]*'
+  workflow_dispatch:
 
 # One publish per tag, and no cancelling: a tag that is pushed twice is pushed
 # over a release that exists, and the second run has nothing to do.
@@ -56,21 +61,39 @@ jobs:
         with:
           channel: stable
       - name: Take the plugins off the release
+        id: take
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if ! gh release view "$TAG" > /dev/null 2>&1; then
-            echo "::warning::$TAG has no release; nothing to publish"
+          nothing() {
+            echo "::warning::$1; nothing to publish"
+            echo "have=false" >> "$GITHUB_OUTPUT"
             exit 0
+          }
+          # The ref is the tag: pub.dev refuses a run that is not one, so the
+          # run that would only ever be refused is stopped here.
+          case "$TAG" in
+            v*) ;;
+            *) nothing "$TAG is not a version tag, and pub.dev rejects a run whose ref is not one" ;;
+          esac
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            nothing "$TAG has no release"
           fi
           gh release download "$TAG" --pattern 'marsrs-flutter-*.tar.gz' --dir dist
+          if [ -z "$(find dist -name '*.tar.gz' -print -quit)" ]; then
+            nothing "$TAG released no Flutter plugin"
+          fi
           ls -l dist
           for archive in dist/*.tar.gz; do
             tar -xzf "$archive"
           done
+          echo "have=true" >> "$GITHUB_OUTPUT"
       - name: Publish the two plugins
+        # Not a `set -e` of the step above: "there is nothing to publish" has to
+        # be a run that succeeded, and not a step that ends the job early.
+        if: steps.take.outputs.have == 'true'
         env:
           TAG: ${{ github.ref_name }}
         run: .github/scripts/publish_pub.sh "${TAG#v}" marsrs marsrs-xlog

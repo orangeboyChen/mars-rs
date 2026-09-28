@@ -25,9 +25,9 @@ name: Release
 #   * npm, from this workflow — the registry exchanges the token for a publish
 #     token of its own. What it needs is this repository named as a trusted
 #     publisher of the package, which is set on npmjs.com and not here.
-#   * pub.dev, from pub.yml — pub.dev rejects a run that was not triggered by a
-#     tag, and this workflow is a `workflow_dispatch` that creates the tag
-#     itself, so the publish waits for the tag push that follows it.
+#   * pub.dev, from pub.yml: pub.dev rejects a run that is not one of a tag,
+#     and this workflow is a `workflow_dispatch` that creates the tag itself, so
+#     it hands the publish to a run whose ref is that tag.
 #
 # A package a registry has never seen has no settings to put a trusted publisher
 # in, so its first version is published by hand and the release says so rather
@@ -117,6 +117,9 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  # `gh workflow run pub.yml`, for the two Flutter plugins: a tag this workflow
+  # pushed cannot start a run of its own, so it is asked for instead.
+  actions: write
   # `packages: write` is what lets the `kmp` job publish the Kotlin
   # Multiplatform pair to GitHub Packages; the default token of a run that does
   # not ask for it is refused with a 403 at the first `PUT`.
@@ -582,6 +585,10 @@ jobs:
     if: needs.version.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
+      # A job-level `permissions` is a whole block and not an addition: every
+      # permission it does not name is `none`, and `actions/checkout` needs
+      # `contents: read` for the repository it checks out.
+      contents: read
       # npm's trusted publishing: `npm publish` asks the registry for a token
       # and answers with this run's own identity, so there is no token here to
       # keep, rotate or leak.
@@ -794,6 +801,19 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -f "$TAG" "$SHA"
           git push -f origin "$TAG"
+
+      - name: Ask pub.yml to publish the plugins
+        # A tag this workflow pushed is a tag GitHub will not let start another
+        # run: what the default token does is not an event that triggers one. So
+        # pub.yml's tag-push trigger would never fire, and it is dispatched
+        # instead — with the tag as its ref, which is what pub.dev asks of a run
+        # that publishes ("Pub.dev rejects publishing from GitHub Actions
+        # triggered without a tag").
+        if: needs.version.outputs.is_new == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh workflow run pub.yml --ref "$TAG"
 
       - name: Trigger the JitPack build
         # JitPack builds lazily, so nothing would publish the AAR until a

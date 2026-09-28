@@ -71,9 +71,12 @@ for pkg in "$@"; do
     esac
 
     # and then the same question about the version: pub.dev refuses a version it
-    # has, so a release published twice over is not a release that fails.
+    # has, so a release published twice over is not a release that fails. The
+    # endpoint is `/versions/<version>` — `/<version>` answers 404 for a version
+    # pub.dev does have, and a 404 is what publishes, which here would be a
+    # second publication of a version that cannot be published twice.
     status="$(curl -sS -o /dev/null -w '%{http_code}' -A "$ua" \
-        "https://pub.dev/api/packages/$name/$version")"
+        "https://pub.dev/api/packages/$name/versions/$version")"
     case "$status" in
         200)
             echo "$name $version is already on pub.dev"
