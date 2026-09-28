@@ -80,8 +80,8 @@ mars_xlog_flush_sync();
 
 | 平台 | 谁在 flush |
 |---|---|
-| Android | `Xlog(config, context)` —— 给 App 任意一个 `Context`；见 [Android](/zh/platforms/android) |
-| SwiftPM | 每个 `Xlog`，建好就开始；见 [SwiftPM](/zh/platforms/swift) |
+| Android | `Xlog(config, context)` —— 给 App 任意一个 `Context`；见 [Android](/zh/platforms/android#app-退出的时候) |
+| SwiftPM | 每个 `Xlog`，建好就开始；见 [SwiftPM](/zh/platforms/swift#app-退出的时候) |
 | 其他平台 | 下次启动，如上 |
 
 `close()` 也会排空，所以退出时顺手关掉 appender 的 App 同样没事。上面那两个 `flush` 是为
