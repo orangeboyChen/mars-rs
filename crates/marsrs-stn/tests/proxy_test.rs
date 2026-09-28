@@ -12,12 +12,14 @@ use std::sync::{Arc, Mutex};
 use marsrs_comm::{LocalIpStack, ProxyInfo, ProxyType, SocketAddress};
 use marsrs_stn::{OpBreaker, ProxyTest, SocketFd, SocketOperator, SocketProfile, Task, Verdict};
 
-/// The four fields mars writes for itself, and the empty line that ends the
-/// head: a `GET` has no `Content-Type` and no `Content-Length`.
+/// The fields a `GET` puts on the wire, in the order the C++ writes them: its
+/// `HeaderFields` is a map ordered by name, so a `Host` the app asked for sorts
+/// in between `Connection` and `User-Agent`.
 const FIELDS: &str = "Accept: */*\r\n\
-                      User-Agent: MicroMessenger Client\r\n\
                       Cache-Control: no-cache\r\n\
-                      Connection: close\r\n";
+                      Connection: close\r\n\
+                      Host: short.weixin.qq.com\r\n\
+                      User-Agent: MicroMessenger Client\r\n";
 
 /// What the host was asked for, and what it answers with.
 #[derive(Clone, Default)]
@@ -171,9 +173,7 @@ fn an_http_proxy_the_host_answers_two_hundred_on_is_available() {
     let sent = seen.sent.lock().unwrap().clone();
     assert_eq!(
         String::from_utf8_lossy(&sent[0]),
-        format!(
-            "GET http://short.weixin.qq.com/ HTTP/1.1\r\n{FIELDS}Host: short.weixin.qq.com\r\n\r\n"
-        )
+        format!("GET http://short.weixin.qq.com/ HTTP/1.1\r\n{FIELDS}\r\n")
     );
 }
 

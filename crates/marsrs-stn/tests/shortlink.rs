@@ -42,14 +42,9 @@ fn request_of(task: &Task, profile: &ConnectProfile, body: &[u8]) -> Vec<u8> {
     pack(&url, &headers, body)
 }
 
-/// The five fields mars writes for itself, in its order, and the empty line
-/// that ends the head.
-const FIELDS: &str = "Accept: */*\r\n\
-                      User-Agent: MicroMessenger Client\r\n\
-                      Cache-Control: no-cache\r\n\
-                      Content-Type: application/octet-stream\r\n\
-                      Connection: close\r\n";
-
+/// `request_of` — the head the C++ writes, whose fields come out of a map
+/// ordered by name and not in the order the packer set them, and then the body
+/// of the task.
 #[test]
 fn a_short_link_task_goes_out_as_a_post_of_its_cgi() {
     let (task, profile) = a_task();
@@ -57,14 +52,16 @@ fn a_short_link_task_goes_out_as_a_post_of_its_cgi() {
 
     assert_eq!(
         String::from_utf8_lossy(&request),
-        format!(
-            "POST /cgi-bin/micromsg-bin/short HTTP/1.1\r\n\
-             {FIELDS}\
-             Content-Length: 5\r\n\
-             Host: short.weixin.qq.com\r\n\
-             \r\n\
-             hello"
-        )
+        "POST /cgi-bin/micromsg-bin/short HTTP/1.1\r\n\
+         Accept: */*\r\n\
+         Cache-Control: no-cache\r\n\
+         Connection: close\r\n\
+         Content-Length: 5\r\n\
+         Content-Type: application/octet-stream\r\n\
+         Host: short.weixin.qq.com\r\n\
+         User-Agent: MicroMessenger Client\r\n\
+         \r\n\
+         hello"
     );
 }
 
@@ -75,13 +72,15 @@ fn a_task_of_no_body_goes_out_as_a_head_that_says_so() {
 
     assert_eq!(
         String::from_utf8_lossy(&request),
-        format!(
-            "POST /cgi-bin/micromsg-bin/short HTTP/1.1\r\n\
-             {FIELDS}\
-             Content-Length: 0\r\n\
-             Host: short.weixin.qq.com\r\n\
-             \r\n"
-        ),
+        "POST /cgi-bin/micromsg-bin/short HTTP/1.1\r\n\
+         Accept: */*\r\n\
+         Cache-Control: no-cache\r\n\
+         Connection: close\r\n\
+         Content-Length: 0\r\n\
+         Content-Type: application/octet-stream\r\n\
+         Host: short.weixin.qq.com\r\n\
+         User-Agent: MicroMessenger Client\r\n\
+         \r\n",
         "the C++ writes the head and then whatever the body is, which is nothing"
     );
 }
@@ -95,15 +94,17 @@ fn a_task_that_goes_through_a_proxy_asks_for_the_whole_url() {
     let request = request_of(&task, &profile, b"hello");
     assert_eq!(
         String::from_utf8_lossy(&request),
-        format!(
-            "POST http://short.weixin.qq.com/cgi-bin/micromsg-bin/short HTTP/1.1\r\n\
-             {FIELDS}\
-             Content-Length: 5\r\n\
-             Host: short.weixin.qq.com\r\n\
-             Proxy-Authorization: Basic bWFyczpzZWNyZXQ=\r\n\
-             \r\n\
-             hello"
-        ),
+        "POST http://short.weixin.qq.com/cgi-bin/micromsg-bin/short HTTP/1.1\r\n\
+         Accept: */*\r\n\
+         Cache-Control: no-cache\r\n\
+         Connection: close\r\n\
+         Content-Length: 5\r\n\
+         Content-Type: application/octet-stream\r\n\
+         Host: short.weixin.qq.com\r\n\
+         Proxy-Authorization: Basic bWFyczpzZWNyZXQ=\r\n\
+         User-Agent: MicroMessenger Client\r\n\
+         \r\n\
+         hello",
         "a proxy is asked for the whole url, and logged in to"
     );
 }

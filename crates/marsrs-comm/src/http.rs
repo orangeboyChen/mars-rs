@@ -23,6 +23,7 @@
 //! keeps the raw bytes in a `std::string`, and no header of mars' is anything
 //! but ASCII.
 
+use std::cmp::Ordering;
 use std::fmt;
 
 use crate::strutil;
@@ -365,9 +366,10 @@ impl Header {
 /// `HeaderFields` — the head of a request or an answer.
 ///
 /// The C++ keeps them in a `std::map` with a case-insensitive comparator, which
-/// is a list here: the names are compared the same way, and what the map's
-/// order gave it — a head that comes out sorted by name — is what insertion
-/// order gives as well for every head mars writes.
+/// is a list here that is held in the order that map holds its entries: by
+/// name, with neither name's case in the way, and one entry per name. A head
+/// therefore comes out sorted by name whatever order the fields were set in,
+/// which is what the C++'s `ToString` and `GetAsList` both give.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HeaderFields {
     headers: Vec<Header>,
@@ -379,16 +381,18 @@ impl HeaderFields {
         Self::default()
     }
 
-    /// `HeaderFiled(name, value)` — a field that is not there yet is added, and
-    /// one that is keeps its name and gets the new value.
+    /// `HeaderFiled(name, value)` — a field that is not there yet goes in where
+    /// the C++'s `std::map` would hold it, and one that is there keeps its name
+    /// — and so its place — and gets the new value.
     pub fn set(&mut self, name: &str, value: &str) {
         match self
             .headers
-            .iter_mut()
-            .find(|header| header.name.eq_ignore_ascii_case(name))
+            .binary_search_by(|header| compare_names(&header.name, name))
         {
-            Some(header) => header.value = value.to_string(),
-            None => self.headers.push(Header::new(name, value)),
+            Ok(at) => self.headers[at].value = value.to_string(),
+            // a name that is not there yet goes in where the map would hold
+            // it, which is what puts the head in the C++'s order
+            Err(at) => self.headers.insert(at, Header::new(name, value)),
         }
     }
 
@@ -417,7 +421,8 @@ impl HeaderFields {
             .map(|header| header.value.as_str())
     }
 
-    /// `GetAsList()` — the fields, in the order they were set.
+    /// `GetAsList()` — the fields, in the order the C++'s map holds them: by
+    /// name, and neither name's case in the way.
     pub fn headers(&self) -> &[Header] {
         &self.headers
     }
@@ -588,7 +593,8 @@ impl HeaderFields {
 }
 
 impl fmt::Display for HeaderFields {
-    /// `ToString` — `name: value` per line, in the order they were set.
+    /// `ToString` — `name: value` per line, in the order the fields are held:
+    /// by name, and neither name's case in the way.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for header in &self.headers {
             write!(f, "{}: {}{}", header.name, header.value, CRLF)?;
@@ -1099,6 +1105,15 @@ impl Parser {
     }
 }
 
+/// `less` — how the C++'s `std::map` orders two names, which is `strcasecmp`:
+/// byte by byte, and neither name's case in the way.
+fn compare_names(left: &str, right: &str) -> Ordering {
+    left.as_bytes()
+        .iter()
+        .map(u8::to_ascii_lowercase)
+        .cmp(right.as_bytes().iter().map(u8::to_ascii_lowercase))
+}
+
 /// `string_strnstr` — where `needle` starts in `buffer`, which is `None` when
 /// it is not wholly in it.
 fn find(buffer: &[u8], needle: &str) -> Option<usize> {
@@ -1264,20 +1279,82 @@ mod tests {
     }
 
     #[test]
-    fn the_head_is_written_in_the_order_it_was_set() {
+    fn the_head_is_written_in_the_order_of_its_names() {
         let mut fields = HeaderFields::new();
-        fields.set_accept_all();
         fields.set_connection_close();
+        fields.set_accept_all();
         assert_eq!(fields.to_string(), "Accept: */*\r\nConnection: close\r\n");
         assert!(fields.is_connection_close());
         assert!(!fields.is_connection_keep_alive());
         assert!(!fields.is_chunked());
+
+        // the five of a short link, set in the order `shortlink_pack` sets
+        // them, and written in the order the C++'s map holds them
+        let mut short_link = HeaderFields::new();
+        short_link.set_accept_all();
+        short_link.set_user_agent_micro_message();
+        short_link.set_cache_control_no_cache();
+        short_link.set_content_type_octet_stream();
+        short_link.set_connection_close();
+        assert_eq!(
+            short_link.to_string(),
+            "Accept: */*\r\n\
+             Cache-Control: no-cache\r\n\
+             Connection: close\r\n\
+             Content-Type: application/octet-stream\r\n\
+             User-Agent: MicroMessenger Client\r\n"
+        );
+        // ... which is the order a caller reads them back in too, the C++'s
+        // `GetAsList` walking the same map
+        let names: Vec<&str> = short_link
+            .headers()
+            .iter()
+            .map(|header| header.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [ACCEPT, CACHE_CONTROL, CONNECTION, CONTENT_TYPE, USER_AGENT]
+        );
 
         fields.set_chunked();
         assert!(fields.is_chunked());
         // whatever way it was written
         fields.set(TRANSFER_ENCODING, "CHUNKED");
         assert!(fields.is_chunked());
+    }
+
+    #[test]
+    fn the_order_of_the_names_is_the_order_of_neither_of_their_cases() {
+        let mut fields = HeaderFields::new();
+        fields.set("host", "short.example");
+        fields.set("CONTENT-LENGTH", "5");
+        fields.set("Accept", ACCEPT_ALL);
+
+        // `strcasecmp` puts them in this order, and each name goes out written
+        // the way it was set
+        assert_eq!(
+            fields.to_string(),
+            "Accept: */*\r\nCONTENT-LENGTH: 5\r\nhost: short.example\r\n"
+        );
+        assert_eq!(fields.content_length(), 5, "whichever way it is written");
+    }
+
+    #[test]
+    fn a_name_that_is_set_twice_keeps_the_one_it_was_first_written_as() {
+        let mut fields = HeaderFields::new();
+        fields.set(USER_AGENT, USER_AGENT_MICRO_MESSAGE);
+        fields.set(CONTENT_TYPE, OCTET_STREAM);
+        fields.set("user-agent", "other");
+
+        // the C++'s `headers_[name] = value` leaves the key alone, so what the
+        // second write changes is the value: one line, in the place the first
+        // name sorted to, and spelled the way it was first written
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields.get("USER-AGENT"), Some("other"));
+        assert_eq!(
+            fields.to_string(),
+            "Content-Type: application/octet-stream\r\nUser-Agent: other\r\n"
+        );
     }
 
     #[test]

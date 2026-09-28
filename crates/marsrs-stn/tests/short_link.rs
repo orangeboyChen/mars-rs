@@ -23,13 +23,17 @@ use marsrs_stn::{
 /// The reading the whole test runs on: the C++'s `gettickcount()`.
 const NOW: u64 = 1000;
 
-/// The five fields mars writes for itself, in its order, and the empty line that
-/// ends the head.
+/// The fields a short link puts on the wire, which is not the order it sets
+/// them in: its `HeaderFields` is a map ordered by name. `Content-Length`
+/// sorts in between `Connection` and `Content-Type`, and a `Proxy-Authorization`
+/// in between `Host` and `User-Agent`.
 const FIELDS: &str = "Accept: */*\r\n\
-                      User-Agent: MicroMessenger Client\r\n\
                       Cache-Control: no-cache\r\n\
+                      Connection: close\r\n\
+                      Content-Length: 5\r\n\
                       Content-Type: application/octet-stream\r\n\
-                      Connection: close\r\n";
+                      Host: short.weixin.qq.com\r\n\
+                      User-Agent: MicroMessenger Client\r\n";
 
 /// What the host was asked for, and what it answers with.
 #[derive(Clone, Default)]
@@ -264,8 +268,6 @@ fn a_task_goes_out_on_the_pair_dns_gave() {
         format!(
             "POST /cgi-bin/micromsg-bin/short HTTP/1.1\r\n\
              {FIELDS}\
-             Content-Length: 5\r\n\
-             Host: short.weixin.qq.com\r\n\
              \r\n\
              hello"
         )
@@ -300,15 +302,17 @@ fn a_task_that_goes_through_an_http_proxy_asks_for_the_whole_url() {
     );
     assert_eq!(
         String::from_utf8_lossy(&request_of(profile, link.task())),
-        format!(
-            "POST http://short.weixin.qq.com/cgi-bin/micromsg-bin/short HTTP/1.1\r\n\
-             {FIELDS}\
-             Content-Length: 5\r\n\
-             Host: short.weixin.qq.com\r\n\
-             Proxy-Authorization: Basic bWFyczpzZWNyZXQ=\r\n\
-             \r\n\
-             hello"
-        ),
+        "POST http://short.weixin.qq.com/cgi-bin/micromsg-bin/short HTTP/1.1\r\n\
+         Accept: */*\r\n\
+         Cache-Control: no-cache\r\n\
+         Connection: close\r\n\
+         Content-Length: 5\r\n\
+         Content-Type: application/octet-stream\r\n\
+         Host: short.weixin.qq.com\r\n\
+         Proxy-Authorization: Basic bWFyczpzZWNyZXQ=\r\n\
+         User-Agent: MicroMessenger Client\r\n\
+         \r\n\
+         hello",
         "a proxy is asked for the whole url, and logged in to"
     );
 

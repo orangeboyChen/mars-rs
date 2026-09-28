@@ -10,8 +10,9 @@ use marsrs_comm::http::{
     Body, Builder, CsMode, Method, Parser, RecvStatus, RequestLine, StatusLine, Version,
 };
 
-/// `shortlink_pack` — the head the C++ writes, in the order it writes it, and
-/// then the body of the task.
+/// `shortlink_pack` — the fields the C++ sets, which is not the order they
+/// come out in: its `HeaderFields` is a map ordered by name, and neither name's
+/// case is in the way.
 fn a_request() -> Builder {
     let mut builder = Builder::new(CsMode::Request);
     *builder.request_mut() =
@@ -27,10 +28,21 @@ fn a_request() -> Builder {
 
 const HEAD: &str = "POST /cgi-bin/micromsg-bin/short HTTP/1.1\r\n\
                     Accept: */*\r\n\
-                    User-Agent: MicroMessenger Client\r\n\
                     Cache-Control: no-cache\r\n\
+                    Connection: close\r\n\
                     Content-Type: application/octet-stream\r\n\
-                    Connection: close\r\n";
+                    User-Agent: MicroMessenger Client\r\n";
+
+/// The same head as [`HEAD`] with the `Content-Length` a body of five bytes is
+/// given, which sorts in between `Connection` and `Content-Type` and not at the
+/// end of the head.
+const HEAD_OF_FIVE_BYTES: &str = "POST /cgi-bin/micromsg-bin/short HTTP/1.1\r\n\
+                    Accept: */*\r\n\
+                    Cache-Control: no-cache\r\n\
+                    Connection: close\r\n\
+                    Content-Length: 5\r\n\
+                    Content-Type: application/octet-stream\r\n\
+                    User-Agent: MicroMessenger Client\r\n";
 
 #[test]
 fn a_short_link_request_is_its_head_and_its_body() {
@@ -40,7 +52,7 @@ fn a_short_link_request_is_its_head_and_its_body() {
     let request = builder.to_buffer().unwrap();
     assert_eq!(
         String::from_utf8_lossy(&request),
-        format!("{HEAD}Content-Length: 5\r\n\r\nhello")
+        format!("{HEAD_OF_FIVE_BYTES}\r\nhello")
     );
     // the head on its own, which is what a body of no bytes is
     let head_only = a_request();
