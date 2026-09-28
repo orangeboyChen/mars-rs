@@ -114,6 +114,23 @@ fn a_record_no_key_can_be_derived_for_leaves_its_marker_behind() {
     assert!(text.contains("after\n"), "{text}");
 }
 
+/// A file made of nothing but a record whose body will not inflate still holds
+/// a record: what the walk answers is that record's marker, and not an error
+/// saying no record was found.
+#[test]
+fn a_file_of_one_unreadable_record_is_that_marker() {
+    let bytes = record(
+        magic::ASYNC_NOCRYPT_ZSTD_START,
+        &[0; CLIENT_PUBKEY_LEN],
+        b"not a zstd frame",
+    );
+
+    let plain = marsrs_xlog::decode_records(&bytes, None).expect("a record was found");
+    let text = String::from_utf8_lossy(&plain);
+
+    assert!(text.contains("zstd decompress error"), "{text}");
+}
+
 /// Nothing behind the damage is a record either, which is the one case there
 /// is nothing to go on to: the reason is what the caller gets.
 #[test]

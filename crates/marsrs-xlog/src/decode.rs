@@ -141,11 +141,14 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
                 None => break Some(reason),
             },
             // The record is whole, so the walk goes on at the one behind it —
-            // its marker is the text it would have carried.
+            // its marker is the text it would have carried. It counts as a
+            // record found: a file of nothing but records like this one is a
+            // file the decoder read, and not a file with no record in it.
             Err(Failure::Unreadable(marker, next)) => {
                 plain.extend_from_slice(marker.as_bytes());
                 plain.push(b'\n');
                 offset = next;
+                blocks += 1;
             }
             Err(Failure::Fatal(reason)) => break Some(reason),
         }
