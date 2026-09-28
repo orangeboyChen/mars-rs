@@ -1,6 +1,6 @@
 //! `mars/stn/src/proxy_test.cc` — whether a proxy is one a task can go through.
 //!
-//! The C++ asks one question of a proxy — `ProxyIsAvailable` — and answers it by
+//! The C++ asks one question of a proxy— `ProxyIsAvailable`— and answers it by
 //! going through it: it connects (to the proxy itself when it is an http one,
 //! and to the host the test is about *through* it when it is not), writes one
 //! `GET`, and reads the status of whatever comes back. [`ProxyTest::test`] is
@@ -9,13 +9,14 @@
 //! 497, or a redirect.
 //!
 //! The run is a short link's own, and two things are not the short link's: the
-//! request is a `GET` of `/` — of `http://host/` when the proxy is an http one,
-//! which is asked for the whole url — and what comes back is judged on its
+//! request is a `GET` of`/`— of `http://host/` when the proxy is an http one,
+//! which is asked for the whole url— and what comes back is judged on its
 //! status alone, with no body to answer a task with. The connect is the long
-//! link's: `ComplexConnect` with the long link's timeout and interval, which the
-//! port hands the operator as [`SocketOperator::set_ip_connection_timeout`] —
-//! both address families get the long link's budget, which is what the C++
-//! gives the connect; its address interval has no slot here.
+//! link's: `ComplexConnect` with the long link's timeout and interval, which
+//! the port hands the operator as
+//! [`SocketOperator::set_ip_connection_timeout`]— both address families get the
+//! long link's budget, which is what the C++ gives the connect; its address
+//! interval has no slot here.
 //!
 //! The reads of the answer are an argument, as they are everywhere else in this
 //! crate: [`ProxyTest::test`] is the C++'s `while (true)` loop, and what it is
@@ -123,8 +124,10 @@ impl ProxyTest {
         self.operator = Some(Box::new(operator));
     }
 
-    /// `DnsUtil::GetDNS().GetHostByName(_host)` — how a proxy, or the host under
-    /// test, named by host is reached.
+    /// `DnsUtil::GetDNS().GetHostByName(_host)` — the ips of a proxy that was
+    /// named by host, and of the host under test when it was. Unset, a proxy
+    /// named by host is one the test cannot reach, and a host is one with
+    /// nowhere to go.
     pub fn set_dns(&mut self, dns: impl FnMut(&str) -> Vec<String> + Send + 'static) {
         self.dns = Some(Box::new(dns));
     }
@@ -239,9 +242,9 @@ impl ProxyTest {
             return None;
         }
 
-        // the proxy the operator is given is the one dns named, not the host the
-        // app told it about; a tunnel or a socks5 one is connected *through*,
-        // which the operator decides from the proxy itself
+        // the proxy the operator is given is the one dns named, not the host
+        // the app told it about; a tunnel or a socks5 one is connected
+        // *through*, which the operator decides from the proxy itself
         let connect_proxy = match &proxy_ip {
             Some(ip) => ProxyInfo {
                 ip: ip.clone(),
@@ -298,9 +301,9 @@ impl ProxyTest {
     /// The read loop of `__ReadWrite` — one read at a time until the answer is
     /// whole, or until the socket says it will not be.
     ///
-    /// What the loop ends with is the status of the answer as far as it came in:
-    /// a first line is enough to say one, which is why a socket that hung up
-    /// after it still leaves the test with the status it read.
+    /// What the loop ends with is the status of the answer as far as it came
+    /// in: a first line is enough to say one, which is why a socket that hung
+    /// up after it still leaves the test with the status it read.
     ///
     /// The socket the C++ hands `block_socket_recv` is not one here: the reads
     /// are an argument, so there is nothing to read from.
@@ -454,8 +457,8 @@ mod tests {
         }
     }
 
-    /// The host's sockets: the numbers it hands out, and what it was asked to do
-    /// with them.
+    /// The host's sockets: the numbers it hands out, and what it was asked to
+    /// do with them.
     struct Host {
         seen: Seen,
         next: i64,
@@ -554,8 +557,8 @@ mod tests {
         }
     }
 
-    /// A test on the host's sockets, wired to the dns above and to a log of what
-    /// the host was asked for.
+    /// A test on the host's sockets, wired to the dns above and to a log of
+    /// what the host was asked for.
     fn test_of(seen: &Seen) -> ProxyTest {
         let mut test = ProxyTest::new();
         test.set_socket_operator(Host::new(seen.clone()));
