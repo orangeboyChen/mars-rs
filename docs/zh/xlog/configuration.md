@@ -44,6 +44,21 @@ HarmonyOS 那一列也是 Kotlin 的拼法，只是大小写不同：`LogLevel.V
 
 `none` 什么都不写，连 `fatal` 也不写 —— 想让 appender 安静下来又不关掉它，用这个。
 
+assert 是唯一不受级别管的一条记录：不管 appender 开在哪一级，它都按 `fatal` 写进去
+—— assert 是写给崩溃看的，不是写给日志看的。
+
+::: code-group
+
+```rust [Rust]
+marsrs::xlog::xlogger_assert(None, "fd >= 0", "socket 已经关掉了");
+```
+
+```c [C]
+mars_xlog_assert("net", __FILE__, __func__, __LINE__, "fd >= 0", "socket 已经关掉了");
+```
+
+:::
+
 构造起来很贵的消息值得先问一句：被级别挡掉的记录也是一样 —— 那串字符串你已经拼好了。
 
 ::: code-group

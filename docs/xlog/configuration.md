@@ -49,6 +49,22 @@ HarmonyOS is the Kotlin spelling in a different case: `LogLevel.Verbose` and not
 `none` writes nothing, not even `fatal` — it is how an appender is quieted
 without being closed.
 
+An assert is the one record the level does not gate: it is written at `fatal`
+whatever the appender's level is, because what an assert is for is the crash,
+and not the log.
+
+::: code-group
+
+```rust [Rust]
+marsrs::xlog::xlogger_assert(None, "fd >= 0", "the socket was already closed");
+```
+
+```c [C]
+mars_xlog_assert("net", __FILE__, __func__, __LINE__, "fd >= 0", "the socket was already closed");
+```
+
+:::
+
 A message that is expensive to build is worth asking about first, because a
 record the level drops still costs the caller the string:
 
