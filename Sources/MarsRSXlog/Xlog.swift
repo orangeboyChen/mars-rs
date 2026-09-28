@@ -23,6 +23,12 @@
 //
 // Every call is a straight translation of a symbol in the header; nothing here
 // adds behaviour the C ABI does not have.
+//
+// The class and every member an app reaches are `@objc`, and `Xlog` is an
+// `NSObject`: an app written in Objective-C takes the port through
+// `[[Xlog alloc] initWithConfig:error:]`, and the `Xlog` it writes is the one
+// the compiler writes out of this file, into `MarsRSXlog-Swift.h`. There is no
+// Objective-C source in the port — the linkage is Swift's.
 
 import Foundation
 
@@ -60,12 +66,13 @@ import Foundation
 /// Two `Xlog`s of one `namePrefix` are one appender: the C ABI answers the
 /// handle it already has, so closing one of them closes what the other writes
 /// through.
-public final class Xlog {
+@objc
+public final class Xlog: NSObject {
     /// What every file of this appender starts with, and what it is known by.
-    public let namePrefix: String
+    @objc public let namePrefix: String
 
     /// Whether this appender is still open: `false` after [close()].
-    public var isOpen: Bool {
+    @objc public var isOpen: Bool {
         handle != Self.noHandle
     }
 
@@ -73,7 +80,7 @@ public final class Xlog {
     ///
     /// Read from the C ABI and not mirrored here, so a level another part of
     /// the app set is the one this answers with.
-    public var level: LogLevel {
+    @objc public var level: LogLevel {
         get {
             // `-1` is what `mars_xlog_get_level` answers for a handle that is
             // not one, and it is `(TLogLevel)-1`, the C++'s "log everything".
@@ -87,7 +94,7 @@ public final class Xlog {
     /// Whether a write reaches the file before it returns: what the
     /// `XlogConfig` gave, until this says otherwise. The C ABI has no getter
     /// for it, so this is the last value this side wrote.
-    public var mode: AppenderMode {
+    @objc public var mode: AppenderMode {
         get {
             currentMode
         }
@@ -98,7 +105,7 @@ public final class Xlog {
     }
 
     /// Whether the console prints the log too — off until an app turns it on.
-    public var isConsoleLogEnabled: Bool = false {
+    @objc public var isConsoleLogEnabled: Bool = false {
         didSet {
             withHandle { mars_xlog_set_console_log_instance($0, isConsoleLogEnabled ? 1 : 0) }
         }
@@ -106,14 +113,14 @@ public final class Xlog {
 
     /// How many bytes a log file may reach before it is closed and a new one
     /// opened; `0` is "never split".
-    public var maxFileSizeBytes: UInt64 = 0 {
+    @objc public var maxFileSizeBytes: UInt64 = 0 {
         didSet {
             withHandle { mars_xlog_set_max_file_size_instance($0, maxFileSizeBytes) }
         }
     }
 
     /// How many seconds a log file is kept; `0` is the C++'s own ten days.
-    public var maxAliveTimeSeconds: Int64 = 0 {
+    @objc public var maxAliveTimeSeconds: Int64 = 0 {
         didSet {
             withHandle { mars_xlog_set_max_alive_duration_instance($0, maxAliveTimeSeconds) }
         }
@@ -121,6 +128,7 @@ public final class Xlog {
 
     /// Whether a record of `level` would be written: what an app asks before it
     /// builds a message that is expensive to build.
+    @objc
     public func isEnabled(for level: LogLevel) -> Bool {
         guard isOpen else {
             return false
@@ -129,6 +137,10 @@ public final class Xlog {
     }
 
     /// Writes a record of `level`.
+    ///
+    /// `file`, `function` and `line` come from the call site in Swift, and are
+    /// written out by the caller in Objective-C.
+    @objc
     public func log(
         _ level: LogLevel,
         message: String,
@@ -145,6 +157,21 @@ public final class Xlog {
         withCStrings(first: tag, second: file, third: function, fourth: message) { cTag, cFile, cFunction, cMessage in
             mars_xlog_write_instance(handle, level.rawValue, cTag, cFile, cFunction, line, cMessage)
         }
+    }
+
+    /// Writes a record of `level` the way Objective-C writes one:
+    /// `[log writeWithLevel:message:tag:]`.
+    ///
+    /// Swift writes [log(_:message:tag:file:function:line:)], which fills the
+    /// file, the function and the line in at the call site; Objective-C has no
+    /// default argument to fill in and no `#file` to fill one with, so a record
+    /// written here carries an empty file, an empty function and the line 0 —
+    /// what the C ABI does with them. Where a record was written goes *in* the
+    /// record through [log(_:message:tag:file:function:line:)], which is where
+    /// `__FILE__`, `__PRETTY_FUNCTION__` and `__LINE__` go.
+    @objc(writeWithLevel:message:tag:)
+    public func write(_ level: LogLevel, message: String, tag: String) {
+        log(level, message: message, tag: tag, file: "", function: "", line: 0)
     }
 
     /// `LogLevel.verbose`.
@@ -220,6 +247,7 @@ public final class Xlog {
     /// - Parameter sync: `true` drains on the calling thread, which is what an
     ///                   app wants before it reads or uploads the files;
     ///                   `false` asks the writer thread to do it and returns.
+    @objc
     public func flush(sync: Bool = false) {
         guard isOpen else {
             return
@@ -230,6 +258,7 @@ public final class Xlog {
     /// Closes this appender: drains what is left and drops it. Writing through
     /// this `Xlog` afterwards writes nothing, and asking the C ABI for this
     /// `namePrefix` answers `0`. Safe to call twice.
+    @objc
     public func close() {
         guard isOpen else {
             return
@@ -253,14 +282,14 @@ public final class Xlog {
     /// The path of the file the *process-wide* appender is writing — the one
     /// `mars_xlog_open` opens, not the one of an `Xlog` — or `nil` when there is
     /// no open file (or the buffer was too small, which 1024 bytes never is).
-    public static var currentLogPath: String? {
+    @objc public static var currentLogPath: String? {
         path(of: mars_xlog_current_log_path)
     }
 
     /// `mars_xlog_current_log_cache_path`: the cache file of the process-wide
     /// appender. An `Xlog` of its own keeps its cache in its `XlogConfig`'s
     /// `cacheDirectory ?? logDirectory`.
-    public static var currentCachePath: String? {
+    @objc public static var currentCachePath: String? {
         path(of: mars_xlog_current_log_cache_path)
     }
 
@@ -279,13 +308,16 @@ public final class Xlog {
     /// - Parameter config: what to open it with.
     /// - Returns: the appender `config` asked for.
     /// - Throws: `XlogError` when the config is one the C ABI refuses, which is
-    ///           what an empty log directory comes to.
+    ///           what an empty log directory comes to. Objective-C reads the
+    ///           same thing out of the `NSError` it hands in.
     public static func open(_ config: XlogConfig) throws -> Xlog {
         try Xlog(config)
     }
 
     /// `Xlog.open(_:)`, as a constructor: the same appender, and the same
-    /// `XlogError` for a configuration the C ABI refuses.
+    /// `XlogError` for a configuration the C ABI refuses — which Objective-C
+    /// reads out of the `NSError` it hands in.
+    @objc(initWithConfig:error:)
     public init(_ config: XlogConfig) throws {
         guard !config.logDirectory.isEmpty else {
             throw XlogError.emptyLogDirectory
@@ -375,25 +407,5 @@ public final class Xlog {
             return nil
         }
         return String(cString: buffer)
-    }
-}
-
-/// The C strings a call needs, valid for the length of the closure: the C ABI
-/// copies what it needs out of them before it answers.
-private func withCStrings<R>(
-    first: String,
-    second: String,
-    third: String,
-    fourth: String,
-    body: (UnsafePointer<CChar>, UnsafePointer<CChar>, UnsafePointer<CChar>, UnsafePointer<CChar>) -> R
-) -> R {
-    first.withCString { firstPointer in
-        second.withCString { secondPointer in
-            third.withCString { thirdPointer in
-                fourth.withCString { fourthPointer in
-                    body(firstPointer, secondPointer, thirdPointer, fourthPointer)
-                }
-            }
-        }
     }
 }

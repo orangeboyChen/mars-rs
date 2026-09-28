@@ -21,6 +21,14 @@ cargo add marsrs-xlog     # xlog alone — the logger and nothing else
 .product(name: "MarsRSXlog", package: "mars-rs")
 ```
 
+```ruby [CocoaPods]
+# Podfile
+platform :ios, '12.0'
+use_frameworks!
+
+pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/v0.1.0/MarsRSXlog.podspec'
+```
+
 ```kotlin [Android]
 // settings.gradle.kts
 maven { url = uri("https://jitpack.io") }

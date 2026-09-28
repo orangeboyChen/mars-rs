@@ -4,6 +4,9 @@ name: Release
 #
 #   * marsrs-xlog.xcframework.zip   -> the xlog binary target of Package.swift
 #   * marsrs-net.xcframework.zip    -> the net one (the diagnosis and the tasks)
+#   * marsrs-cocoapods-xlog-<version>.zip -> the `MarsRSXlog` pod: the xlog
+#                                     framework and the Swift of its module
+#   * marsrs-cocoapods-net-<version>.zip  -> the `MarsRSNet` pod, the same pair
 #   * marsrs.aar                 -> JitPack: io.github.orangeboychen.marsrs:marsrs
 #   * xlog.aar                   -> JitPack: io.github.orangeboychen.marsrs:xlog
 #   * marsrs-android-native.zip  -> the .so files, for a consumer's own AAR
@@ -34,6 +37,12 @@ name: Release
 # A package a registry has never seen has no settings to put a trusted publisher
 # in, so its first version is published by hand and the release says so rather
 # than fail. `CARGO_REGISTRY_TOKEN` is the one credential left, in `crates`.
+#
+# The two CocoaPods pods are the same shape, one step short of it: packaged on
+# every release and published nowhere, because `pod trunk push` takes a token of
+# the CocoaPods trunk and this repository does not have one. What an app names
+# is the podspec of the tag, and what the podspec names is the asset of the
+# release — see the `cocoapods` job.
 #
 # Everything this port packages itself is named `marsrs`, the way the crates
 # are: the two AARs, the archives a consumer downloads, and the group of the
@@ -74,11 +83,11 @@ name: Release
 # workflow_dispatch only: the tag is created by this workflow itself, so
 # pushing one never re-triggers a run.
 #
-# Package.swift is updated on a topic branch and proposed as a pull request —
-# the default branch refuses direct pushes (GH013), the same as in
-# orangeboyChen/mars. The tag and the release are published from that branch's
-# commit, so the new Package.swift resolves at the tag whether or not the PR
-# has been merged yet.
+# Package.swift and the three podspecs are updated on a topic branch and
+# proposed as a pull request — the default branch refuses direct pushes
+# (GH013), the same as in orangeboyChen/mars. The tag and the release are
+# published from that branch's commit, so the new Package.swift resolves at the
+# tag whether or not the PR has been merged yet.
 
 on:
   workflow_dispatch:
@@ -220,6 +229,65 @@ jobs:
           path: |
             dist/${{ env.XCFRAMEWORK_ZIP }}
             dist/${{ env.XCFRAMEWORK_NET_ZIP }}
+
+  # The CocoaPods pods: one zip per pod that carries a binary, each holding the
+  # framework and the Swift of its module, because a pod has one `source` and it
+  # is the only thing `pod install` fetches — see
+  # scripts/package_cocoapods.sh. `MarsRS` is not packaged here: it carries no
+  # framework of its own, so what `pod install` reads for it is the git tag.
+  cocoapods:
+    needs: [version, apple]
+    if: needs.version.outputs.skip != 'true'
+    runs-on: macos-15
+    env:
+      # The names `scripts/package_cocoapods.sh` writes, and the assets the two
+      # podspecs name: a pod is downloaded by the version it is.
+      POD_XLOG_ZIP: marsrs-cocoapods-xlog-${{ needs.version.outputs.version }}.zip
+      POD_NET_ZIP: marsrs-cocoapods-net-${{ needs.version.outputs.version }}.zip
+    steps:
+      - uses: actions/checkout@v7
+      # CocoaPods is on the image and not installed here, and what it is is worth
+      # knowing when a lint says something a newer one would not.
+      - name: Show the CocoaPods version
+        run: pod --version
+      - name: Collect the xcframeworks
+        uses: actions/download-artifact@v8
+        with:
+          name: release-apple
+          path: dist
+      - name: Package the pods
+        run: scripts/package_cocoapods.sh "${{ needs.version.outputs.version }}" dist
+      - name: Prove a pod builds
+        # `pod lib lint` compiles the pod's Swift against the framework it
+        # vendors, in an app it generates — the only check a podspec ever gets,
+        # and the proof that an app's Xcode can build what the pod hands it. It
+        # needs no release to run: linting a pod does not fetch its `source`, so
+        # the url this run has not published yet is not something it can fail on.
+        #
+        # iOS only, and not the watchos the pod declares as well: the app lint
+        # generates builds the watchOS simulator for arm64 *and* x86_64, and the
+        # framework's watchOS simulator slice is arm64 alone — there is no
+        # x86_64 watchOS simulator among the Rust targets it is built from — so
+        # a watchOS lint has no slice to select and fails on that rather than on
+        # the pod. An app of either platform compiles the same two things.
+        run: |
+          set -euo pipefail
+          for PAIR in "$POD_XLOG_ZIP:MarsRSXlog" "$POD_NET_ZIP:MarsRSNet"; do
+            ZIP="${PAIR%%:*}"
+            POD="${PAIR##*:}"
+            DIR="target/pod-lint/$POD"
+            rm -rf "$DIR"
+            mkdir -p "$DIR"
+            unzip -q "dist/$ZIP" -d "$DIR"
+            cp "$POD.podspec" "$DIR/"
+            (cd "$DIR" && pod lib lint "$POD.podspec" --platforms=ios)
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-cocoapods
+          path: |
+            dist/${{ env.POD_XLOG_ZIP }}
+            dist/${{ env.POD_NET_ZIP }}
 
   android:
     needs: version
@@ -755,7 +823,7 @@ jobs:
           path: dist/marsrs-harmony-*.tar.gz
 
   publish:
-    needs: [version, apple, android, host, cli, kmp, plugins, harmony]
+    needs: [version, apple, cocoapods, android, host, cli, kmp, plugins, harmony]
     if: needs.version.outputs.skip != 'true'
     # macOS so that the checksum is the one SwiftPM itself computes, the same
     # way orangeboyChen/mars does it
@@ -778,7 +846,7 @@ jobs:
           echo "xlog=$(swift package compute-checksum "dist/$XCFRAMEWORK_ZIP")" >> "$GITHUB_OUTPUT"
           echo "net=$(swift package compute-checksum "dist/$XCFRAMEWORK_NET_ZIP")" >> "$GITHUB_OUTPUT"
 
-      - name: Point Package.swift at this release
+      - name: Point Package.swift and the podspecs at this release
         if: needs.version.outputs.is_new == 'true'
         id: package
         env:
@@ -798,8 +866,11 @@ jobs:
           # .github/scripts/update_package_swift.py.
           python3 .github/scripts/update_package_swift.py "$TAG" "$CHECKSUM" "$XCFRAMEWORK_ZIP" \
                      "$CHECKSUM_NET" "$XCFRAMEWORK_NET_ZIP"
+          # The three pods, at the version of this release: what a podspec names
+          # is the asset `pod install` downloads, which is this run's.
+          python3 .github/scripts/update_podspecs.py "$TAG"
 
-          git commit -am "chore: point Package.swift at $TAG"
+          git commit -am "chore: point Package.swift and the podspecs at $TAG"
           # force: rerunning the same version reuses the branch and its PR
           git push --force origin "$BRANCH"
 
@@ -808,17 +879,19 @@ jobs:
             PR_URL=$(gh pr create \
               --base "${{ github.ref_name }}" \
               --head "$BRANCH" \
-              --title "chore: point Package.swift at $TAG" \
-              --body "Automated release change: \`Package.swift\` now points at \`$TAG\`.
+              --title "chore: point Package.swift and the podspecs at $TAG" \
+              --body "Automated release change: \`Package.swift\` and the three podspecs now point at \`$TAG\`.
 
           | | |
           |---|---|
           | tag | \`$TAG\` |
           | $XCFRAMEWORK_ZIP | \`$CHECKSUM\` |
           | $XCFRAMEWORK_NET_ZIP | \`$CHECKSUM_NET\` |
+          | MarsRSXlog, MarsRSNet | \`marsrs-cocoapods-{xlog,net}-${TAG#v}.zip\` |
 
           The release and the \`$TAG\` tag are published from this branch, so SPM
-          resolves the new \`Package.swift\` from the tag. Merging only keeps
+          resolves the new \`Package.swift\` from the tag and \`pod install\`
+          downloads the asset of the version a podspec names. Merging only keeps
           \`${{ github.ref_name }}\` in sync.")
           fi
 
@@ -917,6 +990,13 @@ jobs:
             echo "SPM checksum, $XCFRAMEWORK_NET_ZIP: \`${{ steps.checksum.outputs.net }}\`"
             echo ""
             echo "Package.swift PR: ${{ steps.package.outputs.pr || 'not needed, the tag exists already' }}"
+            echo ""
+            # CocoaPods: the pods are not on a spec repo, so what an app names is
+            # the podspec of the tag and not the pod alone
+            echo '```ruby'
+            echo "pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/$TAG/MarsRSXlog.podspec'"
+            echo "pod 'MarsRSNet', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/$TAG/MarsRSNet.podspec'"
+            echo '```'
             echo ""
             echo '```kotlin'
             # the version a consumer writes, without the "v" of the tag: the
