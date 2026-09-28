@@ -16,9 +16,11 @@
 //! A run is not here. The C++ makes a `ShortLinkInterface` per task, runs it on
 //! a `MessageQueue` and keeps an `intptr_t` to it; the port has neither sockets
 //! nor threads, so what the queue keeps is a [`RunId`] the host handed out when
-//! it started one ([`StartRun`]) and hands back with every answer. Everything
-//! the C++ asked the worker — its profile, whether it is keep-alive, when it
-//! sent — is an argument here instead. What is left out:
+//! it started one ([`StartRun`]) and hands back with every answer. Most of what
+//! the C++ asked the worker — whether it is keep-alive, when it sent — is an
+//! argument here instead; its profile, which the C++ reads off a worker it is
+//! about to destroy, is the host's to give while the run is out
+//! ([`RunProfile`]). What is left out:
 //!
 //! * the `DEF_TASK_RUN_LOOP_TIMING` message `__RunLoop` posts to itself is
 //!   [`ShortLinkTaskManager::due_time`] instead, which is when the host has to
@@ -227,6 +229,21 @@ pub type NetInfo = dyn FnMut() -> NetworkKind + Send;
 /// taken for the request it is a retry of.
 pub type GenSequenceId = dyn FnMut() -> u16 + Send;
 
+/// `((ShortLinkInterface*)_running_id)->Profile()` — the pair the run that is out
+/// landed on, which the C++ reads off the worker while the worker is still
+/// alive: the app's error report for a task that timed out names the ip, the
+/// host and the port it timed out *on*, and a run that never answered is the
+/// only time there is to ask.
+///
+/// A run is the host's here and not the queue's, so what the queue has of it is
+/// the number the host handed out; this is the question that turns it back into
+/// a connect. A host that wired none keeps the reading it has.
+///
+/// [`Fn`], and not [`FnMut`]: the C++ asks the worker out of a `const` method
+/// too — `GetConnectProfile` (`mars/stn/src/shortlink_task_manager.cc:1303`) —
+/// and a host that wants to write does it behind its own lock.
+pub type RunProfile = dyn Fn(RunId) -> ConnectProfile + Send;
+
 /// `ShortLinkTaskManager`.
 pub struct ShortLinkTaskManager {
     /// `lst_cmd_`, sorted by [`crate::task_profile::compare_task`].
@@ -261,6 +278,9 @@ pub struct ShortLinkTaskManager {
     should_intercept: Option<Box<ShouldIntercept>>,
     net_info: Option<Box<NetInfo>>,
     gen_sequence_id: Option<Box<GenSequenceId>>,
+    /// `((ShortLinkInterface*)_running_id)->Profile()` — how the queue is told
+    /// what pair a run of its own is on.
+    run_profile: Option<Box<RunProfile>>,
     /// `closefunc` — what the C++ closes a socket with, which the queue needs
     /// for one a run answered badly on. The pool's own is
     /// [`SocketPool::set_close`].
@@ -293,6 +313,7 @@ impl ShortLinkTaskManager {
             should_intercept: None,
             net_info: None,
             gen_sequence_id: None,
+            run_profile: None,
             close: None,
         }
     }
@@ -358,7 +379,10 @@ impl ShortLinkTaskManager {
         while i < self.tasks.len() {
             self.tasks[i].last_failed_dyntime_status = DynamicTimeoutStatus::default();
             if self.tasks[i].running.is_some() {
-                let profile = self.tasks[i].transfer_profile.connect_profile.clone();
+                // the C++ reads the worker's profile before it drops it
+                // (`shortlink_task_manager.cc:293`), so a cancellation is
+                // reported on the pair the run was on
+                let profile = self.profile_at(i);
                 let ended = self.single_resp_handle_at(
                     now,
                     i,
@@ -629,17 +653,23 @@ impl ShortLinkTaskManager {
     /// (`mars/stn/src/shortlink_task_manager.cc:1311-1314`), and it is this
     /// profile — and not the one the link holds — that the app is handed in
     /// `OnTaskEnd`, once the run is over.
+    ///
+    /// The rest of it is the pair the run that is out landed on
+    /// (`:1310`), which is the host's to give: a task whose run has not come
+    /// back yet is the only time the app can ask what ip it went out on, and
+    /// `""`/`""`/`0` is not an answer it can act on.
     pub fn connect_profile(&self, taskid: u32) -> Option<ConnectProfile> {
-        self.tasks
+        let at = self
+            .tasks
             .iter()
-            .find(|p| p.running.is_some() && p.task.taskid == taskid)
-            .map(|p| ConnectProfile {
-                start_encode_packet_time: p.transfer_profile.begin_req2buf_time,
-                encode_packet_finished_time: p.transfer_profile.end_req2buf_time,
-                start_decode_packet_time: p.transfer_profile.begin_buf2resp_time,
-                decode_packet_finished_time: p.transfer_profile.end_buf2resp_time,
-                ..p.transfer_profile.connect_profile.clone()
-            })
+            .position(|p| p.running.is_some() && p.task.taskid == taskid)?;
+        Some(ConnectProfile {
+            start_encode_packet_time: self.tasks[at].transfer_profile.begin_req2buf_time,
+            encode_packet_finished_time: self.tasks[at].transfer_profile.end_req2buf_time,
+            start_decode_packet_time: self.tasks[at].transfer_profile.begin_buf2resp_time,
+            decode_packet_finished_time: self.tasks[at].transfer_profile.end_buf2resp_time,
+            ..self.profile_at(at)
+        })
     }
 
     /// `lst_cmd_`.
@@ -823,6 +853,27 @@ impl ShortLinkTaskManager {
         self.gen_sequence_id = Some(Box::new(gen));
     }
 
+    /// `((ShortLinkInterface*)_running_id)->Profile()` — how the queue is told
+    /// what pair a run of its own is on: the host that owns the run answers
+    /// with the ip, the host and the port it landed on. Unset, and every run
+    /// is reported on the pair the task was last answered on.
+    pub fn set_run_profile(&mut self, profile: impl Fn(RunId) -> ConnectProfile + Send + 'static) {
+        self.run_profile = Some(Box::new(profile));
+    }
+
+    /// What a run that is out is on: the C++ asks the worker, and here the host
+    /// is asked through [`RunProfile`]. A task with no run out, or a host that
+    /// wired none, keeps the reading it was last given.
+    fn profile_at(&self, at: usize) -> ConnectProfile {
+        let Some(run) = self.tasks[at].running else {
+            return self.tasks[at].transfer_profile.connect_profile.clone();
+        };
+        match self.run_profile.as_ref() {
+            Some(profile) => profile(run),
+            None => self.tasks[at].transfer_profile.connect_profile.clone(),
+        }
+    }
+
     /// `closefunc` — what a socket the queue is done with is closed with.
     pub fn set_close_socket(&mut self, close: impl FnMut(SocketFd) + Send + 'static) {
         self.close = Some(Box::new(close));
@@ -848,7 +899,10 @@ impl ShortLinkTaskManager {
             let Some(at) = self.tasks.iter().position(|p| p.task.taskid == taskid) else {
                 continue;
             };
-            let profile = self.tasks[at].transfer_profile.connect_profile.clone();
+            // `shortlink_task_manager.cc:281-283` — the timeout is reported on
+            // the pair the run that never answered was on, which is the ip, the
+            // host and the port the app gets to name in its own error report
+            let profile = self.profile_at(at);
             self.dynamic_timeout
                 .record_at(network, DYN_TIME_TASK_FAILED_PKG_LEN, 0, now);
             self.tasks[at].set_last_failed_status();
@@ -1180,7 +1234,11 @@ impl ShortLinkTaskManager {
 
             let is_source = src_taskid == Task::INVALID_TASK_ID || src_taskid == taskid;
             let code = if is_source { err_code } else { 0 };
-            let profile = self.tasks[i].transfer_profile.connect_profile.clone();
+            // `shortlink_task_manager.cc:1071,1079` — a task the core failed
+            // on its own is failed on the pair its run was on, which is what
+            // the C++ asks the worker for and a run that is out is the only
+            // time there is to ask
+            let profile = self.profile_at(i);
             let ended = self.single_resp_handle_at(now, i, err_type, code, fail_handle, profile);
             if !ended {
                 i += 1;
@@ -1503,6 +1561,9 @@ mod tests {
     type Asked = Arc<Mutex<Vec<(ErrCmdType, i32, TaskFailHandleType, u32, String)>>>;
     /// The four encode and decode times the app was handed for a task.
     type PacketTimes = Arc<Mutex<Vec<(u64, u64, u64, u64)>>>;
+    /// What the app was told about a task that is over, and the pair it was
+    /// reported on.
+    type PairEnded = Arc<Mutex<Vec<(ErrCmdType, i32, String, u16)>>>;
 
     /// A run of every task, named after the task, and a note of what it was
     /// asked for.
@@ -2330,6 +2391,151 @@ mod tests {
             Task::TRANSPORT_PROTOCOL_TCP,
             "a retry is forced onto tcp"
         );
+    }
+
+    /// `shortlink_task_manager.cc:281-283,293` — a run that never answered is
+    /// the only time the pair it went out on can be asked for, and it is the
+    /// pair the app names in its own error report.
+    #[test]
+    fn a_run_that_timed_out_is_failed_on_the_pair_it_landed_on() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        manager.set_run_profile(|run| ConnectProfile {
+            ip: format!("10.0.0.{}", run.0),
+            host: "short.weixin.qq.com".to_string(),
+            port: 8080,
+            ..ConnectProfile::new()
+        });
+        let reported: Arc<Mutex<Vec<(String, String, u16)>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&reported);
+        manager.set_notify_network_err(move |_err_type, _err_code, ip, host, port| {
+            recorder
+                .lock()
+                .unwrap()
+                .push((ip.to_string(), host.to_string(), port));
+        });
+        let ended: Arc<Mutex<Vec<ConnectProfile>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&ended);
+        manager.set_callback(
+            move |_err_type, _err_code, _handle, _task, _cost, profile| {
+                recorder.lock().unwrap().push(profile.clone());
+                0
+            },
+        );
+
+        manager.start_task_at(100_000, task(7), prepare());
+        // while the run is out the app can ask where it went
+        let profile = manager.connect_profile(7).expect("a run is out");
+        assert_eq!(profile.ip, "10.0.0.7");
+        assert_eq!(profile.host, "short.weixin.qq.com");
+        assert_eq!(profile.port, 8080);
+
+        manager.touch_tasks_at(140_000);
+        assert_eq!(
+            *reported.lock().unwrap(),
+            vec![(
+                "10.0.0.7".to_string(),
+                "short.weixin.qq.com".to_string(),
+                8080
+            )],
+            "the app is told the ip, the host and the port the run was on"
+        );
+        let ended = ended.lock().unwrap().clone();
+        assert_eq!(ended.len(), 1, "the task timed out and is over");
+        assert_eq!((ended[0].ip.as_str(), ended[0].port), ("10.0.0.7", 8080));
+    }
+
+    /// `shortlink_task_manager.cc:1005,1071,1079` — the same pair for a run the
+    /// queue drops on purpose: a network change that cancels it, and an error
+    /// the core failed the whole queue with.
+    #[test]
+    fn a_run_that_was_cancelled_is_failed_on_the_pair_it_landed_on() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        manager.set_run_profile(|run| ConnectProfile {
+            ip: format!("10.0.0.{}", run.0),
+            host: "short.weixin.qq.com".to_string(),
+            port: 8080,
+            ..ConnectProfile::new()
+        });
+        let ended: PairEnded = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&ended);
+        manager.set_callback(move |err_type, err_code, _handle, _task, _cost, profile| {
+            recorder
+                .lock()
+                .unwrap()
+                .push((err_type, err_code, profile.ip.clone(), profile.port));
+            0
+        });
+
+        // a network change cancels the run; the task has one try in it, so this
+        // is the try the app hears about
+        let mut one_try = task(7);
+        one_try.retry_count = 0;
+        manager.start_task_at(100_000, one_try, prepare());
+        manager.redo_tasks_at(100_100);
+        assert_eq!(
+            ended.lock().unwrap().clone(),
+            vec![(
+                ErrCmdType::Local,
+                LOCAL_CANCEL,
+                "10.0.0.7".to_string(),
+                8080
+            )],
+            "a cancelled run is failed on the pair it was on, and not on the one the task was last answered on"
+        );
+    }
+
+    /// `shortlink_task_manager.cc:1071,1079` — and the same pair for a task the
+    /// core failed the whole queue with.
+    #[test]
+    fn a_task_the_core_failed_is_failed_on_the_pair_its_run_landed_on() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        manager.set_run_profile(|run| ConnectProfile {
+            ip: format!("10.0.0.{}", run.0),
+            host: "short.weixin.qq.com".to_string(),
+            port: 8080,
+            ..ConnectProfile::new()
+        });
+        let ended: PairEnded = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&ended);
+        manager.set_callback(move |err_type, err_code, _handle, _task, _cost, profile| {
+            recorder
+                .lock()
+                .unwrap()
+                .push((err_type, err_code, profile.ip.clone(), profile.port));
+            0
+        });
+
+        let mut one_try = task(7);
+        one_try.retry_count = 0;
+        manager.start_task_at(100_000, one_try, prepare());
+        manager.retry_tasks_at(
+            100_100,
+            ErrCmdType::Http,
+            -1,
+            TaskFailHandleType::Default,
+            Task::INVALID_TASK_ID,
+        );
+        assert_eq!(
+            ended.lock().unwrap().clone(),
+            vec![(ErrCmdType::Http, -1, "10.0.0.7".to_string(), 8080)]
+        );
+    }
+
+    /// A host that wired none keeps the reading it has, which is what every run
+    /// was reported on before: `ConnectProfile()`.
+    #[test]
+    fn a_host_that_wired_no_run_keeps_the_pair_the_task_was_last_given() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        manager.start_task_at(100_000, task(7), prepare());
+
+        let profile = manager.connect_profile(7).expect("a run is out");
+        assert_eq!(profile.ip, "");
+        assert_eq!(profile.host, "");
+        assert_eq!(profile.port, 0);
     }
 
     #[test]
