@@ -10,10 +10,15 @@ C++ 写出来的那个文件 —— 同样的帧结构、同样的压缩、同�
 |---|---|---|
 | `mars/xlog` | `xlog`：crates.io 上的 `marsrs-xlog`、JitPack 上的 `xlog`、共享 Kotlin 模块的 `xlog-kmp`、Apple 上的 `MarsRSXlog` | [快速开始](/zh/getting-started) |
 
-这个切分是每个平台都做的那个切分：一个包只有日志库，另一个包是整个移植，而整个移植
-里带着的是同一个日志库 —— 只有名字不同。只打日志的应用用前者，还要跑任务或诊断的用
-后者；拿不准的从日志库开始：`marsrs` 是日志库加另外两块，所以从一个包换到另一个包，
-文件这件事什么都不用改。
+Rust 的 crate、JitPack 和共享 Kotlin 模块做的是这个切分：一个包只有日志库，另一个包是
+整个移植，而整个移植里带着的是同一个日志库 —— 只有名字不同。Apple 是切成三份的：
+`MarsRSXlog` 是日志库，`MarsRSNet` 是链路和诊断、完全没有日志库，`MarsRS` 是两份都
+有。Flutter 和 React Native 的两个包里都只有日志库 —— 见
+[Flutter](/zh/platforms/flutter#里面没有什么)和
+[React Native](/zh/platforms/react-native#里面没有什么)。
+
+只打日志的应用用日志库那个包，还要跑任务或诊断的用带着它们的那个；拿不准的从日志库
+开始：`marsrs` 是日志库加另外两块，所以从一个包换到另一个包，文件这件事什么都不用改。
 
 ## appender
 
@@ -50,7 +55,28 @@ config 在三种写法里都是一个 struct，八个字段还是那八个：C++
 另一半要搬走的是宏。`XLOGGER_TAG` 和 `xverbose2` / `xdebug2` / `xinfo2` / `xwarn2` /
 `xerror2` / `xfatal2` 那一族，把级别、tag 和调用点塞在一行 C++ 里；取代它们的是每个
 级别一个方法 —— Kotlin 的 `xlog.i(tag, message)`、Swift 的 `log.info(message:tag:)`、
-Rust 的 `appender_write(None, message)` —— 文件、函数和行号从调用点取，不用调用方写。
+Rust 的 `appender_write(None, message)`。
+
+调用点是三样里唯一不是每个平台都跟着走的那个。Swift 从 `#file`、`#function` 和 `#line`
+填上文件、函数和行号，所以从 `log.info(message:tag:)` 写出的记录知道自己是哪儿写的。
+Kotlin 的 write 只接 handle、级别、tag 和消息，没有别的，所以从 `xlog.i(tag, message)`
+写出的记录里文件是空的、行号是 0 —— 也就是 C++ 项目自己的 `Log` 一直传的那两个值。要
+把调用点写进记录的应用有两条路：旧的 `logWrite` 接的那个 `XLoggerInfo`，或者在 Rust
+里给 `appender_write` 传一个而不是 `None`：
+
+```rust
+appender_write(
+    Some(&XLoggerInfo {
+        level: LogLevel::Info,
+        tag: Some("startup".into()),
+        filename: Some(file!().into()),
+        func_name: Some("main".into()),
+        line: line!() as i32,
+        ..Default::default()
+    }),
+    "cold start in 412 ms",
+);
+```
 
 第二个 appender 是形状差别最大的地方。C++ 项目的 Java 是用
 `Log.openLogInstance(level, mode, cacheDir, logDir, nameprefix, cacheDays)` 开第二个，
@@ -62,9 +88,12 @@ Rust 的 `appender_write(None, message)` —— 文件、函数和行号从调�
 ### 从 C++ 项目的 Java 来
 
 Android 包是唯一还留着旧写法的地方：七个参数的 `Xlog.open`、`XLogConfig`、
-`XLoggerInfo`、`logWrite` 和 `LEVEL_*` 常量都还能用，而且每一个都带着取代它的写法标记
-为 deprecated。`Log.setLogImp(Xlog())` 和 `Log.d(tag, message)` 仍然写进
-`Xlog.open` 装上的那个 appender，所以迁移可以一个调用点一个调用点地走：
+`XLoggerInfo`、`logWrite` 和 `LEVEL_*` 常量都还能用。带着 `@Deprecated` 和取代它的写法
+的是七个参数的 `Xlog.open`、`logWrite`、无参的 `Xlog()` 以及围着它们的 `Log` 门面；
+`XLogConfig`、`XLoggerInfo` 和 `LEVEL_*` 常量没有这个标记，所以用到它们的调用点照样
+编译，没有任何东西把它指向新写法，找出来是应用自己的 grep。`Log.setLogImp(Xlog())`
+和 `Log.d(tag, message)` 仍然写进 `Xlog.open` 装上的那个 appender，所以其余部分可以
+一个调用点一个调用点地走：
 
 ```kotlin
 // 之前

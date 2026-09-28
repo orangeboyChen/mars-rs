@@ -12,12 +12,19 @@ history.
 |---|---|---|
 | `mars/xlog` | `xlog`: `marsrs-xlog` on crates.io, `xlog` on JitPack, `xlog-kmp` for a shared Kotlin module, `MarsRSXlog` on Apple | [Getting started](/getting-started) |
 
-The split is the one every platform makes: the logger is one package and the
-whole port is the other, and the whole port carries the same logger — only the
-name differs. An app that only logs takes the first, an app that also runs a task
-or a diagnosis takes the second, and an app that is not sure starts with the
-logger: `marsrs` is the logger plus the other two pieces, so moving from one
-package to the other renames nothing about the file.
+The split is the one the Rust crates, JitPack and the shared Kotlin module
+make: the logger is one package and the whole port is the other, and the whole
+port carries the same logger — only the name differs. Apple makes it three ways
+instead — `MarsRSXlog` is the logger, `MarsRSNet` is the pipeline and the
+diagnosis and no logger at all, and `MarsRS` is both — and Flutter and React
+Native carry the logger and nothing else in both of their packages: see
+[Flutter](/platforms/flutter#what-is-not-in-it) and
+[React Native](/platforms/react-native#what-is-not-in-it).
+
+An app that only logs takes the logger's package, an app that also runs a task
+or a diagnosis takes the one that carries them, and an app that is not sure
+starts with the logger: `marsrs` is the logger plus the other two pieces, so
+moving from one package to the other renames nothing about the file.
 
 ## The appender
 
@@ -59,9 +66,31 @@ The macros are the other half of what goes. `XLOGGER_TAG` and the
 `xverbose2` / `xdebug2` / `xinfo2` / `xwarn2` / `xerror2` / `xfatal2` family
 carried the level, the tag and the call site in one line of C++; what replaces
 them is a method per level — `xlog.i(tag, message)` in Kotlin,
-`log.info(message:tag:)` in Swift, `appender_write(None, message)` in Rust —
-with the file, the function and the line taken from the call site instead of
-named at it.
+`log.info(message:tag:)` in Swift, `appender_write(None, message)` in Rust.
+
+The call site is the one of the three that does not come along everywhere.
+Swift fills the file, the function and the line in from `#file`, `#function`
+and `#line`, so a record written through `log.info(message:tag:)` says where
+it was written. Kotlin's write takes a handle, a level, a tag and a message and
+nothing else, so a record written through `xlog.i(tag, message)` carries an
+empty file and the line 0 — what the C++ project's own `Log` always passed. An
+app that needs them in the record has two ways: the `XLoggerInfo` the old
+`logWrite` takes, or, in Rust, the one `appender_write` is handed instead of
+`None`:
+
+```rust
+appender_write(
+    Some(&XLoggerInfo {
+        level: LogLevel::Info,
+        tag: Some("startup".into()),
+        filename: Some(file!().into()),
+        func_name: Some("main".into()),
+        line: line!() as i32,
+        ..Default::default()
+    }),
+    "cold start in 412 ms",
+);
+```
 
 A second appender is where the shapes differ most. The C++ project's Java opened
 one with `Log.openLogInstance(level, mode, cacheDir, logDir, nameprefix,
@@ -74,11 +103,15 @@ of a prefix of its own, or the `*_instance` family in Rust —
 ### From the C++ project's Java
 
 The Android package is the one place the old spelling is still there:
-`Xlog.open` with its seven arguments, `XLogConfig`, `XLoggerInfo`, `logWrite` and
-the `LEVEL_*` constants all work, and every one of them is deprecated with the
-spelling that replaces it. `Log.setLogImp(Xlog())` and `Log.d(tag, message)`
-still write through the same appender `Xlog.open` installs, so a migration can go
-one call site at a time:
+`Xlog.open` with its seven arguments, `XLogConfig`, `XLoggerInfo`, `logWrite`
+and the `LEVEL_*` constants all work. What carries a `@Deprecated` — and the
+spelling that replaces it — is the seven-argument `Xlog.open`, `logWrite`, the
+`Xlog()` with no argument and the `Log` facade around them; `XLogConfig`,
+`XLoggerInfo` and the `LEVEL_*` constants carry no such pointer, so a call site
+that uses them compiles with nothing pointing it at the new spelling, and
+finding it is the app's own grep. `Log.setLogImp(Xlog())` and
+`Log.d(tag, message)` still write through the same appender `Xlog.open`
+installs, so the rest of a migration can go one call site at a time:
 
 ```kotlin
 // before

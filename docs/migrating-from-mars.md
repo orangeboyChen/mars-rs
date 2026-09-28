@@ -20,10 +20,17 @@ takes over when it moves them.
 | `mars/stn` — the task pipeline | `marsrs`, and its twins `marsrs-kmp` and `MarsRSNet` | [The task pipeline](/stn) |
 | `mars/sdt` — the network diagnosis | the same `marsrs`, in the same package as the pipeline | [The network diagnosis](/sdt) |
 
-The split is the one every platform makes: the logger is one package and the
-whole port is the other, and the whole port carries the same logger — only the
-name differs. An app that only logs takes the first, an app that also runs a task
-or a diagnosis takes the second.
+The split is the one the Rust crates, JitPack and the shared Kotlin module make:
+the logger is one package and the whole port is the other, and the whole port
+carries the same logger — only the name differs. Apple makes it three ways
+instead — `MarsRSXlog` is the logger, `MarsRSNet` is the pipeline and the
+diagnosis and no logger, and `MarsRS` is both — and Flutter and React Native
+carry the logger and nothing else in both of their packages, so an app on
+either has no pipeline and no diagnosis to move: see
+[Flutter](/platforms/flutter#what-is-not-in-it) and
+[React Native](/platforms/react-native#what-is-not-in-it). An app that only
+logs takes the logger's package, and an app that also runs a task or a
+diagnosis takes the one that carries them.
 
 ## The two things the app takes over
 
@@ -63,17 +70,21 @@ diagnosis are sockets, and this port owns none: the C++ links its own networking
 into the checkers, and here what a socket is belongs to the caller. A diagnosis
 asks you for a resolve, a connect, an HTTP request and an ICMP echo, one at a
 time, and your answer is the result — which is also what makes one testable from
-a machine with no radio. A task's link is wired the same way in Rust, through the
-`SocketOperator` a link is made with; outside Rust the bindings expose no seam
-for one yet, so [the task pipeline](/stn) is the page that says where that
-leaves an app today.
+a machine with no radio. A task's link is wired the same way in Rust, through
+the `SocketOperator` a link is made with; the Kotlin, Swift and C bindings carry
+no seam for one, so a task started outside Rust ends in a socket error instead
+of going out — [the task pipeline](/stn) is the page that says what is there
+for an app on those platforms.
 
 ## Migrating the task pipeline
 
-A task is the same struct with the same defaults — the id, the command, the path,
-the link it wants, the hosts, the timeout and the retries — and the app answers
-the same questions while it runs. What changes is how the answers reach STN, and
-who drains the queue.
+A task is the same struct — the id, the command, the path, the link it wants,
+the hosts, the timeout and the retries — and the app answers the same questions
+while it runs. Two defaults are not the ones `Task::Task()` gives it, and both
+are the ones the C++ project's Java gives its `Task`: `channel_select` is
+`CHANNEL_BOTH` and not `0`, which `NetCore` fails a task for, and `need_authed`
+is `true` and not `false`. What changes besides those is how the answers reach
+STN, and who drains the queue.
 
 | the C++ | Rust | Android | Swift | C |
 |---|---|---|---|---|
