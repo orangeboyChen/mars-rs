@@ -42,6 +42,12 @@ fn logic() -> &'static Mutex<StnLogic> {
     static LOGIC: OnceLock<Mutex<StnLogic>> = OnceLock::new();
     LOGIC.get_or_init(|| {
         let mut logic = StnLogic::new();
+        // `ActiveLogic::Instance()` — the process's own, which the net core asks
+        // about the foreground rather than being told. It is handed over before
+        // [`StnLogic::create`] so the core this makes is wired to it, and the
+        // core a later reset makes is too.
+        logic.set_is_foreground(crate::baseevent::is_foreground_impl);
+        logic.set_last_foreground_change_time(crate::baseevent::last_foreground_change_time_impl);
         logic.create();
         // the app STN asks is Java — `StnLogic`'s callback, asked through the
         // JVM — which is what the C++'s `SetCallback` is for the Java host. A

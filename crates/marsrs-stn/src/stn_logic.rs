@@ -40,7 +40,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use marsrs_comm::tickcount::gettickcount;
 
-use crate::net_core::NetCore;
+use crate::net_core::{IsForeground, LastForegroundChangeTime, NetCore};
 use crate::signalling_keeper::set_strategy;
 use crate::stn_callback_bridge::{App, StnCallbackBridge};
 use crate::{xorshift, LongLink, LongLinkEncoder, LongLinkStatus, LonglinkConfig, NetStatus, Task};
@@ -110,6 +110,8 @@ pub struct StnLogic {
     encoder: LongLinkEncoder,
     encoder_version: i32,
     encoder_name: String,
+    is_foreground: Option<Arc<Mutex<IsForeground>>>,
+    last_foreground_change_time: Option<Arc<Mutex<LastForegroundChangeTime>>>,
 }
 
 impl Default for StnLogic {
@@ -147,6 +149,8 @@ impl StnLogic {
             encoder: LongLinkEncoder::new(),
             encoder_version: 0,
             encoder_name: String::new(),
+            is_foreground: None,
+            last_foreground_change_time: None,
         }
     }
 
@@ -206,6 +210,17 @@ impl StnLogic {
         let mut core = NetCore::with_encoder_at(now, true, self.encoder);
         core.set_packer_encoder(self.encoder_version, self.encoder_name.clone());
         Self::wire(&mut core, &self.bridge);
+        // `ActiveLogic` is one object for the whole process upstream and not
+        // one the net core owns, so what the host said about the foreground
+        // outlives the core it was said to — a reset hands it on.
+        if let Some(is_foreground) = self.is_foreground.as_ref() {
+            let is_foreground = Arc::clone(is_foreground);
+            core.set_is_foreground(move || (*locked(&is_foreground))());
+        }
+        if let Some(last_change) = self.last_foreground_change_time.as_ref() {
+            let last_change = Arc::clone(last_change);
+            core.set_last_foreground_change_time(move || (*locked(&last_change))());
+        }
         self.core = Some(core);
         true
     }
@@ -263,6 +278,39 @@ impl StnLogic {
     pub fn set_active(&mut self, is_active: bool) {
         if let Some(core) = self.core.as_mut() {
             core.set_active(is_active);
+        }
+    }
+
+    /// `ActiveLogic::Instance()->IsForeground()` — what a task asks before it
+    /// wakes a long link that is down.
+    ///
+    /// Unlike [`StnLogic::set_active`] this is not a reading the host pushes at
+    /// a moment but a question the core asks when it wants the answer, so it is
+    /// kept here and handed to every core [`StnLogic::create`] makes: the C++'s
+    /// `ActiveLogic` is one for the process, and a net core made by a reset is
+    /// not a new one. Unset, a core answers `false` — the way the C++'s starts
+    /// out — and a host that says nothing about the foreground wakes nothing.
+    pub fn set_is_foreground(&mut self, is_foreground: impl FnMut() -> bool + Send + 'static) {
+        let is_foreground: Arc<Mutex<IsForeground>> = Arc::new(Mutex::new(is_foreground));
+        self.is_foreground = Some(Arc::clone(&is_foreground));
+        if let Some(core) = self.core.as_mut() {
+            core.set_is_foreground(move || (*locked(&is_foreground))());
+        }
+    }
+
+    /// `ActiveLogic::Instance()->LastForegroundChangeTime()` — when that last
+    /// moved. Together with [`StnLogic::set_is_foreground`] it is the whole of
+    /// what the C++'s `ActiveLogic` tells the net core; unset it answers `0`,
+    /// which with the C++'s own start is "it has not moved since boot".
+    pub fn set_last_foreground_change_time(
+        &mut self,
+        last_foreground_change_time: impl FnMut() -> u64 + Send + 'static,
+    ) {
+        let last_change: Arc<Mutex<LastForegroundChangeTime>> =
+            Arc::new(Mutex::new(last_foreground_change_time));
+        self.last_foreground_change_time = Some(Arc::clone(&last_change));
+        if let Some(core) = self.core.as_mut() {
+            core.set_last_foreground_change_time(move || (*locked(&last_change))());
         }
     }
 
@@ -654,8 +702,8 @@ impl StnLogic {
 }
 
 /// The bridge, without letting a panic in one thread take every thread with it.
-fn locked(bridge: &Arc<Mutex<StnCallbackBridge>>) -> MutexGuard<'_, StnCallbackBridge> {
-    bridge.lock().unwrap_or_else(PoisonError::into_inner)
+fn locked<T: ?Sized>(lock: &Arc<Mutex<T>>) -> MutexGuard<'_, T> {
+    lock.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The host a task is going out on, which is the C++'s
@@ -671,6 +719,7 @@ mod tests {
     use crate::longlink_identify_checker::IdentifyBuffer;
     use crate::task_profile::TaskFailHandleType;
     use crate::{CgiProfile, ErrCmdType, DEFAULT_LONGLINK_NAME};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
 
     /// An app that writes down what it was asked and answers the way a sample
@@ -1039,6 +1088,40 @@ mod tests {
             core.packer_encoder_version(),
             4,
             "the name's, not the encoder's"
+        );
+    }
+
+    /// `ActiveLogic` is one object for the whole process upstream and not one
+    /// the net core owns, so what the host said about the foreground is handed
+    /// to the core a reset makes too: one that was not would never wake a link.
+    #[test]
+    fn the_foreground_a_host_gave_is_the_one_a_reset_core_asks() {
+        let asked = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&asked);
+        let mut logic = StnLogic::default();
+        logic.set_is_foreground(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            true
+        });
+        logic.set_last_foreground_change_time(|| 1000);
+        logic.set_longlink_svr_addr("long.host", vec![80], "");
+
+        assert!(logic.create_at(1000));
+        logic.reset_at(1000);
+        let core = logic.net_core().expect("no core");
+        core.set_net_info(|| crate::NET_TYPE_WIFI);
+
+        let mut task = Task::new(7, 12);
+        task.cgi = "/cgi-bin/7".to_string();
+        task.channel_select = Task::CHANNEL_LONG;
+        task.longlink_host_list = vec!["long.host".to_string()];
+        task.shortlink_host_list = vec!["short.host".to_string()];
+        task.total_timeout = 10 * 60 * 1000;
+        task.user_id = "user".to_string();
+        assert!(core.start_task_at(1000, task));
+        assert!(
+            asked.load(Ordering::SeqCst) > 0,
+            "the core a reset made is the one the host answered"
         );
     }
 
