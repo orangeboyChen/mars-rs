@@ -23,6 +23,11 @@
 #   * the AAR coordinate of platforms/android/build.gradle.kts — `marsrs` for
 #     the whole port and `xlog` for the xlog half, at the version of this
 #     release and not at the one the file was written against;
+#   * the newest entry of CHANGELOG.md, which is the version of the release:
+#     pub.dev warns about a package whose changelog says nothing about the
+#     version it is, and a changelog entry is the one thing here no one can
+#     write in advance, because the version is typed when the release is
+#     dispatched;
 #   * MarsRSXlog.xcframework into ios/Frameworks, because CocoaPods cannot
 #     resolve the SwiftPM binary target of Package.swift;
 #   * mars_xlog.h into ios/include, out of crates/marsrs-ffi/include rather than
@@ -115,6 +120,32 @@ src, n = re.subn(
 )
 assert n == 1, "android/build.gradle.kts has no AAR coordinate to stamp"
 open(path, "w").write(src)
+
+# The changelog the package carries, whose newest entry has to be the version
+# being published: pub.dev warns about one that says nothing about it. So the
+# version is stamped here the way pubspec.yaml's is — as an entry of its own
+# above the one the tree carries, and not by rewriting that one's heading, which
+# would move the entry of a version already published under a new number. The
+# entry says what is true of the plugin of every release: it is the natives of
+# that version. What changed in the Dart between two of them is in the notes of
+# the release, which is what the link is.
+path = prefix + "CHANGELOG.md"
+src = open(path).read()
+heading = "## %s" % version
+if not re.search(r"^%s$" % re.escape(heading), src, flags=re.M):
+    entry = (
+        "%s\n"
+        "\n"
+        "* The plugin of [mars-rs v%s]: the `%s` AAR and the\n"
+        "  MarsRSXlog.xcframework of that release.\n"
+        "\n"
+        "[mars-rs v%s]: https://github.com/orangeboyChen/mars-rs/releases/tag/v%s\n"
+        "\n" % (heading, version, aar, version, version)
+    )
+    lines = src.splitlines(True)
+    at = next((i for i, line in enumerate(lines) if line.startswith("## ")), len(lines))
+    lines[at:at] = [entry]
+    open(path, "w").write("".join(lines))
 PY
 
     tar -czf "$out/$archive-$version.tar.gz" -C platforms/flutter "$dir"
