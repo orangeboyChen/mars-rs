@@ -18,7 +18,8 @@ without a conversion step.
 **Documentation** — [English](https://orangeboychen.github.io/mars-rs/) ·
 [简体中文](https://orangeboychen.github.io/mars-rs/zh/) — install, configure,
 write, and read the files back. Those pages are the xlog documentation: STN and
-SDT ship in the same packages and have no pages of their own yet.
+SDT have no pages of their own yet, and not every package carries them either —
+[where it runs](#where-it-runs) says which do.
 
 ## Where it runs
 
@@ -31,14 +32,15 @@ SDT ship in the same packages and have no pages of their own yet.
 | Flutter | `marsrs_flutter_xlog` / `marsrs_flutter` | the release tarball — pub.dev is not switched on yet |
 | React Native 0.74+ | `marsrs-react-native-xlog` / `marsrs-react-native` | the release tarball — npm is not switched on yet |
 | anything with a C FFI | the `marsrs-<version>-<host>` archive | the release: Linux, macOS and Windows hosts |
-| HarmonyOS | `libmars_ffi.so`, built from source | `scripts/build_harmony.sh` |
+| HarmonyOS | the three `.so` of `marsrs-harmony-<version>.tar.gz` | the release |
 
 The Kotlin Multiplatform package is the widest of them: the same calls in shared
 code write the same file on Android, iOS, watchOS, tvOS, macOS, Linux and
 Windows, each platform compiling the half that reaches this core — JNI on
 Android, cinterop over the C ABI everywhere else. HarmonyOS is the one platform
-with no package: an app builds the C ABI for the OpenHarmony targets and reaches
-it through NAPI itself.
+with no package: a release hands it the three `.so` and the header and nothing
+else, and an app drops them into its module and reaches them through NAPI of its
+own. `scripts/build_harmony.sh <dir>` builds the same three from source.
 
 Every release also ships the `xlog` CLI, which writes and reads those files from
 a shell — `cargo install marsrs-xlog`.
@@ -47,7 +49,10 @@ a shell — `cargo install marsrs-xlog`.
 
 Two ways in, and the difference is how much of the port you take: **xlog alone**,
 or **the whole port** — xlog, STN and SDT. An app that only logs takes the first;
-the pair is the same one the crates on crates.io are.
+the pair is the same one the crates on crates.io are. Three of the packages carry
+the logger under both names today — `marsrs-kmp`, `marsrs_flutter` and
+`marsrs-react-native` have no STN or SDT surface yet, so on those three the
+choice is one of name and not of contents.
 
 ```bash
 cargo add marsrs-xlog    # xlog alone — the logger and nothing else

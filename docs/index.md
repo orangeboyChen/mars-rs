@@ -28,8 +28,9 @@ features:
 ---
 
 These pages are the xlog documentation: the logger, and every platform it ships
-to. STN and the SDT diagnosis come in the same packages and have no pages of
-their own yet.
+to. STN and the SDT diagnosis have no pages of their own yet, and not every
+package carries them either — the Kotlin Multiplatform, Flutter and React Native
+ones carry the logger under both names today.
 
 ## Pick your platform
 
@@ -46,7 +47,7 @@ registry of their own:
 | Flutter | `marsrs_flutter_xlog` or `marsrs_flutter` | [Flutter](/platforms/flutter) |
 | React Native | `marsrs-react-native-xlog` or `marsrs-react-native` | [React Native](/platforms/react-native) |
 | anything with a C FFI | the `marsrs-<version>-<host>` archive | [The C ABI](/platforms/c-abi) |
-| HarmonyOS | `libmars_ffi.so`, built from source today | [HarmonyOS](/platforms/harmonyos) |
+| HarmonyOS | the three `.so` of `marsrs-harmony-<version>.tar.gz` | [HarmonyOS](/platforms/harmonyos) |
 
 `xlog` is the logger alone; `marsrs` adds the STN task pipeline and the SDT
 network diagnosis — the same pair the crates on crates.io are. An app that only
