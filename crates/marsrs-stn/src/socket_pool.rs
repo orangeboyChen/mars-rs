@@ -27,9 +27,9 @@ use marsrs_comm::tickcount::gettickcount;
 /// out to be no good keeps the pool from handing one out, in milliseconds.
 pub const BAN_INTERVAL: u64 = 5 * 60 * 1000;
 /// `DEFAULT_MAX_KEEPALIVE_TIME` — what the C++ keeps a cached socket for. No
-/// caller of `SocketPool` uses it: the timeout is the one the caller writes in
-/// the [`CachedSocket`] it puts in, which is why it lives here and not in the
-/// pool.
+/// caller in this crate passes it in: the timeout is the one the caller writes
+/// in the [`CachedSocket`] it puts in, which is why it lives here and not in
+/// the pool.
 pub const DEFAULT_MAX_KEEPALIVE_TIME: u32 = 5 * 1000;
 
 /// `closefunc` — `CacheSocketItem::CloseSocket()`.
@@ -52,7 +52,8 @@ pub struct CachedSocket {
     pub address: IpPortItem,
     /// `start_tick` — when it went in, which is when its timeout starts.
     pub start: u64,
-    /// `socket_fd`
+    /// The socket itself, which the pool never reads: it is opaque, and all
+    /// the pool does with it is hand it out and hand it back to be closed.
     pub socket: SocketFd,
     /// `timeout` — how long it may stay in the pool, **in seconds**, which is
     /// what the C++ multiplies by 1000.
@@ -96,7 +97,8 @@ impl CachedSocket {
     }
 }
 
-/// `SocketPool`.
+/// The sockets short links leave behind, one per ip, port and host, for the
+/// next task that wants the same pair.
 pub struct SocketPool {
     /// `use_cache_`
     use_cache: bool,
