@@ -98,8 +98,14 @@ pub struct Message {
     pub body1: Option<Box<dyn Any + Send>>,
     /// `body2` — the second payload, for a handler that needs two.
     pub body2: Option<Box<dyn Any + Send>>,
-    /// The function an `AsyncInvoke` posted, if any. It is not `body1`: a
-    /// payload has to be `Any`, and a closure is not.
+    /// The function an `AsyncInvoke` posted, if any. It is erased to a
+    /// callable `FnMut` and not to [`Any`], because that is what it takes
+    /// to run it: `Any` hands a value back only to a caller that names its
+    /// concrete type, and a closure's type has no name. Upstream keeps it
+    /// in `body1` — wrapped in a `shared_ptr` it can name — and any_casts
+    /// it back out, a cast that comes back empty for any other payload. A
+    /// field of its own needs no cast, and leaves `body1` and `body2` free
+    /// for the payloads a handler downcasts.
     pub invoke: Option<Box<dyn FnMut() + Send>>,
     /// `msg_name`.
     pub name: String,
