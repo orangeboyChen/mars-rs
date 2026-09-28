@@ -79,12 +79,14 @@ jobs:
       # `sync-labels` is on: a label whose paths are no longer touched is
       # taken back off. Without it a pull request that shed its `docs/` half
       # on the way to review would carry `meta: docs-site` and
-      # `type: documentation` to the merge, and one whose base moved under it
-      # would keep the `area:` of a half it no longer changes — a list of
-      # labels right about nothing after the first push. What it cannot take
-      # off is a name the map does not carry: the action removes a label only
-      # if `.github/labeler.yml` names it, so a `type: bug` or a `type:
-      # feature` — the family no path can decide — is put on by hand and
+      # `type: documentation` to the merge — a set of labels describing a
+      # diff that is not there any more. Only a push re-runs it, and a push
+      # is what re-labelling waits for here: the diff is taken against the
+      # merge base, so `main` moving under an open pull request does not
+      # shrink it, and the rebase that follows is one. What it never takes
+      # off is a name the map does not carry — since the fifth major
+      # version the action removes a label only if the map names it, so a
+      # `type: bug` or a `type: feature` — the family no path can decide —
       # stays on.
       - uses: actions/labeler@v7
         with:
