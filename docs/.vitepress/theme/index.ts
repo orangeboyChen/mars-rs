@@ -1,4 +1,6 @@
-// The default theme, plus the seven strings of it that no locale can reach.
+// The default theme, plus two things it does not do: the seven strings of it
+// that no locale can reach, and the platform a reader picked, carried from the
+// code group they picked it in to every other group of the site.
 //
 // `en` and `zh` in ../config.ts are every string the theme can be handed. They
 // are not every string the theme writes: seven labels are English in the theme's
@@ -29,6 +31,7 @@
 // language. A bump of vitepress is the moment to look here again — the day the
 // theme gives these a key of their own, this file is the whole of what to delete.
 import DefaultTheme from 'vitepress/theme'
+import { applyPlatform, rememberPlatform } from './platform'
 
 const CHROME: {
   // where the string lives in the rendered page
@@ -92,6 +95,10 @@ function walk(): void {
       document.querySelectorAll(selector).forEach((node) => say(node, attribute, label))
     }
   }
+
+  // The same walk is the one that says a page is on the screen, and the groups
+  // of it are what the reader's platform is handed to.
+  applyPlatform()
 }
 
 export default {
@@ -100,6 +107,11 @@ export default {
     // The build renders every page once in node, where there is no document to
     // walk and no reader to walk it for.
     if (typeof document === 'undefined') return
+
+    // A pick of platform is a pick for the whole site, and one that outlives
+    // the page it was made on: what listens for it is in ./platform.ts, and
+    // what it does with the pick is the `applyPlatform` below.
+    rememberPlatform()
 
     // Every batch of changes to the page is a walk: a navigation renders a new
     // page into the same document, and the writes below are guarded, so a walk

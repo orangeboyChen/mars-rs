@@ -1,5 +1,9 @@
 {
-  "include": [".vitepress/config.ts", ".vitepress/theme/index.ts"],
+  "include": [
+    ".vitepress/config.ts",
+    ".vitepress/theme/index.ts",
+    ".vitepress/theme/platform.ts"
+  ],
   "compilerOptions": {
     "target": "ESNext",
     "module": "ESNext",

@@ -4,6 +4,9 @@ Three steps on every platform: **open** an appender once when the process or the
 app starts, **write** records through it, and **flush** before you read or upload
 its files.
 
+Every block below is a group of platforms: pick yours once and the rest of these
+pages open on it — which one you picked is remembered.
+
 ## 1. Add the dependency
 
 ::: code-group
