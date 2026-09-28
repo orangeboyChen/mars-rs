@@ -17,15 +17,17 @@
 //!
 //! What is left out: the `MessageQueue` the C++ runs its loop on
 //! ([`LongLinkTaskManager::due_time`] is when a host has to call it instead),
-//! `ActiveLogic` and the Android wake lock, `NetSource`'s weak-network
+//! `ActiveLogic` and the Android wake lock, `NetSource` 's weak-network
 //! bookkeeping, `get_real_host_`, the tls and handshake callbacks, the report
 //! (`ReportTaskProfile`), `server_sequence_id`, and the minor long links the
-//! C++ makes for itself (`AddMinorLink`, `IsMinorAvailable`, `FixMinorRealhost`)
-//! — a minor link is only a [`Task::CHANNEL_MINOR_LONG`] channel here, which is
-//! whose name the first host of [`Task::minorlong_host_list`] is.
+//! C++ makes for itself (`AddMinorLink`, `IsMinorAvailable`,
+//! `FixMinorRealhost`)— a minor link is only a [`Task::CHANNEL_MINOR_LONG`]
+//! channel here, which is whose name the first host of
+//! [`Task::minorlong_host_list`] is.
 //!
 //! A task that is over is not taken off the link: the C++ stops a task on the
-//! link only when the app asked to stop it ([`LongLinkTaskManager::stop_task`]).
+//! link only when the app asked to stop it
+//! ([`LongLinkTaskManager::stop_task`]).
 
 use marsrs_comm::tickcount::gettickcount;
 
@@ -57,7 +59,7 @@ pub use crate::shortlink_task_manager::{
 /// one a task is failed with when two of them ran out at once.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Timeout {
-    /// `kEctLocalTaskTimeout` — the task ran out of time, retries and all. It is
+    /// `kEctLocalTaskTimeout`— the task ran out of time, retries and all. It is
     /// the one timeout that applies to a task that never went out.
     Task,
     /// `kEctLongFirstPkgTimeout` — the first package never came.
@@ -100,18 +102,19 @@ impl Timeout {
 pub struct Response {
     /// `_name` — the channel the answer came in on.
     pub name: String,
-    /// `_error_type`.
+    /// `_error_type` — why the answer is what it is, as an [`ErrCmdType`].
     pub err_type: ErrCmdType,
-    /// `_error_code`.
+    /// `_error_code` — and the code for it.
     pub err_code: i32,
-    /// `_cmdid`.
+    /// `_cmdid` — the command the answer is for, which is what a long-link
+    /// task is matched to.
     pub cmdid: u32,
     /// `_taskid` — what the queue finds the task by. [`Task::INVALID_TASK_ID`]
     /// is the server pushing.
     pub taskid: u32,
-    /// `_body`.
+    /// `_body` — what came back, which is what `Buf2Resp` is asked to read.
     pub body: Vec<u8>,
-    /// `_connect_profile`.
+    /// `_connect_profile` — the connect the channel was on when it did.
     pub profile: ConnectProfile,
 }
 
@@ -119,12 +122,14 @@ pub struct Response {
 /// about it, and the task it was about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Failure {
-    /// `_err_type`.
+    /// `_err_type` — why the channel failed, which every task on it is failed
+    /// with.
     err_type: ErrCmdType,
-    /// `_err_code` — what the task the answer was about is failed with; the rest
+    /// `_err_code`— what the task the answer was about is failed with; the rest
     /// of the channel gets `0`.
     err_code: i32,
-    /// `_fail_handle`.
+    /// `_fail_handle` — what the app is told to do about it, which is what
+    /// decides whether a task is tried again.
     fail_handle: TaskFailHandleType,
     /// `_src_taskid` — [`Task::INVALID_TASK_ID`] is every task of the channel.
     src_taskid: u32,
@@ -172,8 +177,9 @@ pub type ResetChannel = dyn FnMut(&str) + Send;
 /// now that the network is another one.
 pub type NetworkChange = dyn FnMut(&str) -> bool + Send;
 
-/// `LongLinkTaskManager` — the queue of tasks that go out on a long link, and
-/// the channels they go out on.
+/// The queue of tasks that go out on a long link, and the channels they go out
+/// on: what the short-link queue is for one run of one task, this one is for a
+/// link that outlives all of them.
 pub struct LongLinkTaskManager {
     /// `lst_cmd_`, sorted by [`crate::task_profile::compare_task`].
     tasks: Vec<TaskProfile>,
@@ -181,12 +187,15 @@ pub struct LongLinkTaskManager {
     /// the name a task names it by, whether it is the main one, and what kind
     /// of link it is.
     channels: Vec<LonglinkConfig>,
-    /// `lastbatcherrortime_`.
+    /// `lastbatcherrortime_` — when the queue last failed a whole channel at
+    /// once: it is the reading the wait every task then owes the queue is
+    /// counted from, which is [`LongLinkTaskManager::retry_interval`].
     last_batch_error_time: u64,
     /// `retry_interval_` — one wait for the whole queue, which is what the C++
     /// keeps instead of one per task.
     retry_interval: u64,
-    /// `tasks_continuous_fail_count_`.
+    /// `tasks_continuous_fail_count_` — failures in a row, which is what the
+    /// dynamic timeout grows on.
     tasks_continuous_fail_count: u32,
     /// `dynamic_timeout_` — the C++ shares one with the short-link queue; this
     /// one is the queue's own, and [`LongLinkTaskManager::dynamic_timeout`] is
@@ -315,7 +324,8 @@ impl LongLinkTaskManager {
         true
     }
 
-    /// `longlink_metas_`.
+    /// `longlink_metas_` — the channels a task may be started on, and whether
+    /// each is the main one.
     pub fn channels(&self) -> &[LonglinkConfig] {
         &self.channels
     }
@@ -382,7 +392,8 @@ impl LongLinkTaskManager {
         true
     }
 
-    /// `HasTask(_taskid)`.
+    /// `HasTask(_taskid)` — whether a task of that id is still in the queue:
+    /// one that answered, or that was stopped, is not.
     pub fn has_task(&self, taskid: u32) -> bool {
         self.tasks
             .iter()
@@ -424,9 +435,9 @@ impl LongLinkTaskManager {
         self.redo_tasks_of_at(now, "");
     }
 
-    /// `__RedoTasks(_name)` — the tasks of one channel are cancelled and tried
-    /// again, which is what a channel whose own monitor said the network changed
-    /// asks for. The channel itself is left alone.
+    /// `__RedoTasks(_name)`— the tasks of one channel are cancelled and tried
+    /// again, which is what a channel whose own monitor said the network
+    /// changed asks for. The channel itself is left alone.
     pub fn redo_tasks_of(&mut self, name: &str) {
         self.redo_tasks_of_at(gettickcount(), name)
     }
@@ -590,8 +601,8 @@ impl LongLinkTaskManager {
     /// `__OnResponse` — what a channel answered with.
     ///
     /// [`None`] is an answer that is not about a task the queue knows: the
-    /// server pushing, an answer for a channel the queue has no link for, or one
-    /// for a task that is over.
+    /// server pushing, an answer for a channel the queue has no link for, or
+    /// one for a task that is over.
     pub fn on_response(&mut self, response: Response) -> Option<RespHandle> {
         self.on_response_at(gettickcount(), response)
     }
@@ -624,8 +635,8 @@ impl LongLinkTaskManager {
         if response.err_type != ErrCmdType::Ok {
             if response.err_code == HANDSHAKE_MISUNDERSTAND {
                 if let Some(at) = at {
-                    // the two ends did not agree on the handshake: a try that is
-                    // not the task's to pay for
+                    // the two ends did not agree on the handshake: a try that
+                    // is not the task's to pay for
                     self.tasks[at].remain_retry_count += 1;
                 }
             }
@@ -793,7 +804,7 @@ impl LongLinkTaskManager {
         }
     }
 
-    /// `DisconnectByTaskId(_taskid, _code)` — the channel a task is going out on
+    /// `DisconnectByTaskId(_taskid, _code)`— the channel a task is going out on
     /// is taken down. `false` when there is no such task, or no such channel.
     pub fn disconnect_by_taskid(&mut self, taskid: u32, code: DisconnectInternalCode) -> bool {
         let Some(at) = self.locate(taskid) else {
@@ -843,12 +854,14 @@ impl LongLinkTaskManager {
         self.retry_interval
     }
 
-    /// `lst_cmd_`.
+    /// `lst_cmd_` — the tasks in the order they go out in, and not in the
+    /// order they were asked for.
     pub fn tasks(&self) -> &[TaskProfile] {
         &self.tasks
     }
 
-    /// How many tasks are in the queue.
+    /// How many tasks are in the queue, whichever channel each is going out
+    /// on.
     pub fn len(&self) -> usize {
         self.tasks.len()
     }
@@ -883,12 +896,14 @@ impl LongLinkTaskManager {
         deadlines.chain(retries).min()
     }
 
-    /// `task_intercept_`.
+    /// `task_intercept_` — the answers the queue kept to hand out again, so
+    /// that a cgi that was answered once is not asked for twice.
     pub fn intercept(&mut self) -> &mut TaskIntercept {
         &mut self.intercept
     }
 
-    /// `dynamic_timeout_`.
+    /// `dynamic_timeout_` — the network's timeout status as this queue has
+    /// seen it, which is what a task's own two timeouts are worked out from.
     pub fn dynamic_timeout(&mut self) -> &mut DynamicTimeout {
         &mut self.dynamic_timeout
     }
@@ -898,8 +913,7 @@ impl LongLinkTaskManager {
         self.encoder = encoder;
     }
 
-    /// `fun_callback_`.
-    /// `fun_callback_` — a task that is over, and what the app says about it:
+    /// [`Callback`] — a task that is over, and what the app says about it:
     /// the answer is the code the task is remembered with.
     ///
     /// The connect profile comes along for the same reason it does in
@@ -915,7 +929,9 @@ impl LongLinkTaskManager {
         self.callback = Some(Box::new(callback));
     }
 
-    /// `fun_notify_network_err_`.
+    /// [`NotifyNetworkErr`] — the app is told about a channel that answered,
+    /// or did not: the name comes first because one link is not the only one
+    /// a host has. Unset, none of it is told.
     pub fn set_notify_network_err(
         &mut self,
         notify: impl FnMut(&str, ErrCmdType, i32, &str, u16) + Send + 'static,
@@ -923,7 +939,9 @@ impl LongLinkTaskManager {
         self.notify_network_err = Some(Box::new(notify));
     }
 
-    /// `fun_notify_retry_all_tasks`.
+    /// [`NotifyRetryAllTasks`] — the app is asked to look at every task of a
+    /// user again. Unset, the task that asked for it stays in the queue, and
+    /// [`RespHandle::Deferred`] is what the host is answered with.
     pub fn set_notify_retry_all_tasks(
         &mut self,
         notify: impl FnMut(ErrCmdType, i32, TaskFailHandleType, u32, &str) + Send + 'static,
@@ -931,12 +949,14 @@ impl LongLinkTaskManager {
         self.notify_retry_all_tasks = Some(Box::new(notify));
     }
 
-    /// `fun_on_push_`.
+    /// [`OnPush`] — an answer with no task behind it, which is the server
+    /// sending something the app did not ask for. Unset, the body is dropped.
     pub fn set_on_push(&mut self, push: impl FnMut(&str, u32, u32, &[u8]) + Send + 'static) {
         self.on_push = Some(Box::new(push));
     }
 
-    /// `Req2Buf`.
+    /// [`Req2Buf`] — the app writes the body of a request. Unset, a task goes
+    /// out with an empty one, which is a body and not an error.
     pub fn set_req2buf(
         &mut self,
         req2buf: impl FnMut(&Task) -> Result<Vec<u8>, i32> + Send + 'static,
@@ -944,7 +964,9 @@ impl LongLinkTaskManager {
         self.req2buf = Some(Box::new(req2buf));
     }
 
-    /// `Buf2Resp`.
+    /// [`Buf2Resp`] — the app reads the body of an answer. Unset, every body
+    /// is `0` and `kTaskFailHandleNormal`, which is a task that succeeded: a
+    /// host that hands none in gets a queue in which nothing ever fails.
     pub fn set_buf2resp(
         &mut self,
         buf2resp: impl FnMut(&Task, &[u8]) -> (i32, TaskFailHandleType) + Send + 'static,
@@ -961,7 +983,8 @@ impl LongLinkTaskManager {
         self.make_sure_authed = Some(Box::new(make_sure_authed));
     }
 
-    /// `fun_anti_avalanche_check_`.
+    /// [`AntiAvalancheCheck`] — whether a task may go out at all. Unset,
+    /// every one may.
     pub fn set_anti_avalanche_check(
         &mut self,
         check: impl FnMut(&Task, &[u8]) -> bool + Send + 'static,
@@ -979,7 +1002,7 @@ impl LongLinkTaskManager {
         self.net_info = Some(Box::new(net_info));
     }
 
-    /// `GenSequenceId` — unset is a task that is reported under sequence id `0`.
+    /// `GenSequenceId`— unset is a task that is reported under sequence id `0`.
     pub fn set_gen_sequence_id(&mut self, gen: impl FnMut() -> u16 + Send + 'static) {
         self.gen_sequence_id = Some(Box::new(gen));
     }
@@ -992,7 +1015,7 @@ impl LongLinkTaskManager {
         self.channel_profile = Some(Box::new(profile));
     }
 
-    /// `Channel()->SvrTrigOff()` + `Monitor()->MakeSureConnected()` — unset is a
+    /// `Channel()->SvrTrigOff()`+ `Monitor()->MakeSureConnected()`— unset is a
     /// channel that is up, which is what lets every task go out.
     pub fn set_make_sure_connected(
         &mut self,
@@ -1010,12 +1033,14 @@ impl LongLinkTaskManager {
         self.send = Some(Box::new(send));
     }
 
-    /// `Channel()->Stop(...)`.
+    /// [`StopOnChannel`] — the link is told a task is not waited for any more.
+    /// Unset, the link keeps waiting for an answer nobody is going to read.
     pub fn set_stop(&mut self, stop: impl FnMut(&str, u32) + Send + 'static) {
         self.stop = Some(Box::new(stop));
     }
 
-    /// `Channel()->Disconnect(...)`.
+    /// [`DisconnectChannel`] — the link is taken down. Unset, one the queue
+    /// wants gone stays up, and everything that goes out on it fails again.
     pub fn set_disconnect(
         &mut self,
         disconnect: impl FnMut(&str, DisconnectInternalCode) + Send + 'static,
@@ -1376,8 +1401,8 @@ impl LongLinkTaskManager {
                 let profile = &mut self.tasks[at];
                 profile.end_task_time = now;
                 profile.err_type = err_type;
-                // what the app says about an answer it was given is the code the
-                // task is remembered with — except for a task that was only
+                // what the app says about an answer it was given is the code
+                // the task is remembered with— except for a task that was only
                 // sent, or one that never went out
                 profile.err_code = if !task.send_only && was_running && err_type == ErrCmdType::Ok {
                     cgi_retcode
@@ -1460,8 +1485,8 @@ impl LongLinkTaskManager {
             self.retry_interval = 0;
         }
 
-        // not a long-link callback: a link that failed on dns, on a socket or on
-        // a cancel is one the C++ leaves alone
+        // not a long-link callback: a link that failed on dns, on a socket or
+        // on a cancel is one the C++ leaves alone
         if fail_handle == TaskFailHandleType::Default
             && !matches!(
                 err_type,
@@ -1476,7 +1501,7 @@ impl LongLinkTaskManager {
         }
     }
 
-    /// `__Locate` — the task an answer is about, which the C++ finds by task id:
+    /// `__Locate`— the task an answer is about, which the C++ finds by task id:
     /// a long link answers for a task, not for a run.
     fn locate(&self, taskid: u32) -> Option<usize> {
         if taskid == Task::INVALID_TASK_ID {
@@ -1736,8 +1761,8 @@ fn due(profile: &TaskProfile, now: u64, network: NetworkKind) -> Vec<Timeout> {
         .collect()
 }
 
-/// `batchMap[_name] = (_code, _src_taskid)`: one entry per channel, and the last
-/// task of a channel that timed out is the one the channel is failed for.
+/// `batchMap[_name] = (_code, _src_taskid)`: one entry per channel, and the
+/// last task of a channel that timed out is the one the channel is failed for.
 fn upsert(batch: &mut Vec<(String, i32, u32)>, name: String, entry: (i32, u32)) {
     match batch.iter_mut().find(|(channel, _, _)| *channel == name) {
         // `std::map::operator[] = std::make_pair(..)` — an assignment, so the
@@ -1858,8 +1883,8 @@ mod tests {
         }
     }
 
-    /// An answer that did not come: what a channel hands `__OnResponse` when the
-    /// read failed.
+    /// An answer that did not come: what a channel hands `__OnResponse` when
+    /// the read failed.
     fn failed(taskid: u32, err_type: ErrCmdType, err_code: i32) -> Response {
         Response {
             err_type,
