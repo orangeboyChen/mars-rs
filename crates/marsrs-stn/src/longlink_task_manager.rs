@@ -672,7 +672,7 @@ impl LongLinkTaskManager {
         let task = self.tasks[at].task.clone();
         // the channel the answer came back on, which is the one the task was
         // put in this queue to go out on
-        let channel = self.tasks[at].link_type;
+        let channel = self.link_type_of(&name);
         let len = response.body.len();
         {
             let profile = &mut self.tasks[at].transfer_profile;
@@ -1218,7 +1218,10 @@ impl LongLinkTaskManager {
                 task.client_sequence_id = sequence_id;
             }
 
-            let body = match self.encode(&task, self.tasks[i].link_type) {
+            // the channel the task goes out on, which is the one this queue
+            // keeps and not the one the task was last failed with
+            let channel = self.link_type_of(&name);
+            let body = match self.encode(&task, channel) {
                 Ok(body) => body,
                 Err(code) => {
                     let profile = self.profile_of(&name);
@@ -1295,7 +1298,8 @@ impl LongLinkTaskManager {
             // of it and the task goes out like any other
             if let Some(answer) = self.intercept.intercept_task_info_at(now, &task.cgi) {
                 let len = answer.len();
-                let (err_code, handle) = self.decode(&task, &answer, self.tasks[i].link_type);
+                let channel = self.link_type_of(&name);
+                let (err_code, handle) = self.decode(&task, &answer, channel);
                 {
                     let profile = &mut self.tasks[i].transfer_profile;
                     profile.received_size = len;
@@ -1543,6 +1547,20 @@ impl LongLinkTaskManager {
             .iter()
             .map(|channel| channel.name.clone())
             .collect()
+    }
+
+    /// `longlink->Config().link_type` — the kind of link a channel is, which is
+    /// what the C++ hands `Req2Buf` and `Buf2Resp` at all four of its calls.
+    /// The task's own `link_type` is not it: `__SingleRespHandle` writes the
+    /// profile of the try that ended over that one, and a profile that was
+    /// never filled in says `CHANNEL_LONG` — so a task with a try left in it
+    /// would be handed the channel of its failure, and not the one it is going
+    /// out on.
+    fn link_type_of(&self, name: &str) -> i32 {
+        self.channels
+            .iter()
+            .find(|channel| channel.name == name)
+            .map_or(Task::CHANNEL_LONG, |channel| channel.link_type)
     }
 
     /// `__GetConnectionProfile` — the connect of a channel, or one that says
@@ -1817,6 +1835,8 @@ mod tests {
     const NOW: u64 = 100 * 1000;
     /// The one channel every test's queue has.
     const CHANNEL: &str = "long.weixin.qq.com";
+    /// A second channel, of the kind a task with `minorlong_host_list` gets.
+    const MINOR: &str = "minor.weixin.qq.com";
 
     /// What went out: the channel, the task, and how long the request was.
     type Sent = Arc<Mutex<Vec<(String, u32, usize)>>>;
@@ -2336,6 +2356,49 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
             vec![(ErrCmdType::Socket, -5001, TaskFailHandleType::Default, 7)],
             "the app hears about it and the task leaves the queue"
+        );
+    }
+
+    /// The channel `Req2Buf` is handed is the one the task is going out on and
+    /// not the one its last try was failed with: `__SingleRespHandle` writes
+    /// the profile of that try over the task's own `link_type`, and a profile
+    /// the app never filled in says `CHANNEL_LONG` — so a task with a try left
+    /// in it used to be encoded for a channel it was never going out on.
+    #[test]
+    fn a_task_given_another_try_is_encoded_for_the_channel_it_is_in() {
+        let mut manager = manager();
+        let mut minor = LonglinkConfig::new(MINOR);
+        minor.link_type = Task::CHANNEL_MINOR_LONG;
+        assert!(manager.add_long_link(minor));
+        let _ = wire(&mut manager);
+
+        let channels: Arc<Mutex<Vec<i32>>> = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&channels);
+        manager.set_req2buf(move |_task, channel| {
+            record
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(channel);
+            Ok(b"body".to_vec())
+        });
+
+        let mut task = task(7);
+        task.minorlong_host_list = vec![MINOR.to_string()];
+        manager.start_task_at(NOW, task, Task::CHANNEL_MINOR_LONG);
+        // A failure the task gets another try for, and the wait the queue owes
+        // before it hands that try out: the channel it comes in on is the one
+        // the task is queued on.
+        let mut failure = failed(7, ErrCmdType::EnDecode, -1);
+        failure.name = MINOR.to_string();
+        manager.on_response_at(NOW + 10, failure);
+        manager.run_loop_at(NOW + 10 + RETRY_INTERNAL);
+
+        assert_eq!(
+            *channels
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![Task::CHANNEL_MINOR_LONG, Task::CHANNEL_MINOR_LONG],
+            "every try is encoded for the link the task is queued on"
         );
     }
 
