@@ -819,7 +819,11 @@ pub fn compute_task_timeout(task: &Task) -> u64 {
     };
     let mut timeout = (wait + TASK_TIMEOUT_MARGIN) * tries as u64;
     if task.long_polling {
-        timeout = task.long_polling_timeout.max(0) as u64 + TASK_TIMEOUT_MARGIN;
+        // `task_timeout = (_task.long_polling_timeout + 5 * 1000)` — the C++'s
+        // `int` arithmetic, on a value it then keeps in a `uint64_t`: a caller
+        // who set nothing, which is `-1` there, gets one millisecond less than
+        // the margin, and not the whole of it
+        timeout = TASK_TIMEOUT_MARGIN.wrapping_add(task.long_polling_timeout as u64);
     }
     if task.total_timeout > 0 && (task.total_timeout as u64) < timeout {
         timeout = task.total_timeout as u64;
@@ -1048,5 +1052,19 @@ mod tests {
             ..TaskOutcome::new(0, 0)
         };
         assert_eq!(other.fail_step(), TaskFailStep::Other);
+    }
+
+    #[test]
+    fn a_long_polling_task_that_set_no_timeout_of_its_own_waits_a_millisecond_less() {
+        let mut task = Task::new(1, 1);
+        task.long_polling = true;
+        // `-1`, which is what the C++ constructor leaves a task that set
+        // nothing with: the margin is added to it, and not to a zero it was
+        // clamped to
+        task.long_polling_timeout = -1;
+        assert_eq!(compute_task_timeout(&task), TASK_TIMEOUT_MARGIN - 1);
+
+        task.long_polling_timeout = 20_000;
+        assert_eq!(compute_task_timeout(&task), 25_000);
     }
 }
