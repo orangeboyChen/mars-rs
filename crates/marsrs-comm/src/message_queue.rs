@@ -443,7 +443,8 @@ pub fn broadcast_message(
     post_message(&MessageHandler { queue: id, seq: 0 }, message, timing)
 }
 
-/// `MessageQueue::FasterMessage` — the message jumps the queue.
+/// `MessageQueue::FasterMessage(handler, message)` — with the C++'s default
+/// timing, which is "now".
 ///
 /// It is addressed to `handler`, and not broadcast: upstream builds its wrapper
 /// from the `_handlerid` it is handed (`MessageWrapper(_handlerid, ...)` in
@@ -451,8 +452,74 @@ pub fn broadcast_message(
 /// `seq == 0`. Posting this one as a broadcast ran every handler that had asked
 /// for broadcasts and *not* the one it was addressed to, so a `FasterMessage`
 /// disappeared instead of being delivered.
+///
+/// What "faster" means is **not** jumping the queue — that is
+/// [`post_message_at_first`]. Upstream looks for a message already pending for
+/// the same handler with the same title (`Message::operator==` compares the
+/// title and nothing else) and, since a message due now cannot be later than
+/// one that is already waiting, replaces it: the pending payload is dropped and
+/// its `post` is handed to the new one, so a post the caller is holding keeps
+/// naming this message. Asking twice therefore runs the handler once, with the
+/// payload of the second ask.
 pub fn faster_message(handler: &MessageHandler, message: Message) -> MessagePost {
-    post_message_at_first(handler, message)
+    let title = message.title;
+    let Some(queue) = queue(handler.queue) else {
+        return NULL_POST;
+    };
+    let mut state = queue.lock();
+    // An uninstalled handler has nothing left to deliver a message to, so a
+    // message carrying its `reg` could never run: `post_message` answers
+    // `NULL_POST` for the same reason, and matching a pending entry below would
+    // hand back a post that no dispatch will ever pick up.
+    if handler.seq != 0 && !state.handlers.contains_key(&handler.seq) {
+        return NULL_POST;
+    }
+    // Search and insertion are one step under the queue's lock, not two: two
+    // threads asking for the same message when nothing is pending would each
+    // see an empty queue and post a copy of its own, and the handler would run
+    // twice — which is the one thing this call promises it does not do.
+    if let Some(index) = state
+        .messages
+        .iter()
+        .position(|m| m.post.reg == *handler && m.title == title)
+    {
+        let entry = state.messages.remove(index).expect("found above");
+        // The old `post`, and the new payload: the pending copy of this message
+        // was asked for and then superseded, so what runs is what was asked for
+        // last, and not both.
+        let replacement = PostedMessage {
+            post: entry.post,
+            title,
+            due: None,
+            period: None,
+            message: Arc::new(Mutex::new(message)),
+        };
+        state.messages.push_back(replacement);
+        drop(state);
+        // `content.breaker->Notify(lock)` of the C++, which it does on the way
+        // out of every post: the replacement is due now, and the message it
+        // replaces may well have been due in a minute — which is exactly what a
+        // thread waiting on this queue is sleeping until. Left unnotified, the
+        // replacement sits there until that wait runs out on its own.
+        queue.cond.notify_all();
+        return entry.post;
+    }
+    // `MessagePost` of the C++'s `post_message`, done here rather than by calling
+    // it: the sequence number and the insertion have to happen under the lock
+    // the search above took, and `MessageTiming::Immediate` is what "faster"
+    // posts — a message that is due now.
+    let seq = state.next_post_seq;
+    state.next_post_seq += 1;
+    state.messages.push_back(PostedMessage {
+        post: MessagePost { reg: *handler, seq },
+        title,
+        due: None,
+        period: None,
+        message: Arc::new(Mutex::new(message)),
+    });
+    drop(state);
+    queue.cond.notify_all();
+    MessagePost { reg: *handler, seq }
 }
 
 /// `MessageQueue::CancelMessage(post)`.

@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -14,8 +14,8 @@ use marsrs_comm::message_queue::{
     create_message_queue, destroy_message_queue, faster_message, found_message,
     get_def_message_queue, install_async_handler, install_message_handler,
     install_message_handler as install, pending_message_count, post_message, post_message_at_first,
-    singleton_message, wait_message, Message, MessageHandler, MessageTiming, MessageTitle, RunLoop,
-    NULL_POST,
+    singleton_message, uninstall_message_handler, wait_message, Message, MessageHandler,
+    MessagePost, MessageTiming, MessageTitle, RunLoop, NULL_POST,
 };
 
 #[test]
@@ -657,6 +657,190 @@ fn a_faster_message_runs_the_handler_it_was_addressed_to() {
         broadcasts.load(Ordering::SeqCst),
         0,
         "it was posted as a broadcast"
+    );
+    destroy_message_queue(queue);
+}
+
+/// `FasterMessage` asked twice for the same handler and title is **one** message
+/// with the payload of the second ask, and the post the first ask returned keeps
+/// naming it (`messagewrapper->postid = (*it)->postid`).
+///
+/// Posing it twice as two pending messages is what the queue did before: the
+/// handler then ran once per ask, with a payload the caller had already
+/// superseded.
+#[test]
+fn a_faster_message_asked_twice_runs_once_with_the_later_payload() {
+    let queue = create_message_queue();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    let handler = install(
+        move |message: &mut Message| sink.lock().unwrap().push(message.name.clone()),
+        false,
+        queue,
+    );
+
+    let first = faster_message(&handler, Message::new(MessageTitle(11), "first"));
+    let second = faster_message(&handler, Message::new(MessageTitle(11), "second"));
+
+    assert_eq!(first, second, "the pending message was given a new post");
+    assert_eq!(
+        pending_message_count(queue),
+        1,
+        "both asks are pending: the handler would run twice"
+    );
+
+    assert!(RunLoop::dispatch_timeout(queue, Duration::from_millis(200)));
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        ["second".to_owned()],
+        "the superseded payload ran"
+    );
+    destroy_message_queue(queue);
+}
+
+/// The coalescing is on the title: another title for the same handler is another
+/// message, and the same title for another handler is too.
+#[test]
+fn a_faster_message_only_replaces_its_own_title() {
+    let queue = create_message_queue();
+    let other = Arc::new(AtomicUsize::new(0));
+    let other_counter = Arc::clone(&other);
+    let second = install(
+        move |_| {
+            other_counter.fetch_add(1, Ordering::SeqCst);
+        },
+        false,
+        queue,
+    );
+    let handler = install(|_| {}, false, queue);
+
+    faster_message(&handler, Message::new(MessageTitle(11), "one"));
+    faster_message(&handler, Message::new(MessageTitle(12), "two"));
+    // Same title, different handler: not the message `handler` is waiting for.
+    faster_message(&second, Message::new(MessageTitle(11), "three"));
+
+    assert_eq!(pending_message_count(queue), 3);
+
+    for _ in 0..3 {
+        RunLoop::dispatch_timeout(queue, Duration::from_millis(50));
+    }
+    assert_eq!(
+        other.load(Ordering::SeqCst),
+        1,
+        "the other handler's message was not coalesced away"
+    );
+    destroy_message_queue(queue);
+}
+
+/// The replacement is due now, and the message it replaces may have been due in
+/// a minute — which is what a thread already waiting on this queue is sleeping
+/// until. The C++ notifies after it has pushed the replacement
+/// (`content.breaker->Notify(lock)`); without that the replacement sits in the
+/// queue until the wait it was meant to cut short runs out.
+#[test]
+fn a_faster_message_wakes_the_thread_waiting_on_the_queue() {
+    let queue = create_message_queue();
+    let handler = install(|_| {}, false, queue);
+    post_message(
+        &handler,
+        Message::new(MessageTitle(11), "later"),
+        MessageTiming::After(60_000),
+    );
+
+    let (tx, rx) = mpsc::channel();
+    let waiter = thread::spawn(move || {
+        let ran = RunLoop::dispatch_timeout(queue, Duration::from_secs(30));
+        let _ = tx.send(ran);
+    });
+    // let the waiter reach the condition variable
+    thread::sleep(Duration::from_millis(50));
+
+    let started = Instant::now();
+    let _post = faster_message(&handler, Message::new(MessageTitle(11), "now"));
+
+    match rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(ran) => assert!(ran, "the replacement did not run"),
+        Err(_) => panic!("the replacement never woke the thread waiting for it"),
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the waiter slept out its 30 s timeout"
+    );
+    let _ = waiter.join();
+    // Read once the waiter is done, so that the dispatch cannot be what makes
+    // up the number: one message ran and none is left, which is the ask having
+    // replaced the message it was waiting for rather than joined it.
+    assert_eq!(
+        pending_message_count(queue),
+        0,
+        "the replacement joined the message it was meant to replace"
+    );
+    destroy_message_queue(queue);
+}
+
+/// The search and the insertion are one step under the queue's lock: two threads
+/// asking for the same message when nothing is pending must not each post a copy
+/// of their own.
+#[test]
+fn two_asks_at_once_still_run_the_handler_once() {
+    let queue = create_message_queue();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&runs);
+    let handler = install(
+        move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        },
+        false,
+        queue,
+    );
+
+    let barrier = Arc::new(Barrier::new(2));
+    let threads: Vec<_> = (0..2)
+        .map(|_| {
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                faster_message(&handler, Message::new(MessageTitle(11), "asked twice"))
+            })
+        })
+        .collect();
+    let posts: Vec<MessagePost> = threads
+        .into_iter()
+        .map(|thread| thread.join().expect("the asking thread panicked"))
+        .collect();
+    assert_eq!(
+        posts[0], posts[1],
+        "the two asks were coalesced into one message"
+    );
+
+    assert!(RunLoop::dispatch_timeout(queue, Duration::from_millis(200)));
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "the handler ran once per ask instead of once"
+    );
+    destroy_message_queue(queue);
+}
+
+/// A handler that has been uninstalled has nothing left to deliver to, and a
+/// message it still has pending does not make it installed again: the ask is
+/// answered the way `post_message` answers it.
+#[test]
+fn an_ask_for_an_uninstalled_handler_is_no_post() {
+    let queue = create_message_queue();
+    let handler = install(|_| {}, false, queue);
+    faster_message(&handler, Message::new(MessageTitle(11), "pending"));
+    uninstall_message_handler(&handler);
+
+    assert_eq!(
+        faster_message(&handler, Message::new(MessageTitle(11), "asked anyway")),
+        NULL_POST,
+        "a message that can never be delivered was posted"
+    );
+    assert_eq!(
+        pending_message_count(queue),
+        1,
+        "the uninstalled handler's pending message was replaced instead of refused"
     );
     destroy_message_queue(queue);
 }
