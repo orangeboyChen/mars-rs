@@ -1164,17 +1164,23 @@ impl ShortLink {
     /// the task manager.
     fn respond_default(&mut self, err_type: ErrCmdType, err_code: i32) {
         self.response_status(err_code);
-        if !self.keep_alive || !self.profile.socket_fd.is_valid() {
-            return;
-        }
         if err_type != ErrCmdType::Ok {
+            // the C++ closes and reports only inside its own `IsKeepAlive()`
+            // arm; what it does after that arm is the retry and the statistic,
+            // and both need the decoder the port does not have here
+            if !self.keep_alive || !self.profile.socket_fd.is_valid() {
+                return;
+            }
             let socket = self.profile.socket_fd;
             self.socket_close(socket);
             // a server that hung up is not a socket the pool got wrong
             if err_code != ECT_SOCKET_SHUTDOWN {
                 self.pool_report(self.profile.is_reused_fd, false, false);
             }
-        } else {
+            return;
+        }
+
+        if self.keep_alive && self.profile.socket_fd.is_valid() {
             // the C++ asserts that the pair that won is on the list, which it
             // always is: the port asks the list instead
             let index = usize::try_from(self.profile.ip_index).unwrap_or(usize::MAX);
@@ -1182,14 +1188,18 @@ impl ShortLink {
             if let Some(item) = item {
                 self.pool_cache(&item);
             }
-            // the C++ says the same after it has read the answer: the socket
-            // received one and the answer was read out of it, which is what
-            // unbans a pool a socket that failed had banned. There is no
-            // `Buf2Resp` here to say the answer could not be read, so the
-            // decode is one that went well.
-            let is_reused_fd = self.profile.is_reused_fd;
-            self.pool_report(is_reused_fd, true, true);
         }
+        // the C++ says this *below* its own `IsKeepAlive()` arm, once the answer
+        // has come in and been read: the socket received one and the answer was
+        // read out of it, which is what unbans a pool a socket that failed had
+        // banned. A server that said `Connection: close` leaves no socket to
+        // cache and still owes the pool that report — without it a reuse that
+        // went well cannot clear a ban another socket had set, and the pool
+        // stays shut for as long as its interval runs. There is no `Buf2Resp`
+        // here to say the answer could not be read, so the decode is one that
+        // went well.
+        let is_reused_fd = self.profile.is_reused_fd;
+        self.pool_report(is_reused_fd, true, true);
     }
 
     /// The run is over without an answer: the profile says why, the app hears
