@@ -82,6 +82,14 @@ public struct StnQuestion {
         public let startReadPacketTime: UInt64
         /// When the last of it came back.
         public let readPacketFinishedTime: UInt64
+        /// When the app was handed the task to write its request.
+        public let startEncodePacketTime: UInt64
+        /// When the request came back.
+        public let encodePacketFinishedTime: UInt64
+        /// When the app was handed the answer.
+        public let startDecodePacketTime: UInt64
+        /// When it was done reading it.
+        public let decodePacketFinishedTime: UInt64
         /// The link the task went out on.
         public let channelType: MarsStn.Channel
         /// How the task went out.
@@ -100,6 +108,10 @@ public struct StnQuestion {
             sendPacketFinishedTime = profile.send_packet_finished_time
             startReadPacketTime = profile.start_read_packet_time
             readPacketFinishedTime = profile.read_packet_finished_time
+            startEncodePacketTime = profile.start_encode_packet_time
+            encodePacketFinishedTime = profile.encode_packet_finished_time
+            startDecodePacketTime = profile.start_decode_packet_time
+            decodePacketFinishedTime = profile.decode_packet_finished_time
             channelType = MarsStn.Channel(rawValue: profile.channel_type)
             transportProtocol = MarsStn.TransportProtocol(rawValue: profile.transport_protocol) ?? .default
             rtt = profile.rtt

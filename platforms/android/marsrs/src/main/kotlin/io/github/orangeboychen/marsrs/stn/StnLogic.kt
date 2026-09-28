@@ -222,7 +222,7 @@ object StnLogic {
 
     const val TASK_END_SUCCESS: Int = 0
 
-    /** What `onTaskEnd` is handed — the port fills the nine fields it has. */
+    /** What `onTaskEnd` is handed — every field but the two handshake ones. */
     class CgiProfile {
         @JvmField
         var taskStartTime: Long = 0
@@ -247,6 +247,18 @@ object StnLogic {
 
         @JvmField
         var readPacketFinishedTime: Long = 0
+
+        @JvmField
+        var startEncodePacketTime: Long = 0
+
+        @JvmField
+        var encodePacketFinishedTime: Long = 0
+
+        @JvmField
+        var startDecodePacketTime: Long = 0
+
+        @JvmField
+        var decodePacketFinishedTime: Long = 0
 
         @JvmField
         var rtt: Long = 0
