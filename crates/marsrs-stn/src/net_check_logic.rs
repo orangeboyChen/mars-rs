@@ -59,9 +59,16 @@ pub const CHECK_TIME_SPAN_INCREMENT_STEP: u64 = 10 * 60 * 1000;
 pub const VALID_BITS_FILTER: u32 = 0xFFFF_FFFF;
 /// `kMostRecentTaskStartN` — where the eight most recent tasks start, and how
 /// many of them there are.
-pub const MOST_RECENT_TASK_START_N: [u32; 2] = [24, 8];
-/// `kSecondRecentTaskStartN` — the eight before those.
-pub const SECOND_RECENT_TASK_START_N: [u32; 2] = [16, 8];
+///
+/// A task goes into bit `0`, which is what `set_bit` does, so the eight most
+/// recent are
+/// the bits `7..0`, which is `n` bits ending at the last one: a window whose
+/// last bit is the thirty-second of the thirty-two is `start_pos + n - 1 ==
+/// 32`, and not `start_pos + n == 32`, which is what the C++ used to ask and
+/// which left the newest task one bit outside the window it names.
+pub const MOST_RECENT_TASK_START_N: [u32; 2] = [25, 8];
+/// `kSecondRecentTaskStartN` — the eight before those, the bits `15..8`.
+pub const SECOND_RECENT_TASK_START_N: [u32; 2] = [17, 8];
 /// `kCheckifBelowCount` — fewer successes than this and the link is broken.
 pub const CHECK_IF_BELOW_COUNT: u32 = 3;
 /// `kCheckifAboveCount` — more than this and the link is fine.
@@ -105,7 +112,11 @@ fn extract_n_bits(records: u32, start_pos: u32, n: u32) -> u32 {
     if !(1..=32).contains(&start_pos) {
         start_pos = 1;
     }
-    if start_pos + n > 32 {
+    // The window is `start_pos` to `start_pos + n - 1`, so it fits while that
+    // last bit is one of the thirty-two. `start_pos + n > 32` — the test the
+    // C++ used to make — clamps a window that reaches exactly to the end, and
+    // a request for the eight newest tasks then comes back with seven.
+    if start_pos + n > 33 {
         n = 32 - start_pos;
     }
     if n == 0 {
@@ -578,11 +589,49 @@ mod tests {
 
     #[test]
     fn the_eight_most_recent_tasks_come_out_of_the_window() {
-        // `1` in the bits 8..1, which is what `kMostRecentTaskStartN` asks for
-        let records = 0b0000_0000_0000_0000_0000_0001_1111_1110;
-        assert_eq!(extract_n_bits(records, 24, 8), 0b1111_1111);
-        // ... and the eight before those are the bits 16..9
-        assert_eq!(extract_n_bits(records, 16, 8), 0);
+        // Eight successes and then eight failures, written the way
+        // `set_bit` writes them: the eight successes sit in the bits 15..8
+        // and the eight failures in the bits 7..0.
+        let mut records = 0;
+        for _ in 0..8 {
+            records = set_bit(true, records, VALID_BITS_FILTER);
+        }
+        for _ in 0..8 {
+            records = set_bit(false, records, VALID_BITS_FILTER);
+        }
+        assert_eq!(records, 0b0000_0000_0000_0000_1111_1111_0000_0000);
+
+        // What the window names is what is in it: the eight most recent tasks
+        // are the eight that failed, and the eight before those all succeeded.
+        assert_eq!(
+            extract_n_bits(
+                records,
+                MOST_RECENT_TASK_START_N[0],
+                MOST_RECENT_TASK_START_N[1]
+            ),
+            0
+        );
+        assert_eq!(
+            extract_n_bits(
+                records,
+                SECOND_RECENT_TASK_START_N[0],
+                SECOND_RECENT_TASK_START_N[1]
+            ),
+            0b1111_1111
+        );
+
+        // The newest task is bit `0`, so a success written now has to land in
+        // the recent window and not in the one before it.
+        records = set_bit(true, records, VALID_BITS_FILTER);
+        assert_eq!(records & 1, 1);
+        assert_eq!(
+            extract_n_bits(
+                records,
+                MOST_RECENT_TASK_START_N[0],
+                MOST_RECENT_TASK_START_N[1]
+            ),
+            1
+        );
 
         // a start position past the end of the window leaves nothing, which is
         // the shift of thirty-two the C++ leaves undefined
@@ -642,9 +691,11 @@ mod tests {
         // five minutes old, the wait is met and grows
         logic.update_long_link_info_at(MIN_CHECK_TIME_SPAN, 0, false);
         assert_eq!(logic.increment_steps(), 1);
-        // ... and fifteen minutes is what the next one needs
-        logic.update_long_link_info_at(MIN_CHECK_TIME_SPAN, 0, false);
-        assert_eq!(logic.increment_steps(), 1);
+        // ... and fifteen minutes is what the next one needs. Only three of
+        // these can be asked for in a row: what has to have been good is the
+        // eight tasks *before* the eight most recent, and each failure takes
+        // one of them, so by the ninth in a row only five are left and five is
+        // not more than `kCheckifAboveCount`.
         logic.update_long_link_info_at(
             MIN_CHECK_TIME_SPAN + CHECK_TIME_SPAN_INCREMENT_STEP,
             0,

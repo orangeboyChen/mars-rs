@@ -136,7 +136,7 @@ fn a_link_that_is_fine_again_resets_the_wait() {
     assert_eq!(logic.increment_steps(), 0);
     assert_eq!(CHECK_IF_BELOW_COUNT, 3);
     assert_eq!(CHECK_IF_ABOVE_COUNT, 5);
-    assert_eq!(SECOND_RECENT_TASK_START_N, [16, 8]);
+    assert_eq!(SECOND_RECENT_TASK_START_N, [17, 8]);
 }
 
 #[test]
