@@ -18,6 +18,24 @@ readme = "README.md"
 marsrs-core = { workspace = true }
 marsrs-buffer = { workspace = true }
 marsrs-appender = { workspace = true }
+# The reader: `decode` walks the record framing this crate writes, so it takes
+# the magic numbers and the header's shape from the crypt crate, the ECDH of the
+# TEA key from `k256`, and the two inflaters the payload was compressed with
+# from `flate2` and `zstd`. All four are already linked into an app that only
+# logs — the appender compresses and encrypts through them — so the reader adds
+# no new bytes to an artifact.
+marsrs-crypt = { workspace = true }
+k256 = { workspace = true }
+flate2 = { workspace = true }
+zstd = { workspace = true }
+
+# `xlog`, the CLI: `cargo install marsrs-xlog` puts it on the `$PATH`, and a
+# release carries it as an archive of its own. It is a bin of *this* crate and
+# not of `marsrs` because it reads and writes the `.xlog` format, which is
+# xlog's half and nothing else's.
+[[bin]]
+name = "xlog"
+path = "src/bin/xlog.rs"
 
 [lints]
 workspace = true

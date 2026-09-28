@@ -12,9 +12,11 @@ description = "CLI that encodes/decodes xlog files so the Rust port can be diffe
 marsrs-core = { workspace = true }
 marsrs-crypt = { workspace = true }
 marsrs-buffer = { workspace = true }
-flate2 = { workspace = true }
-zstd = { workspace = true }
-k256 = { workspace = true }
+# The reader: `decode` is `marsrs-xlog`'s, so the golden fixtures of `fixtures/`
+# prove the very code the `xlog` CLI reads a `.xlog` with, and not a second
+# copy of it. `flate2`, `zstd` and `k256` came with the reader and are gone
+# with it — what is left here is the writer's side and the comparison itself.
+marsrs-xlog = { workspace = true }
 tempfile = { workspace = true }
 serde_json = { workspace = true }
 

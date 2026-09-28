@@ -19,8 +19,10 @@
 //! * `decode` is the reader side: it walks the `header + body + tailer`
 //!   records, undoes TEA (ECDH between the *server* private key and the client
 //!   public key stored in the header) and inflates/decompresses the payload.
-//!   It mirrors `mars/xlog/crypt/decode_log_file_c_impl/decode_log_file.c`,
-//!   which is the C++ side's own decoder.
+//!   The reader itself is `marsrs-xlog`'s — the port of
+//!   `mars/xlog/crypt/decode_log_file_c_impl/decode_log_file.c` lives there
+//!   now, where the CLI reads through it too — so the golden files below are
+//!   what proves the reader this workspace ships.
 //!
 //! Nothing here is production code: it exists so the two implementations can
 //! be diffed byte for byte in CI, and so the golden fixtures under
@@ -33,15 +35,12 @@ use std::fs;
 
 use marsrs_buffer::{CompressMode, LogBuffer};
 use marsrs_core::AutoBuffer;
-use marsrs_crypt::{magic, CLIENT_PUBKEY_LEN, HEADER_LEN, TAILER_LEN, TEA_BLOCK_LEN};
+use marsrs_crypt::{magic, HEADER_LEN, TAILER_LEN};
 
 /// `kBufferBlockLength` in `mars/xlog/src/appender.cc` (150 KiB).
 const DEFAULT_REGION: usize = 150 * 1024;
 /// `ZSTD_c_compressionLevel` default of `XlogConfig` in the C++ appender.
 const DEFAULT_LEVEL: i32 = 6;
-/// `LogCrypt::CryptSyncLog` delta; only used to size the TEA loop.
-const TEA_ROUNDS: u32 = 16;
-const TEA_DELTA: u32 = 0x9e37_79b9;
 
 /// Reads `--key=value` style options; see the CLI in `main.rs`.
 pub type Opts = HashMap<String, String>;
@@ -242,194 +241,14 @@ pub fn decode(opts: &Opts) -> Result<(), String> {
     Ok(())
 }
 
-/// Walks every record in `data` and concatenates the recovered log text.
-pub fn decode_records(data: &[u8], privkey: &[u8; 32]) -> Result<Vec<u8>, String> {
-    let mut plain = Vec::new();
-    let mut offset = 0;
-    let mut blocks = 0;
-
-    while offset + HEADER_LEN + TAILER_LEN <= data.len() {
-        let magic_start = data[offset];
-        if !magic::magic_start_is_valid(magic_start) {
-            return Err(format!("bad magic 0x{magic_start:02x} at {offset}"));
-        }
-        let len = u32::from_le_bytes(data[offset + 5..offset + 9].try_into().expect("slice of 4"))
-            as usize;
-        let body_start = offset + HEADER_LEN;
-        let body_end = body_start + len;
-        if body_end + TAILER_LEN > data.len() {
-            return Err(format!("record at {offset} is truncated"));
-        }
-        if data[body_end] != magic::END {
-            return Err(format!("bad tailer 0x{:02x} at {body_end}", data[body_end]));
-        }
-
-        let body = &data[body_start..body_end];
-        match magic_start {
-            // `LogCrypt::CryptSyncLog` stores sync records verbatim: no TEA,
-            // no compression (the C++ has the TEA loop commented out).
-            magic::SYNC_ZLIB_START
-            | magic::SYNC_NOCRYPT_ZLIB_START
-            | magic::SYNC_ZSTD_START
-            | magic::SYNC_NOCRYPT_ZSTD_START => plain.extend_from_slice(body),
-            magic::ASYNC_ZLIB_START | magic::ASYNC_ZSTD_START => {
-                let mut client_pubkey = [0u8; CLIENT_PUBKEY_LEN];
-                client_pubkey.copy_from_slice(&data[body_start - CLIENT_PUBKEY_LEN..body_start]);
-                let tea_key = tea_key(privkey, &client_pubkey)?;
-                let decrypted = tea_decrypt_all(body, &tea_key);
-                plain.extend_from_slice(&inflate(magic_start, &decrypted)?);
-            }
-            magic::ASYNC_NOCRYPT_ZLIB_START | magic::ASYNC_NOCRYPT_ZSTD_START => {
-                plain.extend_from_slice(&inflate(magic_start, body)?);
-            }
-            other => return Err(format!("unhandled magic 0x{other:02x}")),
-        }
-
-        offset = body_end + TAILER_LEN;
-        blocks += 1;
-    }
-
-    if blocks == 0 {
-        return Err("no record found".into());
-    }
-    Ok(plain)
-}
-
-/// Raw DEFLATE (`inflateInit2(-MAX_WBITS)` + `Z_SYNC_FLUSH`) or zstd, matching
-/// `zlibDecompress` / `zstdDecompress` in `decode_log_file.c`.
-fn inflate(magic_start: u8, body: &[u8]) -> Result<Vec<u8>, String> {
-    if matches!(
-        magic_start,
-        magic::ASYNC_ZLIB_START | magic::ASYNC_NOCRYPT_ZLIB_START
-    ) {
-        return inflate_raw(body);
-    }
-    Ok(inflate_zstd(body))
-}
-
-/// `zstdDecompress` — `ZSTD_decompressStream` in a loop, tolerating a frame
-/// that was never terminated.
+/// The reader every decoder of this workspace reads through:
+/// `marsrs_xlog::decode_records`, the port of `decode_log_file.c`.
 ///
-/// `LogZstdBuffer::Flush` ends the stream with `ZSTD_compressStream2(...,
-/// ZSTD_e_end)` against a *zero-sized* output buffer, so the frame epilogue is
-/// never written and the decompressor keeps the tail of the last block back.
-/// `decode_log_file.c` accepts that and returns what it got; so does this.
-fn inflate_zstd(body: &[u8]) -> Vec<u8> {
-    use std::io::Read;
-
-    let mut out = Vec::new();
-    let Ok(mut decoder) = zstd::stream::read::Decoder::new(body) else {
-        return out;
-    };
-    let mut chunk = vec![0u8; 8192];
-    loop {
-        match decoder.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => out.extend_from_slice(&chunk[..n]),
-            Err(_) => break, // truncated frame: keep what was recovered
-        }
-    }
-    out
-}
-
-/// `zlibDecompress` — raw inflate of a stream that was never terminated
-/// (`deflate(..., Z_SYNC_FLUSH)` + `deflateEnd`), so `Z_STREAM_END` is never
-/// reached and the loop has to stop on "input consumed".
-fn inflate_raw(body: &[u8]) -> Result<Vec<u8>, String> {
-    use flate2::{Decompress, FlushDecompress, Status};
-
-    let mut decoder = Decompress::new(false);
-    let mut output = Vec::new();
-    let mut chunk = vec![0u8; 64 * 1024];
-    let mut consumed = 0;
-
-    loop {
-        let before_in = decoder.total_in();
-        let before_out = decoder.total_out();
-        let status = decoder
-            .decompress(&body[consumed..], &mut chunk, FlushDecompress::Sync)
-            .map_err(|e| format!("inflate: {e}"))?;
-        let produced = (decoder.total_out() - before_out) as usize;
-        let advanced = (decoder.total_in() - before_in) as usize;
-        output.extend_from_slice(&chunk[..produced]);
-        consumed += advanced;
-
-        // Keep calling after the input is exhausted: miniz_oxide holds the
-        // rest of the output back when the chunk filled up.
-        if (advanced == 0 && produced == 0) || matches!(status, Status::StreamEnd) {
-            break;
-        }
-    }
-    Ok(output)
-}
-
-/// TEA-decrypts the leading whole blocks; the trailing `len % 8` bytes were
-/// never encrypted (`LogCrypt::CryptAsyncLog`).
-fn tea_decrypt_all(body: &[u8], key: &[u32; 4]) -> Vec<u8> {
-    let mut out = body.to_vec();
-    for start in (0..out.len())
-        .step_by(TEA_BLOCK_LEN)
-        .take(out.len() / TEA_BLOCK_LEN)
-    {
-        let mut v = [
-            u32::from_le_bytes(out[start..start + 4].try_into().expect("slice of 4")),
-            u32::from_le_bytes(out[start + 4..start + 8].try_into().expect("slice of 4")),
-        ];
-        for (i, word) in tea_decrypt(&mut v, key).iter().enumerate() {
-            out[start + i * 4..start + i * 4 + 4].copy_from_slice(&word.to_le_bytes());
-        }
-    }
-    out
-}
-
-/// Inverse of `__TeaEncrypt` / `teaDecrypt`.
-fn tea_decrypt(v: &mut [u32; 2], k: &[u32; 4]) -> [u32; 2] {
-    let (mut v0, mut v1) = (v[0], v[1]);
-    let (k0, k1, k2, k3) = (k[0], k[1], k[2], k[3]);
-    let mut sum = TEA_DELTA.wrapping_mul(TEA_ROUNDS);
-    for _ in 0..TEA_ROUNDS {
-        v1 = v1.wrapping_sub(
-            (v0.wrapping_shl(4).wrapping_add(k2))
-                ^ (v0.wrapping_add(sum))
-                ^ (v0.wrapping_shr(5).wrapping_add(k3)),
-        );
-        v0 = v0.wrapping_sub(
-            (v1.wrapping_shl(4).wrapping_add(k0))
-                ^ (v1.wrapping_add(sum))
-                ^ (v1.wrapping_shr(5).wrapping_add(k1)),
-        );
-        sum = sum.wrapping_sub(TEA_DELTA);
-    }
-    [v0, v1]
-}
-
-/// `uECC_shared_secret(client_pub, svr_pri, ecdh_key)` — the decoder side of
-/// the ECDH: the *server* private key against the client public key carried in
-/// the record header. The first 16 bytes of the secret are the TEA key.
-fn tea_key(
-    privkey: &[u8; 32],
-    client_pubkey: &[u8; CLIENT_PUBKEY_LEN],
-) -> Result<[u32; 4], String> {
-    use k256::elliptic_curve::ecdh::diffie_hellman;
-
-    let secret = k256::SecretKey::from_slice(privkey).map_err(|e| format!("private key: {e}"))?;
-
-    // uECC stores points as X||Y; SEC1 wants the 0x04 tag in front.
-    let mut sec1 = [0u8; 1 + CLIENT_PUBKEY_LEN];
-    sec1[0] = 0x04;
-    sec1[1..].copy_from_slice(client_pubkey);
-    let public = k256::PublicKey::from_sec1_bytes(&sec1).map_err(|e| format!("client key: {e}"))?;
-
-    let shared = diffie_hellman(secret.to_nonzero_scalar(), public.as_affine());
-    let raw = shared.raw_secret_bytes();
-
-    let mut key = [0u32; 4];
-    for (i, word) in key.iter_mut().enumerate() {
-        let mut le = [0u8; 4];
-        le.copy_from_slice(&raw[i * 4..i * 4 + 4]);
-        *word = u32::from_le_bytes(le);
-    }
-    Ok(key)
+/// It takes the private key by value and not in an `Option`, because this CLI
+/// always asks for one: every fixture the C++ wrote is encrypted, and the
+/// golden files are only comparable when each record was decrypted.
+pub fn decode_records(data: &[u8], privkey: &[u8; 32]) -> Result<Vec<u8>, String> {
+    marsrs_xlog::decode_records(data, Some(privkey))
 }
 
 fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {

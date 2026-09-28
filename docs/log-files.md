@@ -90,7 +90,9 @@ mars logs reads these.
 ::: code-group
 
 ```bash [The CLI]
-xlog-compat decode --privkey=<hex> --in=marsrs_20260927.xlog --out=marsrs.plain
+cargo install marsrs-xlog          # puts `xlog` on the $PATH; a release
+                                   # carries the same command as an archive
+xlog decode --privkey=<hex> marsrs_20260927.xlog --out=marsrs.plain
 ```
 
 ```rust [Rust]
@@ -107,5 +109,9 @@ python3 decode_mars_log_file.py marsrs_20260927.xlog      # Tencent/mars
 :::
 
 An encrypted file needs the private key of the pair whose public key is in the
-config — `xlog-compat decode` takes it as `--privkey`, and nothing reads the
-records without it.
+config — `xlog decode` takes it as `--privkey`, and nothing reads the records
+without it. `xlog encode` is the other half: it writes a `.xlog` out of one
+record per line of its input, and encrypts it when it is given the public key
+of that pair with `--pubkey`.
+
+`xlog help` spells the whole command line out.

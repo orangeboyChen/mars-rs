@@ -32,8 +32,10 @@ implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")   // xlog alone
 implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")
 ```
 
-Every release ships a package per platform — a C ABI archive and a HarmonyOS
-build as well; see [getting started](https://orangeboychen.github.io/mars-rs/getting-started).
+Every release ships a package per platform — a C ABI archive, a HarmonyOS build
+and the `xlog` CLI, which reads and writes those files from a shell
+(`cargo install marsrs-xlog`); see
+[getting started](https://orangeboychen.github.io/mars-rs/getting-started).
 
 ## Use it
 

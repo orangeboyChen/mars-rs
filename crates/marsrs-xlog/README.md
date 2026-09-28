@@ -33,4 +33,20 @@ The crates behind this one (`marsrs-core`, `marsrs-buffer`, `marsrs-appender`)
 are implementation details. They are published only because a published crate
 cannot depend on a crate that is not on crates.io.
 
+## The `xlog` command
+
+`cargo install marsrs-xlog` puts a CLI on the `$PATH`: the writer and the reader
+of the format, for a shell that has a `.xlog` and no Rust in it.
+
+```bash
+xlog decode --privkey=<hex> marsrs_20260927.xlog --out=marsrs.plain
+xlog encode --pubkey=<hex> records.txt --out=marsrs_20260927.xlog
+xlog help
+```
+
+`decode` is what upstream's `decode_mars_log_file.py` does over the same bytes,
+and the same `decode_records` the crate exports; `encode` writes one record per
+line of its input, and encrypts it when it is given the public key of the pair
+whose private key `decode` takes.
+
 MIT licensed.
