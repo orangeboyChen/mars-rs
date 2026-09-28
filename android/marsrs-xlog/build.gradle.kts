@@ -43,6 +43,11 @@ android {
         // `marsrs-jni` is built against NDK 27 / API 24; 21 is the floor the C++
         // project ships with.
         minSdk = 21
+
+        // The rules an app's R8 needs to keep the JNI interface whole —
+        // `android/marsrs`'s, with everything but xlog left out the way this
+        // module is. Carried in the AAR as `proguard.txt`.
+        consumerProguardFiles("consumer-rules.pro")
     }
 
     sourceSets {

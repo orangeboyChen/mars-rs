@@ -108,3 +108,13 @@ Log.d("net", "…")
 val xlog = Xlog(XlogConfig(logDir = dir, namePrefix = "marsrs"))
 xlog.d("net", "…")
 ```
+
+## Shrinking the release build
+
+Nothing to add. `libmarsrsxlog.so` and the Kotlin that calls it name each other
+— the symbol of a native is `Java_io_github_orangeboychen_marsrs_xlog_Xlog_write`,
+and a field the Rust reads is the field `GetFieldID` asks for by name — and R8
+renames both halves. Both AARs carry the rules that keep those names, so an app
+whose release build sets `minifyEnabled true` needs no `proguard-rules.pro` of
+its own: they reach it as the `proguard.txt` of the AAR, and AGP merges them
+into the app's.

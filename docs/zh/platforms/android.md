@@ -99,3 +99,11 @@ Log.d("net", "…")
 val xlog = Xlog(XlogConfig(logDir = dir, namePrefix = "marsrs"))
 xlog.d("net", "…")
 ```
+
+## 缩小发布包
+
+什么都不用加。`libmarsrsxlog.so` 和调用它的 Kotlin 互相按名字引用 —— native 的符号是
+`Java_io_github_orangeboychen_marsrs_xlog_Xlog_write`，Rust 读的字段是 `GetFieldID`
+按名字问的那个字段 —— 而 R8 会把两半都改名。两个 AAR 都自带保住这些名字的规则，所以
+开了 `minifyEnabled true` 的 app 不需要自己的 `proguard-rules.pro`：规则以 AAR 的
+`proguard.txt` 进来，AGP 把它们并进 app 自己的规则里。

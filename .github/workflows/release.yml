@@ -267,6 +267,18 @@ jobs:
           (cd android && ./gradlew --no-daemon :marsrs:assembleRelease :marsrs-xlog:assembleRelease)
           cp android/marsrs/build/outputs/aar/marsrs-release.aar "dist/$MARSRS_AAR"
           cp android/marsrs-xlog/build/outputs/aar/marsrs-xlog-release.aar "dist/$MARSRS_XLOG_AAR"
+          # An AAR with no R8 rules in it is an AAR that breaks the app that
+          # shrinks its release build — the .so and the Kotlin name each
+          # other, and R8 renames both halves — so say so here and not in
+          # someone's crash log. `consumerProguardFiles` is what AGP turns
+          # into the `proguard.txt` of the AAR.
+          for AAR in "dist/$MARSRS_AAR" "dist/$MARSRS_XLOG_AAR"; do
+            if ! unzip -l "$AAR" | grep -q " proguard.txt"; then
+              echo "::error file=$AAR::$AAR carries no proguard.txt: its consumerProguardFiles are missing"
+              exit 1
+            fi
+            echo "$AAR: $(unzip -p "$AAR" proguard.txt | grep -c '^-keep') keep rules"
+          done
       - uses: actions/upload-artifact@v7
         with:
           name: release-android
