@@ -40,8 +40,7 @@ profile：
 - **一个错误类型** —— 失败*在哪*：Rust 里是 `ErrCmdType`，其余是 `errType`。`Ok`
   （0），或者 `Dns`、`Socket`、`Http`、`Server`、`Local`、`Canceld` …
 - **一个错误码** —— *出了什么*问题，它是负的：`-500` 第一个包一直没来，`-501` 包
-  之间有断档，`-502` 一次读或写超时，`-503` 整个任务超时，`-10086` 网络在它下面变
-  了。Android 把这些名字放在 `StnLogic` 上（`FIRSTPKGTIMEOUT`、`TASKTIMEOUT` …）。
+  之间有  断档，`-502` 一次读或写超时，`-503` 整个任务超时，`-10086` 网络在它底下变了。Android 把这些名字放在 `StnLogic` 上（`FIRSTPKGTIMEOUT`、`TASKTIMEOUT` …）。
 - **一个 profile** —— 这一趟的耗时：DNS 什么时候开始、连接什么时候建完、rtt。Rust
   和 Kotlin 里是 `CgiProfile`，Swift 里是 `StnQuestion.CgiProfile`，C 里是
   `MarsStnCgiProfile`。
@@ -58,8 +57,7 @@ profile：
 进程结束。
 
 `due_time` 是距离下一趟还有多久，单位是毫秒：`0` 是已经到期的一趟，队列里等着的一
-个 follow-up 就是。它是一个时长，不是一个时刻，这正是跨 ABI 的调用方需要的：tick
-从一个只有本进程读得到的原点起算，所以告诉宿主的是还要等多久。它也不是什么承诺 ——
+个 follow-up 就是。它是一个时长，不是一个时刻，这正是跨 ABI 的调用方需要的：tick 从一个只有本进程读得到的原点起算，所以给宿主的是还要等多久。它也不是什么承诺 ——
 一个不停空转调 `run_pending` 的循环照样能工作，只是会白烧掉一个核。
 
 在 Android 和共享 Kotlin 上，这个循环是 App 唯一能看到两座桥对一个形状意见不一致

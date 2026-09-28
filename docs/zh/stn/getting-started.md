@@ -5,7 +5,7 @@ STN 是 mars 里跟服务器说话的那一半。**任务**是一个工作单位
 报告。xlog 是另一半，两者互不依赖：只打日志的 App 拿
 [日志那部分](/zh/xlog/getting-started)，这里的一切都用不上。
 
-两条链路，任务会说出它要哪一条：
+链路有两条，任务会说出它要哪一条：
 
 | | **短连接** | **长连接** |
 |---|---|---|
@@ -13,8 +13,8 @@ STN 是 mars 里跟服务器说话的那一半。**任务**是一个工作单位
 | 它承载什么 | 你发起的一个任务 | 你的任务、服务器推下来的消息、让连接保持的 noop |
 | mars 怎么叫它 | `CHANNEL_SHORT` | `CHANNEL_LONG`、`CHANNEL_MINOR_LONG` |
 
-`Task::new` 两条都要（`CHANNEL_BOTH`），在你有理由挑一条之前这就是你要的：STN 会
-把任务发到第一条已经起来的链路上。
+`Task::new` 两条都要（`CHANNEL_BOTH`）；在你有理由挑一条之前就用它：STN 会把任务发到
+第一条已经建起来的链路上。
 
 ## 它在哪里
 
@@ -160,7 +160,7 @@ task.shortLinkHosts = ["example.com"]
 task.totalTimeout = 10_000
 MarsStn.start(task)
 
-// 3. 循环 —— `dueTime` 是这一趟还能等多少毫秒，没有可等的东西时是 `nil`
+// 3. 循环 —— `dueTime` 是这一趟还能等多少毫秒，没有要等的东西时是 `nil`
 while let wait = MarsStn.dueTime {
     Thread.sleep(forTimeInterval: Double(wait) / 1000)
     MarsStn.runPending()
@@ -214,7 +214,7 @@ task.totalTimeout = 10_000
 StnLogic.setShortlinkSvrAddr(443)
 StnLogic.startTask(task)
 
-// 3. 循环 —— `dueTime()` 是这一趟还能等多少毫秒，没有可等的东西时回答 -1
+// 3. 循环 —— `dueTime()` 是这一趟还能等多少毫秒，没有要等的东西时回答 -1
 var due = StnLogic.dueTime()
 while (due >= 0) {
     Thread.sleep(due)
@@ -265,7 +265,7 @@ val task = Task().apply {
 }
 StnLogic.startTask(task)
 
-// 3. 循环 —— `dueTime()` 是这一趟还能等多少毫秒，没有可等的东西时回答 `null`
+// 3. 循环 —— `dueTime()` 是这一趟还能等多少毫秒，没有要等的东西时回答 `null`
 var due = StnLogic.dueTime()
 while (due != null) {
     StnLogic.runPending()
@@ -314,7 +314,7 @@ task.shortlink_host_list.items = hosts;
 task.shortlink_host_list.count = 1;
 if (mars_stn_start_task(&task) != MARS_STN_OK) { /* 被拒，或 panic 了 */ }
 
-/* 3. 循环 —— 回答是这一趟还能等多少毫秒，"没有可等的东西" 就是 MARS_STN_ERR_NO_DUE */
+/* 3. 循环 —— 回答的是这一趟还能等多少毫秒，"没有要等的东西" 就是 MARS_STN_ERR_NO_DUE */
 long long due = mars_stn_due_time();
 while (due >= 0) {
     usleep(due * 1000);

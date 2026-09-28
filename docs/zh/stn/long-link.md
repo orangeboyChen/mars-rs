@@ -20,8 +20,8 @@
 | 现在就发一个 noop | — | `triggerNooping` | `trigNooping` | `mars_stn_trig_nooping` |
 | 丢掉重来 | `reset` / `reset_with_encoder` | `reset` / `resetAndInitEncoderVersion` | `reset` / `resetAndInitEncoderVersion` | `mars_stn_reset` / `mars_stn_reset_and_init_encoder_version` |
 
-上面那些调用到的都是默认那条长连接。要再开一条的应用得给它一个名字 —— `create_long_link`
-加一个 `LonglinkConfig`：名字、host 列表、要不要自己重连、要不要由它来向应用报状态。之
+上面这些调用的都是默认那条长连接。要再开一条，应用得给它一个名字 —— `create_long_link`
+加一个 `LonglinkConfig`：名字、host 列表、要不要自己重连、要不要由它向应用报状态。之
 后就按这个名字找它：`destroy_long_link` 把它丢掉、并让正在它上面跑的任务全部失败，
 `mark_main_longlink` 让它成为应用听到状态的那一条。`group` 留空、`link_type` 给 `0`，拿
 到的就是长连接的默认值。
