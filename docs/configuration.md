@@ -39,8 +39,8 @@ an appender opened at `info` keeps `warning` and drops `debug`.
 
 The two Kotlin columns are the same on purpose: `xlog-kmp` and `xlog` publish one
 API, so a shared module that moves between them renames nothing. So are the two
-columns that follow them — `marsrs_flutter_xlog` and `marsrs-react-native-xlog`
-carry the same spelling of the same options, and it is the Kotlin one.
+columns that follow them — `marsrs_xlog` and `marsrs-react-native-xlog` carry
+the same spelling of the same options, and it is the Kotlin one.
 
 `none` writes nothing, not even `fatal` — it is how an appender is quieted
 without being closed.

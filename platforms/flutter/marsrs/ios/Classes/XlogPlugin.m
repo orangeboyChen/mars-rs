@@ -2,7 +2,7 @@
 
 #import "mars_xlog.h"
 
-// The iOS half of the `marsrs_flutter` plugin: the C ABI of `mars_xlog.h`
+// The iOS half of the `marsrs` plugin: the C ABI of `mars_xlog.h`
 // (crate `marsrs-ffi`) behind the eleven methods of the plugin's channel.
 //
 // Objective-C, and not Swift: what the plugin carries is a static library with
@@ -11,18 +11,18 @@
 // itself. It is the instance API every other platform of the port is written
 // against: `mars_xlog_new_instance` and friends, one appender per prefix.
 //
-// The xlog-only plugin is `marsrs_flutter_xlog`, and this file is its
+// The xlog-only plugin is `marsrs_xlog`, and this file is its
 // Objective-C with the two names changed: xlog is the whole C ABI today, so the
 // two plugins are one package under two names.
 //
-// Every key below is a field `lib/marsrs_flutter.dart` put there, and every
+// Every key below is a field `lib/marsrs.dart` put there, and every
 // default is the one `mars_xlog.h` documents — `logDir` is the field with
 // none, because the appender answers `MARS_XLOG_ERR_EMPTY_LOG_DIR` without it.
 
-static NSString *const kXlogChannel = @"marsrs_flutter";
+static NSString *const kXlogChannel = @"marsrs";
 
 /// What every `FlutterError` below answers as its code.
-static NSString *const kXlogError = @"marsrs_flutter";
+static NSString *const kXlogError = @"marsrs";
 
 /// `XlogConfig.namePrefix` of the Dart, of the Kotlin and of the Swift: what an
 /// appender is opened with when the caller gave none.

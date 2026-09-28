@@ -46,7 +46,7 @@ Native 的两个包今天都只有日志库。
 | iOS / watchOS，Swift 或 Objective-C | `MarsRSXlog` 这个 pod | [CocoaPods](/zh/platforms/cocoapods) |
 | Android，Kotlin 或 Java | JitPack 上的 `marsrs` / `xlog` | [Android](/zh/platforms/android) |
 | Kotlin Multiplatform | `marsrs-kmp` / `xlog-kmp` | [Kotlin Multiplatform](/zh/platforms/kotlin-multiplatform) |
-| Flutter | `marsrs_flutter_xlog` / `marsrs_flutter` | [Flutter](/zh/platforms/flutter) |
+| Flutter | `marsrs_xlog` / `marsrs` | [Flutter](/zh/platforms/flutter) |
 | React Native | `marsrs-react-native-xlog` / `marsrs-react-native` | [React Native](/zh/platforms/react-native) |
 | 任何能调 C 的语言 | `marsrs-<version>-<host>` 压缩包 | [C ABI](/zh/platforms/c-abi) |
 | HarmonyOS | `marsrs-harmonyos-xlog`，或 `marsrs-harmony-<version>.tar.gz` 里的三个 `.so` | [HarmonyOS](/zh/platforms/harmonyos) |

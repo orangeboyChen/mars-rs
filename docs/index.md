@@ -48,7 +48,7 @@ registry of their own:
 | iOS / watchOS, Swift or Objective-C | the `MarsRSXlog` pod | [CocoaPods](/platforms/cocoapods) |
 | Android, Kotlin or Java | `marsrs` or `xlog` on JitPack | [Android](/platforms/android) |
 | Kotlin Multiplatform | `marsrs-kmp` or `xlog-kmp` | [Kotlin Multiplatform](/platforms/kotlin-multiplatform) |
-| Flutter | `marsrs_flutter_xlog` or `marsrs_flutter` | [Flutter](/platforms/flutter) |
+| Flutter | `marsrs_xlog` or `marsrs` | [Flutter](/platforms/flutter) |
 | React Native | `marsrs-react-native-xlog` or `marsrs-react-native` | [React Native](/platforms/react-native) |
 | anything with a C FFI | the `marsrs-<version>-<host>` archive | [The C ABI](/platforms/c-abi) |
 | HarmonyOS | `marsrs-harmonyos-xlog`, or the three `.so` of `marsrs-harmony-<version>.tar.gz` | [HarmonyOS](/platforms/harmonyos) |

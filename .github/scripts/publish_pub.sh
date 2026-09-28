@@ -17,8 +17,7 @@
 # repository:
 #
 #   * the package is on pub.dev already — automation cannot create one, so the
-#     first version of `marsrs_flutter` and `marsrs_flutter_xlog` is published
-#     by hand, once;
+#     first version of `marsrs` and `marsrs_xlog` is published by hand, once;
 #   * "Enable publishing from GitHub Actions" has been clicked in the package's
 #     Admin tab, with this repository and the tag-pattern `v{{version}}`.
 #

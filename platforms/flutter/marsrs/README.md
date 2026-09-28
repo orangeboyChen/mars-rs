@@ -1,4 +1,4 @@
-# marsrs_flutter
+# marsrs
 
 The Flutter plugin of the whole of [mars-rs](https://github.com/orangeboyChen/mars-rs),
 a Rust implementation of [Tencent/mars](https://github.com/Tencent/mars): the
@@ -7,7 +7,7 @@ zstd-compressed, sync or async — today, and STN and SDT when the C ABI carries
 them.
 
 ```dart
-import 'package:marsrs_flutter/marsrs_flutter.dart';
+import 'package:marsrs/marsrs.dart';
 
 final xlog = await Xlog.open(
   XlogConfig(
@@ -30,7 +30,7 @@ methods for the same reason, and not the properties they are in Kotlin and in Sw
 
 ## Installing it
 
-`flutter pub add marsrs_flutter`: the plugin is published to pub.dev, and the
+`flutter pub add marsrs`: the plugin is published to pub.dev, and the
 release of a tag is what publishes it.
 
 | | |
@@ -60,12 +60,12 @@ package out of it.
 
 ## Why there are two plugins
 
-`marsrs_flutter_xlog` is this plugin with the logging half only, and the two
+`marsrs_xlog` is this plugin with the logging half only, and the two
 are the pair the AARs of `platforms/android/` are — `mars-rs` and `marsrs-xlog`
 — and the pair `MarsRS` and `MarsRSXlog` of `Package.swift` are. Today they are
 the same package under two names: the C ABI is 28 `mars_xlog_*` symbols and
 nothing else, and `scripts/build_xcframework.sh` fails the day it is not, so
-taking this one costs exactly what `marsrs_flutter_xlog` costs and the
+taking this one costs exactly what `marsrs_xlog` costs and the
 difference between the two is the promise, not the bytes. STN and SDT land here
 and in nothing else, which is what an app that wants them is buying.
 

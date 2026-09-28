@@ -1,4 +1,4 @@
-# marsrs_flutter_xlog
+# marsrs_xlog
 
 The Flutter plugin of the xlog half of [mars-rs](https://github.com/orangeboyChen/mars-rs),
 a Rust implementation of [Tencent/mars](https://github.com/Tencent/mars): it writes
@@ -6,7 +6,7 @@ the `.xlog` the C++ implementation produced, encrypted or plain, zlib- or
 zstd-compressed, sync or async.
 
 ```dart
-import 'package:marsrs_flutter_xlog/marsrs_flutter_xlog.dart';
+import 'package:marsrs_xlog/marsrs_xlog.dart';
 
 final xlog = await Xlog.open(
   XlogConfig(
@@ -29,7 +29,7 @@ methods for the same reason, and not the properties they are in Kotlin and in Sw
 
 ## Installing it
 
-`flutter pub add marsrs_flutter_xlog`: the plugin is published to pub.dev, and the
+`flutter pub add marsrs_xlog`: the plugin is published to pub.dev, and the
 release of a tag is what publishes it.
 
 | | |
@@ -61,7 +61,7 @@ package out of it.
 
 The C ABI is 28 `mars_xlog_*` symbols and nothing else, and
 `scripts/build_xcframework.sh` fails the day it is not — the same reason the
-framework and the AAR are called xlog's. The pair's other half is `marsrs_flutter`, the
-whole-port plugin, and STN and SDT land in that one and in nothing here. Take one
-of the two and not both: both carry the same `libmarsrsxlog.so`, and an app with
-two of it does not build.
+framework and the AAR are called xlog's. The pair's other half is `marsrs`, the
+whole-port plugin, and STN and SDT land in that one and in nothing here. Take
+one of the two and not both: both carry the same `libmarsrsxlog.so`, and an app
+with two of it does not build.

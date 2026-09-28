@@ -41,7 +41,7 @@ implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")
 ```
 
 ```bash [Flutter]
-flutter pub add marsrs_flutter_xlog          # 要整个端口就 marsrs_flutter
+flutter pub add marsrs_xlog          # 要整个端口就 marsrs
 ```
 
 ```bash [React Native]

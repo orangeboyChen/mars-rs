@@ -1,7 +1,7 @@
 # The Flutter plugin of the xlog half of mars-rs.
 #
 #   dependencies:
-#     marsrs_flutter_xlog:
+#     marsrs_xlog:
 #       path: marsrs-xlog      # the directory in the plugin's tarball
 #
 # `.github/workflows/release.yml` publishes it as
@@ -24,13 +24,13 @@
 # fails the day it is not — the same reason the framework is called xlog's, and
 # the reason `MarsRSXlog` and the `xlog` AAR are.
 #
-# The whole port is the `marsrs_flutter` plugin, and this is the one for an app
+# The whole port is the `marsrs` plugin, and this is the one for an app
 # that only logs — the way `platforms/android/marsrs-xlog` is to
 # `platforms/android/marsrs`, and `MarsRSXlog` to `MarsRS`. The two are the
 # same package today, because xlog is the whole C ABI; the day STN and SDT
-# land in it, they land in `marsrs_flutter` and not here.
+# land in it, they land in `marsrs` and not here.
 
-name: marsrs_flutter_xlog
+name: marsrs_xlog
 description: >-
   Flutter plugin for xlog, the logging half of mars-rs: a Rust implementation of
   Tencent/mars that writes the .xlog the C++ implementation produced.

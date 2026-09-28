@@ -31,7 +31,7 @@ SDT have no pages of their own yet, and not every package carries them either �
 | iOS 12+, watchOS 10+, Swift or Objective-C | the `MarsRSXlog` product or pod | SwiftPM or CocoaPods, from this repository |
 | Android, Kotlin or Java | `xlog` / `marsrs` | [JitPack](https://jitpack.io) |
 | Kotlin Multiplatform | `xlog-kmp` / `marsrs-kmp` | GitHub Packages, or the release's `marsrs-kmp-maven.zip` |
-| Flutter | `marsrs_flutter_xlog` / `marsrs_flutter` | [pub.dev](https://pub.dev), or the release's `marsrs-flutter-xlog-<version>.tar.gz` |
+| Flutter | `marsrs_xlog` / `marsrs` | [pub.dev](https://pub.dev), or the release's `marsrs-flutter-xlog-<version>.tar.gz` |
 | React Native 0.74+ | `marsrs-react-native-xlog` / `marsrs-react-native` | [npm](https://www.npmjs.com), or the release's `marsrs-react-native-xlog-<version>.tgz` |
 | anything with a C FFI | the `marsrs-<version>-<host>` archive | the release: Linux, macOS and Windows hosts |
 | HarmonyOS | `marsrs-harmonyos-xlog`, or the three `.so` of `marsrs-harmony-<version>.tar.gz` | the release — ohpm is not switched on yet |
@@ -54,9 +54,9 @@ a shell and makes the key pair that decides who can — `cargo install marsrs-xl
 Two ways in, and the difference is how much of the port you take: **xlog alone**,
 or **the whole port** — xlog, STN and SDT. An app that only logs takes the first;
 the pair is the same one the crates on crates.io are. Three of the packages carry
-the logger under both names today — `marsrs-kmp`, `marsrs_flutter` and
-`marsrs-react-native` have no STN or SDT surface yet, so on those three the
-choice is one of name and not of contents.
+the logger under both names today — `marsrs-kmp`, `marsrs` and `marsrs-react-native`
+have no STN or SDT surface yet, so on those three the choice is one of name and
+not of contents.
 
 ```bash
 cargo add marsrs-xlog    # xlog alone — the logger and nothing else

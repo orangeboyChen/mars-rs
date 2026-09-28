@@ -1,4 +1,4 @@
-# The iOS half of the `marsrs_flutter_xlog` plugin.
+# The iOS half of the `marsrs_xlog` plugin.
 #
 # `marsrs-xlog.xcframework` is carried here and not resolved: CocoaPods cannot
 # take the SwiftPM binary target of Package.swift, and there is no pod for it,
@@ -12,7 +12,7 @@
 # SwiftPM makes of the two — is nothing CocoaPods can hand a pod.
 
 Pod::Spec.new do |s|
-  s.name             = 'marsrs_flutter_xlog'
+  s.name             = 'marsrs_xlog'
   s.version          = '0.1.0-alpha.2'
   s.summary          = 'Flutter plugin for xlog, the logging half of mars-rs.'
   s.homepage         = 'https://github.com/orangeboyChen/mars-rs'

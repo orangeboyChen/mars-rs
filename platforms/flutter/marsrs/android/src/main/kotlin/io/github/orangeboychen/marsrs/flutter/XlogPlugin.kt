@@ -1,4 +1,4 @@
-// The Android half of the `marsrs_flutter` plugin: the eleven methods of the
+// The Android half of the `marsrs` plugin: the eleven methods of the
 // plugin's channel, each of them a straight call of a member of `Xlog` — the
 // Kotlin face of `libmarsrsxlog.so` in the `marsrs` AAR, the AAR of the whole
 // port, and the same class `platforms/kmp/marsrs-xlog` publishes to a Kotlin
@@ -9,12 +9,12 @@
 // the five settings, under the names every other platform of the port gives
 // them.
 //
-// The xlog-only plugin is `marsrs_flutter_xlog`, and this file is its Kotlin
+// The xlog-only plugin is `marsrs_xlog`, and this file is its Kotlin
 // with the two names changed: xlog is the whole C ABI today, so the two plugins
 // are one package under two names, and they diverge the day STN and SDT land —
 // here, and not there.
 //
-// Every key below is a field `lib/marsrs_flutter.dart` put there, and every
+// Every key below is a field `lib/marsrs.dart` put there, and every
 // number is the one `mars_xlog.h` gives a level, a mode and a compression. The
 // appenders are kept by the prefix they were opened with, because that is what
 // an appender is known by in the C ABI and in `marsrs-jni`: two `Xlog`s of two
@@ -35,7 +35,7 @@ import io.github.orangeboychen.marsrs.xlog.Xlog
 import io.github.orangeboychen.marsrs.xlog.XlogConfig
 import java.util.concurrent.ConcurrentHashMap
 
-/** The Android half of `marsrs_flutter`: the whole port, which today is xlog. */
+/** The Android half of `marsrs`: the whole port, which today is xlog. */
 class XlogPlugin :
     FlutterPlugin,
     MethodCallHandler {
@@ -217,12 +217,12 @@ class XlogPlugin :
     private fun compressMode(ordinal: Int): CompressMode = CompressMode.entries.getOrElse(ordinal) { CompressMode.ZLIB }
 
     private companion object {
-        /** The channel `lib/marsrs_flutter.dart` talks on. */
-        private const val CHANNEL = "marsrs_flutter"
+        /** The channel `lib/marsrs.dart` talks on. */
+        private const val CHANNEL = "marsrs"
 
         /** What a `PlatformException` of a refused configuration, of a write
          * before an `open`, and of every other caller's mistake, is named. */
-        private const val ERROR = "marsrs_flutter"
+        private const val ERROR = "marsrs"
 
         /** `XlogConfig.namePrefix` of the Kotlin, and of the Swift and the Dart. */
         private const val DEFAULT_NAME_PREFIX = "xlog"
