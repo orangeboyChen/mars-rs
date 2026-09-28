@@ -218,12 +218,41 @@ pub fn longlink_unpack(packed: &[u8]) -> Unpacked {
 }
 
 /// `LongLinkEncoder` — the `std::function`s the C++ lets the app replace, as
-/// the methods they default to. `gDefaultLongLinkEncoder` is [`LongLinkEncoder`]
-/// itself: nothing about it is per-connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// the methods they default to. `gDefaultLongLinkEncoder` is
+/// [`LongLinkEncoder`] itself: nothing about it is per-connection.
+///
+/// The three a host can set are the ones the C++'s `longlink_packer.h` leaves
+/// as `std::function`s for the app to assign, and the port carries as values
+/// instead: what a host would have written as a closure that answers a
+/// constant is the constant. [`LongLinkEncoder::noop_isresp`] and the noop's
+/// body are not one of them — the two are what the C++'s own default answers,
+/// and nothing in the port asks for another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LongLinkEncoder {
     /// `packer_encoder_version` — `kOld` until the app asks for `kNew`.
     pub packer_encoder_version: PackerEncoderVersion,
+    /// `longlink_noop_cmdid()` — the cmdid the heartbeats go out with.
+    pub noop_cmdid: u32,
+    /// `longlink_noop_interval()` — `0`, which is "the long link decides for
+    /// itself": a heartbeat interval of its own is one the smart heartbeat is
+    /// not asked about (`longlink.cc:1175,1192`).
+    pub noop_interval: u32,
+    /// `longlink_complexconnect_need_verify()` — whether a pair the connect
+    /// landed on is asked to answer a heartbeat before the link is up.
+    pub complexconnect_need_verify: bool,
+}
+
+impl Default for LongLinkEncoder {
+    /// `gDefaultLongLinkEncoder` — what `longlink_packer.cc` assigns to the
+    /// five `std::function`s the app may replace.
+    fn default() -> Self {
+        Self {
+            packer_encoder_version: PackerEncoderVersion::default(),
+            noop_cmdid: NOOP_CMDID,
+            noop_interval: 0,
+            complexconnect_need_verify: false,
+        }
+    }
 }
 
 impl LongLinkEncoder {
@@ -240,9 +269,10 @@ impl LongLinkEncoder {
         };
     }
 
-    /// `longlink_noop_cmdid()`.
+    /// `longlink_noop_cmdid()` — the cmdid the heartbeats go out with, which
+    /// is the one the C++'s default encoder answers.
     pub fn noop_cmdid(&self) -> u32 {
-        NOOP_CMDID
+        self.noop_cmdid
     }
 
     /// `signal_keep_cmdid()`.
@@ -250,20 +280,28 @@ impl LongLinkEncoder {
         SIGNALKEEP_CMDID
     }
 
-    /// `longlink_noop_interval()` — `0`, so the long link decides for itself.
+    /// `longlink_noop_interval()` — `0` until the app sets one, and `0` is
+    /// "the long link decides for itself": a link with an interval of its
+    /// own is one the smart heartbeat is not asked about
+    /// (`longlink.cc:1175,1192`).
     pub fn noop_interval(&self) -> u32 {
-        0
+        self.noop_interval
     }
 
-    /// `longlink_complexconnect_need_verify()` — `false`.
+    /// `longlink_complexconnect_need_verify()` — whether a pair the connect
+    /// landed on is asked to answer a heartbeat before the link is up.
     pub fn complexconnect_need_verify(&self) -> bool {
-        false
+        self.complexconnect_need_verify
     }
 
     /// `longlink_noop_isresp(taskid, cmdid, recv_seq, body, extend)` — the
-    /// heartbeat answer is the noop task with the noop cmdid.
+    /// heartbeat answer is the noop task with the noop cmdid, which is the one
+    /// the app set and not the constant: a noop that went out as
+    /// [`LongLinkEncoder::noop_cmdid`] comes back as that same cmdid, and
+    /// reading the constant instead would leave every heartbeat's answer
+    /// looking like a task the link is still waiting on.
     pub fn noop_isresp(&self, taskid: u32, cmdid: u32) -> bool {
-        Task::NOOP_TASK_ID == taskid && NOOP_CMDID == cmdid
+        Task::NOOP_TASK_ID == taskid && self.noop_cmdid == cmdid
     }
 
     /// `longlink_ispush(cmdid, taskid, body, extend)` — the server pushes with
@@ -449,6 +487,24 @@ mod tests {
         assert_eq!(encoder.noop_interval(), 0);
         assert!(!encoder.complexconnect_need_verify());
         assert_eq!(encoder.heart_interval(), MIN_HEART_INTERVAL);
+    }
+
+    #[test]
+    fn what_the_app_writes_on_the_encoder_is_what_the_link_asks_it_for() {
+        // the three the app may replace, which the C++ carries as
+        // `std::function`s (`longlink_packer.cc:146-174`)
+        let mut encoder = LongLinkEncoder::new();
+        encoder.noop_cmdid = 77;
+        encoder.noop_interval = 60_000;
+        encoder.complexconnect_need_verify = true;
+
+        assert_eq!(encoder.noop_cmdid(), 77);
+        assert_eq!(encoder.noop_interval(), 60_000);
+        assert!(encoder.complexconnect_need_verify());
+        // what the app's cmdid does to the answer: a heartbeat that went out
+        // as 77 is answered as 77, and not as the constant
+        assert!(encoder.noop_isresp(Task::NOOP_TASK_ID, 77));
+        assert!(!encoder.noop_isresp(Task::NOOP_TASK_ID, NOOP_CMDID));
     }
 
     #[test]
