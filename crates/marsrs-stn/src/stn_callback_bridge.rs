@@ -40,7 +40,8 @@ use crate::{LongLinkStatus, NetStatus, Task};
 /// the app.
 pub type LongLinkErrorListener = dyn FnMut(ErrCmdType, i32, &str, u16) + Send;
 
-/// `SignalOnShortLinkNetworkError`.
+/// `SignalOnShortLinkNetworkError` — the same list for a short link, which is
+/// the one that carries the host along with the ip and the port.
 pub type ShortLinkErrorListener = dyn FnMut(ErrCmdType, i32, &str, &str, u16) + Send;
 
 /// `stn::Callback` — the app, as STN asks it questions.
@@ -129,7 +130,9 @@ pub trait App: Send {
     ) {
     }
 
-    /// `OnShortLinkNetworkError`.
+    /// `OnShortLinkNetworkError` — an error on one try of one task. This is one
+    /// of the three the C++ does not make the app answer: a short-link error is
+    /// told to the app as a task that ended.
     fn on_short_link_network_error(
         &mut self,
         _err_type: ErrCmdType,
@@ -178,7 +181,7 @@ pub trait App: Send {
     fn report_dns_profile(&mut self, _profile: &DnsProfile) {}
 }
 
-/// `CgiProfile` — the connect a task ran on, as the app's report wants it: every
+/// `CgiProfile`— the connect a task ran on, as the app's report wants it: every
 /// reading is a `gettickcount()`.
 ///
 /// [`CgiProfile::of`] is the conversion the C++'s `OnTaskEnd` does, quirks and
@@ -277,7 +280,8 @@ pub struct DnsProfile {
     pub host: String,
     /// `err_type` — [`ErrCmdType::Ok`] until [`DnsProfile::failed`].
     pub err_type: ErrCmdType,
-    /// `err_code`.
+    /// `err_code` — the code for it: `-1` for a question that did not come
+    /// back, `0` for one that did.
     pub err_code: i32,
     /// `dnstype` — which dns it was.
     pub dnstype: DnsType,
@@ -370,7 +374,9 @@ impl StnCallbackBridge {
         self.long_link_errors.push(Box::new(listener));
     }
 
-    /// `SignalOnShortLinkNetworkError::connect`.
+    /// `SignalOnShortLinkNetworkError::connect` — a listener that hears about a
+    /// short-link error before the app does, and with the host the pair was
+    /// tried on.
     pub fn add_short_link_error_listener(
         &mut self,
         listener: impl FnMut(ErrCmdType, i32, &str, &str, u16) + Send + 'static,
@@ -394,7 +400,8 @@ impl StnCallbackBridge {
             .is_none_or(|app| app.makesure_authed(host, user_id))
     }
 
-    /// `TrafficData`.
+    /// `TrafficData` — nothing is counted while there is no app: the C++ asks
+    /// for the log's own tag and for nobody else's.
     pub fn traffic_data(&mut self, send: i64, recv: i64) {
         if let Some(app) = self.app.as_mut() {
             app.traffic_data(send, recv);
@@ -414,7 +421,8 @@ impl StnCallbackBridge {
             .map_or_else(Vec::new, |app| app.on_new_dns(host, longlink_host, extra))
     }
 
-    /// `OnPush`.
+    /// `OnPush` — something the server sent is dropped while there is no app:
+    /// nothing asked for it, so nothing is waiting for it.
     pub fn on_push(&mut self, channel_id: &str, cmdid: u32, taskid: u32, body: &[u8]) {
         if let Some(app) = self.app.as_mut() {
             app.on_push(channel_id, cmdid, taskid, body);
@@ -472,7 +480,9 @@ impl StnCallbackBridge {
         }
     }
 
-    /// `ReportConnectStatus`.
+    /// `ReportConnectStatus` — nothing is told while there is no app, which is
+    /// the one of these the C++ calls most: whether STN can reach anything is
+    /// asked for on every connect.
     pub fn report_connect_status(&mut self, all: NetStatus, longlink: NetStatus) {
         if let Some(app) = self.app.as_mut() {
             app.report_connect_status(all, longlink);
@@ -513,7 +523,8 @@ impl StnCallbackBridge {
         }
     }
 
-    /// `OnLongLinkStatusChange`.
+    /// `OnLongLinkStatusChange` — nothing is told while there is no app: which
+    /// state the default link is in is the app's own business.
     pub fn on_long_link_status_change(&mut self, status: LongLinkStatus) {
         if let Some(app) = self.app.as_mut() {
             app.on_long_link_status_change(status);
@@ -530,15 +541,17 @@ impl StnCallbackBridge {
         )
     }
 
-    /// `OnLonglinkIdentifyResponse` — `false` while there is no app, which is
-    /// what the identify checker says too: a check nobody answered did not pass.
+    /// `OnLonglinkIdentifyResponse`— `false` while there is no app, which is
+    /// what the identify checker says too: a check nobody answered did not
+    /// pass.
     pub fn identify_response(&mut self, channel_id: &str, response: &[u8], hash: &[u8]) -> bool {
         self.app
             .as_mut()
             .is_some_and(|app| app.identify_response(channel_id, response, hash))
     }
 
-    /// `RequestSync`.
+    /// `RequestSync` — nothing happens while there is no app: the C++'s own
+    /// alarm is the one that would have asked.
     pub fn request_sync(&mut self) {
         if let Some(app) = self.app.as_mut() {
             app.request_sync();
@@ -553,7 +566,8 @@ impl StnCallbackBridge {
             .map_or_else(Vec::new, |app| app.net_check_shortlink_hosts())
     }
 
-    /// `ReportTaskProfile`.
+    /// `ReportTaskProfile` — the profile is dropped while there is no app: it
+    /// is the app's own report, and STN keeps nothing of it.
     pub fn report_task_profile(&mut self, profile: &TaskProfile) {
         if let Some(app) = self.app.as_mut() {
             app.report_task_profile(profile);
@@ -567,7 +581,8 @@ impl StnCallbackBridge {
             .map_or(0, |app| app.report_task_limited(check_type, task))
     }
 
-    /// `ReportDnsProfile`.
+    /// `ReportDnsProfile` — the profile is dropped while there is no app: the
+    /// history of what a host answered is the app's to keep.
     pub fn report_dns_profile(&mut self, profile: &DnsProfile) {
         if let Some(app) = self.app.as_mut() {
             app.report_dns_profile(profile);
