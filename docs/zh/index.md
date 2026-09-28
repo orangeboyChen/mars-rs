@@ -4,7 +4,7 @@ layout: home
 hero:
   name: mars-rs
   text: mars 的 Rust 实现
-  tagline: Tencent/mars 的 .xlog 日志、STN 任务链路和 SDT 网络诊断 —— 从 Rust、Swift、Kotlin、Kotlin Multiplatform 或 C 调用。
+  tagline: Tencent/mars 的 .xlog 日志、STN 任务链路和 SDT 网络诊断 —— 从 Rust、Swift、Kotlin、Flutter、React Native、HarmonyOS 或 C 调用。
   actions:
     - theme: brand
       text: 快速开始
@@ -16,8 +16,8 @@ hero:
 features:
   - title: 上游工具直接能读
     details: 写出来的就是 C++ 实现写的那个 .xlog —— 同样的帧结构、同样的压缩、同样的加密，所以上游的解码脚本和基于它做的工具链可以直接读你的日志，不需要转换。
-  - title: 五个平台，一个写法
-    details: 启动时开一个 appender，往里写 tag 和消息，上传前 flush。Rust、Swift、Kotlin、Kotlin Multiplatform 和 C 都是这三步，配置项也一样。
+  - title: 八个平台，一个写法
+    details: 启动时开一个 appender，往里写 tag 和消息，上传前 flush。Rust、Swift、Kotlin、Kotlin Multiplatform、Flutter、React Native、HarmonyOS 和 C 都是这三步，配置项也一样。
   - title: 写日志不卡在磁盘上
     details: "默认的异步模式把记录交给 mmap 缓存和写线程，write 不等待落盘就返回；`flush(sync: true)` 才是把缓存排空的那一下。"
   - title: 压缩、加密、轮转
@@ -25,5 +25,5 @@ features:
   - title: 任务链路，还有网络诊断
     details: "STN 把一个请求当成一个任务跑 —— 排队、重试、超时、上报，走在短连接或 App 自己维持的长连接上。SDT 回答一个主机为什么不再回应：ping、DNS、TCP、HTTP，以及一份写清每一项查到了什么的 JSON 报告。"
   - title: 它自己不开线程
-    details: "两半都不跑在自己的线程上：本来会是线程的东西，是宿主自己调的一次调用 —— `run_pending()` 和 `due_time()`、`runChecks` 和它的探针。"
+    details: "两半都不跑在自己的线程上：本来该是一个线程的地方，是宿主自己调的一次调用 —— `run_pending()` 和 `due_time()`、`runChecks` 和它的探针。"
 ---
