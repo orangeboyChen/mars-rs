@@ -25,7 +25,7 @@ pub(crate) fn console_log(info: Option<&XLoggerInfo>, log: &str) {
     // which only does it on Windows.
     let func_name = extract_function_name(info.func_name.as_deref());
 
-    // `eprintln!` panics when stderr cannot be written (EPIPE, full device).
+    // `writeln!` panics when stderr cannot be written (EPIPE, full device).
     // On the async writer thread there is no panic barrier, so that one panic
     // would end logging for the whole process: ignore the error instead.
     let _ = writeln!(

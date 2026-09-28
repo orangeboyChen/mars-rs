@@ -112,7 +112,6 @@ pub(crate) fn get_next_file_index(
         filename_vec.extend(get_file_names_by_prefix(dir, fileprefix, fileext));
     }
 
-    // `long` is enough to hold all indexes in one day.
     if filename_vec.is_empty() {
         return 0;
     }
