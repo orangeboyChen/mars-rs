@@ -81,14 +81,17 @@ pub fn in6_is_addr_v4mapped(v6: &[u8; 16]) -> bool {
 }
 
 /// `IN6_IS_ADDR_NAT64(a6)` — `s6_addr32[0] == htonl(0x0064ff9b)`, so the
-/// first four bytes are the well-known prefix and the eight after them are
-/// zero. A prefix the network handed out is *not* recognised here, which is
-/// why [`SocketAddress::fix_current_nat64_addr`] has to be called on the
+/// first four bytes are the well-known prefix and the eight after them go
+/// unread. An address upstream classifies as NAT64 is classified as one here,
+/// whatever sits between the prefix and the embedded address.
+///
+/// A prefix the network handed out is *not* recognised, which is why
+/// [`SocketAddress::fix_current_nat64_addr`] has to be called on the
 /// addresses that came from a NAT64 network.
 ///
 /// [`SocketAddress::fix_current_nat64_addr`]: crate::socket_address::SocketAddress::fix_current_nat64_addr
 pub fn in6_is_addr_nat64(v6: &[u8; 16]) -> bool {
-    v6[..12] == NAT64_PREFIX
+    v6[..4] == NAT64_PREFIX[..4]
 }
 
 /// `ConvertV4toNat64V6(_v4_addr, _v6_addr)` — `None` when the stack is not
@@ -142,12 +145,19 @@ mod tests {
         let mut other = in6_set_addr_nat64([1, 1, 1, 1]);
         other[0] = 0x20;
         assert!(!in6_is_addr_nat64(&other));
+    }
 
-        // and the eight bytes between the prefix and the v4 address have to
-        // be zero for `IN6_IS_ADDR_NAT64`
+    #[test]
+    fn the_nat64_test_reads_the_first_four_bytes_only() {
+        // `s6_addr32[0] == htonl(0x0064ff9b)`: the eight bytes between the
+        // prefix and the embedded address are not part of the test, so an
+        // address that padded them is a NAT64 one all the same.
         let mut padded = in6_set_addr_nat64([1, 1, 1, 1]);
         padded[11] = 1;
-        assert!(!in6_is_addr_nat64(&padded));
+        assert!(in6_is_addr_nat64(&padded));
+        padded[4] = 0x20;
+        assert!(in6_is_addr_nat64(&padded));
+        assert_eq!(embedded_v4(&padded), [1, 1, 1, 1]);
     }
 
     #[test]
