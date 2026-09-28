@@ -3,28 +3,29 @@
 //! `Basic` of a `Proxy-Authorization`.
 //!
 //! The C++ writes into a buffer the caller sized with
-//! `modp_b64_encode_len(A) == ((A + 2) / 3 * 4 + 1)` — the `+ 1` is the `\0` it
-//! terminates with — and answers how many characters it wrote. The port hands
-//! back a `String` instead, which is the same characters without the two things
-//! a Rust caller would only have to undo.
+//! `modp_b64_encode_len(A) == ((A + 2) / 3 * 4 + 1)` — the `+ 1` is the
+//! `\0` it terminates with — and answers how many characters it wrote. The
+//! port hands back a `String` instead, which is the same characters without
+//! the two things a Rust caller would only have to undo.
 //!
 //! `DecodeBase64` is not ported: nothing in mars calls it.
 
-/// The alphabet `init_conversion_tables` builds: `A`..`Z`, `a`..`z`, `0`..`9`,
-/// `+`, `/`.
+/// The alphabet `init_conversion_tables` builds: `A`..`Z`, `a`..`z`,
+/// `0`..`9`, `+`, `/`.
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-/// `modp_b64_encode_len(A)` without the `\0`: how many characters [`encode`]
-/// writes for `len` bytes, which is four for every three of them — the C++'s
-/// `(A + 2) / 3 * 4`.
+/// `modp_b64_encode_len(A)` without the `\0`: how many characters
+/// [`encode`] writes for `len` bytes, which is four for every three of them
+/// — the C++'s `(A + 2) / 3 * 4`.
 pub fn encoded_len(len: usize) -> usize {
     len.div_ceil(3) * 4
 }
 
-/// `EncodeBase64` — `data` as base64, `=`-padded like the C++: a last group of
-/// one byte ends in `==` and one of two bytes in `=`.
+/// `EncodeBase64` — `data` as base64, `=`-padded like the C++: a last group
+/// of one byte ends in `==` and one of two bytes in `=`.
 ///
-/// Nothing at all is an empty string, which is what the C++ answers `0` for.
+/// Nothing at all is an empty string, which is what the C++ answers
+/// `0` for.
 pub fn encode(data: &[u8]) -> String {
     let mut encoded = String::with_capacity(encoded_len(data.len()));
     for group in data.chunks(3) {
