@@ -295,9 +295,13 @@ impl LongLinkEncoder {
     }
 
     /// `longlink_noop_isresp(taskid, cmdid, recv_seq, body, extend)` — the
-    /// heartbeat answer is the noop task with the noop cmdid.
+    /// heartbeat answer is the noop task with the noop cmdid, which is the one
+    /// the app set and not the constant: a noop that went out as
+    /// [`LongLinkEncoder::noop_cmdid`] comes back as that same cmdid, and
+    /// reading the constant instead would leave every heartbeat's answer
+    /// looking like a task the link is still waiting on.
     pub fn noop_isresp(&self, taskid: u32, cmdid: u32) -> bool {
-        Task::NOOP_TASK_ID == taskid && NOOP_CMDID == cmdid
+        Task::NOOP_TASK_ID == taskid && self.noop_cmdid == cmdid
     }
 
     /// `longlink_ispush(cmdid, taskid, body, extend)` — the server pushes with
@@ -497,6 +501,10 @@ mod tests {
         assert_eq!(encoder.noop_cmdid(), 77);
         assert_eq!(encoder.noop_interval(), 60_000);
         assert!(encoder.complexconnect_need_verify());
+        // what the app's cmdid does to the answer: a heartbeat that went out
+        // as 77 is answered as 77, and not as the constant
+        assert!(encoder.noop_isresp(Task::NOOP_TASK_ID, 77));
+        assert!(!encoder.noop_isresp(Task::NOOP_TASK_ID, NOOP_CMDID));
     }
 
     #[test]
