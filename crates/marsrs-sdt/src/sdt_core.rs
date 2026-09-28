@@ -18,15 +18,19 @@ use crate::sdt::{CheckIPPorts, CheckStatus, NetCheckType};
 
 /// The `cancel_` of one [`SdtCore`], reachable from outside the core.
 ///
-/// The C++ keeps `cancel_` inside `SdtCore` and guards it with the core's
-/// mutex, but `__RunOn` holds that mutex for as long as the checks take — so
-/// `CancelCheck()` can only ever cancel a request that has not started yet,
-/// never one that is blocked on a socket. The port has the same shape:
-/// [`SdtCore::run_on`] borrows the core for the whole run. So the flag lives
-/// in its own shared cell and a caller that wants to stop a running diagnosis
-/// takes a [`CancelHandle`] ([`SdtCore::cancel_handle`]) before the run and
-/// sets it from wherever it is — the app thread, or the checker itself, which
-/// is where the socket that has to be interrupted is.
+/// The C++ keeps `cancel_` in the core as a `volatile bool` and sets it from
+/// `CancelCheck()` without taking `checking_mutex_`, which `StartCheck` has
+/// already released by the time `__RunOn` runs the checks — so the C++ does
+/// reach a check that is in flight, which is the point of it, and what it
+/// cannot do is run another one afterwards, because nothing ever clears
+/// `cancel_` again.
+///
+/// The port shares the flag for a different reason: [`SdtCore::run_on`] borrows
+/// the core for the whole run, so the flag lives in its own cell — and a caller
+/// that wants to stop a running diagnosis takes a [`CancelHandle`]
+/// ([`SdtCore::cancel_handle`]) before the run and sets it from wherever it is:
+/// the app thread, or the checker itself, which is where the socket that has to
+/// be interrupted is.
 #[derive(Debug, Clone)]
 pub struct CancelHandle(Arc<AtomicBool>);
 
