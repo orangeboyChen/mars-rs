@@ -10,12 +10,12 @@
 //! (`net_core_ ? net_core_->… : xwarn2("net core is empty")`), and it forwards
 //! the core's callbacks to the bridge.
 //!
-//! Rust has no boot framework to ask, so there is no split to keep: [`StnLogic`]
-//! is one value that owns an [`Option<NetCore>`] and the bridge, and every call
-//! the C++ writes twice is written once. `Option` is the C++'s
+//! Rust has no boot framework to ask, so there is no split to keep:
+//! [`StnLogic`] is one value that owns an [`Option<NetCore>`] and the bridge,
+//! and every call the C++ writes twice is written once. `Option` is the C++'s
 //! `if (net_core_)`: nothing the app asks for before [`StnLogic::create`] has a
 //! core to be asked of, and the answer it gets is the one the C++ warns its way
-//! to — `false`, no task, an empty list.
+//! to— `false`, no task, an empty list.
 //!
 //! The wiring the C++ does in `StnManager`'s own callbacks is what
 //! [`StnLogic::create`] does once: every hook the net core, the two queues, the
@@ -45,9 +45,9 @@ use crate::signalling_keeper::set_strategy;
 use crate::stn_callback_bridge::{App, StnCallbackBridge};
 use crate::{xorshift, LongLink, LongLinkEncoder, LongLinkStatus, LonglinkConfig, NetStatus, Task};
 
-/// `kReservedTaskIDStart` — the id the counter is put back to `1` at, so a
-/// generated id is never one of the four the C++ keeps for itself (`kNoopTaskID`
-/// and friends).
+/// `kReservedTaskIDStart`— the id the counter is put back to `1` at, so a
+/// generated id is never one of the four the C++ keeps for itself
+/// (`kNoopTaskID` and friends).
 pub const RESERVED_TASK_ID_START: u32 = 0xffff_fff0;
 
 /// `gs_taskid` — one counter for the whole process, like the C++'s `static
@@ -162,8 +162,8 @@ impl StnLogic {
         self.core.as_mut()
     }
 
-    /// Whether there is a net core: `OnCreate` has been through, and `OnDestroy`
-    /// has not.
+    /// Whether there is a net core: `OnCreate` has been through, and
+    /// `OnDestroy` has not.
     pub fn is_created(&self) -> bool {
         self.core.is_some()
     }
@@ -282,19 +282,21 @@ impl StnLogic {
             .is_some_and(|core| core.start_task_at(now, task))
     }
 
-    /// `StopTask(_taskid)`.
+    /// `StopTask(_taskid)` — `true` when a queue had it. `false` while there is
+    /// no core, which is the C++'s warning.
     pub fn stop_task(&mut self, taskid: u32) -> bool {
         self.core
             .as_mut()
             .is_some_and(|core| core.stop_task(taskid))
     }
 
-    /// `HasTask(_taskid)`.
+    /// `HasTask(_taskid)` — whether a task of that id is still in a queue.
+    /// `false` while there is no core.
     pub fn has_task(&self, taskid: u32) -> bool {
         self.core.as_ref().is_some_and(|core| core.has_task(taskid))
     }
 
-    /// `RedoTasks` — every task is started again, which is what a network change
+    /// `RedoTasks`— every task is started again, which is what a network change
     /// asks for.
     pub fn redo_tasks(&mut self) {
         self.redo_tasks_at(gettickcount())
@@ -335,7 +337,7 @@ impl StnLogic {
         }
     }
 
-    /// `NetCore::GetNextHeartbeatTime` — when the net core next has something to
+    /// `NetCore::GetNextHeartbeatTime`— when the net core next has something to
     /// do, as a `gettickcount()`, which is a reading of a clock the caller of
     /// this crate shares and a caller across an ABI does not.
     pub fn due_time(&mut self) -> Option<u64> {
@@ -348,14 +350,14 @@ impl StnLogic {
     }
 
     /// How long, in milliseconds, the host's run loop may wait before it has to
-    /// call [`StnLogic::run_pending`] again: [`StnLogic::due_time`] read against
-    /// the clock that tick is measured in.
+    /// call [`StnLogic::run_pending`] again: [`StnLogic::due_time`] read
+    /// against the clock that tick is measured in.
     ///
-    /// `Some(0)` is a pass that is due now — a follow-up is waiting, or an alarm
-    /// has already gone off — and `None` is nothing to wait for at all, which is
+    /// `Some(0)` is a pass that is due now— a follow-up is waiting, or an alarm
+    /// has already gone off— and `None` is nothing to wait for at all, which is
     /// the one case in which a host may sleep without a timer. This is the
     /// number every bridge hands across the ABI, because a tick is only a delay
-    /// to a caller that can read the same clock: `gettickcount()`'s origin is
+    /// to a caller that can read the same clock: `gettickcount()` 's origin is
     /// this process's, so a tick carried into C, Swift or Kotlin is a number
     /// that grows with the age of the process and not a duration anybody can
     /// schedule on.
@@ -402,7 +404,9 @@ impl StnLogic {
         self.core.as_mut()?.create_long_link(config)
     }
 
-    /// `DestroyLonglink_ext(_name)`.
+    /// `DestroyLonglink_ext(_name)` — the link is dropped, and every task that
+    /// was going out on it is failed. `false` while there is no core, or when
+    /// there is no link of that name.
     pub fn destroy_long_link(&mut self, name: &str) -> bool {
         self.core
             .as_mut()
@@ -416,7 +420,7 @@ impl StnLogic {
             .is_some_and(|core| core.destroy_long_link_at(now, name))
     }
 
-    /// `MarkMainLonglink_ext(_name)` — the long link whose errors and status the
+    /// `MarkMainLonglink_ext(_name)`— the long link whose errors and status the
     /// app is told about.
     pub fn mark_main_longlink(&mut self, name: &str) -> bool {
         self.core
@@ -424,14 +428,17 @@ impl StnLogic {
             .is_some_and(|core| core.mark_main_longlink(name))
     }
 
-    /// `LongLinkIsConnected_ext(_name)`.
+    /// `LongLinkIsConnected_ext(_name)`— whether that link is up. `false` while
+    /// there is no core, which is what the C++ answers for a link it does not
+    /// have.
     pub fn is_long_link_connected(&self, name: &str) -> bool {
         self.core
             .as_ref()
             .is_some_and(|core| core.is_long_link_connected(name))
     }
 
-    /// `MakesureLonglinkConnected_ext(_name)`.
+    /// `MakesureLonglinkConnected_ext(_name)`— that link is made when it is not
+    /// up. Nothing happens while there is no core.
     pub fn make_sure_long_link_connected(&mut self, name: &str) {
         if let Some(core) = self.core.as_mut() {
             core.make_sure_long_link_connected(name);
@@ -445,7 +452,8 @@ impl StnLogic {
         }
     }
 
-    /// `LongLinkIsConnected`.
+    /// `LongLinkIsConnected` — the default link's, which is the one the app is
+    /// told the status of.
     pub fn is_default_long_link_connected(&self) -> bool {
         self.core
             .as_ref()
@@ -479,17 +487,18 @@ impl StnLogic {
         }
     }
 
-    /// `StopSignalling`.
+    /// `StopSignalling` — the mapping is let go of, which is what the app asks
+    /// for when it has stopped waiting. Nothing happens while there is no core.
     pub fn stop_signalling(&mut self) {
         if let Some(core) = self.core.as_mut() {
             core.stop_signal();
         }
     }
 
-    /// `SetSignallingStrategy(_period, _keepTime)` — for every keeper in the
+    /// `SetSignallingStrategy(_period, _keepTime)`— for every keeper in the
     /// process, which is why it is a free function and not a method: the C++'s
-    /// `g_period` and `g_keepTime` are `static`s of `SignallingKeeper`, and what
-    /// `StnManager` does with them is call it.
+    /// `g_period` and `g_keepTime` are `static` s of `SignallingKeeper`, and
+    /// what `StnManager` does with them is call it.
     pub fn set_signalling_strategy(&self, period: u64, keep_time: u64) {
         set_strategy(period, keep_time);
     }
@@ -498,7 +507,7 @@ impl StnLogic {
     // the net source
     //===------------------------------------------------------------------===//
 
-    /// `SetLonglinkSvrAddr(host, ports, debugip)` — the long link's hosts, which
+    /// `SetLonglinkSvrAddr(host, ports, debugip)`— the long link's hosts, which
     /// is one host the C++ turns into a list of one.
     pub fn set_longlink_svr_addr(&mut self, host: &str, ports: Vec<u16>, debugip: &str) {
         let hosts = if host.is_empty() {
@@ -511,7 +520,9 @@ impl StnLogic {
         }
     }
 
-    /// `SetShortlinkSvrAddr(port, debugip)`.
+    /// `SetShortlinkSvrAddr(port, debugip)`— the port every short link goes out
+    /// on, which is the only one a short link has, and the ip a host is reached
+    /// at without asking dns.
     pub fn set_shortlink_svr_addr(&mut self, port: u16, debugip: &str) {
         if let Some(core) = self.core.as_mut() {
             core.net_source().set_shortlink(port, debugip);
@@ -993,10 +1004,10 @@ mod tests {
         assert_eq!(asked_of(&asked), Vec::<String>::new());
     }
 
-    /// A tick is only a delay to a caller that can read the clock it is measured
-    /// in, which is why [`StnLogic::due_delay`] exists and why the bridges hand
-    /// that one across the ABI: `gettickcount()`'s origin is this process's, so
-    /// the tick itself means nothing on the other side.
+    /// A tick is only a delay to a caller that can read the clock it is
+    /// measured in, which is why [`StnLogic::due_delay`] exists and why the
+    /// bridges hand that one across the ABI: `gettickcount()` 's origin is this
+    /// process's, so the tick itself means nothing on the other side.
     #[test]
     fn what_the_host_waits_on_is_a_delay_and_not_a_tick() {
         let (mut logic, _asked) = logic();
