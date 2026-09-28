@@ -23,7 +23,7 @@ write, and read the files back. The site is one tab per piece: the logger,
 [the task pipeline](https://orangeboychen.github.io/mars-rs/stn/getting-started)
 and [the network
 diagnosis](https://orangeboychen.github.io/mars-rs/sdt/getting-started). Not every
-package carries the last two — [where it runs](#where-it-runs) says which do.
+package carries the last two — [use it](#use-it) says which do.
 
 ## Where it runs
 
@@ -54,10 +54,13 @@ a shell and makes the key pair that decides who can — `cargo install marsrs-xl
 
 Two ways in, and the difference is how much of the port you take: **xlog alone**,
 or **the whole port** — xlog, STN and SDT. An app that only logs takes the first;
-the pair is the same one the crates on crates.io are. Three of the packages carry
-the logger under both names today — `marsrs-kmp`, `marsrs` and `marsrs-react-native`
-have no STN or SDT surface yet, so on those three the choice is one of name and
-not of contents.
+the pair is the same one the crates on crates.io are. Two of the packages carry
+the logger under both names without the other two pieces — Flutter's `marsrs` and
+`marsrs-react-native` have no STN or SDT surface yet, so on those two the choice
+is one of name and not of contents. Everywhere else the wider name is the wider
+port: `marsrs` on Android, `marsrs-kmp` in shared Kotlin and the `MarsRS` product
+on Apple are where an app reaches the task pipeline and the diagnosis, and the C
+archive ships both headers beside the libraries.
 
 ```bash
 cargo add marsrs-xlog    # xlog alone — the logger and nothing else
