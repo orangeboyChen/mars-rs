@@ -432,6 +432,11 @@ fn encode(command: Command) -> Result<(), String> {
                 let mut block = AutoBuffer::new();
                 buffer.flush(&mut region, &mut block);
                 bytes.extend_from_slice(block.as_slice());
+                // The block is out of the region and in `bytes`, which is the
+                // file it was asked for, so the region can be given up:
+                // `drained` is the other half of `flush`, and without it the
+                // next record would join the block that was just copied out.
+                buffer.drained(&mut region);
             }
             // A region that filled up anyway is flushed and the record written
             // to the next one, the way the appender's own cache file is: one
@@ -440,6 +445,7 @@ fn encode(command: Command) -> Result<(), String> {
                 let mut block = AutoBuffer::new();
                 buffer.flush(&mut region, &mut block);
                 bytes.extend_from_slice(block.as_slice());
+                buffer.drained(&mut region);
                 if !buffer.write(&mut region, record) {
                     return Err(format!(
                         "record {index} ({} bytes) does not fit in a {region_len} byte buffer; raise --region",
@@ -451,6 +457,7 @@ fn encode(command: Command) -> Result<(), String> {
         let mut block = AutoBuffer::new();
         buffer.flush(&mut region, &mut block);
         bytes.extend_from_slice(block.as_slice());
+        buffer.drained(&mut region);
     }
 
     command.output(&bytes)?;

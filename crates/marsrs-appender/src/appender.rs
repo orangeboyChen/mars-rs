@@ -669,9 +669,66 @@ impl AppenderInner {
     }
 
     /// `log_buff_->Flush(_out)`.
+    ///
+    /// Copies the block out of the region but leaves the region alone: see
+    /// [`LogBuffer::flush`].
     fn flush_buffer(&mut self, out: &mut AutoBuffer) -> usize {
         let region = self.region.as_mut_slice();
         self.buff.flush(region, out)
+    }
+
+    /// `log_buff_->__Clear()` — only for a block that has reached a file.
+    fn buffer_drained(&mut self) {
+        let region = self.region.as_mut_slice();
+        self.buff.drained(region);
+    }
+
+    /// Drains the cache region into the log and gives it up — in that order.
+    ///
+    /// `true` when the block reached a file (or when the region was empty, in
+    /// which case it is cleared anyway). `false` when it did not, and then the
+    /// region is left exactly as it was so that the next drain writes the same
+    /// block again.
+    ///
+    /// That order is what upstream does differently: `XloggerAppender` flushes
+    /// the mmap buffer into an `AutoBuffer`, clears the buffer, and only then
+    /// writes the `AutoBuffer` to the log file, so a process killed in between
+    /// loses every record of the block. The region *is* the durable copy
+    /// — it is the mmap'd cache file — so the port writes first and gives it up
+    /// after. A crash between the two now costs a duplicate block, which the
+    /// next start recovers and writes again, and not a lost one.
+    fn drain_buffer(&mut self, move_file: bool) -> bool {
+        let mut buffer = std::mem::take(&mut self.scratch);
+        buffer.reset();
+        self.flush_buffer(&mut buffer);
+        if buffer.is_empty() {
+            self.scratch = buffer;
+            return true;
+        }
+
+        // `log2file` answers whether the records reached a file, but in sync
+        // mode it leaves what it buffered behind for the next record, so the
+        // flush that hands it to the OS is part of "reached".
+        let reached = self.log2file(buffer.as_slice(), move_file) && self.flush_pending();
+        if reached {
+            self.buffer_drained();
+        }
+        self.scratch = buffer;
+        reached
+    }
+
+    /// [`Self::drain_buffer`] for a block that was already copied out — the one
+    /// [`Appender::open`] recovers from the cache file before the writer thread
+    /// exists.
+    fn drain_leftover(&mut self, leftover: &[u8]) -> bool {
+        if leftover.is_empty() {
+            return true;
+        }
+        let reached = self.log2file(leftover, false) && self.flush_pending();
+        if reached {
+            self.buffer_drained();
+        }
+        reached
     }
 
     /// `XloggerAppender::__WriteSync` — the half that needs the lock.
@@ -753,9 +810,9 @@ impl AppenderInner {
         // never makes — it passes `const char*` around.
         if self.config.cachedir.is_none() {
             if self.open_log_file(OpenDir::Log) {
-                let written = self.write_file_record(data);
+                let mut written = self.write_file_record(data);
                 if !self.is_sync() {
-                    self.close_log_file();
+                    written |= self.closed_after_a_failed_write();
                 }
                 return written;
             }
@@ -767,9 +824,9 @@ impl AppenderInner {
         let cache_logs = self.cache_logs();
 
         if (cache_logs || cache_path.exists()) && self.open_log_file(OpenDir::Cache) {
-            let written = self.write_file_record(data);
+            let mut written = self.write_file_record(data);
             if !self.is_sync() {
-                self.close_log_file();
+                written |= self.closed_after_a_failed_write();
             }
 
             if cache_logs || !move_file {
@@ -810,7 +867,7 @@ impl AppenderInner {
         // the buffer for a file that is not there.
         let mut write_success = self.write_file_record(data);
         if open_success && !self.is_sync() {
-            self.close_log_file();
+            write_success |= self.closed_after_a_failed_write();
         }
 
         if !write_success {
@@ -980,10 +1037,29 @@ impl AppenderInner {
     }
 
     /// `XloggerAppender::__CloseLogFile`.
-    fn close_log_file(&mut self) {
-        // `fclose` of the C++: whatever is still buffered goes out first.
-        let _ = self.flush_pending();
+    /// `fclose` of the C++: whatever is still buffered goes out first.
+    ///
+    /// Answers whether it did. Async closes the file after every block, and that
+    /// flush is one more attempt at a batch [`Self::write_file_record`] could not
+    /// get out: when it lands, the block *did* reach the file, and a `false` from
+    /// the write would keep the block in the region for the next drain to write
+    /// a second time (see [`Self::drain_buffer`]).
+    fn close_log_file(&mut self) -> bool {
+        let flushed = self.flush_pending();
         self.forget_log_file();
+        flushed
+    }
+
+    /// [`Self::close_log_file`] of an async write that did not reach the file:
+    /// `true` only when the batch that failed is the one the close got out.
+    ///
+    /// A batch is held for exactly one more attempt, so a flush that finds
+    /// nothing to write is not a flush that wrote the block — it is
+    /// [`Self::refuse_pending`] having given the batch up — and saying "reached
+    /// the file" for that is what would drop a block no file ever saw.
+    fn closed_after_a_failed_write(&mut self) -> bool {
+        let held = !self.pending.is_empty();
+        held && self.close_log_file()
     }
 
     fn forget_log_file(&mut self) {
@@ -1107,6 +1183,10 @@ impl AppenderInner {
         if !written || !self.flush_pending() {
             return FileIoAction::WriteFailed;
         }
+        // The heap region this drain read is a copy of a file that is about to
+        // be unlinked, so giving it up here changes nothing on disk — but it is
+        // what leaves `self.buff` able to start a block of its own.
+        self.buffer_drained();
 
         match fs::remove_file(path) {
             Ok(()) => FileIoAction::Success,
@@ -1324,29 +1404,27 @@ impl Appender {
             thread: Mutex::new(None),
         };
 
-        // Anything a previous process left in the cache file.
+        // Anything a previous process left in the cache file. `flush_buffer`
+        // copies it out but leaves it in the region: the region is the only
+        // durable copy of those records until they are in a log file, and
+        // `__Clear()`ing it before the write is what loses them when the process
+        // dies in between (see [`AppenderInner::drain_buffer`]).
         let mut leftover = AutoBuffer::new();
         appender.lock().flush_buffer(&mut leftover);
 
-        // Anything a previous run of this appender left in its own cache file.
-        // A slot with no mapping keeps what was just drained, and the next start
-        // would append it again — once per start, forever. (With a mapping,
-        // `flush_buffer` zeroes it in place.)
-        if !use_mmap {
-            let path = appender.lock().cache_path();
-            if let Some(path) = path {
-                clear_cache_file(&path);
-            }
-        }
-
         if appender.lock().config.mode == AppenderMode::Async {
-            // `flush_buffer` above already cleared the cache, so returning an
-            // error here would lose the records that were just drained. The
+            // Nothing has been written yet, so returning an error here cannot
+            // lose the drained records: they are still in the cache file. The
             // C++ calls SetMode() without checking and writes the leftover
             // regardless; fall back to a synchronous drain instead.
             if let Err(err) = appender.start_thread() {
-                appender.lock().config.mode = AppenderMode::Sync;
-                appender.lock().log2file(leftover.as_slice(), false);
+                let mut guard = appender.lock();
+                guard.config.mode = AppenderMode::Sync;
+                let reached = guard.drain_leftover(leftover.as_slice());
+                drop(guard);
+                if reached {
+                    appender.clear_cache_file_if_heap();
+                }
                 return Err(err);
             }
         }
@@ -1354,8 +1432,30 @@ impl Appender {
         let mark = mark_info();
         if !leftover.is_empty() {
             appender.write_tips2file("~~~~~ begin of mmap ~~~~~\n");
-            appender.lock().log2file(leftover.as_slice(), false);
+            let reached = appender.lock().drain_leftover(leftover.as_slice());
             appender.write_tips2file(&format!("~~~~~ end of mmap ~~~~~{mark}\n"));
+            if !reached {
+                // A block this process did not compress itself cannot stay in
+                // the region: [`LogBuffer::attach`] recovered its length, but the
+                // compressor that produced it is gone, so the next record written
+                // through this appender would start a *second* compressed stream
+                // in the middle of it — under the one header the block has — and
+                // neither stream is readable after that. A block this process
+                // compressed itself is a different matter ([`AppenderInner::
+                // drain_buffer`] keeps it), because there the stream is still
+                // alive and appending to it is what the next drain writes out.
+                //
+                // The records are not given up with it: they were copied out
+                // above, and a batch [`AppenderInner::log2file`] could not write
+                // stays in `AppenderInner::pending` for one more attempt.
+                appender.lock().buffer_drained();
+            }
+            // A slot with no mapping keeps its bytes, so once the records above
+            // are in a log the file has to be emptied or the next start appends
+            // them a second time — once per start, forever. (With a mapping,
+            // `buffer_drained` zeroes it in place.) Clearing it while the write
+            // has not happened is what would lose them.
+            appender.clear_cache_file_if_heap();
         }
 
         // `__DATE__` / `__TIME__` of the C++ banner: which build produced this
@@ -1677,14 +1777,7 @@ impl Appender {
             return;
         }
 
-        let mut buffer = AutoBuffer::new();
-        let _n = guard.flush_buffer(&mut buffer);
-
-        if !buffer.is_empty() {
-            guard.log2file(buffer.as_slice(), false);
-        }
-        // ... and again for what that drain buffered.
-        guard.flush_pending();
+        guard.drain_buffer(false);
     }
 
     /// `XloggerAppender::Close`.
@@ -1699,21 +1792,6 @@ impl Appender {
             return;
         }
 
-        // Mirrors the drain in `open`: without a mapping the file keeps its
-        // bytes, so it has to be cleared here too or the next start appends
-        // the same records again.
-        let (use_mmap, owns_cache, path) = {
-            let guard = self.lock();
-            (guard.use_mmap, guard.cache.is_some(), guard.cache_path())
-        };
-        // Only the owner of the cache file may clear it: `Appender::oneshot`
-        // works on another process's file and must leave it alone when it
-        // cannot drain or remove it.
-        if !use_mmap && owns_cache {
-            if let Some(path) = path {
-                clear_cache_file(&path);
-            }
-        }
         let mark = mark_info();
         // `__DATE__` / `__TIME__` again: the twin of the open banner, so the
         // same build stamp brackets the file.
@@ -1739,18 +1817,50 @@ impl Appender {
             let _ = handle.join();
         }
 
-        let mut guard = self.lock();
-        guard.tx = None;
         // The writer thread's last drain may have left a batch in
         // [`AppenderInner::pending`]: it appends one the way any write does, and
         // nothing flushes it once the appender is in sync mode, where
         // `__Log2File` leaves the file open. Handed to the OS here — the file
         // is about to be dropped, and a batch that outlived its appender is a
-        // batch no later flush can recover.
-        let _ = guard.flush_pending();
+        // batch no later flush can recover. So is a block the thread could not
+        // write at all, which [`AppenderInner::drain_buffer`] writes now and
+        // gives up only if it got there.
+        let drained = {
+            let mut guard = self.lock();
+            guard.tx = None;
+            guard.drain_buffer(false)
+        };
         // C++: `memset(mmap_file_.data(), 0, kBufferBlockLength)` before closing
-        // the mapping, so a later `open` starts from an empty cache.
-        guard.region.as_mut_slice().fill(0);
+        // the mapping, so a later `open` starts from an empty cache — which is
+        // what `drain_buffer` did on its way through. What is *not* done is
+        // giving the region up when the write failed: those records are still
+        // only in the cache file, and the next start recovers them from it.
+        if drained {
+            self.clear_cache_file_if_heap();
+        }
+    }
+
+    /// Empties this appender's own cache file when there is no mapping behind
+    /// it, which is when the file and the region are two copies of the same
+    /// records rather than one.
+    ///
+    /// A mapping's bytes *are* the file's, so zeroing the region empties it
+    /// too; without one, the file keeps whatever the region held and the next
+    /// start would append it a second time — once per start, forever.
+    ///
+    /// Only for the writer that owns the file: [`Appender::oneshot`] works on
+    /// another process's cache file and must leave it alone when it cannot
+    /// drain or remove it.
+    fn clear_cache_file_if_heap(&self) {
+        let (use_mmap, path) = {
+            let guard = self.lock();
+            (guard.use_mmap, guard.cache_path())
+        };
+        if !use_mmap {
+            if let Some(path) = path {
+                clear_cache_file(&path);
+            }
+        }
     }
 
     /// `XloggerAppender::SetMode`.
@@ -1907,23 +2017,18 @@ fn async_log_thread(shared: Arc<Shared>, rx: Receiver<Msg>) {
             }
         };
 
-        let mut buffer = AutoBuffer::new();
+        // One drain under one lock, and not two halves with the lock dropped in
+        // between: the block is copied out of the region, written, and only then
+        // given up, so nothing can observe the region emptied while the records
+        // it held are still in memory.
         let closed = {
             let mut guard = shared
                 .state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            guard.flush_buffer(&mut buffer);
+            guard.drain_buffer(true);
             shared.flags.log_close.load(Ordering::Acquire)
         };
-
-        if !buffer.is_empty() {
-            let mut guard = shared
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            guard.log2file(buffer.as_slice(), true);
-        }
 
         if closed || disconnected || msg == Some(Msg::Close) {
             break;
@@ -2225,6 +2330,72 @@ mod tests {
         );
     }
 
+    /// Async closes the file after every block, and `fclose` flushes first — one
+    /// more attempt at a batch the write could not get out. When it lands, the
+    /// block *did* reach the file, and answering `false` would keep it in the
+    /// region for the next drain to write a second time.
+    #[test]
+    fn a_block_the_closing_flush_got_out_has_reached_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Async), 0, 0).unwrap();
+        let mut guard = appender.lock();
+        assert!(guard.open_log_file(OpenDir::Log));
+        // The file goes away under the buffer, which is what a failed write
+        // leaves behind as well: the batch stays, for one more attempt.
+        let file = guard.log_file.take().expect("opened above");
+        assert!(
+            !guard.write_file_record(b"a block only the closing flush gets out"),
+            "the batch reached a file that is not there"
+        );
+        guard.log_file = Some(file);
+        assert!(
+            guard.closed_after_a_failed_write(),
+            "the batch the close got out is not what answered"
+        );
+        drop(guard);
+        appender.close();
+
+        let text = String::from_utf8_lossy(&fs::read(today_name(tmp.path())).unwrap()).to_string();
+        assert!(
+            text.contains("a block only the closing flush gets out"),
+            "the batch the close got out is not in the file: {text}"
+        );
+    }
+
+    /// The other half of that: a batch is kept for one attempt and no more, so an
+    /// empty `pending` at the close is a batch that was given up — not one that
+    /// got out.
+    #[test]
+    fn a_batch_that_was_given_up_on_has_not_reached_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Async), 0, 0).unwrap();
+        let mut guard = appender.lock();
+        assert!(guard.open_log_file(OpenDir::Log));
+        let file = guard.log_file.take().expect("opened above");
+        // The attempt the batch is kept for has already been spent, so this one
+        // gives it up rather than writing it.
+        guard.pending.extend_from_slice(b"a block no file will see");
+        guard.pending_refused = true;
+        assert!(!guard.flush_pending(), "the batch reached a file");
+        assert!(guard.pending.is_empty(), "the batch was not given up");
+
+        // A file to write to again: a close that found nothing to flush is not a
+        // close that got the batch out, whatever `fclose` answers.
+        guard.log_file = Some(file);
+        assert!(
+            !guard.closed_after_a_failed_write(),
+            "a batch that was given up answered that it reached the file"
+        );
+        drop(guard);
+        appender.close();
+
+        let text = String::from_utf8_lossy(&fs::read(today_name(tmp.path())).unwrap()).to_string();
+        assert!(
+            !text.contains("a block no file will see"),
+            "the batch is in the file after all: {text}"
+        );
+    }
+
     /// The same, for one record: with a cache directory configured but not
     /// active (`cache_days == 0`), the log directory's file is what is missing,
     /// and the record has to be staged in the cache directory rather than wait
@@ -2403,6 +2574,41 @@ mod tests {
         let bytes = fs::read(today_name(tmp.path())).unwrap();
         let text = decoded_text(&bytes);
         assert!(text.contains("cached in mmap"), "{text}");
+    }
+
+    /// A block a previous process left in the cache cannot be appended to: the
+    /// compressor that produced it died with that process, and a second
+    /// compressed stream under the one header the block has is a block no
+    /// decoder reads. So when such a block cannot be written either, it gives the
+    /// region up and the next record starts a block of its own.
+    #[test]
+    fn a_recovered_block_that_could_not_be_written_leaves_the_region() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _mmap_path = records_in_cache(tmp.path());
+
+        // Today's log file is a directory, so the block `open` recovers cannot
+        // reach it — what a full or read-only file system looks like from here.
+        let log_file = today_name(tmp.path());
+        fs::create_dir(&log_file).unwrap();
+
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Async), 0, 0).unwrap();
+
+        // The log file can be written again: what this process logs now has to
+        // come out as a block of its own.
+        fs::remove_dir(&log_file).unwrap();
+        appender.write(Some(&info(LogLevel::Info)), "a record of this process");
+        appender.flush_sync();
+        appender.close();
+
+        let text = decoded_text(&fs::read(&log_file).unwrap());
+        assert!(
+            !text.contains("cached in mmap"),
+            "the block that could not be written is still in the region: {text}"
+        );
+        assert!(
+            text.contains("a record of this process"),
+            "the record joined a block it cannot be read from: {text}"
+        );
     }
 
     #[test]

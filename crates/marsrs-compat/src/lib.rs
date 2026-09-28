@@ -171,6 +171,10 @@ pub fn encode(opts: &Opts) -> Result<(), String> {
                 let mut block = AutoBuffer::new();
                 buffer.flush(&mut region, &mut block);
                 bytes.extend_from_slice(block.as_slice());
+                // The block is out of the region now, so the next record opens
+                // one of its own: `drained` is what the appender calls after
+                // these bytes have reached the file.
+                buffer.drained(&mut region);
                 buffered = 0;
             }
             if !buffer.write(&mut region, record) {
@@ -185,6 +189,7 @@ pub fn encode(opts: &Opts) -> Result<(), String> {
         let mut block = AutoBuffer::new();
         buffer.flush(&mut region, &mut block);
         bytes.extend_from_slice(block.as_slice());
+        buffer.drained(&mut region);
     }
 
     fs::write(&out_path, &bytes).map_err(|e| format!("write {out_path}: {e}"))?;

@@ -27,10 +27,15 @@ fn async_flush(mode: CompressMode, records: &[&str]) -> Vec<u8> {
     let mut out = AutoBuffer::new();
     let n = buf.flush(&mut region, &mut out);
     assert_eq!(n, out.len());
+    // The block is still in the region: what clears it is `drained`, and that
+    // only happens once these bytes have reached a file.
+    let in_region = region[..n - TAILER_LEN].to_vec();
+    buf.drained(&mut region);
     assert_eq!(buf.len(), 0);
     assert!(region.iter().all(|&b| b == 0), "region must be cleared");
 
     let bytes = out.as_slice().to_vec();
+    assert_eq!(bytes[..n - TAILER_LEN], in_region, "flush copies the block");
     assert_eq!(bytes[n - 1], magic::END);
     bytes
 }
