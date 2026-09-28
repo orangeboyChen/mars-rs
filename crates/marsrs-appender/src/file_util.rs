@@ -26,12 +26,17 @@ pub(crate) const MMAP_EXT: &str = "mmap3";
 /// One day in seconds — the unit of the `timespan` arguments.
 pub(crate) const SECONDS_PER_DAY: i64 = 24 * 60 * 60;
 
-/// Wall-clock seconds since the epoch (`gettimeofday` / `time(nullptr)`).
-pub(crate) fn now_secs() -> i64 {
+/// `gettimeofday` — the pair `XLoggerInfo::timeval` carries.
+pub(crate) fn now_timeval() -> (i64, i64) {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+        .map(|d| (d.as_secs() as i64, i64::from(d.subsec_micros())))
+        .unwrap_or((0, 0))
+}
+
+/// Wall-clock seconds since the epoch (`gettimeofday` / `time(nullptr)`).
+pub(crate) fn now_secs() -> i64 {
+    now_timeval().0
 }
 
 /// Monotonic milliseconds since the first call — the port of

@@ -508,6 +508,100 @@ fn write_assert(info: Option<&XLoggerInfo>, log: &str) -> bool {
     write_default(Some(&info), Some(log))
 }
 
+/// `XScopeTracer` of `mars/comm/xlogger/xlogger.h` — the guard behind the
+/// `xverbose_scope` / `xverbose_function` macros, and the port's answer to
+/// them: one record when the scope is entered, one when it is dropped, and
+/// the milliseconds between the two in the second.
+///
+/// ```no_run
+/// use marsrs_appender::{LogLevel, XLoggerInfo, XloggerScopeTracer};
+///
+/// let info = XLoggerInfo {
+///     level: LogLevel::Info,
+///     ..XLoggerInfo::default()
+/// };
+/// let mut scope = XloggerScopeTracer::new(info, "connect", Some("to the long link"));
+/// scope.exit("timed out");
+/// // dropped here, and `<- connect +12, timed out` goes out
+/// ```
+///
+/// The C++ keeps the scope's name in a `char[128]`, so a longer one is cut
+/// at 127 bytes; the port keeps the whole name, which is the difference
+/// between a truncated record and none at all only for a name that long.
+#[must_use = "the exit record is written when the tracer is dropped"]
+pub struct XloggerScopeTracer<'a> {
+    /// Whether the level let the scope in, asked once — where the C++ asks it,
+    /// in the constructor: a level raised while the scope is open does not let
+    /// the exit record in after all.
+    enabled: bool,
+    info: XLoggerInfo<'a>,
+    name: String,
+    /// The `timeval` the exit record measures against.
+    started: (i64, i64),
+    /// What [`XloggerScopeTracer::exit`] has been given, in the order it was
+    /// given: the C++ appends, so two calls read as one message.
+    exitmsg: String,
+}
+
+impl<'a> XloggerScopeTracer<'a> {
+    /// Enters the scope and writes its entry record.
+    ///
+    /// `log` is the message the scope was entered with; both records are
+    /// asked of [`is_enabled_for`] for the default logger, which is the
+    /// `xlogger_IsEnabledFor` the C++ asks.
+    pub fn new(mut info: XLoggerInfo<'a>, name: &str, log: Option<&str>) -> Self {
+        let started = crate::file_util::now_timeval();
+        info.timeval = started;
+        // The C++ sets the three to -1 before it writes either record, and
+        // that is what has `xlogger_Write` fill in the process, the thread and
+        // the main thread: an info of [`XLoggerInfo::default()`] carries 0, and
+        // a record that says "pid 0" names no process at all.
+        info.pid = -1;
+        info.tid = -1;
+        info.maintid = -1;
+
+        let scope = Self {
+            enabled: is_enabled_for(DEFAULT_HANDLE, info.level),
+            info,
+            name: name.to_owned(),
+            started,
+            exitmsg: String::new(),
+        };
+        // `-> %s %s` — the C++ prints the message it was given, or an empty
+        // one, so the space between the name and it is there either way and
+        // the shape of the record does not depend on whether a message was
+        // handed in.
+        if scope.enabled {
+            let entry = format!("-> {} {}", scope.name, log.unwrap_or(""));
+            write_default(Some(&scope.info), Some(&entry));
+        }
+        scope
+    }
+
+    /// `XScopeTracer::Exit` — the message the exit record carries. Appended
+    /// to, the way the C++ appends, so a scope that exits twice reads as one
+    /// message and not as the last one only.
+    pub fn exit(&mut self, msg: &str) {
+        self.exitmsg.push_str(msg);
+    }
+}
+
+impl Drop for XloggerScopeTracer<'_> {
+    /// `<- %s +%ld, %s` — the C++ writes the comma and the message whether or
+    /// not there is one, and so does the port: a reader that splits the two
+    /// halves of a scope reads the same shape either way.
+    fn drop(&mut self) {
+        if !self.enabled {
+            return;
+        }
+        let now = crate::file_util::now_timeval();
+        self.info.timeval = now;
+        let span = (now.0 - self.started.0) * 1000 + (now.1 - self.started.1) / 1000;
+        let exit = format!("<- {} +{}, {}", self.name, span, self.exitmsg);
+        write_default(Some(&self.info), Some(&exit));
+    }
+}
+
 /// `mars::xlog::IsEnabledFor`.
 ///
 /// `false` for an unknown non-zero handle, so nothing is written through it.
@@ -956,6 +1050,68 @@ mod tests {
 
         release_xlogger_instance("filtered");
         set_filter(None);
+    }
+
+    /// `XScopeTracer` — the entry record on the way in, the exit record with
+    /// the span on the way out.
+    #[test]
+    fn a_scope_is_bracketed_by_two_records() {
+        let _guard = serial();
+        let dir = tempfile::tempdir().unwrap();
+        crate::appender_open(config("scope", dir.path())).unwrap();
+        set_appender_mode(DEFAULT_HANDLE, AppenderMode::Sync);
+        set_level(DEFAULT_HANDLE, LogLevel::Verbose);
+
+        let info = XLoggerInfo {
+            level: LogLevel::Info,
+            ..XLoggerInfo::default()
+        };
+        let mut scope = XloggerScopeTracer::new(info, "connect", Some("to the long link"));
+        scope.exit("timed out");
+        drop(scope);
+        flush(DEFAULT_HANDLE, true);
+
+        let text = log_text(dir.path());
+        assert!(text.contains("-> connect to the long link"), "{text}");
+        let exit = text
+            .find("<- connect +")
+            .unwrap_or_else(|| panic!("no exit record: {text}"));
+        assert!(text[exit..].contains("timed out"), "{text}");
+        // The span is milliseconds, and it is in the record behind the `+`.
+        let span = text[exit + "<- connect +".len()..]
+            .split(',')
+            .next()
+            .unwrap_or_default();
+        assert!(span.chars().all(|c| c.is_ascii_digit()), "{span}");
+
+        crate::appender_close();
+        set_level(DEFAULT_HANDLE, LogLevel::None);
+    }
+
+    /// The level is asked **once**, where the C++ asks it — in the
+    /// constructor — so a scope a level refused writes neither of its two
+    /// records.
+    #[test]
+    fn a_scope_the_level_refused_writes_nothing() {
+        let _guard = serial();
+        let dir = tempfile::tempdir().unwrap();
+        crate::appender_open(config("silent-scope", dir.path())).unwrap();
+        set_appender_mode(DEFAULT_HANDLE, AppenderMode::Sync);
+        set_level(DEFAULT_HANDLE, LogLevel::Error);
+
+        let info = XLoggerInfo {
+            level: LogLevel::Info,
+            ..XLoggerInfo::default()
+        };
+        let scope = XloggerScopeTracer::new(info, "silent", None);
+        drop(scope);
+        flush(DEFAULT_HANDLE, true);
+
+        let text = log_text(dir.path());
+        assert!(!text.contains("silent"), "{text}");
+
+        crate::appender_close();
+        set_level(DEFAULT_HANDLE, LogLevel::None);
     }
 
     #[test]
