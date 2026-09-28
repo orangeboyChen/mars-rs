@@ -20,10 +20,12 @@
 //!   error and not a silent skip. It is the walk upstream's two Python
 //!   decoders make under `mars/xlog/crypt/` —
 //!   `decode_mars_crypt_log_file.py` and `decode_mars_nocrypt_log_file.py`
-//!   — over the same bytes. A record that cannot be read stops it — but the
-//!   records before the damage are written out anyway, to `--out` or to
-//!   standard output when there is none, with the reason on standard error:
-//!   a file that lost its end still has days of log in it.
+//!   — over the same bytes. A record that cannot be read is skipped and
+//!   marked instead of ending the walk, so what stands behind the damage
+//!   comes out too. What does end it is a file with no record left in it,
+//!   and even then the text read so far is written out — to `--out`, or to
+//!   standard output when there is none — with the reason on standard
+//!   error: a file that lost its end still has days of log in it.
 //! * `keygen` makes that pair: the 128 hex characters a `pubKey` is
 //!   configured with, and the 64 that `decode` reads what it wrote back
 //!   with. It is drawn from the system's generator and kept nowhere, so a
