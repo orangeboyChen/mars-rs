@@ -24,7 +24,12 @@
 //! asked for the task, so it knows which one it was); the `AutoBuffer`
 //! `extend` of `Req2Buf` and `Buf2Resp`, which is the app's own decoder's; the
 //! `flags` and `server_sequence_id` `Buf2Resp` writes; and the `#else`
-//! branches, which call into Java and are what the JNI crate is for.
+//! branches, which call into Java and are what the JNI crate is for. The
+//! three in the middle cost an app that kept mars's own packer nothing:
+//! mars's `shortlink_pack` and `longlink_pack` write the extension of a
+//! request nowhere, its `longlink_unpack` fills the one of an answer with
+//! nothing, and `flags` and `server_sequence_id` are declared `0` at every
+//! call site and read back by nothing in mars.
 
 use marsrs_comm::tickcount::gettickcount;
 
