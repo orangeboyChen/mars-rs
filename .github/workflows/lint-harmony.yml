@@ -135,10 +135,15 @@ jobs:
       # that takes ten minutes: the archive is 2.1 GB on a mirror whose fast day
       # and slow day are a minute and ten apart, so it is downloaded once and
       # then cached — the way rust.yml caches the OHOS SDK — under a key of the
-      # version alone, which is what makes a cache written by a run on main one
-      # a pull request can restore. What goes into the cache is a third of a
-      # gigabyte and not 2.1: scripts/fetch_deveco_cli.sh unpacks the archive
-      # without the two SDK components this build never runs.
+      # version alone. A cache belongs to the ref that wrote it and to the base
+      # of the pull request on it, so the first run of a branch pays the
+      # download and every run after it does not, and a branch cut from a main
+      # that has run this pays nothing at all.
+      #
+      # What goes into the cache is 291 MB and not 2.1 GB: the two SDK
+      # components a HAR build never runs are a C++ toolchain and the IDE's
+      # previewer, and 1.8 of the 2.1 GB is those two.
+      # scripts/fetch_deveco_cli.sh unpacks the archive without them.
       - name: Cache the DevEco Command Line Tools ${{ env.DEVECO_CLI_VERSION }}
         uses: actions/cache@v6
         with:
