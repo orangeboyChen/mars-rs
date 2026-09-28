@@ -241,13 +241,30 @@ impl ProxyTest {
 
         // the proxy the operator is given is the one dns named, not the host the
         // app told it about; a tunnel or a socks5 one is connected *through*,
-        // which the operator decides from the proxy itself
+        // which the operator decides from the proxy itself.
+        //
+        // The C++ builds that address as
+        // `socket_address(proxy_ip, port).v4tov6_address(localstack)` — mapped
+        // onto the stack the local network carries, the way the port's own long
+        // link maps the one it connects to. Unmapped, a network that carries
+        // only v6 is asked to open the tunnel at an address it cannot reach,
+        // and the proxy is judged unavailable for the want of a mapping.
+        //
+        // [`SocketAddress::ipv6`] and not [`SocketAddress::ip`]: the latter is
+        // the address with the prefix stripped off it again, which is the
+        // v4 address the mapping was made from.
         let connect_proxy = match &proxy_ip {
-            Some(ip) => ProxyInfo {
-                ip: ip.clone(),
-                port: proxy.port,
-                ..proxy.clone()
-            },
+            Some(ip) => {
+                let mut address = SocketAddress::new(ip, proxy.port);
+                if !matches!(proxy.kind, ProxyType::Http) {
+                    address.v4_to_v6_address(stack);
+                }
+                ProxyInfo {
+                    ip: address.ipv6().to_string(),
+                    port: proxy.port,
+                    ..proxy.clone()
+                }
+            }
             None => ProxyInfo::none(),
         };
 
@@ -699,7 +716,17 @@ mod tests {
             "a proxy is reached at the address it is"
         );
         let proxies = seen.proxies.lock().unwrap().clone();
-        assert_eq!(proxies[0], tunnel, "and the proxy goes with it");
+        // ... and the proxy goes with it, mapped onto the local stack: this
+        // test's stack is the unset one, whose mapping is the v4-mapped form
+        // of the address and not the nat64 one an IPv6-only network gets
+        assert_eq!(
+            proxies[0],
+            ProxyInfo {
+                ip: "::ffff:10.0.0.1".to_string(),
+                ..tunnel
+            },
+            "and the proxy goes with it"
+        );
     }
 
     #[test]
@@ -765,6 +792,24 @@ mod tests {
             addresses[0][0].is_v6(),
             "a v4 address mapped onto a v6 network"
         );
+    }
+
+    #[test]
+    fn the_proxy_a_tunnel_is_opened_through_is_mapped_onto_the_local_stack() {
+        for kind in [ProxyType::HttpTunnel, ProxyType::Socks5] {
+            let (mut test, seen) = test();
+            test.set_local_stack(|| LocalIpStack::IPv6);
+            test.test(
+                &ProxyInfo::new(kind, "", "10.0.0.1", 8080, "", ""),
+                "short.weixin.qq.com",
+                &[],
+                answer(200).into_iter(),
+            );
+
+            let proxies = seen.proxies.lock().unwrap().clone();
+            let address = SocketAddress::new(&proxies[0].ip, proxies[0].port);
+            assert!(address.is_v6(), "{kind:?} goes through a v6 address");
+        }
     }
 
     #[test]

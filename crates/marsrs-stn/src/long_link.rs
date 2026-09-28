@@ -943,10 +943,16 @@ impl LongLink {
         };
         // `ComplexConnect` goes through the proxy only when it was given an
         // address for it, and what it is given is the one dns named — not the
-        // host the app told it about
+        // host the app told it about. It is mapped onto the stack the local
+        // network carries (`longlink.cc:645`), and the C++ hands that address
+        // to its operator beside the `proxy_info` the app wrote; the port
+        // hands the whole [`ProxyInfo`] over, so the mapped address is what
+        // its `ip` has to carry — [`SocketAddress::ipv6`] and not
+        // [`SocketAddress::ip`], which is the address with the prefix stripped
+        // off it again.
         let connect_proxy = match &proxy_address {
             Some(address) => ProxyInfo {
-                ip: address.ip().to_string(),
+                ip: address.ipv6().to_string(),
                 port: address.port(),
                 ..proxy
             },
@@ -2362,6 +2368,25 @@ mod tests {
         assert!(link.profile().nat64);
         let addresses = seen.addresses.lock().unwrap();
         assert!(addresses[0][0].is_v6(), "1.1.1.1 became a nat64 one");
+    }
+
+    #[test]
+    fn a_v6_only_network_makes_the_proxy_a_nat64_one_too() {
+        let (mut link, seen) = link();
+        link.set_local_ip_stack(|| LocalIpStack::IPv6);
+        link.set_proxy(|| ProxyInfo::new(ProxyType::Socks5, "", "10.0.0.2", 1080, "", ""));
+        link.make_sure_connected();
+        assert!(link.connect_at(1_000).is_ok());
+
+        // the C++ hands its operator the proxy address mapped onto the stack
+        // the local network carries (`longlink.cc:645`) and the port hands the
+        // whole `ProxyInfo` over, so the mapped address is what its `ip`
+        // carries — unmapped, the network is asked for an address it cannot
+        // reach and the proxy is judged unavailable for the want of a mapping
+        assert_eq!(
+            seen.proxies.lock().unwrap()[0].as_ref().unwrap().ip,
+            "64:ff9b::10.0.0.2"
+        );
     }
 
     #[test]
