@@ -149,8 +149,7 @@ mkdir -p "$project/hvigor"
 cat > "$project/hvigor/hvigor-config.json5" <<JSON5
 {
   "modelVersion": "$model_version",
-  "dependencies": {},
-  "plugins": []
+  "dependencies": {}
 }
 JSON5
 
