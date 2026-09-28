@@ -39,8 +39,8 @@ name: Label
 on:
   pull_request:
     # Labelled when it opens, and again on every push that changes what it
-    # touches. Nothing else: a rebased pull request keeps its labels, and a
-    # retitled one is not re-labelled.
+    # touches — which is also what takes a stale one back off. Nothing else:
+    # a retitled pull request is not re-labelled.
     types:
       - opened
       - synchronize
@@ -76,10 +76,16 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      # `sync-labels` is left at its default `false`: the action adds a label
-      # whose paths are touched and leaves every other one where it is. With it
-      # on, a push that stopped touching `docs/` would take
-      # `type: documentation` back off, and a label put on by hand — a `type:`,
-      # which is exactly the family a path cannot decide — would not outlive the
-      # first push that did not match it.
+      # `sync-labels` is on: a label whose paths are no longer touched is
+      # taken back off. Without it a pull request that shed its `docs/` half
+      # on the way to review would carry `meta: docs-site` and
+      # `type: documentation` to the merge, and one whose base moved under it
+      # would keep the `area:` of a half it no longer changes — a list of
+      # labels right about nothing after the first push. What it cannot take
+      # off is a name the map does not carry: the action removes a label only
+      # if `.github/labeler.yml` names it, so a `type: bug` or a `type:
+      # feature` — the family no path can decide — is put on by hand and
+      # stays on.
       - uses: actions/labeler@v7
+        with:
+          sync-labels: true
