@@ -89,6 +89,7 @@ pub use category::{
     DEFAULT_HANDLE,
 };
 pub use config::{AppenderError, AppenderMode, FileIoAction, LogLevel, XLogConfig, XLoggerInfo};
+pub use console::{get_console_fun, set_console_fun, ConsoleFun};
 pub use dump::xlogger_memory_dump;
 pub use formater::log_formater;
 /// Re-exported so callers (and the FFI layer) do not have to depend on
