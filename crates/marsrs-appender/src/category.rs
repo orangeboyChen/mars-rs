@@ -26,7 +26,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Condvar, Mutex, OnceLock};
+use std::sync::{Condvar, Mutex, OnceLock, RwLock};
 
 use crate::{
     appender_close_instance, appender_flush, appender_flush_instance, appender_flush_sync,
@@ -43,6 +43,51 @@ pub type XloggerHandle = u64;
 /// The default logger, i.e. "no instance" — calls go straight to the
 /// process-wide appender.
 pub const DEFAULT_HANDLE: XloggerHandle = 0;
+
+/// `xlogger_filter_t` of `mars/comm/xlogger/xloggerbase.h` — what an app
+/// hands to [`set_filter`] to decide, per record, whether it is written.
+///
+/// The C++ takes a non-`const` `XLoggerInfo*`, and what it does with the
+/// record afterwards is what the filter left behind: a filter may rewrite
+/// the level, the tag or any other field and the record goes out rewritten.
+/// The return is `<= 0` for "not this one", which is the C++'s
+/// `if (filter && filter(&m_info, ...) <= 0) return;`.
+pub type XloggerFilter = fn(&mut XLoggerInfo, &str) -> i32;
+
+/// `gs_filter` of `mars/comm/xlogger/xloggerbase.c` — one filter for the
+/// whole process, `None` until an app sets one.
+static FILTER: RwLock<Option<XloggerFilter>> = RwLock::new(None);
+
+/// `xlogger_SetFilter` — the filter every record is handed before it is
+/// written; `None` takes it away again, which is the C++'s
+/// `xlogger_SetFilter(NULL)`.
+pub fn set_filter(filter: Option<XloggerFilter>) {
+    *FILTER
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = filter;
+}
+
+/// `xlogger_GetFilter` — the filter a record is about to be handed to, if
+/// an app set one.
+pub fn get_filter() -> Option<XloggerFilter> {
+    *FILTER
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The filter's own answer, which the C++ asks for from inside
+/// `XLogger::~XLogger` (`mars/comm/xlogger/xlogger.cc`) — before it writes,
+/// and before the level of an instance is asked.
+///
+/// A record with no message of its own is not handed to a filter: that is
+/// the `NULL == _log` promotion, which upstream's streaming helper never
+/// reaches either.
+fn filtered_out(info: &mut XLoggerInfo, log: &str) -> bool {
+    let Some(filter) = get_filter() else {
+        return false;
+    };
+    filter(info, log) <= 0
+}
 
 /// `mars::comm::XloggerCategory`.
 ///
@@ -97,6 +142,16 @@ impl XloggerCategory {
     pub fn write(&self, info: Option<&XLoggerInfo>, log: Option<&str>) -> bool {
         let mut info = info.cloned();
 
+        // The filter is asked first, the way `XLogger::~XLogger` asks it
+        // before it writes: what it answers is about the record as the caller
+        // made it, level included, and a level it raised is one the test
+        // below then lets through.
+        if let (Some(info), Some(log)) = (info.as_mut(), log) {
+            if filtered_out(info, log) {
+                return false;
+            }
+        }
+
         if let Some(info) = info.as_ref() {
             if (info.level as i32) < (self.level as i32) {
                 return false;
@@ -133,6 +188,11 @@ fn write_default(info: Option<&XLoggerInfo>, log: Option<&str>) -> bool {
     let mut info = info.cloned();
 
     // … while `xlogger_Write` fills each of the three in on its own.
+    if let (Some(info), Some(log)) = (info.as_mut(), log) {
+        if filtered_out(info, log) {
+            return false;
+        }
+    }
     if let Some(info) = info.as_mut() {
         if info.pid == -1 {
             info.pid = std::process::id() as i64;
@@ -810,6 +870,92 @@ mod tests {
 
         crate::appender_close();
         set_level(DEFAULT_HANDLE, LogLevel::None);
+    }
+
+    /// Takes the filter away again when the test is over — including when it
+    /// panicked: it is one process-wide static, and a filter left behind
+    /// answers for the records of every test that runs after it.
+    struct NoFilter;
+
+    impl Drop for NoFilter {
+        fn drop(&mut self) {
+            set_filter(None);
+        }
+    }
+
+    /// `xlogger_filter_t` — what the C++ asks from inside
+    /// `XLogger::~XLogger`, before it writes: a record the filter answers `0`
+    /// or less for never reaches the file, and one it answers more than `0`
+    /// for goes out the way the filter left it, level included.
+    #[test]
+    fn a_filter_the_app_set_is_asked_about_every_record() {
+        let _guard = serial();
+        let _no_filter = NoFilter;
+        set_filter(Some(|info, log| {
+            if log.contains("drop") {
+                return 0;
+            }
+            // `XLoggerInfo*` is not const: what the filter does to the record
+            // is what gets written.
+            info.level = LogLevel::Fatal;
+            1
+        }));
+
+        let dir = tempfile::tempdir().unwrap();
+        crate::appender_open(config("filter", dir.path())).unwrap();
+        set_appender_mode(DEFAULT_HANDLE, AppenderMode::Sync);
+
+        let info = XLoggerInfo {
+            level: LogLevel::Verbose,
+            ..XLoggerInfo::default()
+        };
+        assert!(
+            !xlogger_write(DEFAULT_HANDLE, Some(&info), Some("drop this one")),
+            "a record the filter refused is one that was written"
+        );
+        assert!(xlogger_write(DEFAULT_HANDLE, Some(&info), Some("kept")));
+        flush(DEFAULT_HANDLE, true);
+
+        let text = log_text(dir.path());
+        assert!(!text.contains("drop this one"), "{text}");
+        // `[F]` — the level the filter raised the record to, in its header.
+        let kept = text.find("kept").expect("the record was not written");
+        assert!(text[..kept].contains("[F]"), "the rewrite was lost: {text}");
+
+        crate::appender_close();
+        set_filter(None);
+        assert!(get_filter().is_none(), "the filter was not taken away");
+    }
+
+    /// The same filter, on the path of a handle that names an **instance**:
+    /// `XLogger::~XLogger` asks it before it writes there too.
+    #[test]
+    fn a_filter_is_asked_about_the_records_of_an_instance_too() {
+        let _guard = serial();
+        let _no_filter = NoFilter;
+        let dir = tempfile::tempdir().unwrap();
+        let handle = new_xlogger_instance(&config("filtered", dir.path()), LogLevel::Verbose);
+        set_appender_mode(handle, AppenderMode::Sync);
+        set_filter(Some(|_, log| i32::from(log.contains("KEPT"))));
+
+        let info = XLoggerInfo {
+            level: LogLevel::Verbose,
+            ..XLoggerInfo::default()
+        };
+        assert!(!xlogger_write(
+            handle,
+            Some(&info),
+            Some("INSTANCE-DROPPED")
+        ));
+        assert!(xlogger_write(handle, Some(&info), Some("INSTANCE-KEPT")));
+        flush(handle, true);
+
+        let text = log_text(dir.path());
+        assert!(text.contains("INSTANCE-KEPT"), "{text}");
+        assert!(!text.contains("INSTANCE-DROPPED"), "{text}");
+
+        release_xlogger_instance("filtered");
+        set_filter(None);
     }
 
     #[test]
