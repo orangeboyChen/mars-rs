@@ -25,9 +25,13 @@ pub(crate) fn console_log(info: Option<&XLoggerInfo>, log: &str) {
     // which only does it on Windows.
     let func_name = extract_function_name(info.func_name.as_deref());
 
-    // `writeln!` panics when stderr cannot be written (EPIPE, full device).
-    // On the async writer thread there is no panic barrier, so that one panic
-    // would end logging for the whole process: ignore the error instead.
+    // The `io::Result` of the write is dropped rather than propagated: a
+    // stderr that cannot be written to — closed, or a pipe with no reader —
+    // is not a reason to fail the record being logged, and on the async
+    // writer thread a panic has nothing to unwind into. `eprintln!`, the
+    // obvious way to write this line, panics on that same failure (`failed
+    // printing to stderr`), so one closed stderr would end logging for the
+    // process.
     let _ = writeln!(
         std::io::stderr(),
         "[{level}][{tag}][{file_name}, {func_name}, {}][{log}",
