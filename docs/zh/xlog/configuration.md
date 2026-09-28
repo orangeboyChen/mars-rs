@@ -1,6 +1,6 @@
 # 配置项
 
-开一个 appender 只需要一份配置，各平台用各自的拼法带着同样的选项。只有
+开一个 appender 只需要一份配置：选项都一样，各平台拼法不同。只有
 `logdir` / `logDir` / `logDirectory` 没有默认值 —— 没有写的地方就开不了 appender。
 
 | 作用 | Rust | Swift | Android | Kotlin Multiplatform | Flutter / React Native | C | HarmonyOS | 默认值 |
@@ -15,9 +15,9 @@
 | 压缩到什么程度 | `compress_level` | `compressionLevel` | `compressLevel` | `compressLevel` | `compressLevel` | `compress_level` | `compressLevel` | `0` —— 用压缩器自己的（zlib 是 6） |
 | 加密用的公钥 | `pub_key` | `publicKey` | `pubKey` | `pubKey` | `pubKey` | `pub_key` | `pubKey` | 空 —— 不加密 |
 
-一份 appender 没法接受的配置会在你构造它的地方就被拒绝，而不是被库悄悄吞掉：
+appender 接受不了的配置，在构造它的地方就被拒绝，而不是被库悄悄吞掉：
 Swift 抛 `XlogError`，Kotlin 抛 `IllegalArgumentException`，Rust 返回 `Err`，C 返回负的
-`MARS_XLOG_ERR_*`，ArkTS 抛 `Error`；两个要跨桥的平台上，打开它的那次调用失败 ——
+`MARS_XLOG_ERR_*`，ArkTS 抛 `Error`；两个要跨桥的平台，失败的是打开它的那次调用 ——
 Dart 是 `PlatformException`，TypeScript 是抛出的 `Error`。
 
 ## 级别
@@ -42,9 +42,9 @@ appender 会留下 `warning`，丢掉 `debug`。
 HarmonyOS 那一列也是 Kotlin 的拼法，只是大小写不同：`LogLevel.Verbose`，而不是
 `LogLevel.VERBOSE` —— ArkTS 的枚举是要写在一堆 HarmonyOS 枚举里的。
 
-`none` 什么都不写，连 `fatal` 也不写 —— 这是不关掉 appender 而让它安静下来的办法。
+`none` 什么都不写，连 `fatal` 也不写 —— 想让 appender 安静下来又不关掉它，用这个。
 
-构造起来很贵的消息，值得先问一句：级别挡掉的记录也一样 —— 那串字符串你已经拼出来了。
+构造起来很贵的消息值得先问一句：被级别挡掉的记录也是一样 —— 那串字符串你已经拼好了。
 
 ::: code-group
 
@@ -93,7 +93,7 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 
 两种模式都不是每条记录都进内核：都先攒着，攒到大约 4 KiB，或者 `close()` /
 `flush(sync: true)` 的时候才交给系统。异步攒着不丢东西 —— 记录同时在内核手里那份
-缓存文件里；同步后面什么都没有，进程被杀时攒着的那截就丢了。退出前唯一要调用的，
+缓存文件里；同步后面什么都没有，进程被杀时攒着的那截就丢了。退出前要调的那一下，
 就是为这一截。
 
 ## 压缩与加密

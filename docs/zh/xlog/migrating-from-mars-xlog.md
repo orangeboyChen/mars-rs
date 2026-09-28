@@ -1,6 +1,6 @@
 # 从 mars-xlog 迁移
 
-只用了 C++ 项目日志库 —— 没用别的 —— 的应用要搬一样东西：appender。它写出来的就是
+只用了 C++ 那个日志库、别的都没用的应用，要搬的只有一样：appender。它写出来的就是
 C++ 写出来的那个文件 —— 同样的帧结构、同样的压缩、同样的加密 —— 所以你已经收集到的
 `.xlog` 文件，现有的工具照样能读，迁移不丢任何历史。
 
@@ -18,7 +18,7 @@ Rust 的 crate、JitPack 和共享 Kotlin 模块做的是这个切分：一个�
 [React Native](/zh/xlog/getting-started#react-native)。
 
 只打日志的应用用日志库那个包，还要跑任务或诊断的用带着它们的那个；拿不准的从日志库
-开始：`marsrs` 是日志库加另外两块，所以从一个包换到另一个包，文件这件事什么都不用改。
+开始：`marsrs` 是日志库加另外两块，所以两个包之间换一次，文件这件事什么都不用改。
 
 ## appender
 
@@ -28,7 +28,7 @@ appender 是同一个东西：每个前缀一个进程级写入器，应用启�
 
 ### 从 C++ 头文件来
 
-appender 在 `mars/xlog/appender.h` 里是一组选项构成的一个 struct 加几个自由函数，在
+appender 在 `mars/xlog/appender.h` 里是一组选项构成的一个 struct 加几个自由函数；
 这里也是一个 struct 加几个调用：
 
 | C++ | Rust | C ABI |
@@ -57,8 +57,9 @@ config 在三种写法里都是一个 struct，八个字段还是那八个：C++
 级别一个方法 —— Kotlin 的 `xlog.i(tag, message)`、Swift 的 `log.info(message:tag:)`、
 Rust 的 `appender_write(None, message)`。
 
-调用点是三样里唯一不是每个平台都跟着走的那个。Swift 从 `#file`、`#function` 和 `#line`
-填上文件、函数和行号，所以从 `log.info(message:tag:)` 写出的记录知道自己是哪儿写的。
+级别、tag 和调用点这三样里，唯一不是每个平台都跟着走的是调用点。Swift 从 `#file`、
+`#function` 和 `#line` 填上文件、函数和行号，所以从 `log.info(message:tag:)` 写出的记录
+知道自己是哪儿写的。
 Kotlin 的 write 只接 handle、级别、tag 和消息，没有别的，所以从 `xlog.i(tag, message)`
 写出的记录里文件是空的、行号是 0 —— 也就是 C++ 项目自己的 `Log` 一直传的那两个值。要
 把调用点写进记录的应用有两条路：旧的 `logWrite` 接的那个 `XLoggerInfo`，或者在 Rust
@@ -91,7 +92,7 @@ Android 包是唯一还留着旧写法的地方：七个参数的 `Xlog.open`、
 `XLoggerInfo`、`logWrite` 和 `LEVEL_*` 常量都还能用。带着 `@Deprecated` 和取代它的写法
 的是七个参数的 `Xlog.open`、`logWrite`、无参的 `Xlog()` 以及围着它们的 `Log` 门面；
 `XLogConfig`、`XLoggerInfo` 和 `LEVEL_*` 常量没有这个标记，所以用到它们的调用点照样
-编译，没有任何东西把它指向新写法，找出来是应用自己的 grep。`Log.setLogImp(Xlog())`
+编译，没有任何东西把它们指向新写法 —— 找出来得靠应用自己 grep。`Log.setLogImp(Xlog())`
 和 `Log.d(tag, message)` 仍然写进 `Xlog.open` 装上的那个 appender，所以其余部分可以
 一个调用点一个调用点地走：
 
@@ -106,14 +107,14 @@ xlog.d("net", "…")
 ```
 
 新写法多给一样东西：`Context`。`Xlog.open(config, context)` 会在应用离开屏幕时自己
-flush，那是 Android 在可以不打招呼就结束进程之前最后一个还会说话的时刻 —— 见
+flush —— 那是 Android 在可以不打招呼就杀进程之前，最后一个还会通知你的时刻 —— 见
 [Android](/zh/xlog/log-files#app-退出的时候)。
 
 ### 从 Apple 的头文件来
 
 没有 Objective-C 封装要搬：Apple 上的应用调的是 Objective-C++ 文件里的 C++ ——
 `xlogger_SetLevel`、`appender_set_console_log`、一个字段一个字段填的 `XLogConfig`，
-以及 `appender_open(config)`。那个文件变成导入模块、拿着自己打开的 appender 的文件：
+以及 `appender_open(config)`。那个文件换成导入模块、拿着自己打开的 appender 的文件：
 
 ::: code-group
 
