@@ -83,9 +83,23 @@ PY
 # token that expired or lost its scope — and 404 is the branch that publishes,
 # which is not a thing crates.io lets anyone do twice over one version. So the
 # status is what is read here, and those two are the only two acted on.
+#
+# `000` for a `curl` that came back with no answer at all, and not a failure of
+# the script: this is called inside a command substitution, where a command that
+# fails is a `set -e` that ends the run — and a run ended by one is a release
+# red over a connection that would have come back on the second ask. `--max-time`
+# is what keeps a request that never answers from being one that holds the job
+# until the workflow's own timeout does.
 crate_status() {
-    curl -sS -o /dev/null -w '%{http_code}' -A "$CRATES_IO_UA" \
-        "https://crates.io/api/v1/crates/$1/$version"
+    local status
+    # `%{http_code}` is `000` for a `curl` that got no answer, which is the
+    # status wanted of it here; what the `||` is for is its exit status, which
+    # `set -e` would end the run on from inside the substitution this is called
+    # in. Assigned and not echoed beside it: a `curl` that fails writes its
+    # `000` and *then* fails, so an `echo` would put two of them there.
+    status="$(curl -sS -o /dev/null -w '%{http_code}' -A "$CRATES_IO_UA" \
+        --max-time 30 "https://crates.io/api/v1/crates/$1/$version")" || status=000
+    printf '%s' "$status"
 }
 
 # Where a crate sits in the sparse index: the name lower-cased, under the
@@ -123,7 +137,8 @@ index_has() {
     # the run over a version that is in it. The index of a crate of nine
     # versions is small enough for `curl` to finish first; one of a hundred
     # is not, and that is what a crate becomes.
-    body="$(curl -sS -A "$CRATES_IO_UA" "https://index.crates.io/$(index_path "$1")")" || return 1
+    body="$(curl -sS -A "$CRATES_IO_UA" --max-time 30 \
+        "https://index.crates.io/$(index_path "$1")")" || return 1
     # `case` and not a `grep`: a glob is literal in everything but `*?[]`,
     # none of which a version holds, and the quotes either side of the field
     # are what keep the match to the `vers` of the crate — the requirement of
@@ -140,11 +155,13 @@ index_has() {
 for CRATE in marsrs-core marsrs-comm marsrs-crypt marsrs-buffer \
              marsrs-appender marsrs-sdt marsrs-stn marsrs-xlog marsrs; do
     # Asked up to five times, because a 429 or a 5xx is crates.io being busy
-    # and not a fact about the version: ten seconds, then again.
+    # and not a fact about the version: ten seconds, then again. A `000` is
+    # asked again for the same reason — it is no answer at all, and an answer
+    # is what a publish is decided on.
     for _ in 1 2 3 4 5; do
         status="$(crate_status "$CRATE")"
         case "$status" in
-            429|5[0-9][0-9]) sleep 10; continue ;;
+            000|429|5[0-9][0-9]) sleep 10; continue ;;
         esac
         break
     done
@@ -157,6 +174,10 @@ for CRATE in marsrs-core marsrs-comm marsrs-crypt marsrs-buffer \
             # The version is the release's and the checkout is the tag's, so the
             # tree carries an edit `cargo publish` would otherwise refuse.
             cargo publish -p "$CRATE" --allow-dirty
+            ;;
+        000)
+            echo "::error::crates.io answered none of the five asks about $CRATE $version; whether it is up is unknown, so it is not published over"
+            exit 1
             ;;
         *)
             echo "::error::crates.io answered $status for $CRATE $version; whether it is up is unknown, so it is not published over"
