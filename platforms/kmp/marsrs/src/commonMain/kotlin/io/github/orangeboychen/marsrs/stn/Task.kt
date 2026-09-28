@@ -20,8 +20,17 @@ package io.github.orangeboychen.marsrs.stn
  * app fills in and never gets back is one this class leaves out.
  */
 public class Task {
-    /** What the task is known by, which [StnLogic.genTaskID] hands out. */
-    public var taskID: Int = 0
+    /**
+     * What the task is known by, which [StnLogic.genTaskID] hands out.
+     *
+     * A new task draws one, and not the `0` a field left to itself would carry:
+     * two tasks that answer to the same id are two entries `hasTask` and
+     * `stopTask` cannot tell apart, and a callback that names it names the
+     * wrong one. The Android AAR's own `Task()` draws one too, so a task of
+     * this class is a task with an id whichever of the two the app builds it
+     * with.
+     */
+    public var taskID: Int = StnLogic.genTaskID()
 
     /** The links the task may go out on: one of the [E_SHORT], [E_LONG] and [E_BOTH] integers. */
     public var channelSelect: Int = 0
