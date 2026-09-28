@@ -991,11 +991,7 @@ impl NetCore {
     /// on, which is what the app's report reads.
     pub fn connect_profile(&mut self, taskid: u32, channel_select: i32) -> ConnectProfile {
         if channel_select == Task::CHANNEL_SHORT {
-            return self
-                .shortlink
-                .connect_profile(taskid)
-                .cloned()
-                .unwrap_or_default();
+            return self.shortlink.connect_profile(taskid).unwrap_or_default();
         }
         if self.use_long_link
             && (channel_select == Task::CHANNEL_LONG

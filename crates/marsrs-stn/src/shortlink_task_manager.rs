@@ -532,7 +532,11 @@ impl ShortLinkTaskManager {
         profile_of.receive_data_size = body_len;
         profile_of.last_receive_pkg_time = now;
 
+        // `begin_buf2resp_time` and `end_buf2resp_time` — the same pair for
+        // the answer, which is what the app is handed as the decode times
+        self.tasks[at].transfer_profile.begin_buf2resp_time = now;
         let (err_code, handle) = self.decode(&task, &response.body);
+        self.tasks[at].transfer_profile.end_buf2resp_time = now;
         self.socket_pool.report_at(
             now,
             profile.is_reused_fd,
@@ -616,11 +620,23 @@ impl ShortLinkTaskManager {
 
     /// `GetConnectProfile(_taskid)` — the connect of the run that is out.
     /// [`None`] for a task that is waiting for one.
-    pub fn connect_profile(&self, taskid: u32) -> Option<&ConnectProfile> {
+    ///
+    /// The four encode and decode times are not the link's to know: the C++
+    /// copies them off the transfer profile here
+    /// (`mars/stn/src/shortlink_task_manager.cc:1311-1314`), and it is this
+    /// profile — and not the one the link holds — that the app is handed in
+    /// `OnTaskEnd`, once the run is over.
+    pub fn connect_profile(&self, taskid: u32) -> Option<ConnectProfile> {
         self.tasks
             .iter()
             .find(|p| p.running.is_some() && p.task.taskid == taskid)
-            .map(|p| &p.transfer_profile.connect_profile)
+            .map(|p| ConnectProfile {
+                start_encode_packet_time: p.transfer_profile.begin_req2buf_time,
+                encode_packet_finished_time: p.transfer_profile.end_req2buf_time,
+                start_decode_packet_time: p.transfer_profile.begin_buf2resp_time,
+                decode_packet_finished_time: p.transfer_profile.end_buf2resp_time,
+                ..p.transfer_profile.connect_profile.clone()
+            })
     }
 
     /// `lst_cmd_`.
@@ -897,7 +913,15 @@ impl ShortLinkTaskManager {
             // not a copy one number behind it
             task.client_sequence_id = sequence_id;
 
-            let body = match self.encode(&task) {
+            // `begin_req2buf_time` and `end_req2buf_time` — the app has the
+            // task to write its request now, and this is what
+            // `GetConnectProfile` hands the app in `OnTaskEnd` as the encode
+            // times, so they are taken on both ways out of the call
+            self.tasks[i].transfer_profile.begin_req2buf_time = now;
+            let encoded = self.encode(&task);
+            self.tasks[i].transfer_profile.end_req2buf_time = now;
+
+            let body = match encoded {
                 Ok(body) => body,
                 Err(code) => {
                     let ended = self.single_resp_handle_at(
@@ -1035,6 +1059,12 @@ impl ShortLinkTaskManager {
         if over {
             let task = self.tasks[at].task.clone();
             let was_running = self.tasks[at].running.is_some();
+            // `net_core.cc:786` hands the app what `GetConnectProfile` says
+            // and not the profile the run ended with, so the four encode and
+            // decode times go out with it
+            let reported = self
+                .connect_profile(task.taskid)
+                .unwrap_or_else(|| profile.clone());
             let cgi_retcode = self.callback.as_mut().map_or(0, |callback| {
                 callback(
                     err_type,
@@ -1042,7 +1072,7 @@ impl ShortLinkTaskManager {
                     fail_handle,
                     &task,
                     cost as u32,
-                    &profile,
+                    &reported,
                 )
             });
             {
@@ -1456,6 +1486,8 @@ mod tests {
     type Ended = Arc<Mutex<Vec<(ErrCmdType, i32, TaskFailHandleType, u32)>>>;
     /// What the app was asked about a task it may want tried again.
     type Asked = Arc<Mutex<Vec<(ErrCmdType, i32, TaskFailHandleType, u32, String)>>>;
+    /// The four encode and decode times the app was handed for a task.
+    type PacketTimes = Arc<Mutex<Vec<(u64, u64, u64, u64)>>>;
 
     /// A run of every task, named after the task, and a note of what it was
     /// asked for.
@@ -1802,6 +1834,38 @@ mod tests {
             vec![(ErrCmdType::Ok, -11, TaskFailHandleType::Normal, 7)]
         );
         assert_eq!(manager.tasks_continuous_fail_count(), 0);
+    }
+
+    /// `net_core.cc:786` — the app is handed what `GetConnectProfile` says and
+    /// not the profile the run ended with, so the four encode and decode times
+    /// are on it: the two the app was asked to write the request in, and the
+    /// two it was given the answer in.
+    #[test]
+    fn the_app_is_told_when_the_request_and_the_answer_were_written() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        let times: PacketTimes = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&times);
+        manager.set_callback(
+            move |_err_type, _err_code, _handle, _task, _cost, profile| {
+                recorder.lock().unwrap().push((
+                    profile.start_encode_packet_time,
+                    profile.encode_packet_finished_time,
+                    profile.start_decode_packet_time,
+                    profile.decode_packet_finished_time,
+                ));
+                0
+            },
+        );
+        manager.start_task_at(100_000, task(7), prepare());
+        assert_eq!(
+            manager.on_response_at(100_500, RunId(7), answered(b"hello")),
+            Some(RespHandle::Ended)
+        );
+        assert_eq!(
+            *times.lock().unwrap(),
+            vec![(100_000, 100_000, 100_500, 100_500)]
+        );
     }
 
     #[test]

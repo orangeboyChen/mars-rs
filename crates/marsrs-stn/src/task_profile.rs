@@ -321,6 +321,17 @@ pub struct ConnectProfile {
     pub read_packet_finished_time: u64,
     /// `recv_reponse_cost` — how long the whole read took, from its first byte.
     pub recv_reponse_cost: u64,
+    /// `start_encode_packet_time` — when the app was handed the task to write
+    /// its request, which `GetConnectProfile` copies off the run's transfer
+    /// profile: the app is handed this profile in `OnTaskEnd`, and the C++
+    /// gets the four encode and decode times from there and not from the link.
+    pub start_encode_packet_time: u64,
+    /// `encode_packet_finished_time` — when the request came back.
+    pub encode_packet_finished_time: u64,
+    /// `start_decode_packet_time` — when the app was handed the answer.
+    pub start_decode_packet_time: u64,
+    /// `decode_packet_finished_time` — when it was done reading it.
+    pub decode_packet_finished_time: u64,
     /// `quic_rw_timeout_ms` — how long a read waits on a quic link; `5000` until
     /// something sets it.
     pub quic_rw_timeout_ms: u32,
@@ -412,6 +423,10 @@ impl Default for ConnectProfile {
             start_read_packet_time: 0,
             read_packet_finished_time: 0,
             recv_reponse_cost: 0,
+            start_encode_packet_time: 0,
+            encode_packet_finished_time: 0,
+            start_decode_packet_time: 0,
+            decode_packet_finished_time: 0,
             quic_rw_timeout_ms: DEFAULT_QUIC_RW_TIMEOUT_MS,
             quic_rw_timeout_source: TimeoutSource::default(),
             keepalive_timeout: 0,
@@ -596,6 +611,15 @@ pub struct TransferProfile {
     pub start_send_time: u64,
     /// `last_receive_pkg_time` — when the last package of the answer came in.
     pub last_receive_pkg_time: u64,
+    /// `begin_req2buf_time` — when the app was handed the task to write its
+    /// request; [`ConnectProfile::start_encode_packet_time`] is copied from it.
+    pub begin_req2buf_time: u64,
+    /// `end_req2buf_time` — when the request came back.
+    pub end_req2buf_time: u64,
+    /// `begin_buf2resp_time` — when the app was handed the answer.
+    pub begin_buf2resp_time: u64,
+    /// `end_buf2resp_time` — when it was done reading it.
+    pub end_buf2resp_time: u64,
     /// `read_write_timeout` — how long the whole read may take.
     pub read_write_timeout: u64,
     /// `first_pkg_timeout` — how long the first package may take.
@@ -626,6 +650,10 @@ impl TransferProfile {
             first_start_send_time: 0,
             start_send_time: 0,
             last_receive_pkg_time: 0,
+            begin_req2buf_time: 0,
+            end_req2buf_time: 0,
+            begin_buf2resp_time: 0,
+            end_buf2resp_time: 0,
             read_write_timeout: 0,
             first_pkg_timeout: 0,
             sent_size: 0,
