@@ -206,6 +206,37 @@ fn a_record_no_key_can_be_derived_for_leaves_its_marker_behind() {
     assert!(text.contains("after\n"), "{text}");
 }
 
+/// A private key no secret can be derived from is the record's failure and not
+/// the file's: `uECC_shared_secret` answers 0 for it — the same answer a client
+/// key that is not a point gets — and `decodeBuffer` goes on at the record
+/// behind it either way. One such record used to end the walk, and the days of
+/// log standing behind it went with it.
+#[test]
+fn a_private_key_no_secret_comes_from_leaves_its_marker_behind() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&sync_record(b"before\n"));
+    // The header's key never gets as far as being checked: the private key is
+    // the first thing the ECDH is asked about, and it is the one refused.
+    bytes.extend_from_slice(&record(
+        magic::ASYNC_ZLIB_START,
+        &[0x11; CLIENT_PUBKEY_LEN],
+        b"\x00",
+    ));
+    bytes.extend_from_slice(&sync_record(b"after\n"));
+
+    // A scalar of zero is not a secp256k1 private key. Reaching this case at
+    // all takes an unusual caller: a key of zeroes, or one past the order of
+    // the curve, and a file that mixes encrypted records with plain ones.
+    let plain = marsrs_xlog::decode_records(&bytes, Some(&[0; 32])).expect("the walk went on");
+    let text = String::from_utf8_lossy(&plain);
+
+    assert!(text.contains("before\n"), "{text}");
+    // The same marker a client key that is not a point gets, naming this time
+    // which of the two keys it was.
+    assert!(text.contains("Get ECDH key error (private key:"), "{text}");
+    assert!(text.contains("after\n"), "{text}");
+}
+
 /// A file made of nothing but a record whose body will not inflate still holds
 /// a record: what the walk answers is that record's marker, and not an error
 /// saying no record was found.

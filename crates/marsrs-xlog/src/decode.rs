@@ -120,8 +120,9 @@ impl std::error::Error for DecodeError {}
 /// next byte a whole record starts at is where it goes on, and the span it
 /// skipped is named in the text — and a record that is there but whose text
 /// cannot be recovered leaves its marker in the text where that text would
-/// have been. What ends it is a file with no record in it at all, and a key
-/// the decoder cannot use: [`DecodeError::recovered`] is what was read before
+/// have been, a key no secret can be derived with included. What ends it is a
+/// file with no record in it at all, and an encrypted record met with no
+/// private key at all: [`DecodeError::recovered`] is what was read before
 /// either.
 pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>, DecodeError> {
     let mut plain = Vec::new();
@@ -197,11 +198,13 @@ enum Failure {
     /// it skipped is named in the text.
     Damaged(String),
     /// The record is whole but its text is not in it: a client public key that
-    /// is not a point, a stream that will not inflate. The marker stands where
-    /// the text would have been, and the walk goes on at the record behind it.
+    /// is not a point, a private key no secret comes out of, a stream that will
+    /// not inflate. The marker stands where the text would have been, and the
+    /// walk goes on at the record behind it.
     Unreadable(String, usize),
-    /// Nothing behind this record can be read either — the decoder was handed a
-    /// private key it cannot use — so the walk ends and this is its reason.
+    /// Nothing behind this record can be read either — an encrypted record met
+    /// with no private key at all, which is the one key the C cannot go on
+    /// from — so the walk ends and this is its reason.
     Fatal(String),
 }
 
@@ -293,17 +296,20 @@ fn record_text(
             let mut client_pubkey = [0u8; CLIENT_PUBKEY_LEN];
             client_pubkey.copy_from_slice(&data[body_start - CLIENT_PUBKEY_LEN..body_start]);
             let tea_key = match tea_key(privkey, &client_pubkey) {
-                // `uECC_shared_secret` answering 0, which is what a damaged
-                // header looks like from in here: `decodeBuffer` puts its
-                // marker in the output and goes on at the record behind it.
-                Err(KeyError::Client(reason)) => {
+                // `uECC_shared_secret` answering 0, which is what both a
+                // damaged header and a private key no secret comes out of look
+                // like from in here: `decodeBuffer` puts its marker where the
+                // record's text would have been and goes on at the record
+                // behind it. A key that is wrong for one record of a file is
+                // wrong for every one of them, so what the walk answers is one
+                // marker per record — which is what the C writes, and is more
+                // than a walk that gives up at the first.
+                Err(KeyError::Client(reason)) | Err(KeyError::Private(reason)) => {
                     return Err(Failure::Unreadable(
                         format!("{ECDH_MARKER} ({reason})"),
                         next,
                     ))
                 }
-                // A key no record of this file can be read with.
-                Err(KeyError::Private(reason)) => return Err(Failure::Fatal(reason)),
                 Ok(key) => key,
             };
             inflate(magic_start, &tea_decrypt_all(body, &tea_key))
@@ -464,8 +470,11 @@ fn tea_decrypt(block: &mut [u32; 2], key: &[u32; 4]) -> [u32; 2] {
 
 /// Why the TEA key of a record could not be derived.
 enum KeyError {
-    /// The private key the decoder was handed is not a secp256k1 one, so no
-    /// record of the file can be read with it.
+    /// The private key the decoder was handed is not a secp256k1 one — `k256`
+    /// refuses a scalar of zero, or one past the curve's order, before a
+    /// record is read. Upstream's `uECC_shared_secret` refuses it the same
+    /// way it refuses a public key that is not a point, and per record: the
+    /// answer is that record's marker, and not the end of the walk.
     Private(String),
     /// The client public key the record's header carries is not a point, which
     /// is what a damaged header looks like: `uECC_shared_secret` answers 0 for
