@@ -53,6 +53,11 @@ pub const MARS_STN_ERR_NULL_TASK: c_int = -2;
 /// The task is not one the queues would take — no channel to go out on, a
 /// timeout the C++ refuses — which is what `StartTask` answers `false` for.
 pub const MARS_STN_ERR_REFUSED: c_int = -3;
+/// What [`mars_stn_due_time`] answers when there is nothing for the host to
+/// wait for: no task is out, no zombie is being checked and no alarm is armed.
+/// It is not [`MARS_STN_ERR_PANIC`], which every other symbol answers with and
+/// this one may too, so the two are two values and not one.
+pub const MARS_STN_ERR_NO_DUE: i64 = -4;
 
 /// Which of the eighteen questions STN asked.
 ///
@@ -840,6 +845,38 @@ pub extern "C" fn mars_stn_gen_task_id() -> u32 {
 #[no_mangle]
 pub extern "C" fn mars_stn_gen_sequence_id() -> u16 {
     guard(0, gen_sequence_id)
+}
+
+/// `NetCore::GetNextHeartbeatTime` — when the host's run loop is to wake: the
+/// soonest of the two queues, the zombie check and the timing sync's alarm, as a
+/// `gettickcount()`.
+///
+/// @return that tick, which is never negative, or [`MARS_STN_ERR_NO_DUE`] when
+/// there is nothing to wait for, or [`MARS_STN_ERR_PANIC`].
+///
+/// A task that is out is always waiting on something, so this is not a
+/// heartbeat a host may ignore: a task that is started and never drained sits in
+/// its queue until the process ends.
+#[no_mangle]
+pub extern "C" fn mars_stn_due_time() -> i64 {
+    guard(MARS_STN_ERR_PANIC.into(), || {
+        with_logic(|logic| {
+            logic
+                .due_time()
+                .map_or(MARS_STN_ERR_NO_DUE, |due| due as i64)
+        })
+    })
+}
+
+/// What the C++'s message queue thread would have done: the follow-ups, one at
+/// a time in the order they were posted, and then one pass of everything the
+/// queues and the zombies only do when they are asked.
+///
+/// The C++ runs this on threads of its own; this port has none, so it is the
+/// host's loop that calls it — [`mars_stn_due_time`] is when.
+#[no_mangle]
+pub extern "C" fn mars_stn_run_pending() {
+    guard((), || with_logic(StnLogic::run_pending));
 }
 
 /// `TrigNooping` — `SmartHeartbeat::SetHeartBeat(0)` and a noop on the default

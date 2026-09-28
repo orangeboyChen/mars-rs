@@ -145,6 +145,25 @@ pub fn clear_task_impl() {
     with_logic(StnLogic::clear_tasks)
 }
 
+/// What the C++'s message queue thread would have done: the follow-ups, one at
+/// a time in the order they were posted, and then one pass of everything the two
+/// queues and the zombies only do when they are asked.
+///
+/// The C++ runs this on a thread of its own; this port has none, so it is the
+/// host's loop that calls it, and [`due_time_impl`] is when. A task Java starts
+/// and nothing drains sits in its queue until the process ends, which is why
+/// `StnLogic.startTask` is not the whole of the pipeline.
+pub fn run_pending_impl() {
+    with_logic(StnLogic::run_pending)
+}
+
+/// `GetNextHeartbeatTime` — when the host's loop is to call [`run_pending_impl`]
+/// again: the soonest of the two queues, the zombie check and the timing sync's
+/// alarm, as a `gettickcount()`. `None` is nothing to wait for.
+pub fn due_time_impl() -> Option<u64> {
+    with_logic(StnLogic::due_time)
+}
+
 /// `StnLogic.makesureLongLinkConnected` — the default long link is connected,
 /// and `true` when there was one to connect: the C++ reaches for it and does
 /// nothing at all when there is none.

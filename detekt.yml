@@ -30,13 +30,17 @@ complexity:
   # `getStatisticsNetType`, which nests as deeply as the C++ does.
   NestedBlockDepth:
     threshold: 10
-  # `StnLogic` holds the whole STN callback surface in one object, which is how
-  # `StnLogic.java` is written; `NetStatusUtil` is the other large one.
+  # `StnLogic` holds the whole STN surface in one object, which is how
+  # `StnLogic.java` is written: one function per symbol of the C ABI's, and the
+  # two the C++'s Java has no need of — `runPending` and `dueTime`, which there
+  # a thread of the C++'s own calls — are two more in the same object, because
+  # the object is the surface and not the thread. `NetStatusUtil` is the other
+  # large one. 42 is the 40 of the symbols plus those two.
   TooManyFunctions:
     thresholdInFiles: 60
     thresholdInClasses: 60
     thresholdInInterfaces: 20
-    thresholdInObjects: 40
+    thresholdInObjects: 42
     thresholdInEnums: 20
 
 empty-blocks:

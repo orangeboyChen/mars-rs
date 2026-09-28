@@ -1030,9 +1030,25 @@ impl NetCore {
         self.pending.lock().unwrap_or_else(poisoned).len()
     }
 
-    /// What the C++'s message queue thread does: one follow-up at a time, in
-    /// the order they were posted. A zombie that is started again can fail at
-    /// once, which is another follow-up, so this is a loop and not a `for`.
+    /// What the C++'s message queue thread does, as one pass: the follow-ups
+    /// first, one at a time in the order they were posted, and then one pass of
+    /// everything the queues only do when they are asked — the timeouts and the
+    /// retries of the two of them, the zombie check, and the timing sync's
+    /// alarm.
+    ///
+    /// The pass is repeated while it leaves a follow-up behind, which a zombie
+    /// started again does at once, and which is what makes this a loop and not a
+    /// `for`.
+    ///
+    /// The queues are here and not only in [`NetCore::start_task_at`] because
+    /// what starts a task is not what ends one that never answered: a task's
+    /// first-package timeout is read in
+    /// [`ShortLinkTaskManager::run_loop_at`](crate::ShortLinkTaskManager::run_loop_at),
+    /// and nothing calls it but a socket event or this pass. A host that
+    /// drains the follow-ups alone has a queue in which a task that got no
+    /// answer sits until the process ends — which [`NetCore::due_time`] is the
+    /// host's way of not doing: it names the soonest of the very alarms this
+    /// answers.
     pub fn run_pending(&mut self) {
         self.run_pending_at(gettickcount())
     }
@@ -1040,39 +1056,68 @@ impl NetCore {
     /// The same, with the reading handed in.
     pub fn run_pending_at(&mut self, now: u64) {
         loop {
-            let next = self.pending.lock().unwrap_or_else(poisoned).pop_front();
-            match next {
-                None => return,
-                Some(FollowUp::Start(task)) => {
-                    self.start_task_at(now, *task);
+            // A zombie that is started again can fail at once, which is another
+            // follow-up, so the follow-ups are drained to the last one. The
+            // guard is a temporary of a `let` and not of a `while let` head,
+            // because a temporary of the head lives to the end of the body and
+            // the core is what the follow-up is done to.
+            loop {
+                let next = self.pending.lock().unwrap_or_else(poisoned).pop_front();
+                match next {
+                    None => break,
+                    Some(FollowUp::Start(task)) => {
+                        self.start_task_at(now, *task);
+                    }
+                    Some(FollowUp::Retry {
+                        err_type,
+                        err_code,
+                        handle,
+                        src_taskid,
+                        user_id,
+                    }) => {
+                        self.retry_tasks_at(now, err_type, err_code, handle, src_taskid, &user_id)
+                    }
+                    Some(FollowUp::LongLinkError {
+                        name,
+                        err_type,
+                        err_code,
+                        ip,
+                        port,
+                    }) => {
+                        self.on_longlink_network_error_at(
+                            now, &name, err_type, err_code, &ip, port,
+                        );
+                    }
+                    Some(FollowUp::ShortLinkError {
+                        err_type,
+                        err_code,
+                        ip,
+                        host,
+                        port,
+                    }) => {
+                        self.on_shortlink_network_error_at(
+                            now, err_type, err_code, &ip, &host, port,
+                        );
+                    }
                 }
-                Some(FollowUp::Retry {
-                    err_type,
-                    err_code,
-                    handle,
-                    src_taskid,
-                    user_id,
-                }) => {
-                    self.retry_tasks_at(now, err_type, err_code, handle, src_taskid, &user_id);
-                }
-                Some(FollowUp::LongLinkError {
-                    name,
-                    err_type,
-                    err_code,
-                    ip,
-                    port,
-                }) => {
-                    self.on_longlink_network_error_at(now, &name, err_type, err_code, &ip, port);
-                }
-                Some(FollowUp::ShortLinkError {
-                    err_type,
-                    err_code,
-                    ip,
-                    host,
-                    port,
-                }) => {
-                    self.on_shortlink_network_error_at(now, err_type, err_code, &ip, &host, port);
-                }
+            }
+
+            // `__RunLoop` of both queues, then what the C++'s `__TimerChecker`
+            // posts: one pass each, at the same reading, whether or not they
+            // have anything to do — a queue with no task in it answers for
+            // itself, and the zombie check arms its own next alarm.
+            self.shortlink.run_loop_at(now);
+            self.longlink.run_loop_at(now);
+            self.zombie
+                .lock()
+                .unwrap_or_else(poisoned)
+                .on_timer_check_at(now);
+            if self.timing_sync.due_time().is_some_and(|due| due <= now) {
+                self.timing_sync.on_alarm_at(now);
+            }
+
+            if !self.has_pending() {
+                return;
             }
         }
     }

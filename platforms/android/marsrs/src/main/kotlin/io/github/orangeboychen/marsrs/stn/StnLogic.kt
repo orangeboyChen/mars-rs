@@ -426,6 +426,33 @@ object StnLogic {
     @JvmStatic
     external fun clearTask()
 
+    /**
+     * What the C++'s message queue thread would have done, as one pass: the
+     * follow-ups, one at a time in the order they were posted, and then one pass
+     * of everything the two queues and the zombies only do when they are asked —
+     * a task's first-package timeout is one of those things, and a zombie that
+     * is started again is another.
+     *
+     * The C++ runs this on a thread of its own; the port has none, so it is the
+     * app's loop that calls it, and [dueTime] is when. Neither is a call the
+     * C++'s Java declares, because there the thread is the caller: a task that
+     * is started here and never drained sits in its queue until the process
+     * ends, which is why [startTask] is not the whole of the pipeline.
+     */
+    @JvmStatic
+    external fun runPending()
+
+    /**
+     * When the app's loop is to call [runPending] again: the soonest of the two
+     * queues, the zombie check and the timing sync's alarm, as a
+     * `gettickcount()`.
+     *
+     * @return that tick, or `-1` when there is nothing to wait for — no task is
+     *     out, no zombie is being checked, no alarm is armed.
+     */
+    @JvmStatic
+    external fun dueTime(): Long
+
     /** Reorders the task queue — the `touchTasks` of the C++, which the port has and its Java does not declare. */
     @JvmStatic
     external fun touchTasks()
