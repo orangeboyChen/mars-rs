@@ -52,8 +52,10 @@ marsrs-harmony-<version>/
 mars_stn_set_app(NULL, ask);          /* 那十八个问题，一个回调回答 */
 mars_stn_start_task(&task);
 
+/* 回答是这一趟还能等多少毫秒 */
 long long due = mars_stn_due_time();
 while (due >= 0) {                    /* 这个移植没有线程：App 自己排空队列 */
+    usleep(due * 1000);
     mars_stn_run_pending();
     due = mars_stn_due_time();
 }

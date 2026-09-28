@@ -46,7 +46,7 @@ Android 上是十三个：JNI 桥自己回答的那五个 —— 两个网络错
 
 **3. 驱动队列。** 这是这个端口唯一一处要求调用方做、而 C++ 不做的事。C++ 用自己的线程跑
 队列和长连接；这个端口里面没有线程，所以本该是一个线程的地方，是宿主的一次调用 ——
-`run_pending()`，以及告诉你什么时候该调它的 `due_time()`。一个发起了却从没被排空的
+`run_pending()`，以及告诉你这一趟最多还能等多久的 `due_time()`。一个发起了却从没被排空的
 任务，会一直待在它的队列里。
 
 ::: code-group
@@ -103,8 +103,9 @@ task.shortlink_host_list = vec!["example.com".to_owned()];
 task.total_timeout = 10_000;
 stn.start_task(task);
 
-// 3. 循环：按 `due_time()` 说的频率
-while let Some(_due) = stn.due_time() {
+// 3. 循环：`due_delay()` 是这一趟还能等多久
+while let Some(wait) = stn.due_delay() {
+    std::thread::sleep(std::time::Duration::from_millis(wait));
     stn.run_pending();
 }
 ```
@@ -130,8 +131,9 @@ task.shortLinkHosts = ["example.com"]
 task.totalTimeout = 10_000
 MarsStn.start(task)
 
-// 3. 循环
-while MarsStn.dueTime != nil {
+// 3. 循环 —— `dueTime` 是这一趟还能等多少毫秒，没有可等的东西时是 `nil`
+while let wait = MarsStn.dueTime {
+    Thread.sleep(forTimeInterval: Double(wait) / 1000)
     MarsStn.runPending()
 }
 ```
@@ -168,9 +170,10 @@ task.totalTimeout = 10_000
 StnLogic.setShortlinkSvrAddr(443)
 StnLogic.startTask(task)
 
-// 3. 循环 —— 没有可等的东西时 `dueTime()` 回答 -1
+// 3. 循环 —— `dueTime()` 是这一趟还能等多少毫秒，没有可等的东西时回答 -1
 var due = StnLogic.dueTime()
 while (due >= 0) {
+    Thread.sleep(due)
     StnLogic.runPending()
     due = StnLogic.dueTime()
 }
@@ -207,9 +210,11 @@ val task = Task().apply {
 }
 StnLogic.startTask(task)
 
-// 3. 循环 —— 没有可等的东西时 `dueTime()` 回答 `null`
-while (StnLogic.dueTime() != null) {
+// 3. 循环 —— `dueTime()` 是这一趟还能等多少毫秒，没有可等的东西时回答 `null`
+var due = StnLogic.dueTime()
+while (due != null) {
     StnLogic.runPending()
+    due = StnLogic.dueTime()
 }
 ```
 
@@ -240,9 +245,10 @@ task.shortlink_host_list.items = hosts;
 task.shortlink_host_list.count = 1;
 if (mars_stn_start_task(&task) != MARS_STN_OK) { /* 被拒，或 panic 了 */ }
 
-/* 3. 循环 —— "没有可等的东西" 就是 MARS_STN_ERR_NO_DUE */
+/* 3. 循环 —— 回答是这一趟还能等多少毫秒，"没有可等的东西" 就是 MARS_STN_ERR_NO_DUE */
 long long due = mars_stn_due_time();
 while (due >= 0) {
+    usleep(due * 1000);
     mars_stn_run_pending();
     due = mars_stn_due_time();
 }
@@ -257,8 +263,12 @@ while (due >= 0) {
 自己写；一个发起了却从没被排空的任务会一直坐在它的队列里，直到进程结束 —— 对一个哪儿
 也去不了的任务，`has_task` 照样回答 `true`。
 
-`due_time` 是下一趟什么时候该跑，是一个 tick，它就是"多久一次"的答案：一个不停空转调
-`run_pending` 的循环能工作，只是会白烧掉一个核。
+`due_time` —— 上面每一种写法里 —— 是距离下一趟还有多久，单位是毫秒：`0` 是已经到期的
+一趟，队列里等着的一个 follow-up 就是。它是一个时长，不是一个时刻，这正是跨 ABI 的调用方
+需要的：tick 从一个只有本进程读得到的原点起算，所以告诉宿主的是还要等多久。它也不是什么
+承诺 —— 一个不停空转调 `run_pending` 的循环照样能工作，只是会白烧掉一个核。Rust 那一半
+把两者分开写：`StnLogic::due_time` 是 `gettickcount()` 的读数，同一进程里的调用方可以拿它
+跟自己的钟比，`due_delay` 才是那个等待；其余每个平台回答的都是那个等待，别的什么都没有。
 :::
 
 ## 任务

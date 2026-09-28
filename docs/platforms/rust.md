@@ -118,7 +118,8 @@ task.cgi = "/cgi-bin/hello".to_owned();
 stn.start_task(task);
 
 // no threads in the port: the queue is drained by whoever calls this
-while stn.due_time().is_some() {
+while let Some(wait) = stn.due_delay() {   // how long the pass may wait, in ms
+    std::thread::sleep(std::time::Duration::from_millis(wait));
     stn.run_pending();
 }
 ```

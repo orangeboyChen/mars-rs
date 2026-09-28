@@ -120,9 +120,9 @@ of one platform, and writes it in that platform's source set.
 Four places the two `actual`s answer differently, and the shared API is what
 both can say:
 
-- `StnLogic.dueTime()` answers `Long?` — `null` when there is nothing to wait
-  for — because the JNI bridge answers `-1` and the C ABI its own
-  `MARS_STN_ERR_NO_DUE`.
+- `StnLogic.dueTime()` answers `Long?` — how many milliseconds the next pass may
+  wait, and `null` when there is nothing to wait for — because the JNI bridge
+  answers `-1` and the C ABI its own `MARS_STN_ERR_NO_DUE`.
 - `StnLogic.makesureLongLinkConnected()` answers nothing: the C ABI's symbol
   answers 1 or 0 and the JNI one answers `void`, so a caller who wants to know
   reads `Question.linkStatus` instead.
@@ -210,7 +210,9 @@ SdtLogic.takeReport()?.let { send(it) }   // answers it once, and empties it
 ```
 
 The four probes are the app's: this port owns no sockets, so a check is asked of
-the `IProbe` you hand to `runChecks`, one at a time, on the thread that called it.
+the `IProbe` you hand to `runChecks`, one at a time, on the thread that called it
+— and that call does not come back until every probe has answered, so one
+diagnosis runs at a time.
 
 [The network diagnosis](/sdt) is the whole of it: the mode, the plan, and the
 JSON of the report.

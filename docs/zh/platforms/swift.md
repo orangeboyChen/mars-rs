@@ -132,7 +132,8 @@ while MarsStn.dueTime != nil {      // 没有哪个线程自己排空这个队�
 }
 ```
 
-`MarsStn.dueTime` 是下一趟什么时候到期，`MarsStn.runPending()` 就是那一趟：C++ 把它们
+`MarsStn.dueTime` 是这一趟还能等多少毫秒 —— `0` 是已经到期的一趟 —— `MarsStn.runPending()`
+就是那一趟：C++ 把它们
 跑在一个消息队列线程上，而这个移植没有那个线程，所以这个循环是 App 的。一个启动了却从
 来没被排空过的任务，就一直留在它的队列里。
 

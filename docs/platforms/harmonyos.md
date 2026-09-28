@@ -57,8 +57,10 @@ diagnosis, through the same NAPI shim it writes for the logger:
 mars_stn_set_app(NULL, ask);          /* the eighteen questions, as one callback */
 mars_stn_start_task(&task);
 
+/* the answer is how many milliseconds the pass may wait */
 long long due = mars_stn_due_time();
 while (due >= 0) {                    /* no threads in the port: the app drains the queues */
+    usleep(due * 1000);
     mars_stn_run_pending();
     due = mars_stn_due_time();
 }

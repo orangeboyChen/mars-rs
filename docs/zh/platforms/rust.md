@@ -114,7 +114,8 @@ task.cgi = "/cgi-bin/hello".to_owned();
 stn.start_task(task);
 
 // 这个移植没有线程：队列由谁调用谁来排空
-while stn.due_time().is_some() {
+while let Some(wait) = stn.due_delay() {   // 这一趟还能等多久，毫秒
+    std::thread::sleep(std::time::Duration::from_millis(wait));
     stn.run_pending();
 }
 ```

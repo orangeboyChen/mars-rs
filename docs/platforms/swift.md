@@ -154,9 +154,10 @@ while MarsStn.dueTime != nil {      // nothing drains the queue on a thread of i
 }
 ```
 
-`MarsStn.dueTime` is when the next pass is due and `MarsStn.runPending()` is the
-pass: the C++ runs them on a message-queue thread and this port has none, so the
-loop is the app's. A task that is started and never drained stays in its queue.
+`MarsStn.dueTime` is how long the pass may wait, in milliseconds — `0` is one
+that is already due — and `MarsStn.runPending()` is the pass: the C++ runs them on
+a message-queue thread and this port has none, so the loop is the app's. A task
+that is started and never drained stays in its queue.
 
 [The task pipeline](/stn) is the whole of it — the two links, the fields of a
 task, how a task ends, and what a long link asks of an app.

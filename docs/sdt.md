@@ -278,6 +278,16 @@ called while `run_checks` is on the stack: take a `CancelHandle` with
 `cancel_handle()` first and hand it to whoever has to stop the run — the probe
 closure, which owns the socket that has to give up.
 
+Everywhere else the cancel needs no handle: it sets the flag the run reads and
+takes no lock the run holds, so it lands from another thread while the probes are
+still being asked — which is the only moment cancelling means anything. What it
+does is keep the rest of the plan from running; a probe that is already out is
+not interrupted.
+
+And a run is one at a time: the diagnosis is one process-wide value, so a second
+`runChecks` waits for the first instead of running beside it — on Android and in
+the shared Kotlin the second call does not come back until the first is over.
+
 ## Where to go next
 
 - [The task pipeline](/stn) — the half that calls SDT when a host stops

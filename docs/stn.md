@@ -53,8 +53,8 @@ task runs on the queue, not on the calling thread.
 **3. Drive the queue.** This is the one thing this port asks of the caller that
 the C++ did not. The C++ runs the queues and the long links on threads of its
 own; this port has no threads in it, so what would have been a thread is a call
-the host makes — `run_pending()`, and `due_time()` to know when to make it. A
-task that is started and never drained stays in its queue.
+the host makes — `run_pending()`, and `due_time()` to know how long it may wait
+before making it. A task that is started and never drained stays in its queue.
 
 ::: code-group
 
@@ -111,8 +111,9 @@ task.shortlink_host_list = vec!["example.com".to_owned()];
 task.total_timeout = 10_000;
 stn.start_task(task);
 
-// 3. the run loop: as often as `due_time()` says
-while let Some(_due) = stn.due_time() {
+// 3. the run loop: `due_delay()` is how long the pass may wait
+while let Some(wait) = stn.due_delay() {
+    std::thread::sleep(std::time::Duration::from_millis(wait));
     stn.run_pending();
 }
 ```
@@ -138,8 +139,10 @@ task.shortLinkHosts = ["example.com"]
 task.totalTimeout = 10_000
 MarsStn.start(task)
 
-// 3. the run loop
-while MarsStn.dueTime != nil {
+// 3. the run loop — `dueTime` is how many milliseconds the pass may wait,
+//    and it is `nil` when there is nothing to wait for
+while let wait = MarsStn.dueTime {
+    Thread.sleep(forTimeInterval: Double(wait) / 1000)
     MarsStn.runPending()
 }
 ```
@@ -176,9 +179,11 @@ task.totalTimeout = 10_000
 StnLogic.setShortlinkSvrAddr(443)
 StnLogic.startTask(task)
 
-// 3. the run loop — `dueTime()` answers -1 when there is nothing to wait for
+// 3. the run loop — `dueTime()` is how many milliseconds the pass may wait,
+//    and it answers -1 when there is nothing to wait for
 var due = StnLogic.dueTime()
 while (due >= 0) {
+    Thread.sleep(due)
     StnLogic.runPending()
     due = StnLogic.dueTime()
 }
@@ -215,9 +220,12 @@ val task = Task().apply {
 }
 StnLogic.startTask(task)
 
-// 3. the run loop — `dueTime()` answers `null` when there is nothing to wait for
-while (StnLogic.dueTime() != null) {
+// 3. the run loop — `dueTime()` is how many milliseconds the pass may wait,
+//    and it answers `null` when there is nothing to wait for
+var due = StnLogic.dueTime()
+while (due != null) {
     StnLogic.runPending()
+    due = StnLogic.dueTime()
 }
 ```
 
@@ -248,9 +256,11 @@ task.shortlink_host_list.items = hosts;
 task.shortlink_host_list.count = 1;
 if (mars_stn_start_task(&task) != MARS_STN_OK) { /* refused or panicked */ }
 
-/* 3. the run loop — MARS_STN_ERR_NO_DUE is what "nothing to wait for" is */
+/* 3. the run loop — the answer is how many milliseconds the pass may wait,
+   and MARS_STN_ERR_NO_DUE is what "nothing to wait for" is */
 long long due = mars_stn_due_time();
 while (due >= 0) {
+    usleep(due * 1000);
     mars_stn_run_pending();
     due = mars_stn_due_time();
 }
@@ -266,9 +276,16 @@ platform that carries STN exposes the pair, so the loop is the app's to write,
 and a task that is started and never drained sits in its queue until the process
 ends — `has_task` answers `true` for a task that is going nowhere.
 
-`due_time` is when the next pass is due, as a tick, and it is the answer to
-"how often": a loop that calls `run_pending` in a tight spin works, and burns a
-core doing it.
+`due_time` — in every spelling above — is how long the host may wait until the
+next pass is due, in milliseconds: `0` is a pass that is already due, which a
+follow-up waiting in the queue is. It is a duration and not a time of day, which
+is what a caller across an ABI needs: a tick is measured from an origin only this
+process can read, so the host is told the wait instead. What it is not is a
+promise — a loop that calls `run_pending` in a tight spin works too, and burns a
+core doing it. The Rust half spells the two apart: `StnLogic::due_time` is the
+`gettickcount()` reading, which a caller in the same process compares against its
+own clock, and `due_delay` is the wait. Every other platform answers the wait and
+nothing else.
 :::
 
 ## The task

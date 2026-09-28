@@ -110,7 +110,8 @@ source set 里。
 
 两个 `actual` 回答得不一样的有四处，共享 API 就是两边都能说的那个：
 
-- `StnLogic.dueTime()` 回答 `Long?` —— 没有要等的东西时是 `null` —— 因为 JNI 桥回答
+- `StnLogic.dueTime()` 回答 `Long?` —— 下一趟还能等多少毫秒，没有要等的东西时是 `null`
+  —— 因为 JNI 桥回答
   `-1`，C ABI 回答它自己的 `MARS_STN_ERR_NO_DUE`。
 - `StnLogic.makesureLongLinkConnected()` 什么都不回答：C ABI 那个符号回答 1 或 0，JNI
   那个回答 `void`，所以想知道的调用方去读 `Question.linkStatus`。
@@ -196,6 +197,7 @@ SdtLogic.takeReport()?.let { send(it) }   // 只回答一次，然后清空
 ```
 
 四个探针是 App 的：这个移植不持有任何 socket，所以一次检查是向交给 `runChecks` 的那个
-`IProbe` 一个一个地问，都在调用它的那个线程上。
+`IProbe` 一个一个地问，都在调用它的那个线程上，而且这个调用要等每个探针都回答了才返回，
+所以一次只有一个诊断在跑。
 
 [网络诊断](/zh/sdt)是它的全部：那个模式、那份计划、以及报告的那份 JSON。

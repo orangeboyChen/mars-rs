@@ -105,9 +105,12 @@ task.channel_select = 0x3;            /* both links */
 task.cgi = "/cgi-bin/hello";
 mars_stn_start_task(&task);
 
-/* no threads in the port: the queues are drained by whoever calls this */
+/* no threads in the port: the queues are drained by whoever calls this —
+   and the answer is how many milliseconds the pass may wait, with
+   MARS_STN_ERR_NO_DUE for "nothing to wait for" */
 long long due = mars_stn_due_time();
-while (due >= 0) {                    /* MARS_STN_ERR_NO_DUE is "nothing to wait for" */
+while (due >= 0) {
+    usleep(due * 1000);
     mars_stn_run_pending();
     due = mars_stn_due_time();
 }

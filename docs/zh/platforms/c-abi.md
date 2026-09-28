@@ -102,9 +102,11 @@ task.channel_select = 0x3;            /* 两条连接 */
 task.cgi = "/cgi-bin/hello";
 mars_stn_start_task(&task);
 
-/* 这个移植没有线程：队列由谁调用谁来排空 */
+/* 这个移植没有线程：队列由谁调用谁来排空 —— 而回答是这一趟还能等多少毫秒，
+   MARS_STN_ERR_NO_DUE 是"没有可等的东西" */
 long long due = mars_stn_due_time();
-while (due >= 0) {                    /* MARS_STN_ERR_NO_DUE 是"没有要等的东西" */
+while (due >= 0) {
+    usleep(due * 1000);
     mars_stn_run_pending();
     due = mars_stn_due_time();
 }

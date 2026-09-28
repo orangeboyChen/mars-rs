@@ -100,16 +100,19 @@ public expect object StnLogic {
      * again is another.
      *
      * The C++ runs this on a thread of its own; this port has none, so it is the
-     * app's loop that calls it, and [dueTime] is when.
+     * app's loop that calls it, and [dueTime] is how long it may wait.
      */
     public fun runPending()
 
     /**
-     * When the app's loop is to call [runPending] again: the soonest of the two
-     * queues, the zombie check and the timing sync's alarm, as a
-     * `gettickcount()`.
+     * How long the app's loop may wait before it calls [runPending] again: the
+     * soonest of the two queues, the zombie check and the timing sync's alarm,
+     * and `0` when a follow-up is already waiting — in milliseconds, which is
+     * what a Kotlin caller on either side of the bridge can act on. A tick
+     * would not be: it is measured from an origin only the process that made
+     * the reading can compare against.
      *
-     * @return that tick, or `null` when there is nothing to wait for — no task
+     * @return that wait, or `null` when there is nothing to wait for — no task
      *         is out, no zombie is being checked, no alarm is armed — which is
      *         the `-1` the JNI bridge answers and the `MARS_STN_ERR_NO_DUE` the
      *         C ABI does.

@@ -159,8 +159,9 @@ while (due >= 0) {          // -1 is "nothing to wait for"
 
 `ICallBack` is the fourteen questions STN asks while a task runs, and it is a
 plain interface with no defaults, so the object is the app's to finish.
-`dueTime()` answers `-1` when there is nothing to wait for, and `runPending()`
-is the pass: a task that is started and never drained stays in its queue.
+`dueTime()` is how long the pass may wait, in milliseconds, and it answers `-1`
+when there is nothing to wait for; `runPending()` is the pass: a task that is
+started and never drained stays in its queue.
 
 [The task pipeline](/stn) is the whole of it — the two links, the fields of a
 task, how a task ends, and what a long link asks of an app.
@@ -195,7 +196,8 @@ SdtLogic.takeReport()?.let { send(it) }   // answers it once, and empties it
 
 The four probes are the app's: this port owns no sockets, so a check is asked of
 the `IProbe` you hand to `runChecks`, one at a time, on the thread that called
-it. The C++ starts a diagnosis on a thread of its own — `com.tencent.mars.sdt.SdtLogic`
+it — and that call does not come back until every probe has answered, so one
+diagnosis runs at a time. The C++ starts a diagnosis on a thread of its own — `com.tencent.mars.sdt.SdtLogic`
 declares no start method — so this surface is the port's own rather than parity.
 
 [The network diagnosis](/sdt) is the whole of it: the mode, the plan, and the
