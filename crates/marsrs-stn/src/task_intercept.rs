@@ -19,12 +19,15 @@ use marsrs_comm::tickcount::gettickcount;
 /// How long an intercepted answer is good for, in milliseconds.
 pub const INTERCEPT_TIMEOUT: u64 = 60 * 1000;
 
-/// `struct TaskInterceptInfo`.
+/// One answer the app gave for one task: kept for [`INTERCEPT_TIMEOUT`], and
+/// never handed back out of it (see the module doc).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskInterceptInfo {
-    /// `name`
+    /// The task the answer is for. An empty name is refused on the way in, so
+    /// this one is never empty.
     pub name: String,
-    /// `intercept_time`
+    /// When the answer was written down, which is what the timeout is measured
+    /// from.
     pub intercept_time: u64,
     /// `data` — the answer the app gave, as the bytes it gave them: the
     /// C++'s `std::string` holds a response buffer, which is protobuf or
@@ -34,7 +37,8 @@ pub struct TaskInterceptInfo {
     pub data: Vec<u8>,
 }
 
-/// `TaskIntercept`.
+/// The answers the app gave for the tasks it took over, forgotten when they go
+/// stale — and read by nobody, which is the C++'s doing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TaskIntercept {
     /// `intercept_tasks_`
