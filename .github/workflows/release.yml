@@ -8,6 +8,8 @@ name: Release
 #   * xlog.aar                   -> JitPack: io.github.orangeboychen.marsrs:xlog
 #   * marsrs-android-native.zip  -> the .so files, for a consumer's own AAR
 #   * marsrs-<version>-<host>.tar.gz / .zip -> the C ABI for Linux/macOS/Windows
+#   * marsrs-xlog-cli-<version>-<host>.tar.gz / .zip -> the `xlog` CLI, which
+#                              reads and writes those files from a shell
 #   * marsrs-kmp-native.zip  -> the archives the Kotlin module is built out of
 #   * marsrs-kmp-maven.zip   -> the Kotlin module itself, as a maven repository
 #   * marsrs-flutter-<version>.tar.gz / marsrs-flutter-xlog-<version>.tar.gz
@@ -351,6 +353,69 @@ jobs:
           name: release-host-${{ matrix.target }}
           path: dist/
 
+  # The `xlog` CLI: one archive per host, for whoever has a `.xlog` to read and
+  # no Rust toolchain — an operator pulling a log off a device, a build that
+  # decrypts what it uploads. It is the `xlog` bin of `marsrs-xlog`, so
+  # `cargo install marsrs-xlog` gets the same command off crates.io; the archive
+  # is for the machine that has neither.
+  #
+  # The same three hosts as the C ABI's, for the same reason: an executable runs
+  # where it was built, so it is built where it runs.
+  cli:
+    needs: version
+    if: needs.version.outputs.skip != 'true'
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTFLAGS: '-D warnings'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the CLI
+        # `--bin xlog` and not `-p marsrs-xlog`: the crate's lib is the xlog
+        # half an app links, and this job is the one command in it.
+        run: cargo build --release -p marsrs-xlog --bin xlog
+      - name: Package it
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.version.outputs.version }}"
+          target="${{ matrix.target }}"
+          stage="dist/marsrs-xlog-cli-$version-$target"
+          mkdir -p "$stage"
+          cp LICENSE README.md "$stage/"
+          for bin in target/release/xlog target/release/xlog.exe; do
+            [ -f "$bin" ] && cp "$bin" "$stage/"
+          done
+          # The one file the archive is for: a stage of two text files and no
+          # command in it is a release that installs nothing.
+          test -f "$stage/xlog" || test -f "$stage/xlog.exe"
+          ls -l "$stage"
+          if [ "${{ matrix.archive }}" = zip ]; then
+            (cd dist && 7z a -r -tzip "marsrs-xlog-cli-$version-$target.zip" "marsrs-xlog-cli-$version-$target" > /dev/null)
+            rm -rf "$stage"
+          else
+            tar -czf "dist/marsrs-xlog-cli-$version-$target.tar.gz" -C dist "marsrs-xlog-cli-$version-$target"
+            rm -rf "$stage"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-cli-${{ matrix.target }}
+          path: dist/
+
   # The native libraries of the Kotlin Multiplatform module, one host per job:
   # every Apple target on macOS, because an Apple archive cannot be built from
   # Linux, and Linux and Windows on Linux, where the cross toolchains are.
@@ -690,7 +755,7 @@ jobs:
           path: dist/marsrs-harmony-*.tar.gz
 
   publish:
-    needs: [version, apple, android, host, kmp, plugins, harmony]
+    needs: [version, apple, android, host, cli, kmp, plugins, harmony]
     if: needs.version.outputs.skip != 'true'
     # macOS so that the checksum is the one SwiftPM itself computes, the same
     # way orangeboyChen/mars does it
@@ -894,8 +959,10 @@ jobs:
   #
   # `marsrs-ffi`, `marsrs-jni` and `marsrs-compat` are the three that stay off
   # it, each with `publish = false` and a note saying why: what their callers
-  # need is a `libmars_ffi.a`, a `libmarsrsxlog.so` and a CLI, and none of those
-  # is in what `cargo publish` packs.
+  # need is a `libmars_ffi.a`, a `libmarsrsxlog.so` and a CLI for the
+  # differential test, and none of those is in what `cargo publish` packs. The
+  # CLI a *user* runs is not one of them: it is the `xlog` bin of
+  # `marsrs-xlog`, and it goes out with the crate and as an archive of its own.
   crates:
     name: crates.io
     runs-on: ubuntu-latest

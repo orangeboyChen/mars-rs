@@ -14,12 +14,21 @@
 //! | open, write, flush, close  | [`appender_open`], [`appender_write`], [`appender_flush_sync`], [`appender_close`] |
 //! | one logger per prefix      | [`appender_open_instance`] and the `*_instance` functions |
 //! | the configuration          | [`XLogConfig`], [`AppenderMode`], [`LogLevel`]        |
-//! | reading a `.xlog` back     | [`LogBuffer`], [`get_period_logs`]                   |
+//! | reading a `.xlog` back     | [`decode_log_file`], [`LogBuffer`], [`get_period_logs`] |
 //! | the byte primitives        | [`bytes`]                                            |
 //!
 //! The files it writes are the C++ implementation's: same magic number, same
 //! TEA/`zlib`/`zstd` framing, so a `.xlog` written here is read by upstream's
 //! `decode_mars_log_file.py` and one written there is read by [`LogBuffer`].
+//!
+//! Reading one back is [`decode_log_file`], and the CLI is the same reader with
+//! a command line in front of it — `cargo install marsrs-xlog` puts `xlog` on
+//! the `$PATH`, and a release carries it as an archive of its own:
+//!
+//! ```text
+//! xlog decode --privkey=<hex> marsrs_20260927.xlog --out=marsrs.plain
+//! xlog encode --pubkey=<hex> records.txt --out=marsrs_20260927.xlog
+//! ```
 //!
 //! ```no_run
 //! use marsrs_xlog::{appender_close, appender_flush_sync, appender_open, appender_write, XLogConfig};
@@ -38,6 +47,11 @@ pub use marsrs_buffer::{get_period_logs, get_period_logs_with_timeout_ms, LogBuf
 /// the little-endian helpers. They are public here because [`log_formater`] and
 /// [`LogBuffer`] take them, not because a caller is expected to build one.
 pub use marsrs_core as bytes;
+
+/// Reading a `.xlog` back: the port of upstream's `decode_log_file.c`.
+pub mod decode;
+
+pub use decode::{decode_log_file, decode_records};
 
 #[cfg(test)]
 mod tests {

@@ -84,7 +84,9 @@ mars_xlog_flush_sync();
 ::: code-group
 
 ```bash [命令行]
-xlog-compat decode --privkey=<hex> --in=marsrs_20260927.xlog --out=marsrs.plain
+cargo install marsrs-xlog          # `xlog` 装到 $PATH 上；每个 release 里
+                                   # 也有同一个命令的压缩包
+xlog decode --privkey=<hex> marsrs_20260927.xlog --out=marsrs.plain
 ```
 
 ```rust [Rust]
@@ -100,5 +102,9 @@ python3 decode_mars_log_file.py marsrs_20260927.xlog      # Tencent/mars
 
 :::
 
-加密过的文件需要配置里那个公钥对应的私钥 —— `xlog-compat decode` 用
-`--privkey` 接它；没有私钥，谁也读不出那些记录。
+加密过的文件需要配置里那个公钥对应的私钥 —— `xlog decode` 用 `--privkey`
+接它；没有私钥，谁也读不出那些记录。`xlog encode` 是另一半：输入里一行就是
+一条记录，它把这些记录写成一个 `.xlog`，给了 `--pubkey`（那对密钥里的公钥）
+就顺带加密。
+
+`xlog help` 会把它整个命令行列出来。

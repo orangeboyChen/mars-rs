@@ -520,14 +520,12 @@ dependencies = [
 name = "marsrs-compat"
 version = "0.1.0"
 dependencies = [
- "flate2",
- "k256",
  "marsrs-buffer",
  "marsrs-core",
  "marsrs-crypt",
+ "marsrs-xlog",
  "serde_json",
  "tempfile",
- "zstd",
 ]
 
 [[package]]
@@ -584,9 +582,13 @@ dependencies = [
 name = "marsrs-xlog"
 version = "0.1.0"
 dependencies = [
+ "flate2",
+ "k256",
  "marsrs-appender",
  "marsrs-buffer",
  "marsrs-core",
+ "marsrs-crypt",
+ "zstd",
 ]
 
 [[package]]
