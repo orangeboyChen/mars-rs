@@ -23,11 +23,11 @@
 //! port cannot, because the host hands the callbacks in afterwards, so
 //! [`NetSourceTimerCheck::on_active_changed_at`] is what starts it.
 //!
-//! Leaving the foreground stops a check that is in flight and leaves one that is
-//! not alone: `__StopCheck()` asks `thread_.isruning()` before it cancels
-//! `asyncpost_`, so the post keeps arriving — and keeps testing — after the app
-//! went to the background without a test running. The port keeps that, which is
-//! what [`NetSourceTimerCheck::stop_check`] and
+//! Leaving the foreground stops a check that is in flight and leaves one
+//! that is not alone: `__StopCheck()` asks `thread_.isruning()` before it
+//! cancels `asyncpost_`, so the post keeps arriving — and keeps testing —
+//! after the app went to the background without a test running. The port
+//! keeps that, which is what [`NetSourceTimerCheck::stop_check`] and
 //! [`NetSourceTimerCheck::on_active_changed_at`] say of themselves too.
 
 use crate::simple_ipport_sort::IpSourceType;
@@ -48,16 +48,20 @@ pub const MAX_SPEED_TEST_COUNT: usize = 30;
 /// `kIntervalTime` — the window of the frequency limit, in milliseconds.
 pub const INTERVAL_TIME: u64 = 60 * 60 * 1000;
 
-/// `longlink_.Profile().ip_type`.
+/// `longlink_.Profile().ip_type` — where the pair the link is on came from:
+/// [`IpSourceType::Backup`] is the only one the check has anything to say
+/// about.
 pub type IpType = dyn FnMut() -> IpSourceType + Send;
 /// `longlink_.Profile().host` and `.ip` — one string each.
 pub type Profile = dyn FnMut() -> String + Send;
 /// `DnsUtil::GetNewDNS().GetHostByName` and `GetDNS().GetHostByName` — the
 /// second is only asked when the first answered nothing.
 pub type Dns = dyn FnMut(&str) -> Vec<String> + Send;
-/// `NetSource::GetLonglinkPorts`.
+/// `NetSource::GetLonglinkPorts` — the ports a long link may be made on, one
+/// of which the test is made on.
 pub type Ports = dyn FnMut() -> Vec<u16> + Send;
-/// `NetSource::RemoveLongBanIP`.
+/// `NetSource::RemoveLongBanIP` — how the ban on a pair is lifted, which is
+/// what a test that succeeded does with the ip it tested.
 pub type RemoveBanIp = dyn FnMut(&str) + Send;
 /// `LongLinkSpeedTestItem` and the `SocketSelect` loop around it: `true` for
 /// `kLongLinkSpeedTestSuc`, `false` for a fail or a timeout.
@@ -65,14 +69,21 @@ pub type SpeedTest = dyn FnMut(&str, u16) -> bool + Send;
 /// `fun_time_check_suc_` — who is told a pair was reachable.
 pub type OnTimeCheckSuc = dyn FnMut() + Send;
 
-/// `NetSourceTimerCheck`.
+/// The check that gets a long link off a backup ip: it asks, now and then,
+/// whether one of the pairs the link would rather be on is reachable, and
+/// lifts the ban on it when it is.
+///
+/// Nothing of it is a thread and none of it is a socket — the periodic post
+/// is a due time the host asks about, and the test is a callback — so a host
+/// that hands none of the callbacks in gets a check that never runs.
 pub struct NetSourceTimerCheck {
     /// `asyncpost_` — [`None`] for `MessageQueue::KNullPost`, which is a check
     /// that was never started or was stopped.
     period_due: Option<u64>,
-    /// `thread_.isruning()`.
+    /// `thread_.isruning()` — whether a test is out, which is what
+    /// `__StopCheck` asks before it cancels the post.
     testing: bool,
-    /// `frequency_limit_`.
+    /// `frequency_limit_` — what keeps an hour from being a hundred tests.
     frequency_limit: FrequencyLimit,
 
     ip_type: Option<Box<IpType>>,
@@ -95,7 +106,9 @@ impl Default for NetSourceTimerCheck {
 }
 
 impl NetSourceTimerCheck {
-    /// `NetSourceTimerCheck(…)`.
+    /// A check that is not running and has never been started: no due time,
+    /// no callbacks, and therefore nothing it can do until a host hands them
+    /// in and [`NetSourceTimerCheck::on_active_changed_at`] starts it.
     pub fn new() -> Self {
         Self::new_at(gettickcount())
     }
@@ -131,7 +144,9 @@ impl NetSourceTimerCheck {
         self.host = Some(Box::new(host));
     }
 
-    /// `longlink_.Profile().ip`.
+    /// `longlink_.Profile().ip` — the pair the link is on already, which is not
+    /// worth testing. Unset answers nothing, and nothing is an ip no dns
+    /// answered, so the test goes ahead.
     pub fn set_ip(&mut self, ip: impl FnMut() -> String + Send + 'static) {
         self.ip = Some(Box::new(ip));
     }
