@@ -7,12 +7,26 @@ use crate::task::Task;
 use marsrs_comm::tickcount::gettickcount;
 
 /// `kFrequencyLimit` / `kFlowLimit` — which gate refused a task.
+///
+/// `as_check_type()` is the number `ReportTaskLimited` is given, which is the
+/// enum of `mars/stn/src/anti_avalanche.h` and not the order of these
+/// variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LimitKind {
     /// `kFrequencyLimit`: the same body was sent too often.
     Frequency,
     /// `kFlowLimit`: the byte budget is used up.
     Flow,
+}
+
+impl LimitKind {
+    /// `kFrequencyLimit` / `kFlowLimit` — what the app is told was weighed.
+    pub fn as_check_type(self) -> i32 {
+        match self {
+            LimitKind::Frequency => 1,
+            LimitKind::Flow => 2,
+        }
+    }
 }
 
 /// The two gates are clocked from [`gettickcount`];
@@ -43,6 +57,11 @@ impl AntiAvalanche {
 
     /// `AntiAvalanche::Check(task, buffer, len)`.
     ///
+    /// `Err` carries the number `ReportTaskLimited` is handed with the kind:
+    /// how long ago the same body went out for [`LimitKind::Frequency`], and
+    /// how many bytes were refused for [`LimitKind::Flow`] — the `span` and
+    /// the `_len` the C++ passes by reference.
+    ///
     /// `network_is_mobile` is the `comm::kMobile == comm::getNetInfo()` of the
     /// C++: the flow limit only applies to a mobile network.
     pub fn check(
@@ -50,7 +69,7 @@ impl AntiAvalanche {
         task: &Task,
         body: &[u8],
         network_is_mobile: bool,
-    ) -> Result<(), LimitKind> {
+    ) -> Result<(), (LimitKind, u32)> {
         self.check_at(task, body, network_is_mobile, gettickcount())
     }
 
@@ -61,13 +80,19 @@ impl AntiAvalanche {
         body: &[u8],
         network_is_mobile: bool,
         now: u64,
-    ) -> Result<(), LimitKind> {
-        let (allowed, _span) = self.frequency_limit.check_at(task, body, now);
+    ) -> Result<(), (LimitKind, u32)> {
+        let (allowed, span) = self.frequency_limit.check_at(task, body, now);
         if !allowed {
-            return Err(LimitKind::Frequency);
+            return Err((
+                LimitKind::Frequency,
+                u32::try_from(span).unwrap_or(u32::MAX),
+            ));
         }
         if network_is_mobile && !self.flow_limit.check_at(task, body.len() as u64, now) {
-            return Err(LimitKind::Flow);
+            return Err((
+                LimitKind::Flow,
+                u32::try_from(body.len()).unwrap_or(u32::MAX),
+            ));
         }
         Ok(())
     }

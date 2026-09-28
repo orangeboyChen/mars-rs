@@ -201,9 +201,9 @@ impl App for Rec {
         self.said.lock().unwrap().profiles += 1;
     }
 
-    fn report_task_limited(&mut self, check_type: i32, _task: &Task) -> u32 {
-        self.said.lock().unwrap().limited.push((check_type, 1));
-        1
+    fn report_task_limited(&mut self, check_type: i32, _task: &Task, param: u32) -> u32 {
+        self.said.lock().unwrap().limited.push((check_type, param));
+        param
     }
 
     fn report_dns_profile(&mut self, profile: &DnsProfile) {
@@ -404,7 +404,7 @@ fn a_dns_question_and_a_limit_and_a_task_the_app_is_told_about() {
         vec!["check.host".to_string()]
     );
     bridge.report_task_profile(&TaskProfile::new(Task::new(7, 12), PrepareProfile::new()));
-    assert_eq!(bridge.report_task_limited(1, &Task::new(7, 12)), 1);
+    assert_eq!(bridge.report_task_limited(1, &Task::new(7, 12), 1), 1);
 
     let mut dns = DnsProfile::new("short.host");
     dns.dnstype = DnsType::Dns;
@@ -441,7 +441,8 @@ fn an_app_that_is_not_there_yet_is_answered_for() {
         0
     );
     assert_eq!(bridge.net_check_shortlink_hosts(), Vec::<String>::new());
-    assert_eq!(bridge.report_task_limited(1, &Task::new(7, 12)), 0);
+    // while there is no app, the number it was handed comes back
+    assert_eq!(bridge.report_task_limited(1, &Task::new(7, 12), 9), 9);
     assert!(!bridge.identify_response("channel", b"resp", b"hash"));
     // a check nobody answered is put off to the next connect, not failed
     assert_eq!(

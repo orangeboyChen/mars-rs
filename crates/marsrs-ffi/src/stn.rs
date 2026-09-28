@@ -458,6 +458,11 @@ pub struct MarsStnQuestion {
     pub check_type: c_int,
     /// `ReportTaskLimited` — the task itself.
     pub task: *const MarsStnTask,
+    /// `ReportTaskLimited` — the number the gate answered with: how long ago
+    /// the same body went out, or how many bytes the funnel refused. Answer
+    /// [`MarsStnAnswer::limit`] and it is the limit the app asks for; `0` is
+    /// "go ahead".
+    pub limit: c_uint,
 }
 
 impl Default for MarsStnQuestion {
@@ -491,6 +496,7 @@ impl Default for MarsStnQuestion {
             longlink_host: 0,
             check_type: 0,
             task: std::ptr::null(),
+            limit: 0,
         }
     }
 }
@@ -1385,18 +1391,20 @@ impl StnApp for CApp {
         });
     }
 
-    fn report_task_limited(&mut self, check_type: i32, task: &Task) -> u32 {
+    fn report_task_limited(&mut self, check_type: i32, task: &Task, param: u32) -> u32 {
         let task = TaskView::of(task);
         let answer = self.ask(&MarsStnQuestion {
             kind: MarsStnQuestionKind::ReportTaskLimited,
             check_type,
             task: task.task(),
+            limit: param,
             ..Default::default()
         });
         match answer.kind {
             MarsStnAnswerKind::Limit => answer.limit,
-            // `0` is "go ahead".
-            _ => 0,
+            // the number it was handed, which is what an app that says nothing
+            // leaves the limit at
+            _ => param,
         }
     }
 
@@ -1946,7 +1954,8 @@ mod tests {
             app.buf2resp(7, "user", b"answer", 0),
             (0, TaskFailHandleType::Normal)
         );
-        assert_eq!(app.report_task_limited(0, &Task::new(7, 8)), 0);
+        // an answer of another kind leaves the number it was handed alone
+        assert_eq!(app.report_task_limited(0, &Task::new(7, 8), 5), 5);
         assert_eq!(
             app.identify_check_buffer("longlink", 0),
             IdentifyBuffer::next(Vec::new())

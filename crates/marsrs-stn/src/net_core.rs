@@ -199,6 +199,15 @@ pub type LastForegroundChangeTime = dyn FnMut() -> u64 + Send;
 /// of it, and the queue is the only thing that has the whole of it.
 pub type ReportTaskProfile = dyn FnMut(&TaskProfile) + Send;
 
+/// `StnManager::ReportTaskLimited` — a task the two gates of
+/// `mars/stn/src/anti_avalanche.cc` refused, asked as the C++ asks it: which
+/// gate it was, the task, and the number the gate answered with — how long ago
+/// the same body went out, or how many bytes the funnel refused. What the app
+/// answers is that number back, and `0` is "go ahead", which is what the C++'s
+/// `unsigned int&` holds until an app writes to it. Unset, and a refused task
+/// is reported nowhere.
+pub type ReportTaskLimited = dyn FnMut(i32, &Task, u32) -> u32 + Send;
+
 /// `NetCore::SetShortLinkOnTimeoutOrRemoteShutdown`
 /// (`mars/stn/src/net_core.h:223`) — a try of the short-link queue that ended,
 /// over or not, at the moment it was pushed into the task's history
@@ -264,6 +273,7 @@ struct Hooks {
     push_preprocess: Option<Box<PushPreprocess>>,
     on_push: Option<Box<OnPush>>,
     report_task_profile: Option<Box<ReportTaskProfile>>,
+    report_task_limited: Option<Box<ReportTaskLimited>>,
     on_timeout_or_remote_shutdown: Option<Box<TimeoutOrRemoteShutdown>>,
 }
 
@@ -275,6 +285,7 @@ impl std::fmt::Debug for Hooks {
             .field("push_preprocess", &self.push_preprocess.is_some())
             .field("on_push", &self.on_push.is_some())
             .field("report_task_profile", &self.report_task_profile.is_some())
+            .field("report_task_limited", &self.report_task_limited.is_some())
             .field(
                 "on_timeout_or_remote_shutdown",
                 &self.on_timeout_or_remote_shutdown.is_some(),
@@ -582,13 +593,15 @@ impl NetCore {
 
         let avalanche = Arc::clone(&self.anti_avalanche);
         let net_info = Arc::clone(&self.net_info);
+        let hooks = Arc::clone(&self.hooks);
         self.shortlink.set_anti_avalanche_check(move |task, body| {
-            anti_avalanche_check(&avalanche, &net_info, task, body)
+            anti_avalanche_check(&avalanche, &net_info, &hooks, task, body)
         });
         let avalanche = Arc::clone(&self.anti_avalanche);
         let net_info = Arc::clone(&self.net_info);
+        let hooks = Arc::clone(&self.hooks);
         self.longlink.set_anti_avalanche_check(move |task, body| {
-            anti_avalanche_check(&avalanche, &net_info, task, body)
+            anti_avalanche_check(&avalanche, &net_info, &hooks, task, body)
         });
 
         let hooks = Arc::clone(&self.hooks);
@@ -697,6 +710,21 @@ impl NetCore {
             .lock()
             .unwrap_or_else(poisoned)
             .report_task_profile = Some(Box::new(report));
+    }
+
+    /// `StnManager::ReportTaskLimited` — a task the anti-avalanche gates
+    /// refused, which is the only way an app hears about one: the C++ reports
+    /// it from inside `AntiAvalanche::Check`, and a task the gate refused
+    /// never reaches a queue, so nothing else can. Unset, and a refused task
+    /// is reported nowhere.
+    pub fn set_report_task_limited(
+        &mut self,
+        limited: impl FnMut(i32, &Task, u32) -> u32 + Send + 'static,
+    ) {
+        self.hooks
+            .lock()
+            .unwrap_or_else(poisoned)
+            .report_task_limited = Some(Box::new(limited));
     }
 
     /// `NetCore::SetShortLinkOnTimeoutOrRemoteShutdown` — a try of the
@@ -1996,15 +2024,30 @@ fn push(pending: &Arc<Mutex<VecDeque<FollowUp>>>, follow_up: FollowUp) {
 fn anti_avalanche_check(
     avalanche: &Arc<Mutex<AntiAvalanche>>,
     net_info: &Arc<Mutex<Box<NetInfo>>>,
+    hooks: &Arc<Mutex<Hooks>>,
     task: &Task,
     body: &[u8],
 ) -> bool {
     let mobile = net_info.lock().unwrap_or_else(poisoned)() == NET_TYPE_MOBILE;
-    avalanche
+    let allowed = avalanche
         .lock()
         .unwrap_or_else(poisoned)
-        .check(task, body, mobile)
-        .is_ok()
+        .check(task, body, mobile);
+    let Err((kind, param)) = allowed else {
+        return true;
+    };
+    // `AntiAvalanche::Check` reports the task it refused itself, which is the
+    // only place it can be reported from: the C++ does it through its
+    // `StnManager`, and a task the gates refused never reaches a queue.
+    if let Some(report) = hooks
+        .lock()
+        .unwrap_or_else(poisoned)
+        .report_task_limited
+        .as_mut()
+    {
+        let _answered = report(kind.as_check_type(), task, param);
+    }
+    false
 }
 
 /// `__CallBack(...)` as a free function, which is what lets the queues' own

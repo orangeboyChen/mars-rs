@@ -663,6 +663,10 @@ impl StnLogic {
         let wired = Arc::clone(bridge);
         core.set_report_task_profile(move |profile| locked(&wired).report_task_profile(profile));
         let wired = Arc::clone(bridge);
+        core.set_report_task_limited(move |check_type, task, param| {
+            locked(&wired).report_task_limited(check_type, task, param)
+        });
+        let wired = Arc::clone(bridge);
         core.set_report_connect_status(move |all: NetStatus, longlink: NetStatus| {
             locked(&wired).report_connect_status(all, longlink)
         });

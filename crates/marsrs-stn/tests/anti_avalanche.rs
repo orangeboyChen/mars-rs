@@ -12,6 +12,12 @@ fn task() -> Task {
     Task::new(1, 1)
 }
 
+/// Which gate refused a task, dropping the number it answered with — the tests
+/// that care about the gate and not about the reading.
+fn refused(result: Result<(), (LimitKind, u32)>) -> LimitKind {
+    result.expect_err("both gates let it through").0
+}
+
 #[test]
 fn a_task_passes_both_gates_on_wifi() {
     let mut avalanche = AntiAvalanche::new_at(true, T0);
@@ -29,8 +35,28 @@ fn the_flow_gate_only_applies_to_a_mobile_network() {
 
     // mobile: the body does not fit in the funnel
     assert_eq!(
+        refused(avalanche.check_at(&task(), &body, true, T0)),
+        LimitKind::Flow
+    );
+    // ... and what it reports is how many bytes it refused
+    assert_eq!(
         avalanche.check_at(&task(), &body, true, T0),
-        Err(LimitKind::Flow)
+        Err((LimitKind::Flow, MAX_VOL as u32 + 1))
+    );
+}
+
+/// `AntiAvalanche::Check` hands `span` to `ReportTaskLimited`, which is how
+/// long ago the same body went out.
+#[test]
+fn the_frequency_gate_reports_how_long_ago_the_body_went_out() {
+    let mut avalanche = AntiAvalanche::new_at(true, T0);
+    for send in 0..106 {
+        let _ = avalanche.check_at(&task(), b"avalanche", false, T0 + send);
+    }
+    // the body went out at `T0 + 105`, one tick before this one
+    assert_eq!(
+        avalanche.check_at(&task(), b"avalanche", false, T0 + 106),
+        Err((LimitKind::Frequency, 1))
     );
 }
 
@@ -45,8 +71,8 @@ fn the_frequency_gate_closes_after_105_sends_of_one_body() {
         );
     }
     assert_eq!(
-        avalanche.check_at(&task(), b"avalanche", false, T0 + 200),
-        Err(LimitKind::Frequency)
+        refused(avalanche.check_at(&task(), b"avalanche", false, T0 + 200)),
+        LimitKind::Frequency
     );
     // a different body is still let through
     assert_eq!(
@@ -67,8 +93,8 @@ fn the_frequency_gate_is_checked_before_the_flow_gate() {
     // the body is far over the funnel as well, but the frequency gate is the
     // one that refuses it
     assert_eq!(
-        avalanche.check_at(&task(), b"avalanche", true, T0 + 200),
-        Err(LimitKind::Frequency)
+        refused(avalanche.check_at(&task(), b"avalanche", true, T0 + 200)),
+        LimitKind::Frequency
     );
 }
 
@@ -122,8 +148,8 @@ fn a_megabyte_a_time_fills_the_funnel_on_mobile_and_not_on_wifi() {
         );
     }
     assert_eq!(
-        avalanche.check_at(&task(), &megabyte, true, T0),
-        Err(LimitKind::Flow),
+        refused(avalanche.check_at(&task(), &megabyte, true, T0)),
+        LimitKind::Flow,
         "the eighty-first megabyte does not fit"
     );
 

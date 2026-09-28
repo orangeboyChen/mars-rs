@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use marsrs_stn::longlink_task_manager::Response as LongAnswer;
 use marsrs_stn::net_source::NO_NET;
 use marsrs_stn::shortlink_task_manager::{Response as ShortAnswer, RETRY_INTERNAL};
-use marsrs_stn::task_profile::{TaskFailHandleType, LONG_FIRST_PKG_TIMEOUT};
+use marsrs_stn::task_profile::{TaskFailHandleType, LOCAL_ANTI_AVALANCHE, LONG_FIRST_PKG_TIMEOUT};
 use marsrs_stn::{
     CallFrom, ConnectProfile, DisconnectInternalCode, ErrCmdType, LongLinkEncoder, LongLinkStatus,
     LonglinkConfig, NetCore, NetStatus, RespHandle, RunId, Task, DEFAULT_LONGLINK_NAME,
@@ -55,6 +55,9 @@ type Pushed = Vec<(String, u32, Vec<u8>)>;
 /// What the app's own report was given for a task that is over: the task, how
 /// it ended, and how many tries it took.
 type Reported = Vec<(u32, ErrCmdType, i32, usize)>;
+/// What the app was told about a task the two gates refused: which gate, and
+/// the number that gate answered with.
+type Limited = Vec<(i32, u32)>;
 
 /// The net core, with the two queues and the app wired the way a host wires
 /// them.
@@ -67,6 +70,9 @@ struct App {
     short_err: Arc<Mutex<ShortErr>>,
     pushed: Arc<Mutex<Pushed>>,
     reported: Arc<Mutex<Reported>>,
+    /// What the app's report of a refused task was given: the gate, and its
+    /// reading.
+    limited: Arc<Mutex<Limited>>,
     /// What the app's timeout hook was given: the short-link queue hands out
     /// every try that ended, and not only the task that is over.
     timeout_or_remote: Arc<Mutex<Reported>>,
@@ -175,6 +181,12 @@ impl App {
                 profile.history.len(),
             ));
         });
+        let limited: Arc<Mutex<Limited>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = limited.clone();
+        core.set_report_task_limited(move |check_type, _task, param| {
+            recorder.lock().unwrap().push((check_type, param));
+            param
+        });
         let timeout_or_remote: Arc<Mutex<Reported>> = Arc::new(Mutex::new(Vec::new()));
         let recorder = timeout_or_remote.clone();
         core.set_on_shortlink_timeout_or_remote_shutdown(move |profile| {
@@ -195,6 +207,7 @@ impl App {
             short_err,
             pushed,
             reported,
+            limited,
             timeout_or_remote,
             answer,
         }
@@ -212,6 +225,19 @@ impl App {
         task.total_timeout = 10 * 60 * 1000;
         task.user_id = "user".to_string();
         assert!(self.core.start_task_at(START, task));
+    }
+
+    /// `StartTask` of a task whose body is the same as every other one's, which
+    /// is what the frequency gate counts; `false` when a gate refused it.
+    fn start_same_body(&mut self, taskid: u32) -> bool {
+        let mut task = Task::new(taskid, 12);
+        task.cgi = "/cgi-bin/same".to_string();
+        task.channel_select = Task::CHANNEL_ALL;
+        task.shortlink_host_list = vec![SHORT_HOST.to_string()];
+        task.retry_count = 1;
+        task.total_timeout = 10 * 60 * 1000;
+        task.user_id = "user".to_string();
+        self.core.start_task_at(START, task)
     }
 
     /// What the host's link is in: the C++ asks the link, and a sample says.
@@ -294,6 +320,11 @@ impl App {
         self.reported.lock().unwrap().clone()
     }
 
+    /// What the app was told about the tasks the two gates refused.
+    fn limited(&self) -> Limited {
+        self.limited.lock().unwrap().clone()
+    }
+
     /// What the app's timeout hook was given for the tries that ended.
     fn timeout_or_remote(&self) -> Reported {
         self.timeout_or_remote.lock().unwrap().clone()
@@ -361,6 +392,33 @@ fn a_task_that_asked_for_the_long_link_is_ended_on_the_answer_it_came_in_on() {
             "2.2.2.2".to_string()
         )]
     );
+}
+
+/// `mars/stn/src/anti_avalanche.cc` — a task one of the two gates refused is
+/// told to the app, and the gate is the only thing that can tell it: a task it
+/// refused ends there, so no report of a finished one ever carries it.
+///
+/// The gates are asked by the queues and not by `StartTask`, so the pass the
+/// host makes is what refuses the body — the hundred and sixth of them.
+#[test]
+fn a_task_the_gates_refused_is_told_to_the_app() {
+    let mut app = App::new();
+    app.bring_up(MAIN, LongLinkStatus::Connected);
+    // 105 sends of one body are let through; the 106th is the avalanche
+    for send in 0..106 {
+        assert!(app.start_same_body(1000 + send), "send {send} of 106");
+    }
+    app.run_pending();
+
+    let limited = app.limited();
+    assert_eq!(limited.len(), 1, "one task was refused, and told once");
+    // `kFrequencyLimit`, and the number the gate weighed it against
+    assert_eq!(limited[0].0, 1);
+    // the task it refused is ended as one, and the 105 before it are not
+    let ended = app.ended();
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0].0, 1105);
+    assert_eq!(ended[0].3, LOCAL_ANTI_AVALANCHE);
 }
 
 /// `shortlink_task_manager.cc:1206` and `longlink_task_manager.cc:760` — a task
