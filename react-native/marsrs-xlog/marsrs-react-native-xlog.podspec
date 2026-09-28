@@ -1,6 +1,6 @@
 # The iOS half of `marsrs-react-native-xlog`.
 #
-# `MarsRSXlog.xcframework` is carried here and not resolved: CocoaPods cannot
+# `marsrs-xlog.xcframework` is carried here and not resolved: CocoaPods cannot
 # take the SwiftPM binary target of Package.swift, and there is no pod for it,
 # so `.github/workflows/release.yml` drops the release's framework into
 # `ios/Frameworks/` before the package is packed. `ios/include/mars_xlog.h` is
@@ -30,7 +30,7 @@ Pod::Spec.new do |s|
   # What Package.swift declares for iOS; the framework's own floor.
   s.platform     = :ios, "12.0"
   s.source_files = "ios/*.{h,m}"
-  s.vendored_frameworks = "ios/Frameworks/MarsRSXlog.xcframework"
+  s.vendored_frameworks = "ios/Frameworks/marsrs-xlog.xcframework"
   s.preserve_paths = "ios/include/mars_xlog.h"
   s.xcconfig     = { "HEADER_SEARCH_PATHS" => "\"$(PODS_TARGET_SRCROOT)/ios/include\"" }
   # `iana-time-zone` calls `CFTimeZone*`, and a Rust static library carries no

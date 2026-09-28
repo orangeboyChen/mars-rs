@@ -2,7 +2,7 @@
 #
 #   dependencies:
 #     marsrs_flutter_xlog:
-#       path: marsrs_flutter_xlog     # the directory in the plugin's tarball
+#       path: marsrs-xlog      # the directory in the plugin's tarball
 #
 # `.github/workflows/release.yml` publishes it as
 # `marsrs-flutter-xlog-<version>.tar.gz` on the release of the same tag, and
