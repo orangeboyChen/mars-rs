@@ -223,7 +223,8 @@ fn a_task_with_no_channel_to_go_out_on_ends_at_once() {
 }
 
 /// A net core made again from nothing ends the tasks the one before it held:
-/// the app is told, and the queues are empty.
+/// the app is told, is handed the profile of the task that ended, and the queues
+/// are empty.
 #[test]
 fn a_reset_net_core_ends_the_tasks_it_holds() {
     let _guard = lock();
@@ -236,12 +237,25 @@ fn a_reset_net_core_ends_the_tasks_it_holds() {
     assert_eq!(mars_stn_has_task(7), 0);
     assert_eq!(
         said(),
-        vec![Said {
-            kind: MarsStnQuestionKind::OnTaskEnd,
-            taskid: 7,
-            err_type: ERR_TYPE_LOCAL,
-            err_code: LOCAL_RESET,
-        }]
+        vec![
+            Said {
+                kind: MarsStnQuestionKind::OnTaskEnd,
+                taskid: 7,
+                err_type: ERR_TYPE_LOCAL,
+                err_code: LOCAL_RESET,
+            },
+            // The report comes after the end, because the task is only whole
+            // once it has ended: the error and the history of its tries are
+            // both in it, and that is the last moment the queue holds it. What
+            // carries the task is the json, and not `taskid`, so the id this is
+            // asked with is 0.
+            Said {
+                kind: MarsStnQuestionKind::ReportTaskProfile,
+                taskid: 0,
+                err_type: 0,
+                err_code: 0,
+            },
+        ]
     );
 }
 
