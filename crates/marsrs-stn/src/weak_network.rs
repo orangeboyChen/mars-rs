@@ -133,7 +133,8 @@ impl WeakKey {
 /// `report_weak_logic_` — who is told what the network is doing.
 pub type ReportWeak = dyn FnMut(WeakKey, i32, bool) + Send;
 
-/// `WeakNetworkLogic`.
+/// Whether the network is being called weak, and the `(key, value)` pairs a
+/// host is told about what it did while it was.
 pub struct WeakNetworkLogic {
     report: Option<Box<ReportWeak>>,
     /// What the C++ asks `ActiveLogic::Instance()` for.

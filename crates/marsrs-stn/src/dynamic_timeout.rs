@@ -3,12 +3,13 @@
 //! Every finished task is classified (met its budget / finished normally /
 //! failed) and the last ten of those are kept in a sliding window. Enough good
 //! packages in a row make the status `Excellent`, too many failures make it
-//! `Bad`; STN uses the status to pick the first-package timeout.
+//! `Bad`; the C++ picks the first-package timeout of the next task from it.
 
 use crate::config::*;
 use marsrs_comm::tickcount::gettickcount;
 
-/// `DynamicTimeoutStatus`.
+/// How good the network looks from the last ten packages: the C++ picks the
+/// first-package timeout from it, and `Excellent` is what buys a shorter one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DynamicTimeoutStatus {
     /// `kEValuating` — not enough history yet.
@@ -20,7 +21,8 @@ pub enum DynamicTimeoutStatus {
     Bad,
 }
 
-/// Which network the task ran on, i.e. the `kMobile == getNetInfo()` of the C++.
+/// Which network a task ran on: the budgets a package is measured against are
+/// tighter on Wi-Fi than on mobile, so the two are classified apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetworkKind {
     /// Wi-Fi: the tighter budgets.
@@ -34,15 +36,15 @@ pub enum NetworkKind {
 enum TaskTag {
     /// `kDynTimeTaskMeetExpectTag` — a small package within budget.
     MeetExpect = 1,
-    /// `kDynTimeTaskMidPkgMeetExpectTag`.
+    /// `kDynTimeTaskMidPkgMeetExpectTag` — a middle package within budget.
     MidPkgMeetExpect = 2,
-    /// `kDynTimeTaskBigPkgMeetExpectTag`.
+    /// `kDynTimeTaskBigPkgMeetExpectTag` — a big package within budget.
     BigPkgMeetExpect = 3,
-    /// `kDynTimeTaskBiggerPkgMeetExpectTag`.
+    /// `kDynTimeTaskBiggerPkgMeetExpectTag` — anything bigger, within budget.
     BiggerPkgMeetExpect = 4,
     /// `KDynTimeTaskNormalTag` — finished, but slower than its budget.
     Normal = 0,
-    /// `kDynTimeTaskFailedTag`.
+    /// `kDynTimeTaskFailedTag` — never finished at all.
     Failed = -1,
 }
 
@@ -84,8 +86,6 @@ impl TaskTag {
     }
 }
 
-/// `DynamicTimeout`.
-///
 /// [`DynamicTimeout::record_at`] takes the tick count explicitly so that the
 /// five-minute expiry of the sliding window is testable without waiting;
 /// [`DynamicTimeout::record`] is the `CgiTaskStatistic()` of the C++ against
@@ -135,12 +135,15 @@ impl DynamicTimeout {
         self.status
     }
 
-    /// How many packages in a row met their budget.
+    /// How many packages in a row met their budget: one that only finished, or
+    /// failed, puts it back to zero, and it only counts while the status is
+    /// still `Evaluating`.
     pub fn continuous_good_count(&self) -> u32 {
         self.continuous_good_count
     }
 
-    /// How many of the last ten packages finished normally or better.
+    /// How many of the last ten packages came in at all: six or fewer call the
+    /// network bad, and more than that bring it back out of it.
     pub fn normal_count(&self) -> usize {
         self.history.iter().filter(|ok| **ok).count()
     }
