@@ -688,7 +688,7 @@ jobs:
       # crates.io answers 403 to the user agent `curl` sends by default.
       CRATES_IO_UA: mars-rs release (https://github.com/orangeboyChen/mars-rs)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
