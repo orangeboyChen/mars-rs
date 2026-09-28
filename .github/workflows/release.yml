@@ -694,7 +694,12 @@ jobs:
         # instead of a failed release. It builds and runs the test of the host's
         # own target: macosArm64 here, the one Kotlin/Native target this runner
         # can execute.
-        run: (cd platforms/kmp && ./gradlew --no-daemon :marsrs-xlog:macosArm64Test)
+        #
+        # No `--no-daemon`, the way the two steps after it are not either: this
+        # job asks Gradle three times, and a daemon is what keeps the compiled
+        # build scripts and the resolved dependencies of the first call for the
+        # two that follow.
+        run: (cd platforms/kmp && ./gradlew :marsrs-xlog:macosArm64Test)
       - name: Publish to GitHub Packages
         # `continue-on-error`, for the reason the npm step gives: GitHub
         # Packages refusing a version is about GitHub Packages, and a release
@@ -705,7 +710,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          (cd platforms/kmp && ./gradlew --no-daemon -PpublishedVersion="${{ needs.version.outputs.version }}" \
+          (cd platforms/kmp && ./gradlew -PpublishedVersion="${{ needs.version.outputs.version }}" \
             -PmavenUser="$GITHUB_ACTOR" -PmavenPassword="$GITHUB_TOKEN" \
             :marsrs:publishAllPublicationsToGitHubPackagesRepository \
             :marsrs-xlog:publishAllPublicationsToGitHubPackagesRepository)
@@ -713,7 +718,7 @@ jobs:
         # GitHub Packages is immutable — a version it has cannot be overwritten
         # — so a tag that exists already is only ever republished as the zip.
         run: |
-          (cd platforms/kmp && ./gradlew --no-daemon -PpublishedVersion="${{ needs.version.outputs.version }}" \
+          (cd platforms/kmp && ./gradlew -PpublishedVersion="${{ needs.version.outputs.version }}" \
             :marsrs:publishToMavenLocal :marsrs-xlog:publishToMavenLocal)
       - name: Package the maven repository
         # Zipped from the root of the repository and not from the group's
