@@ -43,13 +43,16 @@ complexity:
   # large one. The five a link is asked about by its own name are five more
   # symbols of the same surface — `makesureLongLinkConnectedExt`,
   # `longLinkIsConnected` and its `_ext` pair, `disableLongLink` and
-  # `noopTaskID` — which took the object from 40 to 45. The number stays two
-  # above the count, as it was.
+  # `noopTaskID` — which took the object from 40 to 45. The three a link of the
+  # app's own is made, dropped and made the main one with — `createLonglink`,
+  # `destroyLonglink` and `markMainLonglink` — are three more symbols of the
+  # same surface, which took it from 45 to 48. The number stays two above the
+  # count, as it was.
   TooManyFunctions:
     thresholdInFiles: 60
     thresholdInClasses: 60
     thresholdInInterfaces: 20
-    thresholdInObjects: 47
+    thresholdInObjects: 50
     thresholdInEnums: 20
 
 empty-blocks:
