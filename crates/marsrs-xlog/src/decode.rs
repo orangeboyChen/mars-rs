@@ -52,6 +52,17 @@ const ECDH_MARKER: &str = "Get ECDH key error";
 /// `"zstd decompress error"` — what `zstdDecompress` puts in the output in
 /// place of a record the decompressor makes no progress on.
 const ZSTD_MARKER: &str = "zstd decompress error";
+/// `decodeBuffer`'s marker for a hole in the sequence numbers —
+/// `[F]decode_log_file.py log seq:%d-%d is missing`, the two numbers being the
+/// first and the last sequence the file lost. Written into the decoded text
+/// like the rest of them, so that a tool that greps the text for the markers
+/// finds the hole that no byte of the file mentions.
+const MISSING_SEQ_MARKER: &str = "[F]decode_log_file.py log seq:";
+
+/// Where `uint16_t seq` sits in a record's header: one byte of magic in front
+/// of it. `decodeBuffer` reads it at `headerLen - cryptKeyLen - 4 - 2 - 2`,
+/// which is this offset for both of the header lengths.
+const SEQ_OFFSET: usize = 1;
 
 /// Reads `path` and returns the log text of every record in it.
 ///
@@ -109,13 +120,17 @@ impl std::error::Error for DecodeError {}
 /// next byte a whole record starts at is where it goes on, and the span it
 /// skipped is named in the text — and a record that is there but whose text
 /// cannot be recovered leaves its marker in the text where that text would
-/// have been. What ends it is a file with no record in it at all, and a key
-/// the decoder cannot use: [`DecodeError::recovered`] is what was read before
+/// have been, a key no secret can be derived with included. What ends it is a
+/// file with no record in it at all, and an encrypted record met with no
+/// private key at all: [`DecodeError::recovered`] is what was read before
 /// either.
 pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>, DecodeError> {
     let mut plain = Vec::new();
     let mut offset = 0;
     let mut blocks = 0;
+    // `decode_log_file.c`'s file-static `int lastseq`, reset per file: a hole
+    // is a hole in one file's own numbering, and not in the one read before it.
+    let mut lastseq: u16 = 0;
 
     let stopped = loop {
         if data.len() - offset < HEADER_LEN + TAILER_LEN {
@@ -123,6 +138,7 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
         }
         match record_text(data, offset, privkey) {
             Ok((text, next)) => {
+                mark_missing_seq(&mut plain, data, offset, &mut lastseq);
                 plain.extend_from_slice(&text);
                 offset = next;
                 blocks += 1;
@@ -145,12 +161,23 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
             // record found: a file of nothing but records like this one is a
             // file the decoder read, and not a file with no record in it.
             Err(Failure::Unreadable(marker, next)) => {
+                // The C reads the sequence and writes its marker before it
+                // tries the body, so a record whose text is not recoverable
+                // still names the hole standing in front of it.
+                mark_missing_seq(&mut plain, data, offset, &mut lastseq);
                 plain.extend_from_slice(marker.as_bytes());
                 plain.push(b'\n');
                 offset = next;
                 blocks += 1;
             }
-            Err(Failure::Fatal(reason)) => break Some(reason),
+            // The C reads the sequence and writes its marker before it tries
+            // the body, so a record the walk ends on still names the hole
+            // standing in front of it: what was read before the record that
+            // ended it includes that marker.
+            Err(Failure::Fatal(reason)) => {
+                mark_missing_seq(&mut plain, data, offset, &mut lastseq);
+                break Some(reason);
+            }
         }
     };
 
@@ -178,12 +205,53 @@ enum Failure {
     /// it skipped is named in the text.
     Damaged(String),
     /// The record is whole but its text is not in it: a client public key that
-    /// is not a point, a stream that will not inflate. The marker stands where
-    /// the text would have been, and the walk goes on at the record behind it.
+    /// is not a point, a private key no secret comes out of, a stream that will
+    /// not inflate. The marker stands where the text would have been, and the
+    /// walk goes on at the record behind it.
     Unreadable(String, usize),
-    /// Nothing behind this record can be read either — the decoder was handed a
-    /// private key it cannot use — so the walk ends and this is its reason.
+    /// Nothing behind this record can be read either — an encrypted record met
+    /// with no private key at all, which is the one key the C cannot go on
+    /// from — so the walk ends and this is its reason.
     Fatal(String),
+}
+
+/// The `seq` of the record at `offset`, against the one read before it: writes
+/// the marker for the hole between the two, if there is one, in front of that
+/// record's text, and moves `lastseq` on.
+///
+/// The record that went missing took its own bytes with it, so the sequence
+/// numbers of the two records either side of the hole are the only trace it
+/// leaves — and without this the file decodes to a text that reads as whole
+/// while a block of it is gone. That is what the C writes the marker for, and
+/// why it goes into the text rather than to stderr.
+///
+/// Two sequence numbers say nothing: `0`, which is what the writer leaves in
+/// every sync record, and `1`, which is the first record of most files — the
+/// walk starts at `lastseq = 0`, and `seq != 1` is what keeps a file opening
+/// on 1 from being read as having lost everything before it.
+fn mark_missing_seq(out: &mut Vec<u8>, data: &[u8], offset: usize, lastseq: &mut u16) {
+    let seq = u16::from_le_bytes(
+        data[offset + SEQ_OFFSET..offset + SEQ_OFFSET + 2]
+            .try_into()
+            .expect("slice of 2"),
+    );
+    let previous = *lastseq;
+    if seq != 0 {
+        *lastseq = seq;
+    }
+    // Widened, so that the record behind a sequence of `u16::MAX` is compared
+    // against 65536 and not against a wrapped 0.
+    if seq == 0 || seq == 1 || previous == 0 || u32::from(seq) == u32::from(previous) + 1 {
+        return;
+    }
+    out.extend_from_slice(
+        format!(
+            "{MISSING_SEQ_MARKER}{}-{} is missing\n",
+            u32::from(previous) + 1,
+            u32::from(seq) - 1
+        )
+        .as_bytes(),
+    );
 }
 
 /// The text of the record at `offset`, and the offset of the record behind it.
@@ -235,17 +303,20 @@ fn record_text(
             let mut client_pubkey = [0u8; CLIENT_PUBKEY_LEN];
             client_pubkey.copy_from_slice(&data[body_start - CLIENT_PUBKEY_LEN..body_start]);
             let tea_key = match tea_key(privkey, &client_pubkey) {
-                // `uECC_shared_secret` answering 0, which is what a damaged
-                // header looks like from in here: `decodeBuffer` puts its
-                // marker in the output and goes on at the record behind it.
-                Err(KeyError::Client(reason)) => {
+                // `uECC_shared_secret` answering 0, which is what both a
+                // damaged header and a private key no secret comes out of look
+                // like from in here: `decodeBuffer` puts its marker where the
+                // record's text would have been and goes on at the record
+                // behind it. A key that is wrong for one record of a file is
+                // wrong for every one of them, so what the walk answers is one
+                // marker per record — which is what the C writes, and is more
+                // than a walk that gives up at the first.
+                Err(KeyError::Client(reason)) | Err(KeyError::Private(reason)) => {
                     return Err(Failure::Unreadable(
                         format!("{ECDH_MARKER} ({reason})"),
                         next,
                     ))
                 }
-                // A key no record of this file can be read with.
-                Err(KeyError::Private(reason)) => return Err(Failure::Fatal(reason)),
                 Ok(key) => key,
             };
             inflate(magic_start, &tea_decrypt_all(body, &tea_key))
@@ -406,8 +477,11 @@ fn tea_decrypt(block: &mut [u32; 2], key: &[u32; 4]) -> [u32; 2] {
 
 /// Why the TEA key of a record could not be derived.
 enum KeyError {
-    /// The private key the decoder was handed is not a secp256k1 one, so no
-    /// record of the file can be read with it.
+    /// The private key the decoder was handed is not a secp256k1 one — `k256`
+    /// refuses a scalar of zero, or one past the curve's order, before a
+    /// record is read. Upstream's `uECC_shared_secret` refuses it the same
+    /// way it refuses a public key that is not a point, and per record: the
+    /// answer is that record's marker, and not the end of the walk.
     Private(String),
     /// The client public key the record's header carries is not a point, which
     /// is what a damaged header looks like: `uECC_shared_secret` answers 0 for

@@ -23,9 +23,23 @@ fn sync_record(text: &[u8]) -> Vec<u8> {
 
 /// One record with `magic` in front of it and `pubkey` in its header.
 fn record(magic_start: u8, pubkey: &[u8; CLIENT_PUBKEY_LEN], body: &[u8]) -> Vec<u8> {
+    // Every sync record the writer puts out is numbered 0 and every async one
+    // is numbered by a counter that skips 0, so 1 is the first number of most
+    // files: what these fixtures are built to look like.
+    record_with_seq(magic_start, pubkey, 1, body)
+}
+
+/// One record numbered `seq`: the hole `decodeBuffer` marks is a hole in these
+/// numbers, and not in the bytes that carry them.
+fn record_with_seq(
+    magic_start: u8,
+    pubkey: &[u8; CLIENT_PUBKEY_LEN],
+    seq: u16,
+    body: &[u8],
+) -> Vec<u8> {
     let mut out = Vec::new();
     out.push(magic_start);
-    out.extend_from_slice(&1u16.to_le_bytes()); // seq
+    out.extend_from_slice(&seq.to_le_bytes()); // seq
     out.push(0); // begin hour
     out.push(0); // end hour
     out.extend_from_slice(&(body.len() as u32).to_le_bytes());
@@ -33,6 +47,84 @@ fn record(magic_start: u8, pubkey: &[u8; CLIENT_PUBKEY_LEN], body: &[u8]) -> Vec
     out.extend_from_slice(body);
     out.push(magic::END);
     out
+}
+
+/// An async record for `text`, compressed the way the appender compresses it.
+fn async_record(seq: u16, text: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+
+    let mut encoder = zstd::stream::Encoder::new(Vec::new(), 0).expect("the encoder starts");
+    encoder.write_all(text).expect("the text compresses");
+    let body = encoder.finish().expect("the frame ends");
+    record_with_seq(
+        magic::ASYNC_NOCRYPT_ZSTD_START,
+        &[0; CLIENT_PUBKEY_LEN],
+        seq,
+        &body,
+    )
+}
+
+/// An async file of three records, numbered 1, 2 and 4: the third is the one
+/// that says the file lost a record in the middle of it.
+fn file_with_a_hole() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for (seq, text) in [(1, "a\n"), (2, "b\n"), (4, "c\n")] {
+        bytes.extend_from_slice(&async_record(seq, text.as_bytes()));
+    }
+    bytes
+}
+
+/// A block the file lost is a hole in the sequence numbers of the records
+/// either side of it, and that is all it is: the bytes of the record that went
+/// are gone too, so nothing else in the file says it was ever there.
+#[test]
+fn a_sequence_that_leaves_a_hole_is_marked_before_the_record_behind_it() {
+    let plain = marsrs_xlog::decode_records(&file_with_a_hole(), None).expect("the walk went on");
+    let text = String::from_utf8_lossy(&plain);
+
+    assert_eq!(
+        text,
+        "a\nb\n[F]decode_log_file.py log seq:3-3 is missing\nc\n"
+    );
+}
+
+/// A hole of more than one record names both ends of it.
+#[test]
+fn the_marker_names_the_first_and_the_last_sequence_lost() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&async_record(1, b"a\n"));
+    bytes.extend_from_slice(&async_record(5, b"b\n"));
+
+    let plain = marsrs_xlog::decode_records(&bytes, None).expect("the walk went on");
+    let text = String::from_utf8_lossy(&plain);
+
+    assert_eq!(text, "a\n[F]decode_log_file.py log seq:2-4 is missing\nb\n");
+}
+
+/// A file whose records follow one another is a whole file, however it opens:
+/// what the C exempts `0` and `1` for, so that neither a sync record nor the
+/// first record of a file is read as a hole.
+#[test]
+fn a_sequence_with_no_hole_in_it_is_not_marked() {
+    let mut bytes = Vec::new();
+    for (seq, text) in [(1, "a\n"), (2, "b\n"), (3, "c\n")] {
+        bytes.extend_from_slice(&async_record(seq, text.as_bytes()));
+    }
+    // A sync record is numbered 0 — the writer fills no sequence in for it —
+    // so it neither counts as a hole nor moves the numbering on: the async
+    // record behind it follows the one in front of it.
+    bytes.extend_from_slice(&record_with_seq(
+        magic::SYNC_NOCRYPT_ZLIB_START,
+        &[0; CLIENT_PUBKEY_LEN],
+        0,
+        b"d\n",
+    ));
+    bytes.extend_from_slice(&async_record(4, b"e\n"));
+
+    let plain = marsrs_xlog::decode_records(&bytes, None).expect("the walk went on");
+    let text = String::from_utf8_lossy(&plain);
+
+    assert_eq!(text, "a\nb\nc\nd\ne\n");
 }
 
 /// A whole record, then one whose magic is no longer a magic, then one more:
@@ -114,6 +206,37 @@ fn a_record_no_key_can_be_derived_for_leaves_its_marker_behind() {
     assert!(text.contains("after\n"), "{text}");
 }
 
+/// A private key no secret can be derived from is the record's failure and not
+/// the file's: `uECC_shared_secret` answers 0 for it — the same answer a client
+/// key that is not a point gets — and `decodeBuffer` goes on at the record
+/// behind it either way. One such record used to end the walk, and the days of
+/// log standing behind it went with it.
+#[test]
+fn a_private_key_no_secret_comes_from_leaves_its_marker_behind() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&sync_record(b"before\n"));
+    // The header's key never gets as far as being checked: the private key is
+    // the first thing the ECDH is asked about, and it is the one refused.
+    bytes.extend_from_slice(&record(
+        magic::ASYNC_ZLIB_START,
+        &[0x11; CLIENT_PUBKEY_LEN],
+        b"\x00",
+    ));
+    bytes.extend_from_slice(&sync_record(b"after\n"));
+
+    // A scalar of zero is not a secp256k1 private key. Reaching this case at
+    // all takes an unusual caller: a key of zeroes, or one past the order of
+    // the curve, and a file that mixes encrypted records with plain ones.
+    let plain = marsrs_xlog::decode_records(&bytes, Some(&[0; 32])).expect("the walk went on");
+    let text = String::from_utf8_lossy(&plain);
+
+    assert!(text.contains("before\n"), "{text}");
+    // The same marker a client key that is not a point gets, naming this time
+    // which of the two keys it was.
+    assert!(text.contains("Get ECDH key error (private key:"), "{text}");
+    assert!(text.contains("after\n"), "{text}");
+}
+
 /// A file made of nothing but a record whose body will not inflate still holds
 /// a record: what the walk answers is that record's marker, and not an error
 /// saying no record was found.
@@ -142,6 +265,29 @@ fn a_file_with_no_record_in_it_says_so() {
     assert!(err.reason.contains("bad magic"), "{err:?}");
 }
 
+/// A record the walk ends on still counts as read far enough to number: the C
+/// reads the sequence and writes the hole in front of it before it tries the
+/// body, so a record no key was given for is not a reason to lose the hole.
+#[test]
+fn the_record_that_ends_the_walk_is_numbered_too() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&async_record(1, b"a\n"));
+    // Numbered 3, so that 2 is the hole between the two of them, and encrypted:
+    // what the walk is given no private key for, and so what ends it.
+    bytes.extend_from_slice(&record_with_seq(
+        magic::ASYNC_ZLIB_START,
+        &[0; CLIENT_PUBKEY_LEN],
+        3,
+        b"\x00",
+    ));
+
+    let err = marsrs_xlog::decode_records(&bytes, None).expect_err("no key was given");
+    let text = String::from_utf8_lossy(&err.recovered);
+
+    assert!(err.reason.contains("no private key"), "{err:?}");
+    assert!(text.contains("a\n"), "{text}");
+    assert!(text.contains("log seq:2-2 is missing"), "{text}");
+}
 /// A record whose body will not inflate is a record that is there: the marker
 /// stands in for its text and the walk goes on at the one behind it.
 #[test]
