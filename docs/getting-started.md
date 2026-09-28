@@ -181,8 +181,8 @@ mars_xlog_close();
 
 An appender writes `<namePrefix>_YYYYMMDD.xlog` into the log directory you gave
 it — `/tmp/mars-log/marsrs_20260927.xlog` above. The default mode is async, so a
-record can sit in the cache for a moment: **flush before you read or upload**, and
-again before the process goes away. See [log files](/log-files).
+record can sit in the cache for a moment: **flush before you read or upload**.
+Nothing has to be called when the app goes away — see [log files](/log-files).
 
 ## Where to go next
 

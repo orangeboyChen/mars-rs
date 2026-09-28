@@ -28,7 +28,8 @@ val xlog = Xlog.open(
         namePrefix = "marsrs",
         level = LogLevel.INFO,
         mode = AppenderMode.ASYNC,
-    )
+    ),
+    context,     // flushes itself when the app's UI goes away
 )
 xlog.consoleLogEnabled = BuildConfig.DEBUG
 
@@ -89,6 +90,28 @@ the pid and the tid are filled in from the OS, not from Java.
 `namePrefix` are one appender, so closing one of them closes what the other
 writes through — give a part of the app whose logs are read apart from the rest
 a prefix of its own.
+
+## When the app goes away
+
+Hand the `Xlog` any `Context` of the app and it flushes itself — there is nothing
+to call on the way out:
+
+```kotlin
+val xlog = Xlog(config, context)
+val opened = Xlog.open(config, context)     // the same call, under the shared name
+```
+
+Android has no "the app is quitting": `Application.onTerminate` is never called
+on a device, and a process the system ends is told nothing at all. What is left
+is `ComponentCallbacks2.onTrimMemory`, and that is what the `Xlog` registers —
+from `TRIM_MEMORY_UI_HIDDEN` up, every activity of the app is behind something
+else, which is where a backgrounded app lives until it is killed. `onLowMemory()`
+and `close()` flush as well.
+
+Built without a `Context` — `Xlog(config)` — nothing is registered, and nothing
+is lost: the records stay in the cache file, and the next `Xlog` of the same
+`namePrefix` drains them into the log file when it opens. See
+[log files](/log-files#when-the-app-goes-away).
 
 ## Coming from the C++ project's Java
 

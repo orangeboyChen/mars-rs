@@ -8,6 +8,10 @@
 
 package io.github.orangeboychen.marsrs.xlog
 
+import android.content.ComponentCallbacks2
+import android.content.Context
+import android.content.res.Configuration
+import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -54,7 +58,13 @@ import java.util.concurrent.ConcurrentHashMap
  * [AppenderMode.ASYNC] — the default — sits in a memory-mapped cache file until
  * a writer thread takes it to the log file, so the last lines of a process that
  * is killed reach the disk only after [flush]: call it before the app reads or
- * uploads its logs.
+ * uploads its logs. Nothing is *lost* without it — the cache file is the
+ * kernel's, and the next [Xlog] of this [namePrefix] drains it when it opens —
+ * but the file of the session that is ending is complete only once [flush] ran.
+ *
+ * Which is why an [Xlog] built with a `Context` needs no [flush] on its way out:
+ * it flushes itself when Android says the app's UI is no longer on screen, the
+ * last moment Android says anything at all before it can end the process.
  *
  * ## The older spelling
  *
@@ -122,12 +132,17 @@ class Xlog : Log.LogImp {
      * of the same prefix writes through.
      *
      * @param config what to open it with; [XlogConfig]
+     * @param context any `Context` of the app, when this appender is to flush
+     *                itself when the app's UI goes away — the last thing
+     *                Android says before it can end the process without another
+     *                word. `null`, the start, registers nothing; see [flush].
      * @throws IllegalArgumentException when `marsrs-jni` opens nothing, which is
      *                                  what a directory it cannot create comes
      *                                  to. [XlogConfig] refuses a config it
      *                                  cannot honour before this is reached.
      */
-    constructor(config: XlogConfig) {
+    @JvmOverloads
+    constructor(config: XlogConfig, context: Context? = null) {
         // `marsrsxlog` is the `crate-name` of `marsrs-jni`; loading it twice is
         // nothing, so an app that loaded it already needs no way to say so.
         System.loadLibrary(LIBRARY)
@@ -139,6 +154,13 @@ class Xlog : Log.LogImp {
         }
         handle = opened
         openHandles[namePrefix] = opened
+        if (context != null) {
+            val app = context.applicationContext
+            val callback = BackgroundFlush(this)
+            app.registerComponentCallbacks(callback)
+            backgroundFlush = callback
+            registeredWith = app
+        }
     }
 
     /**
@@ -249,6 +271,10 @@ class Xlog : Log.LogImp {
      * buffer to the OS — the last few KiB of a log file are in a `FILE*` until
      * this runs, so a reader in another process cannot see them yet.
      *
+     * An [Xlog] built with a `Context` runs this itself when the app's UI is no
+     * longer on screen, so an app that reads its logs in a later session needs
+     * no call of its own.
+     *
      * @param sync `true` drains on the calling thread, which is what an app
      *             wants before it reads or uploads the files; `false` asks the
      *             writer thread to do it and returns
@@ -275,6 +301,11 @@ class Xlog : Log.LogImp {
         if (!isOpen) {
             return
         }
+        // Before the handle goes: a callback left registered would be handed a
+        // closed [Xlog] by Android and would find nothing to flush.
+        backgroundFlush?.let { registeredWith?.unregisterComponentCallbacks(it) }
+        backgroundFlush = null
+        registeredWith = null
         releaseXlogInstance(namePrefix)
         // The appender is the prefix's and not this wrapper's: `marsrs-jni`
         // answers an [Xlog] of the same prefix with the same handle, so every
@@ -299,6 +330,45 @@ class Xlog : Log.LogImp {
     private var handle: Long
 
     private var currentMode: AppenderMode
+
+    /**
+     * The callback that flushes this [Xlog] when the app's UI is no longer on
+     * screen; `null` when it was built without a `Context`.
+     */
+    private var backgroundFlush: BackgroundFlush? = null
+
+    /** The `Context` [backgroundFlush] was registered with, and what [close] unregisters it from. */
+    private var registeredWith: Context? = null
+
+    /**
+     * What an [Xlog] built with a `Context` registers: [flush] on the moment the
+     * app's UI is no longer on screen.
+     *
+     * Android has no "the app is quitting" — `Application.onTerminate` is never
+     * called on a device, and a process the system ends is told nothing at all.
+     * What is left is `onTrimMemory`, and the levels from
+     * `TRIM_MEMORY_UI_HIDDEN` up: every activity of the app is behind something
+     * else now, which is where a backgrounded app lives until it is killed.
+     *
+     * The appender is held weakly: a callback the app `Context` keeps would hold
+     * the appender open with it, and a cache slot a dropped [Xlog] never closed
+     * is a slot no other one can claim.
+     */
+    private class BackgroundFlush(xlog: Xlog) : ComponentCallbacks2 {
+        private val log = WeakReference(xlog)
+
+        override fun onTrimMemory(level: Int) {
+            if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+                log.get()?.flush(sync = true)
+            }
+        }
+
+        override fun onLowMemory() {
+            log.get()?.flush(sync = true)
+        }
+
+        override fun onConfigurationChanged(newConfig: Configuration) = Unit
+    }
 
     companion object {
         const val LEVEL_ALL = 0
@@ -341,12 +411,18 @@ class Xlog : Log.LogImp {
          * and not `Xlog.Companion.open(config)`.
          *
          * @param config what to open it with
+         * @param context any `Context` of the app, when this appender is to flush
+         *                itself when the app's UI goes away — the last thing
+         *                Android says before it can end the process without
+         *                another word. `null`, the start, registers nothing;
+         *                see [flush]
          * @throws IllegalArgumentException when `marsrs-jni` opens nothing, which
          *                                  is what a directory it cannot create
          *                                  comes to
          */
         @JvmStatic
-        fun open(config: XlogConfig): Xlog = Xlog(config)
+        @JvmOverloads
+        fun open(config: XlogConfig, context: Context? = null): Xlog = Xlog(config, context)
 
         /**
          * Loads `libmarsrsxlog.so` and opens the process-wide appender — the one

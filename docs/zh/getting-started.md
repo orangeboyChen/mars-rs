@@ -179,7 +179,7 @@ mars_xlog_close();
 
 appender 把日志写进你给的那个目录，名字是 `<namePrefix>_YYYYMMDD.xlog` —— 上面就是
 `/tmp/mars-log/marsrs_20260927.xlog`。默认模式是异步，一条记录可能在缓存里待一会儿：
-**读文件、上传、以及进程退出前都要 flush**。见[日志文件](/zh/log-files)。
+**读文件或上传前 flush**。App 退出时什么都不用调用 —— 见[日志文件](/zh/log-files)。
 
 ## 接下来
 

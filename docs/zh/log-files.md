@@ -38,7 +38,7 @@ mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK，或负的错�
 默认模式把记录交给写线程、先进 mmap 缓存文件，所以 write 返回时字节还没进日志文件。
 缓存放在 `cacheDir`，没给就放在日志文件旁边。
 
-**读文件前、上传前、进程退出前都要 flush** —— 被杀掉的进程最后那几条记录，要有人排空才到得了磁盘：
+**读文件前、上传前要 flush** —— 本进程要读，或者另一个进程在本进程还在写的时候要读：
 
 ::: code-group
 
@@ -67,6 +67,30 @@ mars_xlog_flush_sync();
 
 `flush(sync = false)` —— `appender_flush()`、`mars_xlog_flush()` —— 只是通知写线程就返回，
 适合定时调用，但上传前不能用它。
+
+## App 退出的时候
+
+**什么都不用调用。** 进程写到一半被杀掉，也不会丢东西：缓存里的记录在内核手里、不在进程
+手里，所以比进程活得久；下一个同 `namePrefix` 的 appender 打开时会把它们排进日志文件，
+就夹在一次普通启动的 `~~~~~ begin of mmap ~~~~~` 和 `~~~~~ end of mmap ~~~~~` 两行之间。
+一次都没 flush 的 App 只让出一样东西：时间 —— 本次会话最后那几条，要等下次启动才进文件。
+
+有两个包连这点时间都不让，因为它们在 App 离开屏幕时就 flush 了 —— 那是 Android 和 iOS
+在"不打招呼就结束进程"之前最后一次开口：
+
+| 平台 | 谁在 flush |
+|---|---|
+| Android | `Xlog(config, context)` —— 给 App 任意一个 `Context`；见 [Android](/zh/platforms/android) |
+| SwiftPM | 每个 `Xlog`，建好就开始；见 [SwiftPM](/zh/platforms/swift) |
+| 其他平台 | 下次启动，如上 |
+
+`close()` 也会排空，所以退出时顺手关掉 appender 的 App 同样没事。上面那两个 `flush` 是为
+另一种情况准备的：**App 还活着**的时候要读文件或上传。
+
+同步模式是唯一的例外，也是唯一一个答案不是"什么都不用"的地方：它后面没有缓存文件兜底，
+所以进程还攒着的那截 —— 不到 4 KiB —— 会跟着进程一起消失。用同步模式又想要这几条的 App
+得自己 `close()` 或 `flush(sync: true)`：上面那两个 hook 做了这件事，顺手关掉 appender 的
+App 也做了。
 
 ## 轮转与保留
 
