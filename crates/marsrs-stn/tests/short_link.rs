@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use marsrs_comm::tickcount::gettickcount;
 use marsrs_comm::{LocalIpStack, ProxyInfo, ProxyType, SocketAddress};
-use marsrs_stn::short_link::{ConnectFail, RunFail, ShortLink};
+use marsrs_stn::short_link::{ConnectFail, RunFail, ShortLink, ETIMEDOUT};
 use marsrs_stn::{
     default_packer, pack, request_headers, request_url, CachedSocket, ConnectProfile, ErrCmdType,
     ExtraInfo, IpPortItem, IpSourceType, NetSource, OpBreaker, SocketFd, SocketOperator,
@@ -401,6 +401,49 @@ fn the_pairs_newdns_handed_the_link_are_the_ones_it_goes_out_on() {
     );
 }
 
+/// The pairs that lost are the ones the host had begun to dial, and the C++
+/// walks them with `i < profile.index` — a loop that stops at the winner. Its
+/// dials are staggered, so a pair *behind* the winner can be one it had begun
+/// and that the winner then beat: that pair lost, and is one the app's callback
+/// and the net source's history ought to hear about.
+#[test]
+fn a_pair_dialled_behind_the_winner_is_one_that_lost() {
+    let seen = Seen::default();
+    let mut link = link(Arc::new(Mutex::new(net_source())), &seen);
+    let pairs: Vec<IpPortItem> = ["183.3.226.35", "183.3.226.36", "183.3.226.37"]
+        .into_iter()
+        .map(|ip| {
+            let mut item = IpPortItem::new(ip, 80);
+            item.source_type = IpSourceType::Dns;
+            item.host = "short.weixin.qq.com".to_string();
+            item
+        })
+        .collect();
+    link.set_connect_params(pairs, 1500, 2500);
+    link.set_socket_operator({
+        let mut host = Host::new(seen.clone());
+        // the first pair won while the second was still being dialled, and the
+        // third was never begun at all
+        host.profile.index = 0;
+        host.profile.set_connecting(1, true);
+        host
+    });
+
+    assert_eq!(link.connect_at(NOW), Ok(SocketFd(3)));
+    assert_eq!(link.profile().ip, "183.3.226.35");
+    assert_eq!(
+        seen.reports.lock().unwrap().as_slice(),
+        &[Reported {
+            err_type: ErrCmdType::Socket,
+            err_code: ETIMEDOUT,
+            ip: "183.3.226.36".to_string(),
+            host: "short.weixin.qq.com".to_string(),
+            port: 80,
+        }],
+        "the dial that was still in flight, and not the one never begun"
+    );
+}
+
 #[test]
 fn a_task_that_asked_to_be_kept_takes_the_socket_the_pool_kept() {
     let seen = Seen::default();
@@ -656,4 +699,62 @@ fn a_socket_the_server_kept_is_the_one_the_next_task_takes() {
         1,
         "the first task connected, and the second did not have to"
     );
+}
+
+/// A server that says `Connection: close` leaves the pool no socket to cache,
+/// but the reuse it answered is still one the pool hears went well: the C++
+/// makes that report *below* its own `IsKeepAlive()` arm, and a pool a failing
+/// socket banned is unbanned by a success and not by a cache.
+#[test]
+fn a_reuse_the_server_closed_is_one_the_pool_hears_went_well() {
+    let seen = Seen::default();
+    let source = Arc::new(Mutex::new(net_source()));
+    // the pool the task before this one left its socket in
+    let mut pool = SocketPool::new();
+    pool.set_is_closed(|_| false);
+    let mut item = IpPortItem::new("183.3.226.35", 80);
+    item.source_type = IpSourceType::Dns;
+    item.host = "short.weixin.qq.com".to_string();
+    pool.add_cache(CachedSocket::new_at(NOW, item, SocketFd(11), 15));
+    let pool = Arc::new(Mutex::new(pool));
+
+    let mut task = task();
+    task.headers
+        .insert("Connection".to_string(), "Keep-Alive".to_string());
+    let mut link = link_for(source, &seen, task, false);
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    link.set_cache_socket(move |item| pool.lock().unwrap().get_socket_at(NOW, item));
+    link.set_pool_report({
+        let reports = Arc::clone(&reports);
+        move |is_reused, has_received, is_decode_ok| {
+            reports
+                .lock()
+                .unwrap()
+                .push((is_reused, has_received, is_decode_ok))
+        }
+    });
+    let cached = Arc::new(Mutex::new(Vec::new()));
+    link.set_pool_cache({
+        let cached = Arc::clone(&cached);
+        move |item, _| cached.lock().unwrap().push(item.clone())
+    });
+
+    let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
+    let reads = vec![(Ok(answer.to_vec()), NOW + 200)];
+    assert_eq!(
+        link.run_at(NOW, b"hello", reads.into_iter()),
+        Some(Ok(b"hello".to_vec()))
+    );
+
+    assert!(link.profile().is_reused_fd, "the socket came from the pool");
+    assert_eq!(
+        reports.lock().unwrap().as_slice(),
+        &[(true, true, true)],
+        "a reuse that answered, whether or not it can be cached again"
+    );
+    assert!(
+        cached.lock().unwrap().is_empty(),
+        "a socket the server closed is not one the pool keeps"
+    );
+    assert_eq!(seen.closed(), vec![SocketFd(11)]);
 }

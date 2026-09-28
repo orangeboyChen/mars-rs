@@ -60,6 +60,42 @@ pub struct SocketProfile {
     pub total_cost: u32,
     /// `is0rtt` — whether the connect was a 0-rtt one.
     pub is_0rtt: i32,
+    /// `ConnectingIndex[32]` — one bit per address the connect was given, set
+    /// where a connect was started and had not finished when another one won.
+    /// The C++ sets its `ConnectingIndex[_index]` in the observer's `OnConnect`
+    /// and clears it in `OnConnected`, so a pair the winner beat before its
+    /// dial began is not in it, and neither is one that dialled and answered
+    /// with an error of its own. A host that dials several addresses at once
+    /// fills this in; one that does not leaves it at `0`, which is what the
+    /// C++'s own observer answers for a connect it never started.
+    pub connecting_index: u32,
+}
+
+/// How many addresses a bit of [`SocketProfile::connecting_index`] stands for,
+/// which is what the C++'s `char ConnectingIndex[32]` holds.
+const CONNECTING_INDEX_BITS: usize = 32;
+
+impl SocketProfile {
+    /// `1 == ConnectingIndex[_index]` — whether the connect on `_index` was
+    /// started and had not finished when the winner won. Past the 32 the C++'s
+    /// array holds, an address is one the C++ could not have tracked either.
+    pub fn is_connecting(self, index: usize) -> bool {
+        index < CONNECTING_INDEX_BITS && self.connecting_index & (1 << index) != 0
+    }
+
+    /// `ConnectingIndex[_index] = _connecting` — what the C++'s observer writes
+    /// in `OnConnect` and in `OnConnected`: a host that dialled `_index` sets
+    /// it, and clears it once that dial answers.
+    pub fn set_connecting(&mut self, index: usize, connecting: bool) {
+        if index >= CONNECTING_INDEX_BITS {
+            return;
+        }
+        if connecting {
+            self.connecting_index |= 1 << index;
+        } else {
+            self.connecting_index &= !(1 << index);
+        }
+    }
 }
 
 /// `OPBreaker` — the pipe the C++ wakes to get a blocking call to give up.
@@ -113,7 +149,9 @@ pub trait SocketOperator: Send {
     /// `ErrorDesc(_errcode)` — the platform's description of an error code.
     fn error_desc(&self, error_code: i32) -> String;
 
-    /// `Profile()` — what the last connect left behind.
+    /// `Profile()` — what the last connect left behind. A host that dials the
+    /// addresses it was given more than one at a time also says which of them
+    /// it had dialled, in [`SocketProfile::connecting_index`].
     fn profile(&self) -> SocketProfile;
 
     /// `Breaker()` — the pipe a blocking call of this operator listens to.

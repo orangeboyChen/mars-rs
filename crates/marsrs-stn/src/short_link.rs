@@ -789,10 +789,22 @@ impl ShortLink {
         }
 
         let index = usize::try_from(connected.index).unwrap_or(usize::MAX);
-        // the pairs that lost: the C++ reports the ones its connect had
-        // *started*, which the host does not say, so every pair before the one
-        // that won is reported
-        let losers: Vec<IpPortItem> = self.profile.ip_items.iter().take(index).cloned().collect();
+        // the pairs that lost: only the ones the host had *started* a connect
+        // on, which is what the C++'s `ConnectingIndex` carries — a pair the
+        // winner beat before its dial began is not a pair that timed out, and
+        // reporting it is how a pair that was never tried gets banned. The C++
+        // walks them with `i < profile.index`, which stops at the winner and so
+        // misses a dial behind it: its dials are staggered, so a pair after the
+        // one that won may be one it had started. The winner's own bit is the
+        // one the C++ clears in `OnConnected`, and is never a loser's.
+        let losers: Vec<IpPortItem> = self
+            .profile
+            .ip_items
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != index && connected.is_connecting(*i))
+            .map(|(_, item)| item.clone())
+            .collect();
         for item in &losers {
             self.report(
                 ErrCmdType::Socket,
@@ -1152,17 +1164,23 @@ impl ShortLink {
     /// the task manager.
     fn respond_default(&mut self, err_type: ErrCmdType, err_code: i32) {
         self.response_status(err_code);
-        if !self.keep_alive || !self.profile.socket_fd.is_valid() {
-            return;
-        }
         if err_type != ErrCmdType::Ok {
+            // the C++ closes and reports only inside its own `IsKeepAlive()`
+            // arm; what it does after that arm is the retry and the statistic,
+            // and both need the decoder the port does not have here
+            if !self.keep_alive || !self.profile.socket_fd.is_valid() {
+                return;
+            }
             let socket = self.profile.socket_fd;
             self.socket_close(socket);
             // a server that hung up is not a socket the pool got wrong
             if err_code != ECT_SOCKET_SHUTDOWN {
                 self.pool_report(self.profile.is_reused_fd, false, false);
             }
-        } else {
+            return;
+        }
+
+        if self.keep_alive && self.profile.socket_fd.is_valid() {
             // the C++ asserts that the pair that won is on the list, which it
             // always is: the port asks the list instead
             let index = usize::try_from(self.profile.ip_index).unwrap_or(usize::MAX);
@@ -1171,6 +1189,17 @@ impl ShortLink {
                 self.pool_cache(&item);
             }
         }
+        // the C++ says this *below* its own `IsKeepAlive()` arm, once the answer
+        // has come in and been read: the socket received one and the answer was
+        // read out of it, which is what unbans a pool a socket that failed had
+        // banned. A server that said `Connection: close` leaves no socket to
+        // cache and still owes the pool that report — without it a reuse that
+        // went well cannot clear a ban another socket had set, and the pool
+        // stays shut for as long as its interval runs. There is no `Buf2Resp`
+        // here to say the answer could not be read, so the decode is one that
+        // went well.
+        let is_reused_fd = self.profile.is_reused_fd;
+        self.pool_report(is_reused_fd, true, true);
     }
 
     /// The run is over without an answer: the profile says why, the app hears
@@ -1803,6 +1832,10 @@ mod tests {
         });
         let mut host = Host::new(seen.clone());
         host.profile.index = 2;
+        // the three were dialled at once, and the first two were still
+        // connecting when the third won
+        host.profile.set_connecting(0, true);
+        host.profile.set_connecting(1, true);
         host.profile.rtt = 40;
         host.profile.total_cost = 60;
         link.set_socket_operator(host);
@@ -1837,7 +1870,31 @@ mod tests {
                     port: 80,
                 },
             ],
-            "every pair before the one that won"
+            "every pair before the one that won that was dialled"
+        );
+    }
+
+    /// The C++ reports a losing pair only when its own connect was started:
+    /// `ShortLinkConnectObserver` sets `ConnectingIndex[_index]` in `OnConnect`,
+    /// so a pair the winner beat before its dial began is not reported, and is
+    /// not one the net source's history may count against.
+    #[test]
+    fn a_pair_the_winner_beat_before_its_connect_began_is_not_reported() {
+        let seen = Seen::default();
+        let mut link = link(&seen);
+        link.set_shortlink_items(|_, _| vec![item("183.3.226.35", 80), item("183.3.226.36", 80)]);
+        let mut host = Host::new(seen.clone());
+        // the second pair answered before the first was ever dialled, so the
+        // host leaves the first out of the mask
+        host.profile.index = 1;
+        link.set_socket_operator(host);
+
+        let socket = link.connect_at(1000).unwrap();
+        assert!(socket.is_valid());
+        assert_eq!(link.profile().ip, "183.3.226.36");
+        assert!(
+            seen.reports.lock().unwrap().is_empty(),
+            "a pair no connect was started on is not one that timed out"
         );
     }
 
@@ -2619,6 +2676,39 @@ mod tests {
             reported.lock().unwrap().as_slice(),
             &[(true, false, false)],
             "reused, and no answer was decoded out of it"
+        );
+    }
+
+    /// The C++ tells the pool how a socket it handed out went on both paths:
+    /// `OnSocketPoolReport(_conn_profile.is_reused_fd, true, ...)` on the
+    /// `kEctOK` one, which is what clears a ban an earlier failure set. Without
+    /// it a pool that was banned stays banned, however well its sockets work.
+    #[test]
+    fn an_answer_that_came_back_is_one_the_pool_hears_went_well() {
+        let seen = Seen::default();
+        let (mut link, socket) = reused(&seen);
+        let reported = Arc::new(Mutex::new(Vec::new()));
+        link.set_pool_report({
+            let reported = reported.clone();
+            move |is_reused, has_received, is_decode_ok| {
+                reported
+                    .lock()
+                    .unwrap()
+                    .push((is_reused, has_received, is_decode_ok))
+            }
+        });
+        link.write_at(1100, socket, b"hello").unwrap();
+
+        let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: Keep-Alive\r\n\r\n\
+                       hello";
+        assert_eq!(
+            link.read_at(1200, socket, Ok(answer)),
+            Read::Done(Ok(b"hello".to_vec()))
+        );
+        assert_eq!(
+            reported.lock().unwrap().as_slice(),
+            &[(true, true, true)],
+            "reused, and it answered: the pool is credited with it"
         );
     }
 
