@@ -181,13 +181,20 @@ public actual object SdtLogic {
         val array = allocArray<MarsSdtHosts>(links.size)
         links.forEachIndexed { index, link ->
             array[index].name = cstring(link.name)
-            val ports = allocArray<MarsSdtIpPort>(link.hosts.size)
-            link.hosts.forEachIndexed { host, ip ->
-                ports[host].ip = cstring(ip)
-                ports[host].port = link.ports.getOrElse(host) { 0 }.toUShort()
+            // The nth host with the nth port, and a host whose partner is
+            // missing is not one the run probes: [Link] says an unmatched list
+            // is cut short, and the JNI bridge pairs the two the same way, so
+            // one `Link` means one thing on either `actual`. A port of `0` for
+            // a host that has none is a TCP check of nowhere, and it is a check
+            // only Kotlin/Native would have run.
+            val pairs = minOf(link.hosts.size, link.ports.size)
+            val ports = allocArray<MarsSdtIpPort>(pairs)
+            for (pair in 0 until pairs) {
+                ports[pair].ip = cstring(link.hosts[pair])
+                ports[pair].port = link.ports[pair].toUShort()
             }
             array[index].ports = ports
-            array[index].port_count = link.hosts.size.toUInt()
+            array[index].port_count = pairs.toUInt()
         }
         return array
     }
