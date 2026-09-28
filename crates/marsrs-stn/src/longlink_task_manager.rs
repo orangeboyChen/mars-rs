@@ -1395,10 +1395,12 @@ impl LongLinkTaskManager {
         {
             let profile = &mut self.tasks[at];
             profile.remain_retry_count -= 1;
+            // the try that failed, and not the task: `err_type` / `err_code`
+            // stay `kEctOK` / `0` until the task is over, which is what a
+            // reader of a task that is still going sees. The short-link queue
+            // does set them here — the two disagreed upstream.
             profile.transfer_profile.error_type = err_type;
             profile.transfer_profile.error_code = err_code;
-            profile.err_type = err_type;
-            profile.err_code = err_code;
         }
         self.tasks[at].push_history();
         self.tasks[at].init_send_param_at(now);
@@ -2237,6 +2239,31 @@ mod tests {
                 .is_empty(),
             "a socket error is the link's own, not one to take it down for"
         );
+    }
+
+    #[test]
+    fn a_task_that_has_another_try_coming_is_not_one_that_failed() {
+        let mut manager = manager();
+        let _ = wire(&mut manager);
+        manager.start_task_at(NOW, task(7), Task::CHANNEL_LONG);
+
+        assert_eq!(
+            manager.on_response_at(NOW + 10, failed(7, ErrCmdType::Socket, -5001)),
+            Some(RespHandle::Retried)
+        );
+        let task = &manager.tasks()[0];
+        assert_eq!(
+            task.err_type,
+            ErrCmdType::Ok,
+            "the failure is the try's, and the task is still going"
+        );
+        assert_eq!(task.err_code, 0);
+        // what the try is remembered with is in the history the try left
+        assert_eq!(
+            task.history.last().map(|try_| try_.error_type),
+            Some(ErrCmdType::Socket)
+        );
+        assert_eq!(task.history.last().map(|try_| try_.error_code), Some(-5001));
     }
 
     #[test]
