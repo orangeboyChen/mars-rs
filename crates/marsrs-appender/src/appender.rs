@@ -153,23 +153,31 @@ thread_local! {
     static RECORD: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// Formats one record into `record` and answers how many bytes of it are the
+/// record.
+///
+/// The buffer is grown to [`TEMP_LOG_SIZE`] because `log_formater` truncates
+/// against `max_length()`, so a shorter one would cut a long body sooner than
+/// the C++ cuts it.
+fn format_record_into(info: Option<&XLoggerInfo>, log: &str, record: &mut Vec<u8>) -> usize {
+    record.resize(TEMP_LOG_SIZE, 0);
+    let mut out = PtrBuffer::new(&mut record[..]);
+    log_formater(info, Some(log), &mut out);
+    out.len()
+}
+
 /// Formats one record into the calling thread's buffer and answers how many
 /// bytes of it are the record.
 ///
 /// Holds no lock, which is why [`Appender::write`] calls it first: the
 /// formatter is the most expensive part of a record and the C++ runs it
 /// outside `mutex_buffer_async_` and `mutex_log_file_` too.
+///
+/// Callers that are themselves inside a write — the recursive dump — must not
+/// come through here: [`format_record_into`] into a buffer of their own is
+/// what they want, and why it exists.
 fn format_record(info: Option<&XLoggerInfo>, log: &str) -> usize {
-    RECORD.with(|cell| {
-        let mut record = cell.borrow_mut();
-        // Grown once, on this thread's first record. `log_formater` truncates
-        // against `max_length()`, so the buffer has to be the C++'s full
-        // 16 KiB or a long body would be cut shorter than the C++ cuts it.
-        record.resize(TEMP_LOG_SIZE, 0);
-        let mut out = PtrBuffer::new(&mut record[..]);
-        log_formater(info, Some(log), &mut out);
-        out.len()
-    })
+    RECORD.with(|cell| format_record_into(info, log, &mut cell.borrow_mut()))
 }
 
 /// Hands the `len` bytes [`format_record`] left in the buffer to `f`.
@@ -179,6 +187,31 @@ fn format_record(info: Option<&XLoggerInfo>, log: &str) -> usize {
 /// keeping the two apart is what makes that true by construction.
 fn with_record<T>(len: usize, f: impl FnOnce(&[u8]) -> T) -> T {
     RECORD.with(|cell| f(&cell.borrow()[..len]))
+}
+
+/// The `recursion_str` of a write that was logged from inside the logger: the
+/// record that names the episode, formatted because the file gets the string
+/// raw — `WriteTips2File` hands its argument to the buffer as it stands, so
+/// the line a decoder of the log shows is the one the formatter produced.
+///
+/// Formatted into a buffer of its own, and never into [`RECORD`]. A recursive
+/// write is one that runs while an outer write is formatting or consuming that
+/// buffer, so borrowing it again is a panic, and formatting into it would
+/// leave the outer write to file the dump's bytes under the outer record's
+/// length. The dump is built once per episode, so the buffer costs one
+/// allocation on the one write that recurses.
+fn recursion_dump(info: Option<&XLoggerInfo>, count: u32) -> String {
+    let mut recursive = info.cloned().unwrap_or_default();
+    recursive.level = LogLevel::Fatal;
+    let body = format!("ERROR!!! xlogger_appender Recursive calls!!!, count:{count}");
+
+    let mut record = Vec::new();
+    let len = format_record_into(Some(&recursive), &body, &mut record);
+    let dump = String::from_utf8_lossy(&record[..len]).into_owned();
+    // The C++ hands `ConsoleLog` that same string, which is why its console
+    // shows the prefix twice; the port consoles the body.
+    console_log(Some(&recursive), &body);
+    dump
 }
 
 /// Overwrites the record with `__WriteAsync`'s "the cache is nearly full"
@@ -1782,17 +1815,7 @@ impl Appender {
             if count > MAX_RECURSION {
                 return;
             }
-            let mut recursive = info.cloned().unwrap_or_default();
-            recursive.level = LogLevel::Fatal;
-            let body = format!("ERROR!!! xlogger_appender Recursive calls!!!, count:{count}");
-            // Formatted, because the file gets the string raw: `WriteTips2File`
-            // hands its argument to the buffer as it stands, so the line a
-            // decoder of the log shows is the one the formatter produced. The
-            // C++ hands `ConsoleLog` that same string, which is why its console
-            // shows the prefix twice; the port consoles the body.
-            let len = format_record(Some(&recursive), &body);
-            let dump = with_record(len, |data| String::from_utf8_lossy(data).into_owned());
-            console_log(Some(&recursive), &body);
+            let dump = recursion_dump(info, count);
             RECURSION_DUMP.with(|cell| *cell.borrow_mut() = Some(dump));
             return;
         }
@@ -2566,6 +2589,61 @@ mod tests {
         // The record that recursed is the one that is *not* filed: the dump
         // stands in for it.
         assert!(!text.contains("logged from inside the logger"), "{text}");
+        assert!(text.contains("Recursive calls!!!, count:2"), "{text}");
+        assert!(text.contains("the record after it"), "{text}");
+    }
+
+    /// A recursive write is one that runs while an outer write is consuming the
+    /// record it formatted: [`with_record`] holds a borrow of the buffer for as
+    /// long as its callback does, so a dump that formatted into that buffer
+    /// borrowed it a second time and panicked.
+    #[test]
+    fn the_recursion_dump_does_not_borrow_the_in_flight_record() {
+        let len = format_record(Some(&info(LogLevel::Info)), "the record being written");
+        let before = with_record(len, |data| data.to_vec());
+
+        // What re-entry from inside that callback looks like.
+        let dump = with_record(len, |_| recursion_dump(Some(&info(LogLevel::Info)), 2));
+
+        assert!(dump.contains("Recursive calls!!!, count:2"), "{dump}");
+        assert_eq!(
+            with_record(len, |data| data.to_vec()),
+            before,
+            "the record the outer write is reading was overwritten"
+        );
+    }
+
+    /// The dump is built beside the record the outer write has formatted and
+    /// not yet consumed, so that record reaches the file as it was formatted,
+    /// and not as the dump's bytes under the outer record's length.
+    #[test]
+    fn the_recursion_dump_leaves_the_outer_record_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Sync), 0, 0).unwrap();
+
+        // The record an outer write holds at the point a write recurses.
+        let len = format_record(Some(&info(LogLevel::Info)), "the record being written");
+        let before = with_record(len, |data| data.to_vec());
+
+        // The counter is per thread, so raising it is what a write that is
+        // itself inside a write looks like from here.
+        RECURSION_COUNT.with(|cell| cell.set(1));
+        appender.write(Some(&info(LogLevel::Info)), "logged from inside the logger");
+        RECURSION_COUNT.with(|cell| cell.set(0));
+
+        assert_eq!(
+            with_record(len, |data| data.to_vec()),
+            before,
+            "the dump was built in the buffer the outer record is read out of"
+        );
+
+        // The outer write goes on, and the next write files the dump with it.
+        appender.lock().write_sync(len);
+        appender.write(Some(&info(LogLevel::Info)), "the record after it");
+        appender.close();
+
+        let text = decoded_text(&fs::read(today_name(tmp.path())).unwrap());
+        assert!(text.contains("the record being written"), "{text}");
         assert!(text.contains("Recursive calls!!!, count:2"), "{text}");
         assert!(text.contains("the record after it"), "{text}");
     }
