@@ -42,11 +42,15 @@
 //! Not ported: the wake lock and the android-only branches, the tls group
 //! name, the `get_real_host` / handshake / intercept setters
 //! (`SetGetRealHostFunc` and friends are one line each over a queue the port
-//! leaves to the host), the minor long link (`AddMinorLongLink`,
-//! `IsMinorAvailable`, `FixMinorRealhost` — a second link the C++ makes out
-//! of a host list the app hands in, which nothing in the port makes),
+//! leaves to the host), `FixMinorRealhost` (the real host of a minor link,
+//! which is the `get_real_host` setter the lines above are about),
 //! `__OnShortLinkResponse` (nothing but a log), and `__ResetLongLink` (an
 //! `#ifdef __APPLE__` that is commented out).
+//!
+//! The minor long link is here, but not where the C++ has it: the core makes
+//! the channel in `StartTask` (`add_minor_link`) and asks whether one is free
+//! (`is_minor_available`), both of which the C++ leaves to the queue — whose
+//! metas they are, and the port keeps the links in the core.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -903,6 +907,26 @@ impl NetCore {
             }
         }
 
+        // the minor long link: a task that may go out on one has it made out
+        // of the hosts it came with, while the app is in front
+        // (`net_core.cc:471-482`). The C++'s `SvrTrigOff()` is not here: its
+        // `IsSvrTrigOff()` answers `false` whatever it was set to
+        // (`longlink.h:172-176`).
+        let foreground = self.is_foreground();
+        if self.use_long_link && task.channel_select & Task::CHANNEL_MINOR_LONG != 0 && foreground {
+            let hosts = task.minorlong_host_list.clone();
+            if let Some(host) = hosts.first().cloned() {
+                if !self.links.contains_key(&host) {
+                    self.add_minor_link(&hosts);
+                }
+                if !self.is_long_link_connected(&host) {
+                    if let Some(meta) = self.long_link_meta(&host) {
+                        meta.monitor().make_sure_connected_at(now);
+                    }
+                }
+            }
+        }
+
         let channel = self.choose_channel(&task);
         let start_ok = match channel {
             Task::CHANNEL_MINOR_LONG | Task::CHANNEL_LONG => {
@@ -1682,6 +1706,50 @@ impl NetCore {
             })
     }
 
+    /// `AddMinorLink(_hosts)` — the channel of the first host on the list: kept
+    /// alive, of `kChannelMinorLong`, and with the whole list as its hosts
+    /// (`longlink_task_manager.cc:1172`).
+    ///
+    /// What the C++ does in the queue — because its metas are the queue's — is
+    /// two things here: the channel is the queue's config, and the link is the
+    /// host's factory's, like every other one.
+    fn add_minor_link(&mut self, hosts: &[String]) -> bool {
+        let Some(host) = hosts.first().cloned() else {
+            return false;
+        };
+        let mut config = LonglinkConfig::new(host.clone());
+        config.is_keep_alive = true;
+        config.host_list = hosts.to_vec();
+        config.link_type = Task::CHANNEL_MINOR_LONG;
+        self.create_long_link(config);
+        self.links.contains_key(&host)
+    }
+
+    /// `IsMinorAvailable(_task)` — whether a task may go out on a minor link:
+    /// one of that name that is up with nothing of its own out, or room for
+    /// another yet (`longlink_task_manager.cc:1192`).
+    ///
+    /// The C++ asks the queue, which owns its metas; the port keeps the links
+    /// here, so this is where the question is answered. Its `linkCnt` walks a
+    /// vector of metas and counts the ones of that name, which is a walk of a
+    /// map here: a name is a key, so the count is one or none, and the cap it
+    /// is held against is asked of the one link there is.
+    fn is_minor_available(&self, task: &Task) -> bool {
+        let Some(host) = task.minorlong_host_list.first() else {
+            return false;
+        };
+        // a link the task's own pass made is one the C++ counts too, which is
+        // why a task with room for one and no more goes out on another channel
+        // until that link is up
+        if self.links.contains_key(host) {
+            if !self.is_long_link_connected(host) || self.longlink.task_count(host) > 0 {
+                return 1 < task.max_minorlinks;
+            }
+            return true;
+        }
+        0 < task.max_minorlinks
+    }
+
     /// `__ChooseChannel(...)` — long link, short link, or the channel the task
     /// asked for: a task that may use either is put on the long link while it
     /// is up, and a `kChannelFastStrategy` one only while nothing else of that
@@ -1702,15 +1770,27 @@ impl NetCore {
             return Task::CHANNEL_SHORT;
         }
 
+        // `minorOk` — a task that came with a minor host list may go out on a
+        // link of its own (`net_core.cc:296,308`)
+        let minor_ok = !task.minorlong_host_list.is_empty() && self.is_minor_available(task);
+
         match task.channel_select {
             Task::CHANNEL_ALL => {
-                if longlink_ok {
+                if minor_ok {
+                    Task::CHANNEL_MINOR_LONG
+                } else if longlink_ok {
                     Task::CHANNEL_LONG
                 } else {
                     Task::CHANNEL_SHORT
                 }
             }
-            Task::CHANNEL_NORMAL => Task::CHANNEL_SHORT,
+            Task::CHANNEL_NORMAL => {
+                if minor_ok {
+                    Task::CHANNEL_MINOR_LONG
+                } else {
+                    Task::CHANNEL_SHORT
+                }
+            }
             Task::CHANNEL_BOTH => {
                 if longlink_ok {
                     Task::CHANNEL_LONG
@@ -1940,6 +2020,7 @@ mod tests {
     const NOW: u64 = 100 * 1000;
     const MAIN: &str = DEFAULT_LONGLINK_NAME;
     const SHORT_HOST: &str = "short.weixin.qq.com";
+    const MINOR: &str = "minor.weixin.qq.com";
 
     /// `(taskid, user_id, err_type, err_code, profile.ip)` — the user a task
     /// was started for goes out with the end, like the C++ hands
@@ -2001,6 +2082,33 @@ mod tests {
         fn pushed(&self) -> Pushed {
             drain(&self.pushed)
         }
+    }
+
+    /// [`wired`], with the app in front: what a task that may go out on a
+    /// minor link is up against, the C++'s `ActiveLogic::IsForeground()`.
+    fn wired_in_front() -> (NetCore, Rec) {
+        let (mut core, rec) = wired();
+        core.set_is_foreground(|| true);
+        core.set_last_foreground_change_time(|| NOW);
+        (core, rec)
+    }
+
+    /// A task that may go out on a minor link, with room for `max` of them.
+    fn minor_task(taskid: u32, max: i32) -> Task {
+        let mut task = task(taskid);
+        task.channel_select = Task::CHANNEL_ALL;
+        task.minorlong_host_list = vec![MINOR.to_string()];
+        task.max_minorlinks = max;
+        task
+    }
+
+    /// `LongLink::kConnected` on the minor link, which is what makes it one a
+    /// task may go out on.
+    fn minor_up(core: &NetCore) {
+        let link = Arc::clone(core.long_link(MINOR).expect("the minor link"));
+        link.lock()
+            .unwrap_or_else(poisoned)
+            .set_status(LongLinkStatus::Connected);
     }
 
     /// A core with the default long link, both queues wired to a recorder, and
@@ -2241,6 +2349,98 @@ mod tests {
         assert_eq!(
             rec.sent(),
             vec![(MAIN.to_string(), 7, "/cgi-bin/7".to_string())]
+        );
+    }
+
+    /// `AddMinorLink(task.minorlong_host_list)` of the C++'s `StartTask`
+    /// (`net_core.cc:471-482`): a task that may go out on a minor link has one
+    /// made out of the hosts it came with, and woken.
+    #[test]
+    fn a_task_that_may_go_out_on_a_minor_link_has_one_made() {
+        let (mut core, _rec) = wired_in_front();
+
+        assert!(core.start_task_at(NOW, minor_task(7, 1)));
+        assert!(
+            core.long_link(MINOR).is_some(),
+            "the link the task came with the hosts for"
+        );
+        let link = Arc::clone(core.long_link(MINOR).expect("the minor link"));
+        assert!(
+            link.lock().unwrap_or_else(poisoned).is_running(),
+            "the link was woken, as the C++ wakes it"
+        );
+
+        // ... and a task started in the background does not have one made:
+        // the C++ asks `ActiveLogic::Instance()->IsForeground()` of it first
+        let (mut core, _rec) = wired();
+        core.set_is_foreground(|| false);
+        assert!(core.start_task_at(NOW, minor_task(7, 1)));
+        assert!(
+            core.long_link(MINOR).is_none(),
+            "the app is in the background"
+        );
+    }
+
+    /// `IsMinorAvailable` (`longlink_task_manager.cc:1192`): a link of that
+    /// name that is up with nothing of its own out is what a task goes out
+    /// on — even while the main link is up too, which is what
+    /// `kChannelMinorLong` winning `kChannelAll` means (`net_core.cc:308`).
+    #[test]
+    fn an_up_minor_link_is_what_a_task_of_that_name_goes_out_on() {
+        let (mut core, rec) = wired_in_front();
+        up(&core, LongLinkStatus::Connected);
+
+        // the first task is what has the link made; room for two, so it is
+        // not the cap that answers for the second
+        assert!(core.start_task_at(NOW, minor_task(7, 2)));
+        minor_up(&core);
+        assert!(core.start_task_at(NOW, minor_task(8, 2)));
+
+        assert_eq!(
+            rec.sent(),
+            vec![
+                (MINOR.to_string(), 7, "/cgi-bin/7".to_string()),
+                (MINOR.to_string(), 8, "/cgi-bin/8".to_string()),
+            ]
+        );
+        assert_eq!(core.longlink().task_count(MAIN), 0);
+    }
+
+    /// ... and the two ways it is not: a link with a task of its own out on
+    /// it, and one that is not up yet — both of which the C++ answers by
+    /// going on to the next channel (`longlink_task_manager.cc:1199-1200`).
+    #[test]
+    fn a_minor_link_that_is_taken_or_down_is_not_one_a_task_goes_out_on() {
+        let (mut core, rec) = wired_in_front();
+        up(&core, LongLinkStatus::Connected);
+
+        assert!(core.start_task_at(NOW, minor_task(7, 2)));
+        minor_up(&core);
+        // a task of its own out on it that is not answered yet
+        assert!(core.start_task_at(NOW, minor_task(8, 1)));
+        assert_eq!(
+            rec.sent(),
+            vec![
+                (MINOR.to_string(), 7, "/cgi-bin/7".to_string()),
+                (MAIN.to_string(), 8, "/cgi-bin/8".to_string()),
+            ]
+        );
+
+        // and room for one and no more: the link the first task had made is
+        // not up yet, and the C++ counts it against the cap all the same
+        let (mut core, rec) = wired_in_front();
+        up(&core, LongLinkStatus::Connected);
+        assert!(core.start_task_at(NOW, minor_task(7, 1)));
+        assert!(core.long_link(MINOR).is_some(), "the link was made");
+        assert!(!core.is_long_link_connected(MINOR), "but it is not up yet");
+        minor_up(&core);
+        assert!(core.start_task_at(NOW, minor_task(8, 1)));
+        assert_eq!(
+            rec.sent(),
+            vec![
+                (MAIN.to_string(), 7, "/cgi-bin/7".to_string()),
+                (MINOR.to_string(), 8, "/cgi-bin/8".to_string()),
+            ]
         );
     }
 
