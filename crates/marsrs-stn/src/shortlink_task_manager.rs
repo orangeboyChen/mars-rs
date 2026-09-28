@@ -44,7 +44,7 @@ use crate::socket_pool::{CachedSocket, CloseSocket, SocketPool};
 use crate::task::Task;
 use crate::task_intercept::TaskIntercept;
 use crate::task_profile::{
-    compare_task, first_pkg_timeout, read_write_timeout, ConnectProfile, ErrCmdType,
+    compare_task, first_pkg_timeout, read_write_timeout, ConnectProfile, ErrCmdType, FirstAuthFlag,
     PrepareProfile, RunId, TaskFailHandleType, TaskProfile, HANDSHAKE_MISUNDERSTAND,
     HTTP_FIRST_PKG_TIMEOUT, HTTP_LONG_POLLING_TIMEOUT, HTTP_PKG_PKG_TIMEOUT,
     HTTP_READ_WRITE_TIMEOUT, LOCAL_ANTI_AVALANCHE, LOCAL_CANCEL, LOCAL_RESET, LOCAL_TASK_TIMEOUT,
@@ -1015,11 +1015,40 @@ impl ShortLinkTaskManager {
             }
             let host = hosts[0].clone();
 
+            // `shortlink_task_manager.cc:417-445` — the auth of a try is timed
+            // like the rest of it. The check spans every pass of the loop a
+            // task waits through, so the beginning is only written once: a
+            // task the app has not logged in for yet is one the report is
+            // told about once, and the reading that says how long it waited
+            // is the whole wait and not the last pass of it
             let mut task = self.tasks[i].task.clone();
-            if task.need_authed && !self.authed(&host, &task.user_id) {
-                i += 1;
-                continue;
+            if self.tasks[i].transfer_profile.begin_check_auth_time == 0 {
+                self.tasks[i].transfer_profile.begin_check_auth_time = now;
             }
+            if task.need_authed {
+                self.tasks[i].transfer_profile.begin_make_sure_auth_time = gettickcount();
+                let authed = self.authed(&host, &task.user_id);
+                self.tasks[i].transfer_profile.end_make_sure_auth_time = gettickcount();
+                if self.tasks[i].is_first_check_auth {
+                    self.tasks[i].first_auth_flag = if authed {
+                        FirstAuthFlag::AlreadyAuth
+                    } else {
+                        FirstAuthFlag::WaitAuth
+                    };
+                    self.tasks[i].is_first_check_auth = false;
+                }
+                // an app that is not authed is one the task waits for: the
+                // C++ leaves it in the queue and goes to the next one, and
+                // `end_check_auth_time` is not written
+                if !authed {
+                    i += 1;
+                    continue;
+                }
+            } else {
+                self.tasks[i].first_auth_flag = FirstAuthFlag::NoNeedAuth;
+                self.tasks[i].is_first_check_auth = false;
+            }
+            self.tasks[i].transfer_profile.end_check_auth_time = gettickcount();
 
             // `first->task.client_sequence_id = …GenSequenceId()` — one per
             // try, and before `Req2Buf`, which is what the app is handed the
@@ -2736,6 +2765,86 @@ mod tests {
             ended.lock().unwrap().clone(),
             vec![(7, ErrCmdType::Ok, 0, 1)],
             "a task that ended well is asked about as well"
+        );
+    }
+
+    /// `shortlink_task_manager.cc:417-445` — an app that is not authed is one
+    /// the task waits for: the queue leaves it in the list and goes on, the
+    /// check is not over, and the beginning of it is the first pass and not
+    /// the last.
+    #[test]
+    fn a_task_waiting_for_auth_is_flagged_and_keeps_the_first_reading() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        manager.set_make_sure_authed(|_host, _user_id| false);
+        let mut needs_auth = task(7);
+        needs_auth.need_authed = true;
+        manager.start_task_at(100_000, needs_auth, prepare());
+
+        assert_eq!(
+            manager.tasks()[0].first_auth_flag,
+            FirstAuthFlag::WaitAuth,
+            "the app said it was not authed"
+        );
+        assert_eq!(
+            manager.tasks()[0].transfer_profile.begin_check_auth_time,
+            100_000
+        );
+        assert_eq!(
+            manager.tasks()[0].transfer_profile.end_check_auth_time,
+            0,
+            "a pass that went no further is not the end of the check"
+        );
+        assert_eq!(manager.len(), 1, "the task is still in the queue");
+
+        // the next pass asks again, and the wait is still the whole of it
+        manager.run_loop_at(100_100);
+        assert_eq!(
+            manager.tasks()[0].transfer_profile.begin_check_auth_time,
+            100_000
+        );
+        assert_eq!(manager.tasks()[0].first_auth_flag, FirstAuthFlag::WaitAuth);
+        assert_eq!(manager.len(), 1);
+    }
+
+    /// `shortlink_task_manager.cc:417-445` — the same for the two ways the
+    /// check is over: an app that said it was authed, and a task that needed
+    /// no auth at all.
+    #[test]
+    fn a_task_whose_auth_is_checked_is_timed_and_flagged_once() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        let mut needs_auth = task(7);
+        needs_auth.need_authed = true;
+        manager.start_task_at(100_000, needs_auth, prepare());
+
+        let profile = &manager.tasks()[0].transfer_profile;
+        assert_eq!(profile.begin_check_auth_time, 100_000);
+        assert!(
+            0 < profile.begin_make_sure_auth_time,
+            "the app was asked, and the asking timed"
+        );
+        assert!(profile.begin_make_sure_auth_time <= profile.end_make_sure_auth_time);
+        assert!(0 < profile.end_check_auth_time, "the check is over");
+        assert_eq!(
+            manager.tasks()[0].first_auth_flag,
+            FirstAuthFlag::AlreadyAuth
+        );
+        assert!(!manager.tasks()[0].is_first_check_auth);
+
+        // a task that needs no auth is flagged and not asked
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        manager.start_task_at(100_000, task(8), prepare());
+        let profile = &manager.tasks()[0].transfer_profile;
+        assert_eq!(
+            profile.begin_make_sure_auth_time, 0,
+            "a task that needs no auth is not timed"
+        );
+        assert!(0 < profile.end_check_auth_time);
+        assert_eq!(
+            manager.tasks()[0].first_auth_flag,
+            FirstAuthFlag::NoNeedAuth
         );
     }
 
