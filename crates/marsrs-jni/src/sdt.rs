@@ -17,6 +17,15 @@
 //! tests; everything up to it — the JSON, and the record of what was handed
 //! over — is here and is covered by `cargo test`.
 //!
+//! The two the C++'s Java declares are two because the C++ needs no more: a
+//! diagnosis there is started from inside the C++, by threads that are its own
+//! and sockets that are its own. The port has neither, so Java starts the
+//! diagnosis ([`sdt::start_active_check_impl`]) and answers the four probes of
+//! it ([`sdt::run_checks_java_impl`]) — and asks the two questions that go with
+//! running one by hand: whether a check is in flight, and what it is going to
+//! do. Those are the `external`s the port's `SdtLogic` declares beside the
+//! C++'s two.
+//!
 //! Everything else the JVM touches lives in [`crate::jni_bridge`]; what is here
 //! is plain Rust and is covered by `cargo test`.
 //!
@@ -30,6 +39,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use marsrs_sdt::checkimpl::Ask;
 use marsrs_sdt::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
+use marsrs_sdt::sdt_core::CancelHandle;
 use marsrs_sdt::{Callback, CheckIPPorts, NetCheckType, SdtLogic};
 
 /// What `getLoadLibraries` reports: the C++ lists the modules the process
@@ -64,14 +74,41 @@ struct SdtState {
     reported: Arc<Mutex<Vec<CheckResultProfile>>>,
 }
 
+/// A diagnosis nobody has touched yet, with the callback that records what it
+/// finds already installed.
+fn new_state() -> SdtState {
+    let reported = Arc::new(Mutex::new(Vec::new()));
+    let mut logic = SdtLogic::new();
+    logic.set_callback(Sink(Arc::clone(&reported)));
+    // A new diagnosis is a new core, and a new cancellation flag with it: this
+    // is the one [`cancel_active_check_impl`] sets, and it has to be the one
+    // the logic the state holds answers to.
+    *cancel()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = logic.cancel_handle();
+    SdtState { logic, reported }
+}
+
+/// The cancellation flag of the request in flight, kept *outside* [`state()`].
+///
+/// That is the whole point: [`run_active_check_impl`] holds the process-wide
+/// diagnosis for as long as the checks take — which is exactly when a caller
+/// wants to cancel — so a flag that had to be reached through that lock could
+/// only ever be set before a run started or after it had already finished and
+/// reset itself. [`marsrs_sdt::CancelHandle`] is shared for the same reason
+/// inside the diagnosis, and this is the copy the boundary keeps of it.
+fn cancel() -> &'static Mutex<CancelHandle> {
+    static CANCEL: OnceLock<Mutex<CancelHandle>> = OnceLock::new();
+    // A flag of its own, and not [`new_state`]'s: that one reaches for this,
+    // so asking it here would be asking the question the answer is made of.
+    // Every state that follows overwrites it with the handle of the core it
+    // holds, which is the one a run of that core reads.
+    CANCEL.get_or_init(|| Mutex::new(CancelHandle::new()))
+}
+
 fn state() -> &'static Mutex<SdtState> {
     static STATE: OnceLock<Mutex<SdtState>> = OnceLock::new();
-    STATE.get_or_init(|| {
-        let reported = Arc::new(Mutex::new(Vec::new()));
-        let mut logic = SdtLogic::new();
-        logic.set_callback(Sink(Arc::clone(&reported)));
-        Mutex::new(SdtState { logic, reported })
-    })
+    STATE.get_or_init(|| Mutex::new(new_state()))
 }
 
 fn with_state<R>(f: impl FnOnce(&mut SdtState) -> R) -> R {
@@ -84,12 +121,12 @@ fn with_state<R>(f: impl FnOnce(&mut SdtState) -> R) -> R {
 /// Drops the diagnosis state and starts over: the waiting checks, the
 /// callback and everything that was reported go away together.
 pub fn reset_impl() {
-    let reported = Arc::new(Mutex::new(Vec::new()));
-    let mut logic = SdtLogic::new();
-    logic.set_callback(Sink(Arc::clone(&reported)));
-    *state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = SdtState { logic, reported };
+    // The lock comes first: `new_state` reaches for [`cancel`], so building
+    // the new state on the right of an assignment that has not locked yet
+    // — the operands are evaluated right to left — would let the state's
+    // own first build overwrite the handle the new one had just stored, and
+    // a cancel would then set a flag no run reads.
+    with_state(|state| *state = new_state());
     if let Ok(mut delivered) = delivered().lock() {
         delivered.clear();
     }
@@ -107,8 +144,9 @@ pub fn http_netcheck_cgi_impl() -> String {
 
 /// `StartActiveCheck` — `false` when a check is already in flight.
 ///
-/// Java does not declare this one; it is the Rust side of the same state, and
-/// the reason [`set_http_netcheck_cgi_impl`] exists.
+/// The C++'s Java declares no such call: there the diagnosis is started from
+/// inside the C++, which has the sockets and the threads a run needs. The port
+/// has neither, so starting one is the app's call and not the port's.
 pub fn start_active_check_impl(
     longlink_items: &CheckIPPorts,
     shortlink_items: &CheckIPPorts,
@@ -123,8 +161,16 @@ pub fn start_active_check_impl(
 }
 
 /// `CancelActiveCheck`.
+///
+/// It stops a run that is *in* flight, not one that has not started: the flag
+/// this sets is the one the run's own read, and it is reached without the lock
+/// that run holds, so a caller may cancel from another thread while the probes
+/// are still being asked — which is the only moment cancelling means anything.
 pub fn cancel_active_check_impl() {
-    with_state(|state| state.logic.cancel_active_check())
+    cancel()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .cancel();
 }
 
 /// Whether a check is in flight.
@@ -164,6 +210,25 @@ pub fn run_active_check_impl(ask: &mut Ask, network_type: i32) -> Vec<CheckResul
 /// (`PlatformComm.getNetInfo`) when nobody has set one.
 pub fn run_active_check_with_net_info_impl(ask: &mut Ask) -> Vec<CheckResultProfile> {
     run_active_check_impl(ask, crate::platform_comm::net_info_impl().as_i32())
+}
+
+/// [`run_active_check_impl`] with the probes asked of Java: the four checks
+/// want a socket, and the port opens none, so the app's `SdtLogic.IProbe` is
+/// what they reach — [`crate::jni_bridge`] carries a query of the check to
+/// Java and comes back with what that probe made of it, through the [`Ask`]
+/// this call builds over it.
+///
+/// This is the `__RunOn` thread of the C++, run on the thread that called it:
+/// it holds the process-wide diagnosis until every probe has answered, so a
+/// run is one at a time and it does not come back until it is over.
+///
+/// `false` when nothing was in flight, and when the one that was got cancelled
+/// before its first check: a run that answered nothing is a run that reported
+/// nothing, which is what `MARS_SDT_ERR_NO_CHECK` is in the C ABI.
+pub fn run_checks_java_impl(network_type: i32) -> bool {
+    let mut ask = Ask::new(crate::jni_bridge::ask_probe);
+    let results = run_active_check_impl(&mut ask, network_type);
+    !results.is_empty()
 }
 
 /// Takes everything the checks have reported since the last call.
@@ -338,6 +403,62 @@ mod tests {
         })
     }
 
+    /// A cancel that has to wait for the run it means to stop is no cancel at
+    /// all — and the run holds the diagnosis for as long as its probes take,
+    /// which is exactly when the app's UI thread presses "stop". So the flag is
+    /// reached without that lock: the cancel below lands on another thread
+    /// while the first check is still being made, and the run stops at the
+    /// second. (Were it reached through the state lock, `join` would never
+    /// return.)
+    #[test]
+    fn a_cancel_from_another_thread_stops_the_run_that_is_in_flight() {
+        isolated(|| {
+            assert!(start_active_check_impl(
+                &hosts("long"),
+                &hosts("short"),
+                NET_CHECK_BASIC,
+                UNUSE_TIMEOUT
+            ));
+            assert_eq!(plan_impl().len(), 2);
+
+            let mut first = true;
+            let results = run_checks_impl(|kind, request| {
+                record(kind, request);
+                if std::mem::take(&mut first) {
+                    // The thread stands in for the app's: it takes no part of
+                    // the run with it, which is the point.
+                    std::thread::spawn(cancel_active_check_impl).join().unwrap();
+                }
+            });
+            assert_eq!(results.len(), 1, "the second check never ran");
+            assert_eq!(results[0].kind(), Some(Kind::PingCheck));
+        })
+    }
+
+    /// A reset throws the cancellation away with the request it cancelled: the
+    /// flag a caller sets afterwards belongs to the core the next run reads,
+    /// not to the one that is gone.
+    #[test]
+    fn a_reset_takes_the_cancellation_with_it() {
+        isolated(|| {
+            assert!(start_active_check_impl(
+                &hosts("long"),
+                &hosts("short"),
+                NET_CHECK_BASIC,
+                UNUSE_TIMEOUT
+            ));
+            cancel_active_check_impl();
+            reset_impl();
+            assert!(start_active_check_impl(
+                &hosts("long"),
+                &hosts("short"),
+                NET_CHECK_BASIC,
+                UNUSE_TIMEOUT
+            ));
+            assert_eq!(run_checks_impl(record).len(), 2, "the new request ran");
+        })
+    }
+
     #[test]
     fn a_diagnosis_runs_with_the_checkers_of_the_port() {
         isolated(|| {
@@ -429,6 +550,36 @@ mod tests {
             assert_eq!(results[0].network_type, NetInfo::NoNet.as_i32());
 
             // the platform's own tests reset what was set here
+        })
+    }
+
+    /// Java is asked once per check when a run is driven from Java, and there
+    /// is no JVM to ask in a unit test — so [`run_checks_java_impl`] is the run
+    /// a host with no network at all would make.
+    #[test]
+    fn a_run_that_asks_java_with_no_jvm_to_ask_reports_one_failed_check() {
+        isolated(|| {
+            assert!(start_active_check_impl(
+                &hosts("long.weixin.qq.com"),
+                &hosts("short.weixin.qq.com"),
+                NET_CHECK_BASIC,
+                UNUSE_TIMEOUT
+            ));
+
+            assert!(
+                run_checks_java_impl(NetInfo::Wifi.as_i32()),
+                "the check ran, which is all a run reports"
+            );
+            let results = take_reported_impl();
+            // One, and not the two of the plan: the ping is first, and a ping
+            // that answered nothing ends the run — the C++'s `kCheckFinish`,
+            // which is what a host with no network gets.
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].kind(), Some(Kind::PingCheck));
+            assert_ne!(
+                results[0].error_code, 0,
+                "a probe nobody answered is one that failed"
+            );
         })
     }
 
