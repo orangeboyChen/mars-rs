@@ -172,6 +172,13 @@ pub type ResetChannel = dyn FnMut(&str) + Send;
 /// now that the network is another one.
 pub type NetworkChange = dyn FnMut(&str) -> bool + Send;
 
+/// `ReportTaskProfile` (`mars/stn/src/longlink_task_manager.cc:760`) — the
+/// finished task, handed out once it is over: the app's own report is made of
+/// it, and the queue is the only thing that has the whole of it — the history
+/// of the tries, the transfer readings, and how the task ended. Unset, and a
+/// task that is over is reported nowhere.
+pub type ReportProfile = dyn FnMut(&TaskProfile) + Send;
+
 /// `LongLinkTaskManager` — the queue of tasks that go out on a long link, and
 /// the channels they go out on.
 pub struct LongLinkTaskManager {
@@ -220,6 +227,8 @@ pub struct LongLinkTaskManager {
     disconnect: Option<Box<DisconnectChannel>>,
     reset_channel: Option<Box<ResetChannel>>,
     network_change: Option<Box<NetworkChange>>,
+    /// `ReportTaskProfile` — where the finished task is handed out.
+    report_profile: Option<Box<ReportProfile>>,
 }
 
 impl LongLinkTaskManager {
@@ -256,6 +265,7 @@ impl LongLinkTaskManager {
             disconnect: None,
             reset_channel: None,
             network_change: None,
+            report_profile: None,
         }
     }
 
@@ -1048,6 +1058,13 @@ impl LongLinkTaskManager {
         self.network_change = Some(Box::new(network_change));
     }
 
+    /// `ReportTaskProfile` — where the finished task is handed out once it is
+    /// over: the whole [`TaskProfile`], which no other hook of this queue
+    /// gives. Unset, and a task that is over is reported nowhere.
+    pub fn set_report_profile(&mut self, report: impl FnMut(&TaskProfile) + Send + 'static) {
+        self.report_profile = Some(Box::new(report));
+    }
+
     /// `__RunOnTimeout` — the tasks that answered nothing.
     ///
     /// A task that is out is waiting on three timeouts at once and the C++
@@ -1403,6 +1420,16 @@ impl LongLinkTaskManager {
                 profile.transfer_profile.error_type = err_type;
                 profile.transfer_profile.error_code = err_code;
                 profile.push_history();
+            }
+            // `longlink_task_manager.cc:760` — the task is only whole now: the
+            // error it ended on and the history of its tries are both in it,
+            // and this is the last moment the queue has it
+            // `longlink_task_manager.cc:760` — the task is only whole now: the
+            // error it ended on and the history of its tries are both in it,
+            // and this is the last moment the queue has it
+            let finished = self.tasks[at].clone();
+            if let Some(report) = self.report_profile.as_mut() {
+                report(&finished);
             }
             self.tasks.remove(at);
             return true;

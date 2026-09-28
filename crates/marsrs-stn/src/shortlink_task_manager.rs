@@ -244,6 +244,12 @@ pub type GenSequenceId = dyn FnMut() -> u16 + Send;
 /// and a host that wants to write does it behind its own lock.
 pub type RunProfile = dyn Fn(RunId) -> ConnectProfile + Send;
 
+/// `ReportTaskProfile` (`mars/stn/src/shortlink_task_manager.cc:1206`) — the
+/// finished task, handed out once it is over: the app's own report is made of
+/// it, and the queue is the only thing that has the whole of it — the history
+/// of the tries, the transfer readings, and how the task ended. Unset, and a
+/// task that is over is reported nowhere.
+pub type ReportProfile = dyn FnMut(&TaskProfile) + Send;
 /// `ShortLinkTaskManager`.
 pub struct ShortLinkTaskManager {
     /// `lst_cmd_`, sorted by [`crate::task_profile::compare_task`].
@@ -281,6 +287,8 @@ pub struct ShortLinkTaskManager {
     /// `((ShortLinkInterface*)_running_id)->Profile()` — how the queue is told
     /// what pair a run of its own is on.
     run_profile: Option<Box<RunProfile>>,
+    /// `ReportTaskProfile` — where the finished task is handed out.
+    report_profile: Option<Box<ReportProfile>>,
     /// `closefunc` — what the C++ closes a socket with, which the queue needs
     /// for one a run answered badly on. The pool's own is
     /// [`SocketPool::set_close`].
@@ -314,6 +322,7 @@ impl ShortLinkTaskManager {
             net_info: None,
             gen_sequence_id: None,
             run_profile: None,
+            report_profile: None,
             close: None,
         }
     }
@@ -874,6 +883,13 @@ impl ShortLinkTaskManager {
         }
     }
 
+    /// `ReportTaskProfile` — where the finished task is handed out once it is
+    /// over: the whole [`TaskProfile`], which no other hook of this queue
+    /// gives. Unset, and a task that is over is reported nowhere.
+    pub fn set_report_profile(&mut self, report: impl FnMut(&TaskProfile) + Send + 'static) {
+        self.report_profile = Some(Box::new(report));
+    }
+
     /// `closefunc` — what a socket the queue is done with is closed with.
     pub fn set_close_socket(&mut self, close: impl FnMut(SocketFd) + Send + 'static) {
         self.close = Some(Box::new(close));
@@ -1158,6 +1174,13 @@ impl ShortLinkTaskManager {
                 profile.transfer_profile.error_type = err_type;
                 profile.transfer_profile.error_code = err_code;
                 profile.push_history();
+            }
+            // `shortlink_task_manager.cc:1206` — the task is only whole now:
+            // the error it ended on and the history of its tries are both in
+            // it, and this is the last moment the queue has it
+            let finished = self.tasks[at].clone();
+            if let Some(report) = self.report_profile.as_mut() {
+                report(&finished);
             }
             self.stop_run_at(at);
             self.tasks.remove(at);
@@ -1564,6 +1587,9 @@ mod tests {
     /// What the app was told about a task that is over, and the pair it was
     /// reported on.
     type PairEnded = Arc<Mutex<Vec<(ErrCmdType, i32, String, u16)>>>;
+    /// What the app's own report was given for a task that is over: the task,
+    /// how it ended, and how many tries it took.
+    type Reported = Arc<Mutex<Vec<(u32, ErrCmdType, i32, usize)>>>;
 
     /// A run of every task, named after the task, and a note of what it was
     /// asked for.
@@ -2538,6 +2564,52 @@ mod tests {
         assert_eq!(profile.port, 0);
     }
 
+    /// `shortlink_task_manager.cc:1206` — the report is of the task that is
+    /// over, and not of the tries that came before it: a task with two tries in
+    /// it is reported once, with both of them in its history.
+    #[test]
+    fn a_task_that_is_over_is_the_one_the_report_gets() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        let reported: Reported = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&reported);
+        manager.set_report_profile(move |profile| {
+            recorder.lock().unwrap().push((
+                profile.task.taskid,
+                profile.err_type,
+                profile.err_code,
+                profile.history.len(),
+            ));
+        });
+
+        manager.start_task_at(100_000, task(7), prepare());
+        assert!(manager.on_send_at(100_000, RunId(7)));
+        // the first try failed, and the task has another one coming
+        assert_eq!(
+            manager.on_response_at(
+                100_500,
+                RunId(7),
+                failed(ErrCmdType::Socket, ECT_SOCKET_SHUTDOWN)
+            ),
+            Some(RespHandle::Retried)
+        );
+        assert!(
+            reported.lock().unwrap().is_empty(),
+            "a task that is not over is not reported"
+        );
+
+        manager.run_loop_at(102_000);
+        assert!(manager.on_send_at(102_000, RunId(7)));
+        assert_eq!(
+            manager.on_response_at(102_500, RunId(7), failed(ErrCmdType::Socket, -1)),
+            Some(RespHandle::Ended)
+        );
+        assert_eq!(
+            reported.lock().unwrap().clone(),
+            vec![(7, ErrCmdType::Socket, -1, 2)],
+            "the task that is over, with the try that failed in its history"
+        );
+    }
     #[test]
     fn the_debug_of_a_queue_is_what_the_host_would_want_to_see() {
         let mut manager = ShortLinkTaskManager::new();
