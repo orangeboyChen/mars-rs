@@ -132,8 +132,9 @@
 
 # HarmonyOS: the module an app installs — the ArkTS, the NAPI seam under it and
 # the three `libmarsrs_xlog.so` it is packed with — the scripts that build and
-# pack it, and the two that check it, which are the only things in this
-# repository that read the ArkTS. `scripts/build_harmony.sh` is the other
+# pack it, the one that fetches the DevEco Command Line Tools they need, and the
+# two that check it, which are the only things in this repository that read the
+# ArkTS. `scripts/build_harmony.sh` is the other
 # HarmonyOS asset, the three `libmars_ffi.so` with no package around them, and
 # it is labelled with these because it is the same platform: an app takes one or
 # the other, and the difference is whether it writes NAPI of its own.
@@ -143,6 +144,8 @@
     - platforms/harmonyos/**
     - scripts/build_harmony.sh
     - scripts/build_harmony_napi.sh
+    - scripts/assemble_harmony_har.sh
+    - scripts/fetch_deveco_cli.sh
     - scripts/package_harmony.sh
     - scripts/check_harmony.sh
     - scripts/check_harmony_arkts.sh

@@ -13,6 +13,11 @@ platforms/android/*/build/
 platforms/android/local.properties
 /dist
 
+# platforms/harmonyos: where scripts/fetch_deveco_cli.sh unpacks the DevEco
+# Command Line Tools — a cache of someone else's archive, and not a source of
+# this repository
+/.deveco-cli
+
 # platforms/kmp: the native libraries the release unpacks into it
 # (platforms/kmp/native/<kotlin-target>/libmars_ffi.a,
 # platforms/kmp/native/android/<abi>/) and what Gradle writes

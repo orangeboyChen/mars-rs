@@ -10,9 +10,8 @@ name: Lint (Harmony)
 #
 # What runs is one build and two reads, and the two reads are there because the
 # build is expensive: HarmonyOS's own ArkTS compiler arrives inside the DevEco
-# Command Line Tools, which is a 2.1 GB archive cached once per runner image
-# generation and a `hvigor assembleHar` that wants a DevEco *project* around
-# this module. So:
+# Command Line Tools, which is a 2.1 GB archive on a mirror that is slow, and a
+# `hvigor assembleHar` that wants a DevEco *project* around this module. So:
 #
 #   assemble  scripts/assemble_harmony_har.sh   DevEco's own `hvigorw` over the
 #                                               module — the only ArkTS
@@ -85,7 +84,7 @@ jobs:
           .github/scripts/changed_paths.sh \
             'platforms/harmonyos/**' \
             'scripts/check_harmony.sh' 'scripts/check_harmony_arkts.sh' \
-            'scripts/assemble_harmony_har.sh' \
+            'scripts/assemble_harmony_har.sh' 'scripts/fetch_deveco_cli.sh' \
             'scripts/package_harmony.sh' '.github/scripts/**' \
             '.github/workflows/lint-harmony.yml'
 
@@ -132,26 +131,27 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
-      # 2.1 GB, downloaded and not cached: the extracted tree is several GB,
-      # and one cache entry of that size is most of the repository's whole
-      # cache budget — which the Rust and OHOS SDK caches are drawing on. A
-      # minute of download on the runs that touch this module is the cheaper
-      # half of that trade, and a run that does not touch it pays nothing.
-      - name: Download the DevEco Command Line Tools ${{ env.DEVECO_CLI_VERSION }}
-        run: |
-          set -euo pipefail
-          curl -sSfL -o "$RUNNER_TEMP/deveco.zip" "$DEVECO_CLI_URL"
-          # Pinned twice: the version is in the URL and the archive is checked
-          # against the .sha256 that sits beside it on the mirror, so a
-          # re-upload under the same name is a failed run and not a silent
-          # change of toolchain.
-          echo "$DEVECO_CLI_SHA256  $RUNNER_TEMP/deveco.zip" | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/deveco"
-          unzip -q "$RUNNER_TEMP/deveco.zip" -d "$RUNNER_TEMP/deveco"
-          rm "$RUNNER_TEMP/deveco.zip"
+      # The DevEco Command Line Tools, and the reason this job is not the one
+      # that takes ten minutes: the archive is 2.1 GB on a mirror whose fast day
+      # and slow day are a minute and ten apart, so it is downloaded once and
+      # then cached — the way rust.yml caches the OHOS SDK — under a key of the
+      # version alone, which is what makes a cache written by a run on main one
+      # a pull request can restore. What goes into the cache is a third of a
+      # gigabyte and not 2.1: scripts/fetch_deveco_cli.sh unpacks the archive
+      # without the two SDK components this build never runs.
+      - name: Cache the DevEco Command Line Tools ${{ env.DEVECO_CLI_VERSION }}
+        uses: actions/cache@v6
+        with:
+          path: .deveco-cli
+          key: deveco-cli-${{ env.DEVECO_CLI_VERSION }}
+      - name: Fetch the DevEco Command Line Tools ${{ env.DEVECO_CLI_VERSION }}
+        run: scripts/fetch_deveco_cli.sh .deveco-cli
       # The real thing: DevEco's own ArkTS compiler over this module, and the
       # HAR that comes out of it — the one with `compatibleSdkVersion`,
       # `compatibleSdkType`, `obfuscated` and `nativeComponents` in it, which
       # is what `ohpm publish` looks for and what
       # scripts/package_harmony.sh assembles by hand without.
-      - run: DEVECO_HOME="$RUNNER_TEMP/deveco/command-line-tools" scripts/assemble_harmony_har.sh dist
+      - name: Assemble the HAR
+        env:
+          DEVECO_HOME: ${{ github.workspace }}/.deveco-cli/command-line-tools
+        run: scripts/assemble_harmony_har.sh dist
