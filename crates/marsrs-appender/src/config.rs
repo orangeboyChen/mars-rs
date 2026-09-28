@@ -142,6 +142,11 @@ pub struct XLoggerInfo<'a> {
     pub maintid: i64,
     /// `timeval` as `(tv_sec, tv_usec)`.
     pub timeval: (i64, i64),
+    /// `traceLog` — `XLogger::ForwardToSysTrace` is what sets it, and a
+    /// record that carries it is echoed to the console with console logging
+    /// switched off. Only Android does that: `XloggerAppender::Write` reads
+    /// the field under `#ifdef ANDROID`.
+    pub trace_log: i32,
 }
 
 impl Default for XLoggerInfo<'_> {
@@ -157,6 +162,7 @@ impl Default for XLoggerInfo<'_> {
             tid: 0,
             maintid: 0,
             timeval: (0, 0),
+            trace_log: 0,
         }
     }
 }

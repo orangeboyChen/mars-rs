@@ -169,6 +169,7 @@ pub(crate) fn write_impl(instance: u64, level: LogLevel, tag: Cow<'_, str>, log:
         tid: -1,
         maintid: -1,
         timeval: now_timeval(),
+        trace_log: 0,
     };
     xlogger_write(instance, Some(&info), Some(log))
 }
@@ -388,6 +389,7 @@ mod tests {
             tid: -1,
             maintid: -1,
             timeval: now_timeval(),
+            trace_log: 0,
         };
         assert!(log_write_impl(Some(info), "with info"));
         assert!(write_impl(
