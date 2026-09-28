@@ -6,11 +6,19 @@
 // Kotlin of the port publish — `mars_xlog_new_instance` and friends over the C
 // ABI on iOS, `Xlog(XlogConfig(...))` over the AAR on Android.
 //
-// Every call crosses the channel, so every one of them is a `Future`: the write
-// is an `await` and not a call the caller can let go. That is the one thing this
-// surface cannot have in common with the Swift and the Kotlin — there, a record
-// costs a call and nothing else — and it is why the settings below are
-// `setLevel` and not `level`.
+// A call that answers nothing waits for nothing: a write and a setting hand the
+// call to the platform side and return, `xlog.i('net', '…')` the way it does in
+// Kotlin and in Swift, and the channel keeps the order the calls were handed
+// over in. Four of them answer a `Future`, because four of them have something
+// an app can act on: the appender [Xlog.open] opens, the drain [Xlog.flush] and
+// [Xlog.close] wait for, and the answer [Xlog.isLoggable] gives.
+//
+// The five settings are properties and not a `setLevel` / `getLevel` pair, which
+// is the spelling the Kotlin, the Swift and the TypeScript of the port give
+// them. What one of them answers is what this side last wrote, and not what the
+// appender holds: a getter answers in the call it is read in, and what the
+// platform side holds is a channel call away. [Xlog.isLoggable] asks the
+// appender itself, which is why it is the one of the six an app awaits.
 
 import 'package:flutter/services.dart';
 
@@ -114,7 +122,7 @@ class XlogConfig {
 
 /// One appender: opened by [Xlog.open] and closed by [Xlog.close].
 class Xlog {
-  Xlog._(this.namePrefix);
+  Xlog._(this.namePrefix, this._level, this._mode);
 
   static const MethodChannel _channel = MethodChannel('marsrs_xlog');
 
@@ -122,6 +130,16 @@ class Xlog {
   final String namePrefix;
 
   var _closed = false;
+
+  LogLevel _level;
+
+  AppenderMode _mode;
+
+  var _consoleLogEnabled = false;
+
+  var _maxFileSizeBytes = 0;
+
+  var _maxAliveTimeSeconds = 0;
 
   /// Whether this appender is still open: `false` after [close].
   bool get isOpen => !_closed;
@@ -133,7 +151,136 @@ class Xlog {
   /// `logDir is empty` when [XlogConfig.logDir] is.
   static Future<Xlog> open(XlogConfig config) async {
     await _channel.invokeMethod<void>('open', config.toMap());
-    return Xlog._(config.namePrefix);
+    return Xlog._(config.namePrefix, config.level, config.mode);
+  }
+
+  /// The level a record has to reach: what this was last set to, and what the
+  /// configuration gave before that.
+  ///
+  /// The level the appender itself is at is what [isLoggable] reads, and it is
+  /// the one an app that did not set it asks for: a getter answers in the call
+  /// it is read in, and a level the platform side holds is a channel call away.
+  LogLevel get level => _level;
+
+  set level(LogLevel level) {
+    if (_closed) {
+      return;
+    }
+    _level = level;
+    _send('setLevel', <String, Object?>{'level': level.value});
+  }
+
+  /// Whether a write waits for the file: what the configuration gave, and what
+  /// this was last set to after that.
+  ///
+  /// The C ABI is asked for a mode and never answers one, so a mode is a mirror
+  /// on every platform of the port and not only here.
+  AppenderMode get mode => _mode;
+
+  set mode(AppenderMode mode) {
+    if (_closed) {
+      return;
+    }
+    _mode = mode;
+    _send('setMode', <String, Object?>{'mode': mode.value});
+  }
+
+  /// Whether the console prints the record too: what this was last set to, and
+  /// `false` when it never was.
+  bool get consoleLogEnabled => _consoleLogEnabled;
+
+  set consoleLogEnabled(bool enabled) {
+    if (_closed) {
+      return;
+    }
+    _consoleLogEnabled = enabled;
+    _send('setConsoleLogEnabled', <String, Object?>{'enabled': enabled});
+  }
+
+  /// How many bytes a log file may reach before it is closed and a new one
+  /// opened; `0` never splits.
+  int get maxFileSizeBytes => _maxFileSizeBytes;
+
+  set maxFileSizeBytes(int bytes) {
+    if (_closed) {
+      return;
+    }
+    _maxFileSizeBytes = bytes;
+    _send('setMaxFileSize', <String, Object?>{'bytes': bytes});
+  }
+
+  /// How many seconds a log file is kept; `0` is the C++'s own ten days.
+  int get maxAliveTimeSeconds => _maxAliveTimeSeconds;
+
+  set maxAliveTimeSeconds(int seconds) {
+    if (_closed) {
+      return;
+    }
+    _maxAliveTimeSeconds = seconds;
+    _send('setMaxAliveTime', <String, Object?>{'seconds': seconds});
+  }
+
+  /// Whether a record of [level] would be written: what an app asks before it
+  /// builds a message that is expensive to build.
+  ///
+  /// The appender's own answer, and not the one [level] mirrors — and `false`
+  /// once [close] ran, which is the honest answer of an appender that writes
+  /// nothing.
+  Future<bool> isLoggable(LogLevel level) async {
+    if (_closed) {
+      return false;
+    }
+    return await _invoke<bool>('isLoggable', <String, Object?>{'level': level.value}) ?? false;
+  }
+
+  /// Writes one record of [level], tagged [tag].
+  ///
+  /// The file, the function and the line of the record are the C++'s own
+  /// defaults on the platform side — Dart has no caller frame to name.
+  void log(LogLevel level, String tag, String message) {
+    if (_closed) {
+      return;
+    }
+    _send('log', <String, Object?>{'level': level.value, 'tag': tag, 'message': message});
+  }
+
+  /// [LogLevel.verbose].
+  void v(String tag, String message) => log(LogLevel.verbose, tag, message);
+
+  /// [LogLevel.debug].
+  void d(String tag, String message) => log(LogLevel.debug, tag, message);
+
+  /// [LogLevel.info].
+  void i(String tag, String message) => log(LogLevel.info, tag, message);
+
+  /// [LogLevel.warning].
+  void w(String tag, String message) => log(LogLevel.warning, tag, message);
+
+  /// [LogLevel.error].
+  void e(String tag, String message) => log(LogLevel.error, tag, message);
+
+  /// [LogLevel.fatal].
+  void f(String tag, String message) => log(LogLevel.fatal, tag, message);
+
+  /// Takes what is in the cache to the log file; [sync] waits for the write.
+  ///
+  /// Waiting is the platform side's: what this answers is that the drain has
+  /// happened, which is what an app wants before it reads or uploads the files.
+  Future<void> flush({bool sync = false}) async {
+    if (_closed) {
+      return;
+    }
+    await _invoke<void>('flush', <String, Object?>{'sync': sync});
+  }
+
+  /// Drains what is left and closes this appender. Writing through it afterwards
+  /// writes nothing, and calling it twice closes nothing twice.
+  Future<void> close() async {
+    if (_closed) {
+      return;
+    }
+    _closed = true;
+    await _invoke<void>('close');
   }
 
   /// Every call carries the name the appender was opened with, because the
@@ -144,80 +291,16 @@ class Xlog {
     return _channel.invokeMethod<T>(method, <String, Object?>{'namePrefix': namePrefix, ...args});
   }
 
-  /// Writes one record of [level], tagged [tag].
+  /// Hands `method` to the platform side and does not wait for it: a write and
+  /// a setting have nothing to answer, and the channel keeps the order the
+  /// calls were made in, so a record handed over is a record written after the
+  /// one handed over before it.
   ///
-  /// The file, the function and the line of the record are the C++'s own
-  /// defaults on the platform side — Dart has no caller frame to name.
-  Future<void> log(LogLevel level, String tag, String message) {
-    return _invoke<void>('log', <String, Object?>{'level': level.value, 'tag': tag, 'message': message});
-  }
-
-  /// [LogLevel.verbose].
-  Future<void> v(String tag, String message) => log(LogLevel.verbose, tag, message);
-
-  /// [LogLevel.debug].
-  Future<void> d(String tag, String message) => log(LogLevel.debug, tag, message);
-
-  /// [LogLevel.info].
-  Future<void> i(String tag, String message) => log(LogLevel.info, tag, message);
-
-  /// [LogLevel.warning].
-  Future<void> w(String tag, String message) => log(LogLevel.warning, tag, message);
-
-  /// [LogLevel.error].
-  Future<void> e(String tag, String message) => log(LogLevel.error, tag, message);
-
-  /// [LogLevel.fatal].
-  Future<void> f(String tag, String message) => log(LogLevel.fatal, tag, message);
-
-  /// Whether a record of [level] would be written: what an app asks before it
-  /// builds a message that is expensive to build.
-  Future<bool> isLoggable(LogLevel level) async {
-    return await _invoke<bool>('isLoggable', <String, Object?>{'level': level.value}) ?? false;
-  }
-
-  /// Takes what is in the cache to the log file; [sync] waits for the write.
-  Future<void> flush({bool sync = false}) {
-    return _invoke<void>('flush', <String, Object?>{'sync': sync});
-  }
-
-  /// The level a record has to reach.
-  Future<void> setLevel(LogLevel level) {
-    return _invoke<void>('setLevel', <String, Object?>{'level': level.value});
-  }
-
-  /// The level the appender is at: what [setLevel] last asked for, and what the
-  /// configuration gave before that.
-  Future<LogLevel> getLevel() async {
-    final value = await _invoke<int>('getLevel');
-    return LogLevel.values[(value ?? LogLevel.info.value).clamp(0, LogLevel.values.length - 1)];
-  }
-
-  /// Whether a write waits for the file.
-  Future<void> setMode(AppenderMode mode) {
-    return _invoke<void>('setMode', <String, Object?>{'mode': mode.value});
-  }
-
-  /// Whether the console prints the record too.
-  Future<void> setConsoleLogEnabled(bool enabled) {
-    return _invoke<void>('setConsoleLogEnabled', <String, Object?>{'enabled': enabled});
-  }
-
-  /// How many bytes a log file may reach before it is closed and a new one
-  /// opened; `0` never splits.
-  Future<void> setMaxFileSize(int bytes) {
-    return _invoke<void>('setMaxFileSize', <String, Object?>{'bytes': bytes});
-  }
-
-  /// How many seconds a log file is kept; `0` is the C++'s own ten days.
-  Future<void> setMaxAliveTime(int seconds) {
-    return _invoke<void>('setMaxAliveTime', <String, Object?>{'seconds': seconds});
-  }
-
-  /// Drains what is left and closes this appender. Writing through it afterwards
-  /// writes nothing.
-  Future<void> close() async {
-    await _invoke<void>('close');
-    _closed = true;
+  /// What the platform side answers is ignored, an error included — a write
+  /// through an appender that is not open is one the platform side refuses, and
+  /// a logger that throws at the app that logged is worse than a record that is
+  /// not in the file.
+  void _send(String method, [Map<String, Object?> args = const <String, Object?>{}]) {
+    _invoke<void>(method, args).ignore();
   }
 }

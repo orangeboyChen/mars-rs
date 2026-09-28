@@ -17,16 +17,18 @@ final xlog = await Xlog.open(
   ),
 );
 
-await xlog.i('Net', 'hello');
+xlog.i('Net', 'hello');
 await xlog.flush(sync: true);
 await xlog.close();
 ```
 
 `Xlog` is one appender: `Xlog.open(config)` opens it and `close()` closes it —
 the same class, under the same name, the Swift package,
-`platforms/kmp/marsrs-xlog` and the Android AAR publish. Every call is a
-`Future`, because every one of them crosses the channel; the settings are
-methods for the same reason, and not the properties they are in Kotlin and in Swift.
+`platforms/kmp/marsrs-xlog` and the Android AAR publish. A write and a setting
+are calls and not `await`s, and the five settings are the properties they are in
+Kotlin and in Swift: the channel is crossed without the caller waiting for it.
+What answers a `Future` is what an app can act on — the appender `open` opens,
+the drain `flush` and `close` wait for, and the answer `isLoggable` gives.
 
 ## Installing it
 

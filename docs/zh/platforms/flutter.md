@@ -45,9 +45,9 @@ final xlog = await Xlog.open(
     mode: AppenderMode.async,
   ),
 );
-await xlog.setConsoleLogEnabled(kDebugMode);
+xlog.consoleLogEnabled = kDebugMode;
 
-await xlog.i('startup', 'hello from mars');
+xlog.i('startup', 'hello from mars');
 
 await xlog.flush(sync: true);   // 读文件、上传之前
 await xlog.close();
@@ -56,19 +56,21 @@ await xlog.close();
 `logDir` 是唯一没有默认值的选项，其余都在[配置项](/zh/configuration)页上，用的
 是端口的 Kotlin 给的那套名字。
 
-## 每个调用都是 `Future`
+## App 要等什么
 
 这个插件是 method channel 而不是 `dart:ffi`：Apple 那边的二进制是
-`MarsRSXlog.xcframework` 里的静态库，`DynamicLibrary.open` 没有东西可开。所以
-下面每个调用都要跨到平台线程、返回一个 `Future` —— `await` 它，或者调用方不想等
-这条记录时交给 `unawaited()`：
+`MarsRSXlog.xcframework` 里的静态库，`DynamicLibrary.open` 没有东西可开。所以跨到
+平台线程上的是一条消息、不是一次调用 —— 没有答案的调用就不用等，写和设置把消息递过
+去就返回，`xlog.i('startup', '…')` 跟 Kotlin、Swift、TypeScript 里一样。channel 保持
+消息递过去的顺序，所以一条记录写在它前面那条之后。
 
-```dart
-unawaited(xlog.i('startup', 'cold start'));
-```
+其中有四个返回 `Future`，因为这四个有 App 接得住的东西：`Xlog.open` 打开的那个
+appender、`flush` 和 `close` 等的那次排空、还有 `isLoggable` 给的那个答案。
 
-这是这份 API 唯一没法跟端口的 Swift 和 Kotlin 一样的地方 —— 那边一条记录就是一
-次调用、没有别的 —— 也是为什么设置项是 `setLevel(…)` 而不是 `level = …`。
+五个设置项是其他平台上那样的属性，而不是 `setLevel` / `getLevel` 一对。读一个回来得到
+的是这一侧最后写进去的值、不是 appender 里那个：getter 在读它的那次调用里就要返回，
+而平台侧持有的那个隔着一次 channel 调用。`isLoggable` 问的是 appender 自己，它是
+App 要等的那个。
 
 ## 写
 
@@ -76,14 +78,14 @@ unawaited(xlog.i('startup', 'cold start'));
 消息；级别要到调用时才知道就用 `log(level, tag, message)`。
 
 ```dart
-await xlog.v('net', '…');
-await xlog.d('net', '…');
-await xlog.i('startup', '…');
-await xlog.w('net', '…');
-await xlog.e('login', '…');
-await xlog.f('login', '…');
+xlog.v('net', '…');
+xlog.d('net', '…');
+xlog.i('startup', '…');
+xlog.w('net', '…');
+xlog.e('login', '…');
+xlog.f('login', '…');
 
-await xlog.log(LogLevel.debug, 'net', '…');
+xlog.log(LogLevel.debug, 'net', '…');
 ```
 
 低于 appender 打开时那个级别的记录在格式化之前就被丢掉了。构造起来很贵的消息值
@@ -91,7 +93,7 @@ await xlog.log(LogLevel.debug, 'net', '…');
 
 ```dart
 if (await xlog.isLoggable(LogLevel.debug)) {
-  await xlog.d('net', expensiveDescription());
+  xlog.d('net', expensiveDescription());
 }
 ```
 
@@ -99,14 +101,17 @@ if (await xlog.isLoggable(LogLevel.debug)) {
 
 | 干什么 | 怎么干 |
 |---|---|
-| 改级别 | `await xlog.setLevel(LogLevel.warning)` |
-| 把级别读回来 | `await xlog.getLevel()` |
-| 切异步 / 同步 | `await xlog.setMode(AppenderMode.sync)` |
-| 同时打到控制台 | `await xlog.setConsoleLogEnabled(true)` |
-| 到多大就换一个文件 | `await xlog.setMaxFileSize(8 * 1024 * 1024)` |
-| 到多久就换一个文件 | `await xlog.setMaxAliveTime(10 * 24 * 3600)` |
+| 改级别 | `xlog.level = LogLevel.warning` |
+| 把级别读回来 | `xlog.level` |
+| 切异步 / 同步 | `xlog.mode = AppenderMode.sync` |
+| 同时打到控制台 | `xlog.consoleLogEnabled = true` |
+| 到多大就换一个文件 | `xlog.maxFileSizeBytes = 8 * 1024 * 1024` |
+| 到多久就换一个文件 | `xlog.maxAliveTimeSeconds = 10 * 24 * 3600` |
 | 还开着吗 | `xlog.isOpen` |
 | 把缓存排出去 | `await xlog.flush(sync: true)` |
+
+设置项是写、不是等，读一个回来得到的是这一侧最后写进去的值 —— 见
+[App 要等什么](#app-要等什么)。
 
 `close()` 排掉剩下的、关掉这个 appender。同一个 `namePrefix` 的两个 `Xlog` 是同
 一个 appender —— native 那边是一个插件、每个 prefix 存一个 appender，每个调用都

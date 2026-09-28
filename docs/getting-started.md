@@ -136,9 +136,9 @@ final xlog = await Xlog.open(
         level: LogLevel.info,
     ),
 );
-await xlog.setConsoleLogEnabled(kDebugMode);
+xlog.consoleLogEnabled = kDebugMode;
 
-await xlog.i("startup", "hello from mars");
+xlog.i("startup", "hello from mars");
 
 await xlog.flush(sync: true);  // the records are on disk when this returns
 await xlog.close();
