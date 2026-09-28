@@ -59,7 +59,7 @@ if (xlog.isLoggable(LogLevel.DEBUG)) {
 
 ```dart [Flutter]
 if (await xlog.isLoggable(LogLevel.debug)) {
-  await xlog.d("net", expensiveDescription());
+  xlog.d("net", expensiveDescription());
 }
 ```
 
@@ -102,11 +102,11 @@ if (xlog.isLoggable(LogLevel.debug)) {
 
 | 作用 | Rust | Swift | Android | Kotlin Multiplatform | Flutter | React Native | C |
 |---|---|---|---|---|---|---|---|
-| 改级别 | `set_level` | `log.level` | `xlog.level` | `xlog.level` | `await xlog.setLevel(…)` | `xlog.level` | `mars_xlog_set_level` |
-| 切异步 / 同步 | `appender_set_mode` | `log.mode` | `xlog.mode` | `xlog.mode` | `await xlog.setMode(…)` | `xlog.mode` | `mars_xlog_set_mode` |
-| 同时打到控制台 | `appender_set_console_log` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `await xlog.setConsoleLogEnabled(…)` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log` |
-| 到 N 字节就换文件 | `appender_set_max_file_size` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `await xlog.setMaxFileSize(…)` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size` |
-| 超过 N 秒就删文件 | `appender_set_max_alive_duration` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `await xlog.setMaxAliveTime(…)` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration` |
+| 改级别 | `set_level` | `log.level` | `xlog.level` | `xlog.level` | `xlog.level` | `xlog.level` | `mars_xlog_set_level` |
+| 切异步 / 同步 | `appender_set_mode` | `log.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `mars_xlog_set_mode` |
+| 同时打到控制台 | `appender_set_console_log` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log` |
+| 到 N 字节就换文件 | `appender_set_max_file_size` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size` |
+| 超过 N 秒就删文件 | `appender_set_max_alive_duration` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration` |
 | 当前文件在哪 | `appender_get_current_log_path` | `Xlog.currentLogPath` | — | — | — | — | `mars_xlog_current_log_path` |
 
 大小和时间的 `0` 都表示"不限制"：文件永不切分、永不删除 —— C++ 那边自己保留十天。

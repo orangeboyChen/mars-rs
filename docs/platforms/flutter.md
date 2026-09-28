@@ -48,9 +48,9 @@ final xlog = await Xlog.open(
     mode: AppenderMode.async,
   ),
 );
-await xlog.setConsoleLogEnabled(kDebugMode);
+xlog.consoleLogEnabled = kDebugMode;
 
-await xlog.i('startup', 'hello from mars');
+xlog.i('startup', 'hello from mars');
 
 await xlog.flush(sync: true);   // before the app reads or uploads the files
 await xlog.close();
@@ -60,21 +60,25 @@ await xlog.close();
 [the configuration page](/configuration), under the names the Kotlin of the port
 gives them.
 
-## Every call is a `Future`
+## What an app awaits
 
 The plugin is a method channel and not `dart:ffi`: the Apple binary is a static
 library inside `MarsRSXlog.xcframework`, and `DynamicLibrary.open` has nothing
-to open for one. So every call below crosses to the platform thread and answers a
-`Future` — `await` it, or hand it to `unawaited()` when the caller does not want
-to wait for a record:
+to open for one. So what crosses to the platform thread is a message and not a
+call, and a call that answers nothing waits for nothing — a write and a setting
+hand the message over and return, `xlog.i('startup', '…')` the way it does in
+Kotlin, in Swift and in TypeScript. The channel keeps the order the messages were
+handed over in, so a record is written after the one handed over before it.
 
-```dart
-unawaited(xlog.i('startup', 'cold start'));
-```
+Four of them answer a `Future`, because four of them have something an app can
+act on: the appender `Xlog.open` opens, the drain `flush` and `close` wait for,
+and the answer `isLoggable` gives.
 
-That is the one thing this surface cannot share with the Swift and the Kotlin of
-the port, where a record costs a call and nothing else, and it is why the
-settings are `setLevel(…)` and not `level = …`.
+The five settings are the properties they are on every other platform of the
+port, and not a `setLevel` / `getLevel` pair. What one of them answers is what
+this side last wrote, and not what the appender holds: a getter answers in the
+call it is read in, and what the platform side holds is a channel call away.
+`isLoggable` is the appender's own answer, and it is the one an app awaits.
 
 ## Writing
 
@@ -83,14 +87,14 @@ tag and a message, and `log(level, tag, message)` when the level is not known
 until the call.
 
 ```dart
-await xlog.v('net', '…');
-await xlog.d('net', '…');
-await xlog.i('startup', '…');
-await xlog.w('net', '…');
-await xlog.e('login', '…');
-await xlog.f('login', '…');
+xlog.v('net', '…');
+xlog.d('net', '…');
+xlog.i('startup', '…');
+xlog.w('net', '…');
+xlog.e('login', '…');
+xlog.f('login', '…');
 
-await xlog.log(LogLevel.debug, 'net', '…');
+xlog.log(LogLevel.debug, 'net', '…');
 ```
 
 A record below the level the appender was opened at is dropped before anything is
@@ -99,7 +103,7 @@ the record is dropped either way, and what `isLoggable` saves is the string:
 
 ```dart
 if (await xlog.isLoggable(LogLevel.debug)) {
-  await xlog.d('net', expensiveDescription());
+  xlog.d('net', expensiveDescription());
 }
 ```
 
@@ -107,14 +111,17 @@ if (await xlog.isLoggable(LogLevel.debug)) {
 
 | what | how |
 |---|---|
-| move the level | `await xlog.setLevel(LogLevel.warning)` |
-| read the level back | `await xlog.getLevel()` |
-| switch async / sync | `await xlog.setMode(AppenderMode.sync)` |
-| mirror records to the console | `await xlog.setConsoleLogEnabled(true)` |
-| close a file at a size | `await xlog.setMaxFileSize(8 * 1024 * 1024)` |
-| drop a file at an age | `await xlog.setMaxAliveTime(10 * 24 * 3600)` |
+| move the level | `xlog.level = LogLevel.warning` |
+| read the level back | `xlog.level` |
+| switch async / sync | `xlog.mode = AppenderMode.sync` |
+| mirror records to the console | `xlog.consoleLogEnabled = true` |
+| close a file at a size | `xlog.maxFileSizeBytes = 8 * 1024 * 1024` |
+| drop a file at an age | `xlog.maxAliveTimeSeconds = 10 * 24 * 3600` |
 | is it still open | `xlog.isOpen` |
 | drain the cache | `await xlog.flush(sync: true)` |
+
+A setting is written and not awaited, and what reading one back answers is what
+this side last wrote — see [what an app awaits](#what-an-app-awaits).
 
 `close()` drains what is left and closes the appender. Two `Xlog`s of one
 `namePrefix` are one appender — the native side is one plugin holding one

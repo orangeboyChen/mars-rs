@@ -134,9 +134,9 @@ final xlog = await Xlog.open(
         level: LogLevel.info,
     ),
 );
-await xlog.setConsoleLogEnabled(kDebugMode);
+xlog.consoleLogEnabled = kDebugMode;
 
-await xlog.i("startup", "hello from mars");
+xlog.i("startup", "hello from mars");
 
 await xlog.flush(sync: true);  // 返回时记录已经在磁盘上了
 await xlog.close();
