@@ -257,6 +257,29 @@ fn a_slot_that_does_not_recover_is_reported_with_the_one_that_did() {
     assert!(text.contains("the slot that recovers"), "{text}");
 }
 
+/// A slot nobody ever wrote a record into is not a slot that could not be
+/// read: it is what a heap region leaves behind, and what a writer that was
+/// killed between claiming a slot and filling it leaves behind too. The C++
+/// keeps no cache file at all without a mapping, so it never gets as far as
+/// reading one; answering `ReadFailed` for it is answering "broken" for a
+/// cache directory that is clean, and a caller that flushes until the code
+/// says there is nothing left never stops.
+#[test]
+fn an_empty_slot_is_nothing_to_flush_and_not_a_failure() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("log");
+    let cfg = config(&log);
+    fs::create_dir_all(&log).unwrap();
+
+    let empty = log.join("Mars_1.mmap3");
+    fs::write(&empty, b"").unwrap();
+
+    assert_eq!(appender_oneshot_flush(&cfg), FileIoAction::Unnecessary);
+    // Not drained, so not unlinked either: `appender.cc` only removes a cache
+    // file it wrote the records out of.
+    assert!(empty.exists(), "an empty slot is not one to remove");
+}
+
 /// The body [`two_processes_keep_every_record`] runs in a second process: open
 /// the same prefix in the same directory and write.
 ///

@@ -1730,7 +1730,22 @@ impl Appender {
             return FileIoAction::Unnecessary;
         }
 
-        // Read the whole cache file into a heap region.
+        // A slot with no bytes in it holds no records, and it is a state the
+        // C++ has no file for: a writer whose region is a heap one keeps no
+        // cache file at all, so `appender.cc` never gets as far as reading
+        // one. This port empties the file instead (`clear_cache_file`) so that
+        // the next start re-arms the pre-allocation, and what the C++ answers
+        // for a buffer that flushes to nothing is what this answers for it:
+        // `kActionUnnecessary`. `read_exact` would call it a read that failed,
+        // and a caller that flushes until the code says there is nothing left
+        // would never stop.
+        if slot.metadata().is_ok_and(|meta| meta.len() == 0) {
+            return FileIoAction::Unnecessary;
+        }
+
+        // Read the whole cache file into a heap region. A file that is there
+        // and is shorter than a region is what a truncated or half-written one
+        // looks like: the C++'s `kActionReadFailed`.
         let mut data = vec![0u8; BUFFER_BLOCK_LENGTH];
         if slot.read_exact(&mut data).is_err() {
             return FileIoAction::ReadFailed;
