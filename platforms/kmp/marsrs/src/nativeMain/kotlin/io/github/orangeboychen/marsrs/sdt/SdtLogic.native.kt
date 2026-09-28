@@ -52,13 +52,24 @@ import kotlinx.cinterop.toKString
  * The report is the one thing the C ABI hands back differently from the JNI
  * bridge: there the port calls `SdtLogic.reportSignalDetectResults` itself, here
  * it is [takeReport] the caller asks. So [runChecks] takes the report of a run
- * that went and hands it to [SdtLogic.ICallBack], which is what makes the two
- * platforms one API.
+ * that went, keeps it for the [takeReport] that comes looking for it, and hands
+ * it to [SdtLogic.ICallBack], which is what makes the two platforms one API.
  */
 @OptIn(ExperimentalForeignApi::class)
 public actual object SdtLogic {
     /** The callback the report of a run is handed to, which is the app's. */
     private var callBack: ICallBack? = null
+
+    /**
+     * The reports of runs that are over and that nothing has taken yet.
+     *
+     * The C ABI has one buffer and [takeReport] empties it, so a report handed
+     * to the callback by way of a take is a report a later [takeReport] would
+     * find gone. What the common API promises is one document either way — the
+     * callback gets it, and an app that would rather ask keeps its own copy to
+     * ask for — which is what this list is: the copy the callback was handed.
+     */
+    private val pending = mutableListOf<String>()
 
     /** What [SdtLogic]'s own KDoc says, which is where the words are. */
     public actual fun interface ICallBack {
@@ -125,12 +136,17 @@ public actual object SdtLogic {
                 networkType
             )
             // The report of the run, which is the one thing the C ABI has no
-            // callback of its own for: taken here and handed to the callback, the
-            // way the JNI bridge hands it over from inside the run. An app that
-            // would rather ask for it asks [takeReport], and gets nothing — the
-            // same as on Android, where the bridge took it first.
+            // callback of its own for: taken here, and handed to the callback,
+            // the way the JNI bridge hands it over from inside the run. The take
+            // empties the buffer it takes from, so the document is put by for
+            // the [takeReport] that comes looking for it afterwards — one run,
+            // one report, handed over twice.
             if (ran == MARS_SDT_OK) {
-                callBack?.reportSignalDetectResults(takeReport())
+                val report = takeReport()
+                if (report != null) {
+                    pending.add(report)
+                }
+                callBack?.reportSignalDetectResults(report)
             }
             ran == MARS_SDT_OK
         } finally {
@@ -140,6 +156,11 @@ public actual object SdtLogic {
     }
 
     public actual fun takeReport(): String? {
+        // What a run is holding for a caller that asks, and otherwise what the
+        // C ABI is: one document either way, and taking it empties it.
+        if (pending.isNotEmpty()) {
+            return pending.removeAt(0)
+        }
         var size = REPORT_BUFFER_SIZE
         while (size <= REPORT_BUFFER_LIMIT) {
             val (text, written) = memScoped {
@@ -163,6 +184,11 @@ public actual object SdtLogic {
     }
 
     public actual fun reset() {
+        // Every result waiting to be taken goes with the rest of the diagnosis,
+        // which is what `mars_sdt_reset` says and what an app that resets before
+        // it asks expects: a report of a run it threw away is not one it is
+        // handed afterwards.
+        pending.clear()
         mars_sdt_reset()
     }
 
