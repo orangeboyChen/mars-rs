@@ -1,5 +1,7 @@
 # mars, in Rust
 
+[![Rust](https://github.com/orangeboyChen/mars-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/orangeboyChen/mars-rs/actions/workflows/rust.yml) [![codecov](https://codecov.io/gh/orangeboyChen/mars-rs/graph/badge.svg?branch=main)](https://codecov.io/gh/orangeboyChen/mars-rs) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Rust implementation of [Tencent/mars](https://github.com/Tencent/mars), the
 mobile library WeChat runs on. It is the same three pieces the C++ project is:
 
