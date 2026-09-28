@@ -12,7 +12,7 @@
 //! two queues' loops, hand the answers back, and drain what the queues asked
 //! for ([`NetCore::run_pending`] is the C++'s message queue thread).
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use marsrs_stn::longlink_task_manager::Response as LongAnswer;
 use marsrs_stn::net_source::NO_NET;
@@ -20,8 +20,8 @@ use marsrs_stn::shortlink_task_manager::{Response as ShortAnswer, RETRY_INTERNAL
 use marsrs_stn::task_profile::{TaskFailHandleType, LOCAL_ANTI_AVALANCHE, LONG_FIRST_PKG_TIMEOUT};
 use marsrs_stn::{
     CallFrom, ConnectProfile, DisconnectInternalCode, ErrCmdType, LongLinkEncoder, LongLinkStatus,
-    LonglinkConfig, NetCore, NetStatus, RespHandle, RunId, Task, DEFAULT_LONGLINK_NAME,
-    NET_TYPE_WIFI,
+    LonglinkConfig, NetCore, NetStatus, RespHandle, RunId, SignallingKeeper, Task,
+    DEFAULT_LONGLINK_NAME, DEFAULT_PERIOD, NET_TYPE_WIFI,
 };
 
 /// The channel every sample starts on.
@@ -293,6 +293,15 @@ impl App {
 
     fn sent(&self) -> Vec<Sent> {
         self.sent.lock().unwrap().clone()
+    }
+
+    /// The main link's signalling keeper, which is the one the app starts and
+    /// stops through [`NetCore::keep_signal`].
+    fn keeper(&mut self) -> MutexGuard<'_, SignallingKeeper> {
+        self.core
+            .long_link_meta(MAIN)
+            .expect("no such link")
+            .keeper()
     }
 
     fn ended(&self) -> Ended {
@@ -765,6 +774,36 @@ fn a_follow_up_that_is_waiting_is_due_at_the_reading_the_host_has() {
     // a host that drains it has nothing to wait for but the alarms again
     app.run_pending();
     assert!(app.core.due_time_at(START).is_none_or(|due| due > START));
+}
+
+#[test]
+fn the_signalling_the_app_asked_for_goes_on_until_the_link_s_data_runs_out() {
+    let mut app = App::new();
+    app.bring_up(MAIN, LongLinkStatus::Connected);
+
+    // `KeepSignal()`: the first buffer goes out at once
+    app.core.keep_signal_at(START);
+    assert_eq!(app.keeper().sent(), 1);
+
+    // what the link's own run says: data moved, so the next one is posted a
+    // period later, and that is what the host is told to wait for
+    app.keeper().on_network_data_changed_at(START + 100);
+    assert_eq!(
+        app.core.due_time_at(START + 200),
+        Some(START + 100 + DEFAULT_PERIOD)
+    );
+
+    // ... and a host that runs what is due sends it, once
+    app.core.run_pending_at(START + 100 + DEFAULT_PERIOD);
+    assert_eq!(app.keeper().sent(), 2);
+    assert!(app
+        .core
+        .due_time_at(START + 100 + DEFAULT_PERIOD)
+        .is_none_or(|due| due > START + 100 + DEFAULT_PERIOD));
+
+    // `StopSignal()` — the app is waiting for nothing, and nothing goes out
+    app.core.stop_signal();
+    assert!(!app.keeper().is_keeping());
 }
 
 #[test]

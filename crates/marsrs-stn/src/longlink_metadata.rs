@@ -19,7 +19,7 @@
 //! from [`LongLinkMetaData::monitor`], [`LongLinkMetaData::checker`] and
 //! [`LongLinkMetaData::keeper`].
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::long_link::{DisconnectInternalCode, LongLink, MakeSure};
 use crate::{
@@ -36,8 +36,12 @@ pub struct LongLinkMetaData {
     monitor: LongLinkConnectMonitor,
     /// `netsource_checker_`.
     checker: NetSourceTimerCheck,
-    /// `signal_keeper_`.
-    keeper: SignallingKeeper,
+    /// `signal_keeper_` — shared with the link, which is where the data whose
+    /// coming and going the keeper measures moves: the C++ connects the
+    /// keeper to a signal of the process's that its link emits into
+    /// (`net_core.cc:1161`), and the port wires the link to the keeper
+    /// instead.
+    keeper: Arc<Mutex<SignallingKeeper>>,
     /// `config_`.
     config: LonglinkConfig,
 }
@@ -126,6 +130,21 @@ impl LongLinkMetaData {
                 0
             });
         }
+        let keeper = Arc::new(Mutex::new(keeper));
+        {
+            // the other half of the signal the C++ wires in `NetCore`: the
+            // link's own writes and reads are what the keeper's `keepTime` is
+            // measured from, and it is the link that knows about them
+            let keeper = Arc::clone(&keeper);
+            link.lock()
+                .unwrap_or_else(poisoned)
+                .set_on_network_data_changed(move |now| {
+                    keeper
+                        .lock()
+                        .unwrap_or_else(poisoned)
+                        .on_network_data_changed_at(now);
+                });
+        }
 
         Self {
             link,
@@ -153,8 +172,15 @@ impl LongLinkMetaData {
     }
 
     /// `SignalKeeper()`.
-    pub fn keeper(&mut self) -> &mut SignallingKeeper {
-        &mut self.keeper
+    ///
+    /// A guard, and not a `&mut`, because the link shares the keeper: its own
+    /// run says that data moved from inside a lock the host holds, and this is
+    /// what a host starts and stops from the outside
+    /// ([`crate::NetCore::keep_signal`]). The keeper sends over the link it
+    /// shares, so a hold on one is never taken while the other is held —
+    /// saying that data moved posts a due time and nothing else.
+    pub fn keeper(&self) -> MutexGuard<'_, SignallingKeeper> {
+        self.keeper.lock().unwrap_or_else(poisoned)
     }
 
     /// `Config()`.
@@ -363,7 +389,7 @@ mod tests {
 
     #[test]
     fn the_keeper_sends_on_the_link_it_shares_with_the_metadata() {
-        let mut meta = meta();
+        let meta = meta();
         meta.channel()
             .lock()
             .unwrap()

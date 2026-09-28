@@ -1243,11 +1243,11 @@ impl NetCore {
     }
 
     /// When the net core next has something to do: now, when a follow-up is
-    /// waiting, and otherwise the earliest of the two queues, the zombie check
-    /// and the timing sync's alarm. All of it as a `gettickcount()`, which is a
-    /// reading of a clock the caller of this crate shares and a caller across an
-    /// ABI does not — [`crate::StnLogic::due_delay`] is the same thing as a
-    /// duration.
+    /// waiting, and otherwise the earliest of the two queues, the zombie check,
+    /// the main link's signalling and the timing sync's alarm. All of it as a
+    /// `gettickcount()`, which is a reading of a clock the caller of this crate
+    /// shares and a caller across an ABI does not —
+    /// [`crate::StnLogic::due_delay`] is the same thing as a duration.
     pub fn due_time(&mut self) -> Option<u64> {
         self.due_time_at(gettickcount())
     }
@@ -1268,7 +1268,35 @@ impl NetCore {
         let zombies = self.zombie.lock().unwrap_or_else(poisoned).due_time();
         let mut due = min_due(self.shortlink.due_time(), self.longlink.due_time());
         due = min_due(due, zombies);
+        due = min_due(due, self.signalling_due_time());
         min_due(due, self.timing_sync.due_time())
+    }
+
+    /// When the main link's signalling keeper next sends a buffer: what the
+    /// C++ posts on its own message queue (`signalling_keeper.cc:88`), and what
+    /// the port leaves to the host to fire — [`NetCore::run_pending_at`] does.
+    ///
+    /// Only the main link's, which is the only one the C++ connects to the
+    /// signal (`net_core.cc:1161`) and the only one
+    /// [`NetCore::keep_signal_at`] ever starts.
+    fn signalling_due_time(&self) -> Option<u64> {
+        let name = self.default_link.as_deref()?;
+        self.links.get(name)?.keeper().due_time()
+    }
+
+    /// `SignallingKeeper::__OnTimeOut()` — the buffer the keeper posted, sent
+    /// once the reading the host handed in has reached it.
+    fn fire_signalling_at(&mut self, now: u64) {
+        let Some(name) = self.default_link.clone() else {
+            return;
+        };
+        let Some(meta) = self.links.get_mut(&name) else {
+            return;
+        };
+        let due = meta.keeper().due_time();
+        if due.is_some_and(|due| due <= now) {
+            meta.keeper().on_timeout();
+        }
     }
 
     //===------------------------------------------------------------------===//
@@ -1290,8 +1318,8 @@ impl NetCore {
     /// What the C++'s message queue thread does, as one pass: the follow-ups
     /// first, one at a time in the order they were posted, and then one pass of
     /// everything the queues only do when they are asked — the timeouts and the
-    /// retries of the two of them, the zombie check, and the timing sync's
-    /// alarm.
+    /// retries of the two of them, the zombie check, the timing sync's alarm,
+    /// and the buffer the main link's signalling keeper posted.
     ///
     /// The pass is repeated while it leaves a follow-up behind, which a zombie
     /// started again does at once, and which is what makes this a loop and not a
@@ -1371,6 +1399,9 @@ impl NetCore {
             if self.timing_sync.due_time().is_some_and(|due| due <= now) {
                 self.timing_sync.on_alarm_at(now);
             }
+            // and what the keeper posted: one buffer, the way the C++'s
+            // message queue runs `__OnTimeOut` once for one `AsyncInvokeAfter`
+            self.fire_signalling_at(now);
 
             if !self.has_pending() {
                 return;
