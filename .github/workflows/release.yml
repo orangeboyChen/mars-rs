@@ -35,6 +35,14 @@ name: Release
 #     and this workflow is a `workflow_dispatch` that creates the tag itself, so
 #     it hands the publish to a run whose ref is that tag.
 #
+# No registry is asked in a step that can end the release. What one of them
+# answers is about itself and not about the tag, the assets or the other
+# registries of the same release, every one of which is assembled by the time it
+# is asked; a step that fails is a red step of a green run. The way back is
+# publish.yml — Actions -> Publish, with the tag — which publishes the
+# registries of a release that is already out, mostly out of the archives it
+# carries and with no build of its own.
+#
 # A package a registry has never seen has no settings to put a trusted publisher
 # in, so its first version is published by hand and the release says so rather
 # than fail. `CARGO_REGISTRY_TOKEN` is the one credential left, in `crates`.
@@ -675,7 +683,12 @@ jobs:
         # can execute.
         run: (cd platforms/kmp && ./gradlew --no-daemon :marsrs-xlog:macosArm64Test)
       - name: Publish to GitHub Packages
+        # `continue-on-error`, for the reason the npm step gives: GitHub
+        # Packages refusing a version is about GitHub Packages, and a release
+        # is not a thing to keep back over it. publish.yml publishes the pair
+        # out of `marsrs-kmp-native.zip`, the native archives this job packs.
         if: needs.version.outputs.is_new == 'true'
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -765,12 +778,20 @@ jobs:
           path: |
             dist/marsrs-flutter-*.tar.gz
             dist/marsrs-react-native-*.tgz
-      # The registry, last, and only for a tag that is new: what is published to
-      # it is immutable, so a version it has cannot be published over, and the
-      # release is complete — assets, tag, checksums — before it is asked for
-      # anything. pub.dev is not asked here, and pub.yml says why.
+      # The registry, last in this job and only for a tag that is new: what is
+      # published to it is immutable, so a version it has cannot be published
+      # over. pub.dev is not asked here, and pub.yml says why.
+      #
+      # `continue-on-error`: what npm needs — this repository named as a
+      # trusted publisher of the package — is set on npmjs.com and not here, so
+      # a publish it refuses is a thing only a person can put right, and a
+      # release held back over it would hold back the tag, the assets and every
+      # other registry of the same release with it. What the release loses is
+      # npm alone, and publish.yml gives it back out of the two tarballs this
+      # job uploads.
       - name: Publish the React Native modules to npm
         if: needs.version.outputs.is_new == 'true'
+        continue-on-error: true
         run: .github/scripts/publish_npm.sh "${{ needs.version.outputs.version }}"
 
   # HarmonyOS: two assets, because there are two ways in. The three
@@ -1010,6 +1031,12 @@ jobs:
         # JitPack builds lazily, so nothing would publish the AAR until a
         # consumer asks for it. .github/scripts/jitpack_build.sh kicks the build off
         # once the release assets are online and waits for the answer.
+        #
+        # `continue-on-error`: the release and the tag are out by now, so a
+        # build jitpack.io answers no to is a fact about jitpack.io — and this
+        # is the last step before `crates`, which would otherwise be skipped
+        # over it. Asking again is what publish.yml does.
+        continue-on-error: true
         env:
           TAG: ${{ needs.version.outputs.tag }}
         run: .github/scripts/jitpack_build.sh
@@ -1101,110 +1128,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Give the manifests the release's version
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          python3 - "$VERSION" <<'PY'
-          import re, sys
-
-          version = sys.argv[1]
-          src = open('Cargo.toml').read()
-
-          # Both spellings of the workspace version: the one in
-          # `[workspace.package]`, which every crate inherits, and the one in
-          # each `[workspace.dependencies]` entry of a crate of ours, which is
-          # the version requirement a published crate resolves its siblings by.
-          # A release that shipped 0.2.0 while its crates still asked for
-          # `^0.1.0` would not resolve for anybody. Only the two places are
-          # touched, so an external dependency that happens to be at the same
-          # version as the workspace keeps the version it asks for.
-          ours = re.search(r'\[workspace\.package\]\n(.*?)\n\n', src, re.S).group(1)
-          current = re.search(r'version = "([^"]+)"', ours).group(1)
-
-          out = []
-          in_deps = False
-          for line in src.splitlines(keepends=True):
-              if line.startswith('[workspace.dependencies]'):
-                  in_deps = True
-              elif line.startswith('['):
-                  in_deps = False
-              if line.startswith('version = ') or (in_deps and line.startswith('marsrs-')):
-                  line = line.replace('version = "%s"' % current, 'version = "%s"' % version)
-              out.append(line)
-
-          open('Cargo.toml', 'w').write(''.join(out))
-          print('crates.io version: %s (was %s)' % (version, current))
-          PY
-
+      # The manifests, and then the nine crates:
+      # .github/scripts/publish_crates.sh, which publish.yml runs too, off a
+      # checkout of the tag.
       - name: Publish the nine crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          VERSION: ${{ needs.version.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
-            echo "::warning::CARGO_REGISTRY_TOKEN is not set; publish $VERSION to crates.io by hand"
-            exit 0
-          fi
-
-          # The status of a version of a crate on crates.io: 200 is "it is
-          # there", 404 is "it is not", and both are answers about the version.
-          # `curl -f` folds every other status into the same false branch as a
-          # 404 — a rate limit, an outage, a token that expired or lost its
-          # scope — and 404 is the branch that publishes, which is not a thing
-          # crates.io lets anyone do twice over one version. So the status is
-          # what is read here, and those two are the only two acted on.
-          crate_status() {
-            curl -sS -o /dev/null -w '%{http_code}' -A "$CRATES_IO_UA" \
-              "https://crates.io/api/v1/crates/$1/$VERSION"
-          }
-
-          # Dependency order, and the two crates a caller takes last: crates.io
-          # resolves a dependency out of the registry, so a crate is only
-          # publishable once the crates it names are on it.
-          for CRATE in marsrs-core marsrs-comm marsrs-crypt marsrs-buffer \
-                       marsrs-appender marsrs-sdt marsrs-stn marsrs-xlog marsrs; do
-            # Asked up to five times, because a 429 or a 5xx is crates.io being
-            # busy and not a fact about the version: ten seconds, then again.
-            for _ in 1 2 3 4 5; do
-              status="$(crate_status "$CRATE")"
-              case "$status" in
-                429|5[0-9][0-9]) sleep 10; continue ;;
-              esac
-              break
-            done
-
-            case "$status" in
-              200)
-                echo "$CRATE $VERSION is already on crates.io"
-                continue
-                ;;
-              404)
-                ;;
-              *)
-                echo "::error::crates.io answered $status for $CRATE $VERSION; whether it is up is unknown, so it is not published over"
-                exit 1
-                ;;
-            esac
-
-            # The version is the tag's and the tag is this release's, so the
-            # checkout carries an edit `cargo publish` would otherwise refuse.
-            cargo publish -p "$CRATE" --allow-dirty
-
-            # crates.io's index is not its database: a publish is visible to
-            # the next `cargo publish` only once the index has caught up, and a
-            # dependency that has not is "no matching package". Anything but a
-            # 200 is "not yet" here — the index that answers 404, and an answer
-            # this job could not read — and either way the publish that follows
-            # is what decides, and says so.
-            for _ in $(seq 1 60); do
-              [ "$(crate_status "$CRATE")" = 200 ] && break
-              sleep 5
-            done
-          done
+        run: .github/scripts/publish_crates.sh "${{ needs.version.outputs.version }}"
 
       - name: Summary
         env:

@@ -1,0 +1,335 @@
+name: Publish
+
+# The registries of a release that is already out — npm, pub.dev, GitHub
+# Packages, crates.io and JitPack — and the way back when one of them said no.
+#
+#   Actions -> Publish -> Run workflow, `tag` = v0.1.0-alpha.2
+#
+# release.yml publishes the registries itself on the way past, and a registry
+# that answers with an error no longer takes the release with it: what one of
+# them refusing used to cost was the tag, the assets and every other registry
+# of the same release, all of which had been built already. What it costs now
+# is this workflow, run by hand once the release exists:
+#
+#   * npm, out of the two `npm pack` tarballs of the release;
+#   * pub.dev, by asking pub.yml for a run of its own — pub.dev refuses a
+#     publish from a run whose ref is not a tag, and only a run dispatched at
+#     the tag has one;
+#   * GitHub Packages, out of `marsrs-kmp-native.zip`, the archives the Kotlin
+#     module is built out of;
+#   * crates.io, out of a checkout of the tag;
+#   * JitPack, by asking jitpack.io to build the tag again.
+#
+# Nothing here is built from the sources of the tag but the crates and the
+# Kotlin module, which are what `cargo publish` and `./gradlew publish` are
+# given to pack; every other registry is asked for with the archive the release
+# is already carrying. That is the point of it: a release is assembled once, and
+# a registry that missed it is given what the release has and not a second
+# build of its own.
+#
+# A version a registry has is a version it will not take again, so every job
+# asks before it publishes and says so when there is nothing to do. Running
+# this workflow twice is therefore as safe as running it once.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The tag of the release, e.g. v0.1.0-alpha.2'
+        required: true
+      target:
+        description: 'The registry to publish to'
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - npm
+          - pub
+          - crates
+          - kmp
+          - jitpack
+
+# Two runs over the same tag would race over the same immutable version, so the
+# second waits for the first and is not cancelled: what it is about to publish
+# may already be up by the time it starts.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # The release itself: the tag typed by hand is the one thing this workflow is
+  # given, so it is checked before any registry is asked for anything — and a
+  # tag with no release is an error and not a warning, because there is nothing
+  # to publish and a run that said nothing would look like one that worked.
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve the release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          # The tag with or without its "v": what is typed by hand is typed
+          # both ways.
+          case "$TAG" in
+            v*) ;;
+            *) TAG="v$TAG" ;;
+          esac
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            echo "::error::$TAG is no release of ${{ github.repository }}; publish.yml publishes one that is already out"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "publishing $TAG"
+
+  npm:
+    needs: resolve
+    if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'npm' }}
+    runs-on: ubuntu-latest
+    permissions:
+      # `gh release download`, for the tarballs of this release
+      contents: read
+      # npm's trusted publishing: the registry exchanges this run's token for a
+      # publish token of its own
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      # Node 24, which is npm 11: trusted publishing is npm 11.5.1 and later.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Take the modules off the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --pattern 'marsrs-react-native-*.tgz' --dir dist
+          if [ -z "$(find dist -name '*.tgz' -print -quit)" ]; then
+            echo "::error::$TAG released no React Native module, and there is nothing to publish"
+            exit 1
+          fi
+          # What `npm pack` wrote is what npm would publish: the module with
+          # the version, the AAR coordinate and the xcframework of this
+          # release, and nothing else of the tree.
+          mkdir -p packages
+          for tgz in dist/*.tgz; do
+            package="packages/$(basename "$tgz" .tgz)"
+            mkdir -p "$package"
+            tar -xzf "$tgz" -C "$package" --strip-components=1
+          done
+          ls -l dist
+      - name: Publish the two modules
+        # `packages/*` is the pair the step above unpacked, and no argument of
+        # the script's own: a directory named by hand is the one publish_npm.sh
+        # publishes, and the tree's pair is what it falls back to.
+        run: .github/scripts/publish_npm.sh "${{ needs.resolve.outputs.version }}" packages/*
+
+  # pub.dev, in a run of its own: it rejects a publish from a run whose ref is
+  # not a tag, and this workflow is a `workflow_dispatch` — a run started from
+  # the Actions tab has the default branch as its ref. pub.yml is dispatched at
+  # the tag instead, which is what release.yml does too, and it takes the two
+  # Flutter tarballs off the release by itself.
+  pub:
+    needs: resolve
+    if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'pub' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # `gh workflow run pub.yml`
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Ask pub.yml to publish the plugins
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          gh workflow run pub.yml --ref "$TAG"
+          {
+            echo "### pub.dev $TAG"
+            echo ""
+            echo "pub.yml is running at the tag, which is the ref pub.dev asks"
+            echo "of a run that publishes. Its own run is where the result is:"
+            echo ""
+            echo "https://github.com/${{ github.repository }}/actions/workflows/pub.yml"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  crates:
+    name: crates.io
+    needs: resolve
+    if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'crates' }}
+    runs-on: ubuntu-latest
+    env:
+      # crates.io answers 403 to the user agent `curl` sends by default.
+      CRATES_IO_UA: mars-rs release (https://github.com/orangeboyChen/mars-rs)
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      # The tag, and not the branch: a crate is packed out of the sources, and
+      # the sources of this release are the ones the tag holds.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Publish the nine crates
+        run: .github/scripts/publish_crates.sh "${{ needs.resolve.outputs.version }}"
+      - name: Summary
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          {
+            echo "### crates.io $VERSION"
+            echo ""
+            echo '```toml'
+            echo "marsrs = \"$VERSION\"       # the whole port"
+            echo "marsrs-xlog = \"$VERSION\"  # xlog alone"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # GitHub Packages: `marsrs-kmp` and `xlog-kmp`, one publication per module.
+  # This is the one job that builds, because a Kotlin Multiplatform publication
+  # is one artifact per Kotlin target of one module — the module metadata names
+  # all fourteen, so a publication that left one out is one Gradle cannot
+  # resolve for the platform it forgot — and macOS is where all of them can be
+  # built. What it does not build is the natives: those are the release's own,
+  # `marsrs-kmp-native.zip`, so there is no Rust and no NDK in this job.
+  kmp:
+    name: GitHub Packages
+    needs: resolve
+    if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'kmp' }}
+    runs-on: macos-15
+    permissions:
+      # `gh release download`, for the native archives of this release
+      contents: read
+      # the `PUT` of a publication: the default token of a run that does not
+      # ask for it is refused with a 403 at the first one
+      packages: write
+    env:
+      KMP_NATIVE_ZIP: marsrs-kmp-native.zip
+      KMP_GROUP: io.github.orangeboychen.marsrs
+      KMP_ARTIFACT: marsrs-kmp
+      KMP_ARTIFACT_XLOG: xlog-kmp
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      # Gradle's downloads, and Kotlin/Native's: the ~1 GB toolchain
+      # `kotlin-native` unpacks into `~/.konan`.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.konan
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle.properties', '**/gradle/libs.versions.toml', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+      - name: Install the Android SDK components
+        # The module has an Android target, so every `./gradlew` of it needs the
+        # SDK, including one that is asked for no Android task at all: Gradle
+        # will not configure the project without it.
+        run: |
+          set -euo pipefail
+          android_home="$HOME/Library/Android/sdk"
+          echo "ANDROID_HOME=$android_home" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$android_home" >> "$GITHUB_ENV"
+          sdkmanager=$(ls -d "$android_home"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1 || true)
+          if [ -z "$sdkmanager" ]; then
+            echo "::error::no cmdline-tools under $android_home, and the Kotlin Multiplatform module needs the Android SDK"
+            exit 1
+          fi
+          # `yes` is killed by SIGPIPE as soon as sdkmanager stops reading, and
+          # under `pipefail` that 141 would fail the job although sdkmanager
+          # itself succeeded.
+          { yes || true; } | "$sdkmanager" --licenses > /dev/null
+          "$sdkmanager" --install "platforms;android-36" "build-tools;34.0.0"
+          echo "sdk.dir=$android_home" > platforms/kmp/local.properties
+      - name: Take the native archives off the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --pattern "$KMP_NATIVE_ZIP" --dir dist
+          # `platforms/kmp/native/` is not of the repository — .gitignore keeps
+          # out what the release jobs assemble into it — and the zip was made
+          # of that directory and not of the one above it.
+          mkdir -p platforms/kmp/native
+          unzip -q -o "dist/$KMP_NATIVE_ZIP" -d platforms/kmp/native
+          find platforms/kmp/native -name '*.a' -o -name '*.so' | sort
+      - name: Publish to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          # GitHub Packages is immutable — a version it has cannot be
+          # overwritten — so a publication that is up already is one that is
+          # skipped, and one that is not is the only one Gradle is asked for.
+          # Both coordinates are asked about separately, because it is one
+          # publication per module and a partial release is a thing a failed
+          # one leaves behind.
+          # `io.github.orangeboychen.marsrs` as the path of a maven
+          # repository, which is what the URL of a publication is made of.
+          path="$(printf '%s' "$KMP_GROUP" | tr '.' '/')"
+          tasks=()
+          for pair in "marsrs:$KMP_ARTIFACT" "marsrs-xlog:$KMP_ARTIFACT_XLOG"; do
+            module="${pair%%:*}"
+            artifact="${pair##*:}"
+            url="https://maven.pkg.github.com/${GITHUB_REPOSITORY}/${path}/${artifact}/${VERSION}/${artifact}-${VERSION}.pom"
+            status="$(curl -sS -o /dev/null -w '%{http_code}' \
+              -u "$GITHUB_ACTOR:$GITHUB_TOKEN" "$url")"
+            case "$status" in
+              200)
+                echo "$artifact $VERSION is already on GitHub Packages"
+                continue
+                ;;
+              404)
+                ;;
+              *)
+                echo "::error::GitHub Packages answered $status for $artifact $VERSION; whether it is up is unknown, so it is not published over"
+                exit 1
+                ;;
+            esac
+            tasks+=(":$module:publishAllPublicationsToGitHubPackagesRepository")
+          done
+          if [ ${#tasks[@]} -eq 0 ]; then
+            echo "nothing to publish, GitHub Packages has both of $VERSION"
+            exit 0
+          fi
+          (cd platforms/kmp && ./gradlew --no-daemon -PpublishedVersion="$VERSION" \
+            -PmavenUser="$GITHUB_ACTOR" -PmavenPassword="$GITHUB_TOKEN" \
+            "${tasks[@]}")
+
+  # JitPack builds lazily, so a release whose AAR nobody has asked for is a
+  # release whose AAR does not exist yet. Asking again is all it takes, and it
+  # is the same question release.yml asks once the assets are online.
+  jitpack:
+    name: JitPack
+    needs: resolve
+    if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'jitpack' }}
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+      JITPACK_GROUP: io.github.orangeboychen.marsrs
+      JITPACK_ARTIFACT: marsrs
+      JITPACK_ARTIFACT_XLOG: xlog
+    steps:
+      - uses: actions/checkout@v7
+      - name: Trigger the JitPack build
+        run: .github/scripts/jitpack_build.sh

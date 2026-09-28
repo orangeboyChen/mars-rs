@@ -6,7 +6,7 @@
 # `marsrs-react-native-xlog`, which is also the name
 # scripts/package_react_native.sh's tarballs carry.
 #
-#   .github/scripts/publish_npm.sh <version>
+#   .github/scripts/publish_npm.sh <version> [<dir>...]
 #
 # No credential: the job asks for `id-token: write`, and npm's trusted
 # publishing exchanges this run's OIDC token for a token of the registry's own.
@@ -21,6 +21,12 @@
 # tarballs: what goes up is what the release carries — the version of
 # package.json, the xcframework the podspec names and the AAR coordinate of this
 # release — and npm reads `files` out of package.json either way.
+#
+# A `<dir>` is asked for by publish.yml, which publishes a release that is
+# already out: it takes the two `npm pack` tarballs off the release and unpacks
+# them, so what it hands here is the module that tarball held and not the tree
+# of a checkout. With no argument the pair of the tree is published, which is
+# what release.yml wants — it has just stamped them itself.
 
 set -euo pipefail
 
@@ -34,7 +40,14 @@ version="${version#v}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$root"
 
-for pkg in platforms/react-native/marsrs platforms/react-native/marsrs-xlog; do
+# The pair of the tree, unless the caller named the directories to publish.
+if [ "$#" -gt 0 ]; then
+    pkgs=("$@")
+else
+    pkgs=(platforms/react-native/marsrs platforms/react-native/marsrs-xlog)
+fi
+
+for pkg in "${pkgs[@]}"; do
     name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])' "$pkg/package.json")"
 
     # The two questions the crates.io step asks crates.io. The first is the one
