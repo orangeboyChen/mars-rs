@@ -40,13 +40,14 @@ fn an_unknown_body_is_recorded_and_the_second_send_reports_the_span() {
     assert_eq!(limit.records()[0].count, 1);
     assert_eq!(limit.records()[0].last_update, T0);
 
-    // the C++ reports how long ago the same body went out
-    assert_eq!(limit.check_at(&task, b"body", T0 + 1500), (true, 1500));
+    // the C++ reports how long ago the same body went out, and a gap
+    // shorter than `RESET_RECORD_INTERVAL` is the same burst
+    assert_eq!(limit.check_at(&task, b"body", T0 + 150), (true, 150));
     assert_eq!(limit.records()[0].count, 2);
-    assert_eq!(limit.records()[0].last_update, T0 + 1500);
+    assert_eq!(limit.records()[0].last_update, T0 + 150);
 
     // another body gets its own record
-    assert_eq!(limit.check_at(&task, b"other", T0 + 1500), (true, 0));
+    assert_eq!(limit.check_at(&task, b"other", T0 + 150), (true, 0));
     assert_eq!(limit.records().len(), 2);
 }
 
@@ -63,13 +64,15 @@ fn one_body_may_go_out_105_times_and_then_the_gate_closes() {
         );
     }
     assert_eq!(limit.records()[0].count, RECORD_INTERCEPT_COUNT);
+    // one more, still inside the burst the hundred and five were
     assert_eq!(
-        limit.check_at(&task, b"avalanche", T0 + 1000),
-        (false, 1000 - 105)
+        limit.check_at(&task, b"avalanche", T0 + 106),
+        (false, 1),
+        "the gate is closed"
     );
 
-    // the record stays refused once it is over the count
-    assert!(!limit.check_at(&task, b"avalanche", T0 + 2000).0);
+    // the record stays refused while the burst goes on
+    assert!(!limit.check_at(&task, b"avalanche", T0 + 107).0);
 }
 
 #[test]
@@ -95,15 +98,48 @@ fn the_table_holds_thirty_bodies_and_drops_the_one_touched_longest_ago() {
 }
 
 #[test]
+fn a_body_that_comes_back_after_a_gap_starts_a_new_burst() {
+    let mut limit = FrequencyLimit::new_at(T0);
+    let task = task();
+
+    // a hundred sends two milliseconds apart are one burst, and they are
+    // counted as one
+    for send in 0..100 {
+        assert!(limit.check_at(&task, b"body", T0 + 2 * send).0);
+    }
+    assert_eq!(limit.records()[0].count, 100);
+
+    // the same body a second later is not the tail of that burst
+    assert_eq!(
+        limit.check_at(&task, b"body", T0 + 1000),
+        (true, 1000 - 198)
+    );
+    assert_eq!(limit.records()[0].count, 1);
+    assert_eq!(limit.records()[0].last_update, T0 + 1000);
+
+    // so a body that goes out once a second never reaches the count,
+    // however many times it goes out
+    for send in 2..200 {
+        assert!(
+            limit.check_at(&task, b"body", T0 + 1000 * send).0,
+            "send {send} of the same body was refused"
+        );
+    }
+    assert_eq!(limit.records()[0].count, 1);
+}
+
+#[test]
 fn the_hourly_sweep_keeps_the_hot_records_and_caps_their_count() {
     let mut limit = FrequencyLimit::new_at(T0);
     let task = task();
 
-    // 100 sends of "hot", the last one five minutes before the sweep
-    for send in 0..99 {
-        assert!(limit.check_at(&task, b"hot", T0 + send).0);
+    // 100 sends of "hot", the last of them five minutes before the sweep.
+    // They are a millisecond apart, so they are one burst, and they count
+    // as one.
+    let burst = T0 + 55 * 60 * 1000 - 100;
+    for send in 0..100 {
+        assert!(limit.check_at(&task, b"hot", burst + send).0);
     }
-    assert!(limit.check_at(&task, b"hot", T0 + 55 * 60 * 1000).0);
     assert_eq!(limit.records()[0].count, 100);
 
     // a cold record: sent once, an hour ago
