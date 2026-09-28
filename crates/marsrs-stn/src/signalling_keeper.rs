@@ -87,7 +87,9 @@ enum Post {
     Fired,
 }
 
-/// `SignallingKeeper`.
+/// One mapping's signalling: a host calls [`SignallingKeeper::keep`] when the
+/// app starts waiting, feeds it [`SignallingKeeper::on_network_data_changed`],
+/// and fires [`SignallingKeeper::due_time`] to send what is left of it.
 pub struct SignallingKeeper {
     send: Option<Box<SendSignalling>>,
     /// `last_touch_time_` — `None` before the first [`SignallingKeeper::keep`].
