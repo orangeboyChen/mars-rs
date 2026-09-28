@@ -534,9 +534,10 @@ impl ShortLinkTaskManager {
 
         // `begin_buf2resp_time` and `end_buf2resp_time` — the same pair for
         // the answer, which is what the app is handed as the decode times
+        // (`shortlink_task_manager.cc:821,834`), and again off two readings
         self.tasks[at].transfer_profile.begin_buf2resp_time = now;
         let (err_code, handle) = self.decode(&task, &response.body);
-        self.tasks[at].transfer_profile.end_buf2resp_time = now;
+        self.tasks[at].transfer_profile.end_buf2resp_time = gettickcount();
         self.socket_pool.report_at(
             now,
             profile.is_reused_fd,
@@ -916,10 +917,13 @@ impl ShortLinkTaskManager {
             // `begin_req2buf_time` and `end_req2buf_time` — the app has the
             // task to write its request now, and this is what
             // `GetConnectProfile` hands the app in `OnTaskEnd` as the encode
-            // times, so they are taken on both ways out of the call
+            // times. The clock is read again once the app is done
+            // (`shortlink_task_manager.cc:479`): a pair taken off one reading
+            // is a duration of nothing, and the app's encode is the one
+            // reading of the run the port is not the one taking the time of
             self.tasks[i].transfer_profile.begin_req2buf_time = now;
             let encoded = self.encode(&task);
-            self.tasks[i].transfer_profile.end_req2buf_time = now;
+            self.tasks[i].transfer_profile.end_req2buf_time = gettickcount();
 
             let body = match encoded {
                 Ok(body) => body,
@@ -1857,14 +1861,27 @@ mod tests {
                 0
             },
         );
+        let clock = gettickcount();
         manager.start_task_at(100_000, task(7), prepare());
         assert_eq!(
             manager.on_response_at(100_500, RunId(7), answered(b"hello")),
             Some(RespHandle::Ended)
         );
-        assert_eq!(
-            *times.lock().unwrap(),
-            vec![(100_000, 100_000, 100_500, 100_500)]
+
+        // The two beginnings are the ticks the run was handed; the two ends
+        // are the clock's own, read again when the app was done, which is the
+        // only thing that makes them a duration the app can read instead of a
+        // second copy of the instant the pair began on.
+        let times = times.lock().unwrap().clone();
+        assert_eq!(times.len(), 1);
+        assert_eq!((times[0].0, times[0].2), (100_000, 100_500));
+        assert!(
+            times[0].1 >= clock,
+            "the encode end is read when the app is done"
+        );
+        assert!(
+            times[0].3 >= clock,
+            "the decode end is read when the app is done"
         );
     }
 
