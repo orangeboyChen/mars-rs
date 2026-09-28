@@ -69,3 +69,4 @@ ohpm 的发布流程还没开。
 - [快速开始](/zh/getting-started) —— 每个平台的依赖和一段能跑的代码。
 - [配置项](/zh/configuration) —— 每个配置项、默认值、以及在各个平台上的名字。
 - [日志文件](/zh/log-files) —— 文件在哪、叫什么、什么时候要 flush、怎么读回来。
+- [从 mars 迁移](/zh/migrating-from-mars) —— 同样的三块，用这个移植写的名字，一块一章。

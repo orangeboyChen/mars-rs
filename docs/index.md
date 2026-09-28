@@ -81,3 +81,5 @@ Two pages, one per half, and each of them says which platforms carry it:
   called on each platform.
 - [Log files](/log-files) — where they land, what they are called, when to
   flush, and how to read them back.
+- [Migrating from mars](/migrating-from-mars) — the same three pieces under the
+  names this port spells them, one chapter per piece.

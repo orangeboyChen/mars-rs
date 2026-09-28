@@ -256,6 +256,7 @@ export default defineConfig({
               { text: 'Configuration', link: '/configuration' },
               { text: 'Log files', link: '/log-files' },
               { text: 'The CLI', link: '/cli' },
+              { text: 'Migrating from mars', link: '/migrating-from-mars' },
             ],
           },
           // The two pages of the half that is not the logger: they are a pair,
@@ -329,6 +330,7 @@ export default defineConfig({
               { text: '配置项', link: '/zh/configuration' },
               { text: '日志文件', link: '/zh/log-files' },
               { text: '命令行', link: '/zh/cli' },
+              { text: '从 mars 迁移', link: '/zh/migrating-from-mars' },
             ],
           },
           {
