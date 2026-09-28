@@ -35,7 +35,7 @@ pub const LONGLINK_UNPACK_STREAM_PACKAGE: i32 = 1;
 
 /// `NOOP_CMDID` — the heartbeat.
 pub const NOOP_CMDID: u32 = 6;
-/// `SIGNALKEEP_CMDID`.
+/// `SIGNALKEEP_CMDID` — the keep-alive of a mapping the app is waiting on.
 pub const SIGNALKEEP_CMDID: u32 = 243;
 /// `PUSH_DATA_TASKID` — a package with this task id is the server pushing.
 pub const PUSH_DATA_TASKID: u32 = 0;
@@ -217,9 +217,9 @@ pub fn longlink_unpack(packed: &[u8]) -> Unpacked {
     }
 }
 
-/// `LongLinkEncoder` — the `std::function`s the C++ lets the app replace, as
-/// the methods they default to. `gDefaultLongLinkEncoder` is [`LongLinkEncoder`]
-/// itself: nothing about it is per-connection.
+/// `LongLinkEncoder`— the `std::function` s the C++ lets the app replace, as
+/// the methods they default to. `gDefaultLongLinkEncoder` is
+/// [`LongLinkEncoder`] itself: nothing about it is per-connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LongLinkEncoder {
     /// `packer_encoder_version` — `kOld` until the app asks for `kNew`.
@@ -232,7 +232,9 @@ impl LongLinkEncoder {
         Self::default()
     }
 
-    /// `SetEncoderVersion`.
+    /// `SetEncoderVersion` — `2` is `kNew`, and every other number is `kOld`:
+    /// the C++'s own switch has one case for the new one and a `default` for
+    /// the old.
     pub fn set_encoder_version(&mut self, version: i32) {
         self.packer_encoder_version = match version {
             2 => PackerEncoderVersion::New,
@@ -240,12 +242,13 @@ impl LongLinkEncoder {
         };
     }
 
-    /// `longlink_noop_cmdid()`.
+    /// `longlink_noop_cmdid()` — the cmdid the heartbeat goes out with.
     pub fn noop_cmdid(&self) -> u32 {
         NOOP_CMDID
     }
 
-    /// `signal_keep_cmdid()`.
+    /// `signal_keep_cmdid()` — the cmdid of the package that keeps a mapping
+    /// up.
     pub fn signal_keep_cmdid(&self) -> u32 {
         SIGNALKEEP_CMDID
     }
@@ -272,7 +275,9 @@ impl LongLinkEncoder {
         PUSH_DATA_TASKID == taskid
     }
 
-    /// `longlink_identify_isresp(sent_seq, cmdid, recv_seq, body, extend)`.
+    /// `longlink_identify_isresp(sent_seq, cmdid, recv_seq, body, extend)` —
+    /// the answer to a check is the one that carries the sequence the check
+    /// went out with, and a sequence of `0` is not one anybody was asked.
     pub fn identify_isresp(&self, sent_seq: u32, recv_seq: u32) -> bool {
         sent_seq == recv_seq && 0 != sent_seq
     }
