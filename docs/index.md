@@ -36,6 +36,7 @@ registry of their own:
 |---|---|---|
 | Rust | `marsrs` or `marsrs-xlog` | [Rust](/platforms/rust) |
 | iOS / watchOS, Swift | the `MarsRSXlog` SwiftPM product | [SwiftPM](/platforms/swift) |
+| iOS / watchOS, Swift or Objective-C | the `MarsRSXlog` pod | [CocoaPods](/platforms/cocoapods) |
 | Android, Kotlin or Java | `marsrs` or `xlog` on JitPack | [Android](/platforms/android) |
 | Kotlin Multiplatform | `marsrs-kmp` or `xlog-kmp` | [Kotlin Multiplatform](/platforms/kotlin-multiplatform) |
 | Flutter | `marsrs_flutter_xlog` or `marsrs_flutter` | [Flutter](/platforms/flutter) |

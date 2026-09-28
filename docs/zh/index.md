@@ -35,6 +35,7 @@ features:
 |---|---|---|
 | Rust | `marsrs` 或 `marsrs-xlog` | [Rust](/zh/platforms/rust) |
 | iOS / watchOS，Swift | SwiftPM 的 `MarsRSXlog` | [SwiftPM](/zh/platforms/swift) |
+| iOS / watchOS，Swift 或 Objective-C | `MarsRSXlog` 这个 pod | [CocoaPods](/zh/platforms/cocoapods) |
 | Android，Kotlin 或 Java | JitPack 上的 `marsrs` / `xlog` | [Android](/zh/platforms/android) |
 | Kotlin Multiplatform | `marsrs-kmp` / `xlog-kmp` | [Kotlin Multiplatform](/zh/platforms/kotlin-multiplatform) |
 | Flutter | `marsrs_flutter_xlog` / `marsrs_flutter` | [Flutter](/zh/platforms/flutter) |

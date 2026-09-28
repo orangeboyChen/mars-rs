@@ -245,6 +245,7 @@ export default defineConfig({
             items: [
               { text: 'Rust', link: '/platforms/rust' },
               { text: 'SwiftPM', link: '/platforms/swift' },
+              { text: 'CocoaPods', link: '/platforms/cocoapods' },
               { text: 'Android', link: '/platforms/android' },
               {
                 text: 'Kotlin Multiplatform',
@@ -290,6 +291,7 @@ export default defineConfig({
             items: [
               { text: 'Rust', link: '/zh/platforms/rust' },
               { text: 'SwiftPM', link: '/zh/platforms/swift' },
+              { text: 'CocoaPods', link: '/zh/platforms/cocoapods' },
               { text: 'Android', link: '/zh/platforms/android' },
               {
                 text: 'Kotlin Multiplatform',

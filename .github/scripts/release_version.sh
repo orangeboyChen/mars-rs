@@ -143,6 +143,10 @@ ASSETS="$XCFRAMEWORK_ZIP $XCFRAMEWORK_NET_ZIP $NATIVE_ZIP $MARSRS_AAR $MARSRS_XL
 # the maven repository it is published as. Both are one asset whatever the
 # version is, unlike the host archives below.
 ASSETS="$ASSETS $KMP_NATIVE_ZIP $KMP_MAVEN_ZIP"
+# the two pods that carry a binary, named by the version the way the host
+# archives below are: a pod is downloaded under the version it is, so an
+# archive of another version is not the one its podspec names
+ASSETS="$ASSETS marsrs-cocoapods-xlog-$VERSION.zip marsrs-cocoapods-net-$VERSION.zip"
 # one archive per host of the matrix in release.yml, in the shape that host
 # packages it in
 for HOST in x86_64-unknown-linux-gnu:tar.gz aarch64-apple-darwin:tar.gz \
