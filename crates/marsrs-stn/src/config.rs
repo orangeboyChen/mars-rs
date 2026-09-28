@@ -2,9 +2,10 @@
 
 /// Packages up to this size have to answer within the "small package" budget.
 pub const DYN_TIME_SMALL_PACKAGE_LEN: u32 = 3 * 1024;
-/// ... the "middle package" budget.
+/// Packages up to this size answer within the "middle package" budget.
 pub const DYN_TIME_MIDDLE_PACKAGE_LEN: u32 = 10 * 1024;
-/// ... the "big package" budget; anything larger uses the "bigger" one.
+/// Packages up to this size answer within the "big package" budget; anything
+/// larger is given the "bigger" one.
 pub const DYN_TIME_BIG_PACKAGE_LEN: u32 = 30 * 1024;
 
 /// Wi-Fi budgets, in milliseconds.
@@ -19,14 +20,17 @@ pub const DYN_TIME_MIDDLE_PACKAGE_GPRS_COSTTIME: u64 = 3 * 1000;
 pub const DYN_TIME_BIG_PACKAGE_GPRS_COSTTIME: u64 = 5 * 1000;
 pub const DYN_TIME_BIGGER_PACKAGE_GPRS_COSTTIME: u64 = 7 * 1000;
 
-/// How many packages in a row have to meet their budget before the network is
-/// called excellent.
+/// At least this many packages in a row have to meet their budget before the
+/// network is called excellent.
 pub const DYN_TIME_MAX_CONTINUOUS_EXCELLENT_COUNT: u32 = 10;
-/// Below this many normal packages out of the last ten the network is bad.
+/// Six or fewer of the last ten packages finishing normally or better make the
+/// network bad — and more than that bring it back out of it.
 pub const DYN_TIME_MIN_NORMAL_PKG_COUNT: usize = 6;
-/// The sliding window of the "last N packages" bookkeeping, in milliseconds.
+/// How long the window of the last ten packages is kept, in milliseconds. A big
+/// package older than this does not count towards `Excellent` either.
 pub const DYN_TIME_COUNT_EXPIRE_TIME: u64 = 5 * 60 * 1000;
-/// The size a failed task is reported with.
+/// The size a caller passes for a task that never finished, which is what makes
+/// the window count it as a failure.
 pub const DYN_TIME_TASK_FAILED_PKG_LEN: u32 = 0xffff_ffff;
 
 /// `FlowLimit`: bytes per second the funnel drains while the app is in the
@@ -66,16 +70,17 @@ pub const NET_STABLE_TEST_COUNT: u32 = 3;
 pub const LONGLINK_CONN_TIMEOUT_MS: u32 = 10 * 1000;
 /// `kLonglinkConnInteral` — how long after the first address the next one is
 /// started, in milliseconds. The C++ spells it `2.5 * 1000`, which is `2500`
-/// of a `unsigned int` and not `2` of them.
+/// and not the `2` the same literal would give as an `unsigned int`.
 pub const LONGLINK_CONN_INTERVAL_MS: u32 = 2500;
 /// `kLonglinkConnMax` — how many addresses a connect tries at once. Which ones,
 /// and how many, is the host's connect's own bookkeeping, so the port hands it
 /// the two timeouts above and nothing else: `ComplexConnect` is not ported.
 pub const LONGLINK_CONN_MAX: u32 = 3;
 
+/// One day, in seconds: the unit the probe age below is written in.
+pub const ONE_DAY_SECONDS: i64 = 24 * 60 * 60;
 /// One week, in seconds: how old a settled interval has to be before the smart
 /// heartbeat probes a bigger one.
-pub const ONE_DAY_SECONDS: i64 = 24 * 60 * 60;
 pub const PROBE_BIGGER_HEART_AGE: i64 = 7 * ONE_DAY_SECONDS;
 /// `MAX_INI_SECTIONS` — how many networks `Heartbeat.ini` remembers.
 pub const MAX_INI_SECTIONS: usize = 20;
