@@ -29,7 +29,7 @@ features:
 
 ## 选你的平台
 
-每个 release 都按平台发包：
+每个 release 都按平台发包 —— 只有两个是发到自己的 registry 上的：
 
 | 你的应用 | 用哪个 | 页面 |
 |---|---|---|
@@ -37,10 +37,15 @@ features:
 | iOS / watchOS，Swift | SwiftPM 的 `MarsRSXlog` | [SwiftPM](/zh/platforms/swift) |
 | Android，Kotlin 或 Java | JitPack 上的 `marsrs` / `xlog` | [Android](/zh/platforms/android) |
 | Kotlin Multiplatform | `marsrs-kmp` / `xlog-kmp` | [Kotlin Multiplatform](/zh/platforms/kotlin-multiplatform) |
+| Flutter | `marsrs_flutter_xlog` / `marsrs_flutter` | [Flutter](/zh/platforms/flutter) |
+| React Native | `marsrs-react-native-xlog` / `marsrs-react-native` | [React Native](/zh/platforms/react-native) |
 | 任何能调 C 的语言 | `marsrs-<version>-<host>` 压缩包 | [C ABI](/zh/platforms/c-abi) |
 | HarmonyOS | `libmars_ffi.so`，目前要自己编译 | [HarmonyOS](/zh/platforms/harmonyos) |
 
 `xlog` 只有日志；`marsrs` 再加上 STN 任务链路和 SDT 网络诊断 —— 和 crates.io 上那两个 crate 是同一对。只打日志的 App 用前者。
+
+Flutter 插件和 React Native 模块发在 pub.dev 和 npm 上，不在 release 的压缩包
+里；这两个 registry 的发布流程还没开。
 
 ## 其余几页
 
