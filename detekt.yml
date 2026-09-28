@@ -16,10 +16,14 @@ build:
 complexity:
   # 30 signatures over the default six: the JNI callbacks (`req2Buf`,
   # `onTaskEnd`, `buf2Resp` …) take what the C++ project's Java gives them.
-  # 12 is the longest signature in the tree.
+  # 12 is the longest signature in the tree. A constructor is a wider thing:
+  # KMP's `CgiProfile` is the C++'s own field for field, and that is fifteen
+  # — the eleven the port carried at first, and the four readings on the
+  # encode and the decode of the packet. Grouping them would give the port a
+  # shape the C ABI does not have.
   LongParameterList:
     functionThreshold: 12
-    constructorThreshold: 12
+    constructorThreshold: 15
   # `getNetType`, `guessNetSpeed`, `searchIntentByClass`: a `when` over the
   # network subtypes the C++ names is not simpler than the C++ is.
   ComplexCondition:
