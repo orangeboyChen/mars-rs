@@ -116,7 +116,12 @@ index_path() {
 # index" in the next `cargo publish` of the run.
 index_has() {
     curl -sS -A "$CRATES_IO_UA" "https://index.crates.io/$(index_path "$1")" |
-        grep -q "\"vers\":\"$version\""
+        # `-F` and not a pattern: a `.` in a version is a wildcard in one, so
+        # `0.1.0-alpha.3` matches a `0.1.0-alphaX3` the index holds and the
+        # wait ends on a version that was never published. Fixed, and with
+        # both quotes in it, the only string it can match is the field itself
+        # — the requirements of a dependency are under `"req"`.
+        grep -Fq "\"vers\":\"$version\""
 }
 
 # Dependency order, and the two crates a caller takes last: crates.io resolves a
@@ -159,11 +164,16 @@ for CRATE in marsrs-core marsrs-comm marsrs-crypt marsrs-buffer \
     # slowest case it has, and the release this job is the last step of is out
     # and tagged by now, so waiting is cheaper than a red step that publish.yml
     # has to be asked to run again.
+    # What is asked again at the end is the answer the loop reached and not the
+    # index: a probe that fails is a transient one — a DNS, a TLS, a 5xx — and
+    # the loop has 119 more of them to spend, whereas one that fails here would
+    # end the run over a version that was already seen.
+    in_index=false
     for _ in $(seq 1 120); do
-        index_has "$CRATE" && break
+        if index_has "$CRATE"; then in_index=true; break; fi
         sleep 5
     done
-    if ! index_has "$CRATE"; then
+    if [ "$in_index" != true ]; then
         echo "::error::$CRATE $version is on crates.io but not in its index after ten minutes; the crates that depend on it cannot resolve it, so they are not published"
         exit 1
     fi
