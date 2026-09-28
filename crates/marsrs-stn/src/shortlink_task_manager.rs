@@ -521,6 +521,22 @@ impl ShortLinkTaskManager {
         true
     }
 
+    /// `__OnMakeSureAuthTime` (`mars/stn/src/shortlink_task_manager.cc:1529`,
+    /// the answer to a worker's `OnMakeSureAuthTime`) — when a run that did its
+    /// own auth asked the app and when the app answered. A run of the app's own
+    /// that handles the auth inside the run has no way to say otherwise, and
+    /// these are the two readings the C++ would have taken itself. A run the
+    /// queue does not know is one it has forgotten, and nothing is written.
+    pub fn on_make_sure_auth_time(&mut self, run_id: RunId, begin: u64, end: u64) -> bool {
+        let Some(at) = self.locate(run_id) else {
+            return false;
+        };
+        let profile = &mut self.tasks[at].transfer_profile;
+        profile.begin_make_sure_auth_time = begin;
+        profile.end_make_sure_auth_time = end;
+        true
+    }
+
     /// `__OnResponse` — what a run answered with. [`None`] when no run of that
     /// name is in the queue, which is an answer about a task the queue has
     /// forgotten.
@@ -2845,6 +2861,25 @@ mod tests {
         assert_eq!(
             manager.tasks()[0].first_auth_flag,
             FirstAuthFlag::NoNeedAuth
+        );
+    }
+
+    /// `shortlink_task_manager.cc:1529` — a run that asks the app about auth
+    /// itself hands the pair back, and a run the queue has forgotten writes
+    /// nothing.
+    #[test]
+    fn a_run_that_did_its_own_auth_hands_back_when_it_asked() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        manager.start_task_at(100_000, task(7), prepare());
+
+        assert!(manager.on_make_sure_auth_time(RunId(7), 100_050, 100_090));
+        let profile = &manager.tasks()[0].transfer_profile;
+        assert_eq!(profile.begin_make_sure_auth_time, 100_050);
+        assert_eq!(profile.end_make_sure_auth_time, 100_090);
+        assert!(
+            !manager.on_make_sure_auth_time(RunId(8), 100_050, 100_090),
+            "a run the queue does not know writes nothing"
         );
     }
 
