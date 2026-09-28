@@ -33,6 +33,9 @@ mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK，或负的错�
 
 :::
 
+能给出这个路径的就是这三个包。其余平台由 App 自己拼出文件名，而拼用到的正是它交给配置
+的那两样：目录和前缀，中间夹着当天日期。
+
 ## 异步：记录可能还在缓存里
 
 默认模式把记录交给写线程、先进 mmap 缓存文件，所以 write 返回时字节还没进日志文件。
@@ -59,14 +62,27 @@ xlog.flush(sync = true)
 Xlog.flush(sync = true)
 ```
 
+```typescript [HarmonyOS]
+xlog.flush(true)
+```
+
+```dart [Flutter]
+await xlog.flush(sync: true)
+```
+
+```ts [React Native]
+xlog.flush(true)
+```
+
 ```c [C]
 mars_xlog_flush_sync();
 ```
 
 :::
 
-`flush(sync = false)` —— `appender_flush()`、`mars_xlog_flush()` —— 只是通知写线程就返回，
-适合定时调用，但上传前不能用它。
+`flush(sync = false)` —— `appender_flush()`、`mars_xlog_flush()`，也就是上面那几行不传
+`true` 的写法 —— 只是通知写线程就返回，适合定时调用，但上传前不能用它。Flutter 那边凡是
+跨到原生一侧的调用都返回 `Future`，`flush` 也一样，所以要 `await`。
 
 ## App 退出的时候
 

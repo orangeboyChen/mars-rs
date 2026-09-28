@@ -34,6 +34,10 @@ mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK, or a negative 
 
 :::
 
+Those three are the ones that answer it. The rest leave the app to name the
+file itself, which is the two things it gave the config: the directory and the
+prefix, with the day in between.
+
 ## Async: the record may still be in the cache
 
 The default mode hands a record to a writer thread through a memory-mapped cache
@@ -62,15 +66,29 @@ xlog.flush(sync = true)
 Xlog.flush(sync = true)
 ```
 
+```typescript [HarmonyOS]
+xlog.flush(true)
+```
+
+```dart [Flutter]
+await xlog.flush(sync: true)
+```
+
+```ts [React Native]
+xlog.flush(true)
+```
+
 ```c [C]
 mars_xlog_flush_sync();
 ```
 
 :::
 
-`flush(sync = false)` — `appender_flush()`, `mars_xlog_flush()` — only signals
-the writer thread and returns; it is the cheap one to call on a timer, and not
-the one to call before you upload.
+`flush(sync = false)` — `appender_flush()`, `mars_xlog_flush()`, and the same
+call without the `true` above — only signals the writer thread and returns; it
+is the cheap one to call on a timer, and not the one to call before you upload.
+Flutter's answers a `Future` like every call of its that crosses to the native
+side, so `await` it.
 
 ## When the app goes away
 
