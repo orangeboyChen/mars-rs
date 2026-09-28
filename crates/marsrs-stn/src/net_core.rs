@@ -23,10 +23,12 @@
 //!   [`NetCore::set_identify_on_response`]: the C++'s checker pulls them out of
 //!   the manager when it needs them, so every link the core keeps — and every
 //!   one it makes afterwards — is wired to them.
-//! * `ActiveLogic` — `IsForeground`, `LastForegroundChangeTime` and
-//!   `IsActive` are [`NetCore::set_active`] plus a `NetInfo` hook; the
-//!   `MakeSureConnected` a foreground task asks for is not ported, because a
-//!   port has no notion of a foreground.
+//! * `ActiveLogic` — `IsForeground` and `LastForegroundChangeTime` are
+//!   [`NetCore::set_is_foreground`] and
+//!   [`NetCore::set_last_foreground_change_time`]: what a task that may go out
+//!   on a long link reads before it wakes one that is down. `IsActive` is
+//!   [`NetCore::set_active`] plus a `NetInfo` hook, which is all the
+//!   anti-avalanche check asks of it.
 //! * the `MessageQueue` — the C++ `StartTask`, `RetryTasks` and the two
 //!   network-error handlers post themselves to it, which is what lets a queue
 //!   re-enter the net core from inside its own run. A `&mut` that a value
@@ -85,6 +87,10 @@ pub const FAST_SEND_LONGLINK_TASK_CNT_LIMIT: usize = 0;
 /// `kShortlinkErrTime` — how many short-link errors in a row make the whole
 /// connection `ServerFailed`.
 pub const SHORTLINK_ERR_TIME: i32 = 3;
+
+/// The `15 * 60 * 1000` of `NetCore::StartTask` — how soon after the app came
+/// to the front a task still wakes a long link that is down.
+pub const LONG_LINK_FOREGROUND_WINDOW: u64 = 15 * 60 * 1000;
 
 /// `kMobile` — one of the [`NetInfo`] answers, next to [`NO_NET`] and
 /// [`crate::NET_TYPE_WIFI`].
@@ -170,6 +176,18 @@ pub type NetInfo = dyn FnMut() -> i32 + Send;
 /// `time(NULL)` — the unix second the two ip reports are stamped with. Unset
 /// is the clock of the machine the port runs on.
 pub type Clock = dyn FnMut() -> u64 + Send;
+
+/// `ActiveLogic::Instance()->IsForeground()` — whether the app is in front,
+/// which is the one thing [`NetCore::start_task_at`] asks of the app before it
+/// wakes a long link that is down. Unset answers `false`, the way the C++'s
+/// `ActiveLogic` starts out.
+pub type IsForeground = dyn FnMut() -> bool + Send;
+
+/// `ActiveLogic::Instance()->LastForegroundChangeTime()` — the reading of the
+/// clock the app last went in or out of the front at. Unset answers `0`: with
+/// nothing else said, nothing has changed it since the process began, and
+/// whether the app is in front at all is [`IsForeground`]'s to answer.
+pub type LastForegroundChangeTime = dyn FnMut() -> u64 + Send;
 
 fn poisoned<T>(poisoned: PoisonError<T>) -> T {
     poisoned.into_inner()
@@ -314,6 +332,10 @@ pub struct NetCore {
     identify_buffer: Arc<Mutex<Option<Box<GetIdentifyCheckBuffer>>>>,
     /// `OnLonglinkIdentifyResponse` — the app's verdict on the answer.
     identify_response: Arc<Mutex<Option<Box<OnIdentifyResponse>>>>,
+    /// `ActiveLogic::Instance()->IsForeground()`.
+    is_foreground: Option<Box<IsForeground>>,
+    /// `ActiveLogic::Instance()->LastForegroundChangeTime()`.
+    last_foreground_change_time: Option<Box<LastForegroundChangeTime>>,
     clock: Option<Box<Clock>>,
 }
 
@@ -367,6 +389,8 @@ impl NetCore {
             on_longlink_status_change: None,
             identify_buffer: Arc::new(Mutex::new(None)),
             identify_response: Arc::new(Mutex::new(None)),
+            is_foreground: None,
+            last_foreground_change_time: None,
             clock: None,
         };
         // `defaultConfig.longlink_encoder = default_longlink_encoder`: every
@@ -765,6 +789,24 @@ impl NetCore {
         self.anti_avalanche().on_signal_active(is_active);
     }
 
+    /// `ActiveLogic::Instance()->IsForeground()` — whether the app is in front,
+    /// which is what a task asks before it wakes a long link that is down. A
+    /// host that never says otherwise gets the C++'s `ActiveLogic` as it is
+    /// made: not in front, so nothing is woken.
+    pub fn set_is_foreground(&mut self, is_foreground: impl FnMut() -> bool + Send + 'static) {
+        self.is_foreground = Some(Box::new(is_foreground));
+    }
+
+    /// `ActiveLogic::Instance()->LastForegroundChangeTime()` — when that last
+    /// changed. Together with [`NetCore::set_is_foreground`] it is the whole of
+    /// what the C++'s `ActiveLogic` tells the net core.
+    pub fn set_last_foreground_change_time(
+        &mut self,
+        last_foreground_change_time: impl FnMut() -> u64 + Send + 'static,
+    ) {
+        self.last_foreground_change_time = Some(Box::new(last_foreground_change_time));
+    }
+
     /// `SetPackerEncoderVersion` / `SetPackerEncoderName` — carried for the
     /// app to read back; nothing in the port hands them to a channel.
     pub fn set_packer_encoder(&mut self, version: i32, name: impl Into<String>) {
@@ -840,6 +882,25 @@ impl NetCore {
                 &ConnectProfile::new(),
             );
             return false;
+        }
+
+        // `longlink->Monitor()->MakeSureConnected()`: a task that may go out on
+        // a long link wakes the one it is named for, but only while the app is
+        // in front and went there within [`LONG_LINK_FOREGROUND_WINDOW`] — the
+        // C++ asks nothing of a link for a task started in the background, or
+        // one started a quarter of an hour after the app came forward, and a
+        // link that is already up is not woken either. What the monitor makes
+        // of the question is its own, ladder and all: this is the pass, not a
+        // connect.
+        if self.use_long_link
+            && task.channel_select & Task::CHANNEL_LONG != 0
+            && self.long_link_is_down(&task.channel_name)
+            && self.is_foreground()
+            && LONG_LINK_FOREGROUND_WINDOW >= now.saturating_sub(self.last_foreground_change_time())
+        {
+            if let Some(meta) = self.long_link_meta(&task.channel_name) {
+                meta.monitor().make_sure_connected_at(now);
+            }
         }
 
         let channel = self.choose_channel(&task);
@@ -1602,6 +1663,25 @@ impl NetCore {
             })
     }
 
+    /// `ActiveLogic::Instance()->IsForeground()` — unset answers `false`, which
+    /// is the `isforeground_(false)` the C++'s `ActiveLogic` is made with.
+    fn is_foreground(&mut self) -> bool {
+        self.is_foreground
+            .as_mut()
+            .is_some_and(|is_foreground| is_foreground())
+    }
+
+    /// `ActiveLogic::Instance()->LastForegroundChangeTime()` — unset answers
+    /// `0`, the reading the C++'s would have taken when its `ActiveLogic` was
+    /// made: nothing has moved the app in or out of the front yet.
+    fn last_foreground_change_time(&mut self) -> u64 {
+        self.last_foreground_change_time
+            .as_mut()
+            .map_or(0, |last_foreground_change_time| {
+                last_foreground_change_time()
+            })
+    }
+
     /// `__ChooseChannel(...)` — long link, short link, or the channel the task
     /// asked for: a task that may use either is put on the long link while it
     /// is up, and a `kChannelFastStrategy` one only while nothing else of that
@@ -2090,6 +2170,62 @@ mod tests {
             rec.sent(),
             vec![("short".to_string(), 7, "/cgi-bin/7".to_string())]
         );
+    }
+
+    /// Whether the link of the default channel was asked to connect: the
+    /// monitor's `MakeSureConnected` is what starts a run on it.
+    fn running(core: &NetCore) -> bool {
+        core.long_link(MAIN)
+            .expect("the default link")
+            .lock()
+            .unwrap_or_else(poisoned)
+            .is_running()
+    }
+
+    /// `longlink->Monitor()->MakeSureConnected()` of the C++'s `StartTask`: a
+    /// task that may go out on a long link wakes the one it is named for.
+    #[test]
+    fn a_task_wakes_the_link_of_an_app_that_came_forward() {
+        let (mut core, _rec) = wired();
+        core.set_is_foreground(|| true);
+        core.set_last_foreground_change_time(|| NOW);
+
+        assert!(!running(&core), "no run was asked for yet");
+        assert!(core.start_task_at(NOW, task(7)));
+        assert!(running(&core), "the task woke the link it is named for");
+    }
+
+    /// ... and the four reasons it does not: an app in the background, one
+    /// that came forward longer than [`LONG_LINK_FOREGROUND_WINDOW`] ago, a
+    /// link that is up already, and a task that cannot go out on one.
+    #[test]
+    fn a_task_wakes_no_link_it_was_not_given_a_reason_to() {
+        let (mut core, _rec) = wired();
+        core.set_is_foreground(|| false);
+        core.set_last_foreground_change_time(|| NOW);
+        assert!(core.start_task_at(NOW, task(7)));
+        assert!(!running(&core), "the app is in the background");
+
+        let (mut core, _rec) = wired();
+        core.set_is_foreground(|| true);
+        core.set_last_foreground_change_time(|| 0);
+        assert!(core.start_task_at(NOW + LONG_LINK_FOREGROUND_WINDOW, task(7)));
+        assert!(!running(&core), "the app came forward a quarter hour ago");
+
+        let (mut core, _rec) = wired();
+        core.set_is_foreground(|| true);
+        core.set_last_foreground_change_time(|| NOW);
+        up(&core, LongLinkStatus::Connected);
+        assert!(core.start_task_at(NOW, task(7)));
+        assert!(!running(&core), "the link is up");
+
+        let (mut core, _rec) = wired();
+        core.set_is_foreground(|| true);
+        core.set_last_foreground_change_time(|| NOW);
+        let mut short = task(8);
+        short.channel_select = Task::CHANNEL_SHORT;
+        assert!(core.start_task_at(NOW, short));
+        assert!(!running(&core), "the task cannot go out on a long link");
     }
 
     #[test]
