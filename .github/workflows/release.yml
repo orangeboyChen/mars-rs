@@ -776,7 +776,7 @@ jobs:
   # ABI, as marsrs-harmony-<version>.tar.gz. There is no package and no ArkTS
   # wrapper — the docs say so, and an app reaches the C ABI through NAPI of its
   # own — so what the release has to give that platform is the natives and the
-  # header, and nothing else.
+  # headers, and nothing else.
   #
   # No credential gates this one: the OpenHarmony SDK is public and the script
   # downloads it. What does gate it is the 2.7 GB that download is, which a
@@ -813,9 +813,15 @@ jobs:
           version="${{ needs.version.outputs.version }}"
           stage="dist/marsrs-harmony-$version"
           scripts/build_harmony.sh "$stage"
-          # the header of the C ABI the app calls, and the licence it is under
+          # the three headers of the C ABI the app calls, and the licence it is
+          # under: `build_harmony.sh` builds `marsrs-ffi` with `sdt,stn` on top
+          # of the default `xlog`, so the `.so` it wrote answers `mars_stn_*`
+          # and `mars_sdt_*` as well, and shipping `mars_xlog.h` alone would
+          # hide two thirds of what the library exports.
           mkdir -p "$stage/include"
           cp crates/marsrs-ffi/include/mars_xlog.h "$stage/include/"
+          cp crates/marsrs-ffi/include/mars_sdt.h "$stage/include/"
+          cp crates/marsrs-ffi/include/mars_stn.h "$stage/include/"
           cp LICENSE README.md "$stage/"
           tar -czf "$stage.tar.gz" -C dist "marsrs-harmony-$version"
           ls -l "$stage.tar.gz"
