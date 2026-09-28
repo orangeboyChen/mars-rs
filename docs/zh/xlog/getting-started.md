@@ -156,8 +156,9 @@ implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")  // + STN 和 SDT
 ```
 
 两个 AAR 带的是同一个 `libmarsrsxlog.so`，覆盖 `arm64-v8a`、`armeabi-v7a` 和
-`x86_64`。两个都带着 R8 规则，把 Kotlin 和 native 两边互相调用用到的名字留住，所
-以开了 `minifyEnabled true` 的 release 构建不需要自己再加规则。
+`x86_64`，两个都要求 `minSdk 21`。两个都带着 R8 规则，把 Kotlin 和 native 两边
+互相调用用到的名字留住，所以开了 `minifyEnabled true` 的 release 构建不需要自己
+再加规则。
 
 ```kotlin
 val xlog = Xlog.open(
@@ -231,7 +232,9 @@ flutter pub add marsrs_xlog    # 要整个移植就 marsrs
 配置 —— 它从 JitPack 解析 `io.github.orangeboychen.marsrs:xlog` —— `pod install`
 是 `flutter build ios` 自己的事：这个插件是带 podspec 的普通 Flutter 插件，App 的
 `Podfile` 里不需要提到它。两个包只拿一个，不要都拿：两个带的是同一个 native 库，
-一个 App 里放两份是编不过的。
+一个 App 里放两份是编不过的。它是两个平台的插件 —— 它 `pubspec.yaml` 里的
+`platforms:` 只写了 Android 和 iOS —— 所以还要构建 Web 或桌面的 App 在那边得从
+平台自己的代码里拿日志。
 
 ```dart
 final dir = await getTemporaryDirectory();          // path_provider
@@ -267,7 +270,9 @@ cd ios && pod install
 包在 npm 上，所以 `npm install` 拿的是那里最新的版本。App 里不需要提到这个模块：
 autolinking 会找到 `android/` 里的 `ReactPackage` 和 `ios/` 里的 pod，这也就是把
 `Xlog` 放进 `TurboModuleRegistry` 的东西。它是 TurboModule，这正是新架构要的 ——
-React Native 0.74 或更新，并且关掉 bridge —— 这也是这层对 App 唯一的要求。
+React Native 0.74 或更新，并且关掉 bridge —— 这也是这层对 App 唯一的要求。这个
+模块带的是 Android 和 iOS 两个平台：还要构建 Web 的 App 在那边得从平台自己的
+代码里拿日志。
 
 ```ts
 const xlog = Xlog.open({
@@ -299,8 +304,10 @@ marsrs-<version>-<host>.zip      （Windows）
     libmars_ffi.a / libmars_ffi.so（.dylib、.dll）
 ```
 
-为 `x86_64-unknown-linux-gnu`、`aarch64-apple-darwin` 和
-`x86_64-pc-windows-msvc` 构建，任务链路和网络诊断都在里面。
+每个 host 一个压缩包，在你要的那个版本的 release 上 ——
+`x86_64-unknown-linux-gnu`、`aarch64-apple-darwin` 和 `x86_64-pc-windows-msvc`。
+解压到哪儿都行：`include/` 和那个库就是它的全部内容，任务链路和网络诊断跟日志在
+同一个库里。
 
 ```c
 #include <mars_xlog.h>

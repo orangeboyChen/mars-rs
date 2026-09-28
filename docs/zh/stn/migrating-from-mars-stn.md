@@ -13,7 +13,7 @@
 ## App 接过去的那两件事
 
 **队列是靠一次调用排空的，不是靠一个线程。** C++ 用自己的一个 message-queue 线程跑
-队列；这个移植里没有线程，所以本该是一个线程的地方，是宿主的一次调用 ——
+队列；这个库里没有线程，所以本该是一个线程的地方，是宿主的一次调用 ——
 `run_pending()`，以及告诉它这一趟最多还能等多久的 `due_time()`。一个循环就是全部：
 
 ::: code-group
@@ -77,7 +77,7 @@ interface，所以那个对象得由 App 补完。
 启动这一步也一样：`Mars.init(context, handler)` 和 `Mars.onCreate(true)` 起两座
 桥，屏幕或网络变了的时候 `BaseEvent.onForeground` 和 `BaseEvent.onNetworkChange`，
 `AppLogic.setCallBack` 给的是 STN 问的账号和设备 —— C++ 项目的 Java 拼的那几个名字，
-在这个移植的包里。
+现在在这个库的包里。
 
 ## 接着看
 

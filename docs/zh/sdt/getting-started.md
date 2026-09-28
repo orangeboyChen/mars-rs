@@ -202,6 +202,10 @@ marsrs-<version>-<host>.zip      （Windows）
     libmars_ffi.a / libmars_ffi.so（.dylib、.dll）
 ```
 
+每个 host 一个压缩包 —— Linux、macOS、Windows —— 在你要的那个版本的 release 上。
+它和[日志那一节](/zh/xlog/getting-started#c-abi)发布的是同一个压缩包：一个库，
+三个头文件都在里面。
+
 ```c
 #include <mars_sdt.h>
 

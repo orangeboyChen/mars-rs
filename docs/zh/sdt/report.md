@@ -35,7 +35,7 @@
 | 报告 | `report_json(&results)` | `MarsSdt.takeReport()` | `SdtLogic.takeReport()` | `mars_sdt_take_report(buf, len)` |
 | 改用回调 | — | — | `SdtLogic.setCallBack { … }` | — |
 
-两条路拿的是同一份文档，所以 App 用其中一条：在 Android 和共享 Kotlin 上，一趟会把
+两条路取的是同一份报告，所以 App 走一条就够：在 Android 和共享 Kotlin 上，一趟会把
 报告交给回调*并且*留着给之后的 `takeReport()`，所以两个都用的 App 会把同一次诊断送
 两次。取走就清空了 —— 下一次调用报的是这之后发生的事。
 
@@ -54,15 +54,15 @@
 | 全丢掉 | `SdtCore::reset` | `reset` | `reset` | `mars_sdt_reset` |
 
 在 Rust 里一趟会独占借用这个 logic，所以 `run_checks` 还在栈上的时候调不了
-`cancel_active_check`：先用 `cancel_handle()` 拿一个 `CancelHandle`，交给要停这一趟
-的那一方 —— 那个探测闭包，它握着必须让出来的 socket。
+`cancel_active_check`：先用 `cancel_handle()` 取一个 `CancelHandle`，交给要停这一趟
+的那一方 —— 那个探测闭包，socket 在它手里，只有它放得开。
 
-其余每个平台的取消都不需要 handle：它设的是这一趟会读的那个标志，不拿这一趟握着的
-锁，所以它能在探测还在被问的时候从另一个线程落下来 —— 而这也正是取消有意义的唯一
-时刻。它做的是不让计划里剩下的部分跑起来；一个已经出去的探测不会被打断。
+其余每个平台取消都不用 handle：它设的是这一趟会读的那个标志，不去拿这一趟握着的
+锁，所以探测还在被问的时候，它能从另一个线程落下来 —— 这本来就是取消唯一有意义的
+时刻。它做的是让计划里剩下的部分不再跑起来；已经出去的探测不会被打断。
 
-还有，一趟一次只能有一趟：诊断是一个进程级的值，所以第二次 `runChecks` 会等第一次
-而不是跟它并排跑 —— 在 Android 和共享 Kotlin 上，第二次调用直到第一次结束才返回。
+还有一点，一次只跑一趟：诊断是一个进程级的值，所以第二次 `runChecks` 会等第一次跑完，
+而不是跟它并排跑 —— 在 Android 和共享 Kotlin 上，第二次调用要到第一次结束才返回。
 
 ## 接着看
 

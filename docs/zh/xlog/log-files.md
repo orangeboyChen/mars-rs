@@ -33,6 +33,9 @@ mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK，或负的错�
 
 :::
 
+Flutter、React Native 和 HarmonyOS 都不回答路径 —— 这三个上的 appender 没有
+`currentLogPath` —— 所以这三个上的 App 读的是自己给的那个目录，加上上面那个名字。
+
 ## 异步：记录可能还在缓存里
 
 默认模式把记录交给写线程、先进 mmap 缓存文件，所以 write 返回时字节还没进日志文件。
@@ -59,6 +62,18 @@ xlog.flush(sync = true)
 Xlog.flush(sync = true)
 ```
 
+```dart [Flutter]
+await xlog.flush(sync: true)
+```
+
+```ts [React Native]
+xlog.flush(true)
+```
+
+```typescript [HarmonyOS]
+xlog.flush(true)
+```
+
 ```c [C]
 mars_xlog_flush_sync();
 ```
@@ -82,6 +97,8 @@ mars_xlog_flush_sync();
 |---|---|
 | Android | `Xlog(config, context)` —— App 任意一个 `Context` 都会注册一个 `ComponentCallbacks2`，从 `TRIM_MEMORY_UI_HIDDEN` 往上就 flush |
 | SwiftPM | 每个 `Xlog`，建好就开始：它看着 `didEnterBackground` 和 `willTerminate`，在 watchOS 上还看着 `WKExtension` 的 |
+| Flutter、React Native | 自己没有：两边都是直接去调 C ABI 的 —— Android 上不给 `Context`，iOS 上不经过那个 Swift 封装 —— 所以没有注册任何 hook，就是上面的“下次启动” |
+| HarmonyOS | 没有：NAPI 模块没有注册任何生命周期回调，就是上面的“下次启动” |
 | 其余每个平台 | 下次启动，如上 |
 
 `close()` 也会排空，所以退出时顺手关掉 appender 的 App 同样没事。上面那两个 `flush` 是为

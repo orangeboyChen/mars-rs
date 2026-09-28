@@ -38,7 +38,7 @@ native 一侧在 Android 上倒是带着 STN —— 整个移植的那个 AAR �
    Rust 里一个 trait，Swift 里一个闭包，共享 Kotlin 里一个 `ask`，C 里一个回调，
    Android 上是 App 实现的那个 interface。见[那些问题](/zh/stn/callbacks)。
 2. **发起一个任务。** 它被接过去，挑一条链路，放进队列，调用立刻返回。
-3. **驱动队列。** 这是这个移植对调用方唯一的要求。本该是一个线程的地方，是 App 的
+3. **驱动队列。** 这是这个库对调用方唯一的要求。本该是一个线程的地方，是 App 的
    一对调用 —— `run_pending()`，以及告诉它这一趟最多还能等多久的 `due_time()`。
    一个发起了却从没被排空的任务，会一直待在它的队列里。
 
@@ -286,6 +286,10 @@ marsrs-<version>-<host>.zip      （Windows）
     include/mars_stn.h      任务链路
     libmars_ffi.a / libmars_ffi.so（.dylib、.dll）
 ```
+
+每个 host 一个压缩包 —— Linux、macOS、Windows —— 在你要的那个版本的 release 上。
+它和[日志那一节](/zh/xlog/getting-started#c-abi)发布的是同一个压缩包：一个库，
+三个头文件都在里面。
 
 ```c
 #include <mars_stn.h>
