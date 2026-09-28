@@ -129,7 +129,11 @@ class Xlog {
   /// What every file of this appender starts with, and what it is known by.
   final String namePrefix;
 
-  var _closed = false;
+  /// The drain [close] started, and `null` while it has not: what a second
+  /// [close] answers, so that every caller waits for the one drain, and what
+  /// marks this appender closed while that drain is still running — a record
+  /// handed to an appender that is closing is one with nowhere to land.
+  Future<void>? _closing;
 
   LogLevel _level;
 
@@ -141,8 +145,9 @@ class Xlog {
 
   var _maxAliveTimeSeconds = 0;
 
-  /// Whether this appender is still open: `false` after [close].
-  bool get isOpen => !_closed;
+  /// Whether this appender is still open: `false` once [close] is called, and
+  /// not only once the drain it started has finished.
+  bool get isOpen => _closing == null;
 
   /// Opens an appender of its own with [config].
   ///
@@ -163,7 +168,7 @@ class Xlog {
   LogLevel get level => _level;
 
   set level(LogLevel level) {
-    if (_closed) {
+    if (_closing != null) {
       return;
     }
     _level = level;
@@ -178,7 +183,7 @@ class Xlog {
   AppenderMode get mode => _mode;
 
   set mode(AppenderMode mode) {
-    if (_closed) {
+    if (_closing != null) {
       return;
     }
     _mode = mode;
@@ -190,7 +195,7 @@ class Xlog {
   bool get consoleLogEnabled => _consoleLogEnabled;
 
   set consoleLogEnabled(bool enabled) {
-    if (_closed) {
+    if (_closing != null) {
       return;
     }
     _consoleLogEnabled = enabled;
@@ -202,7 +207,7 @@ class Xlog {
   int get maxFileSizeBytes => _maxFileSizeBytes;
 
   set maxFileSizeBytes(int bytes) {
-    if (_closed) {
+    if (_closing != null) {
       return;
     }
     _maxFileSizeBytes = bytes;
@@ -213,7 +218,7 @@ class Xlog {
   int get maxAliveTimeSeconds => _maxAliveTimeSeconds;
 
   set maxAliveTimeSeconds(int seconds) {
-    if (_closed) {
+    if (_closing != null) {
       return;
     }
     _maxAliveTimeSeconds = seconds;
@@ -227,7 +232,7 @@ class Xlog {
   /// once [close] ran, which is the honest answer of an appender that writes
   /// nothing.
   Future<bool> isLoggable(LogLevel level) async {
-    if (_closed) {
+    if (_closing != null) {
       return false;
     }
     return await _invoke<bool>('isLoggable', <String, Object?>{'level': level.value}) ?? false;
@@ -238,7 +243,7 @@ class Xlog {
   /// The file, the function and the line of the record are the C++'s own
   /// defaults on the platform side — Dart has no caller frame to name.
   void log(LogLevel level, String tag, String message) {
-    if (_closed) {
+    if (_closing != null) {
       return;
     }
     _send('log', <String, Object?>{'level': level.value, 'tag': tag, 'message': message});
@@ -267,20 +272,27 @@ class Xlog {
   /// Waiting is the platform side's: what this answers is that the drain has
   /// happened, which is what an app wants before it reads or uploads the files.
   Future<void> flush({bool sync = false}) async {
-    if (_closed) {
+    if (_closing != null) {
       return;
     }
     await _invoke<void>('flush', <String, Object?>{'sync': sync});
   }
 
   /// Drains what is left and closes this appender. Writing through it afterwards
-  /// writes nothing, and calling it twice closes nothing twice.
+  /// writes nothing, and calling it twice closes nothing twice: what the second
+  /// call answers is the drain the first one started, so an app that awaits
+  /// either one has awaited the one drain, and not a future that was already
+  /// done while the files were still being written — the answer an app waiting
+  /// to read or upload them would have been given by a second call that
+  /// returned at once.
   Future<void> close() async {
-    if (_closed) {
-      return;
+    final closing = _closing;
+    if (closing != null) {
+      return closing;
     }
-    _closed = true;
-    await _invoke<void>('close');
+    final drain = _invoke<void>('close');
+    _closing = drain;
+    return drain;
   }
 
   /// Every call carries the name the appender was opened with, because the
