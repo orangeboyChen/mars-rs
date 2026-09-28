@@ -349,17 +349,35 @@ impl LongLinkConnectMonitor {
         self.auto_interval_connect(now);
     }
 
-    /// `__OnSignalActive(_isactive)`.
-    pub fn on_active_changed(&mut self, _is_active: bool) {
-        self.on_active_changed_at(marsrs_comm::tickcount::gettickcount(), _is_active)
+    /// `__OnSignalActive(_isactive)` — the app became active, or stopped being
+    /// it, and only the first of the two is a reason to touch the alarms.
+    pub fn on_active_changed(&mut self, is_active: bool) {
+        self.on_active_changed_at(marsrs_comm::tickcount::gettickcount(), is_active)
     }
 
-    /// The same, with the reading handed in, with the same early return.
-    pub fn on_active_changed_at(&mut self, now: u64, _is_active: bool) {
+    /// The same, with the reading handed in.
+    ///
+    /// The signal comes on both edges, and only becoming active is a reason to
+    /// ask for the link again. The false edge is not the app going to the
+    /// background — that leaves it active until an alarm says otherwise —
+    /// but the alarm that makes it inactive after ten minutes there, and by
+    /// then the monitor has recomputed on every alarm that fired in
+    /// between: an alarm here is a due time, and it is `IsActive` as it
+    /// reads when the alarm fires that decides the wait. Re-arming on the
+    /// false edge buys one cycle sooner on the inactive ladder and costs
+    /// the wake alarm a link that went down within the last half second
+    /// had armed, which `__AutoIntervalConnect` cancels and replaces with
+    /// a rebuild up to ten minutes out.
+    ///
+    /// `__OnSignalForeground` above is left alone: that is the one the C++
+    /// does not condition on its flag.
+    pub fn on_active_changed_at(&mut self, now: u64, is_active: bool) {
         if self.is_svr_trig_off() {
             return;
         }
-        self.auto_interval_connect(now);
+        if is_active {
+            self.auto_interval_connect(now);
+        }
     }
 
     /// `__OnLongLinkStatuChanged(_status, _channel_id)` — the C++ hands the
