@@ -194,10 +194,15 @@ pub fn replace_char(s: &str, be_replaced: char, replace_with: char) -> String {
     s.replace(be_replaced, &replace_with.to_string())
 }
 
-/// `strutil::GetFileNameFromPath` — everything after the last `/` or `\`.
-/// A trailing separator (or no separator at all) yields the whole input.
+/// `strutil::GetFileNameFromPath` — what follows the last `\`, or the last
+/// `/` in a path that has no backslash at all. A trailing separator (or no
+/// separator at all) yields the whole input.
+///
+/// The backslash is looked for first and a slash only when there is none, so
+/// `"a\b/c"` is `"b/c"` and not `"c"`.
 pub fn file_name_from_path(path: &str) -> &str {
-    match path.rfind(['/', '\\']) {
+    let pos = path.rfind('\\').or_else(|| path.rfind('/'));
+    match pos {
         Some(pos) if pos + 1 < path.len() => &path[pos + 1..],
         _ => path,
     }

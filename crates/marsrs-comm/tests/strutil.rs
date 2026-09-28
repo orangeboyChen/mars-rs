@@ -115,6 +115,16 @@ fn takes_the_file_name_of_a_path() {
 }
 
 #[test]
+fn a_mixed_separator_path_yields_the_name_after_the_backslash() {
+    // `strrchr('\\')` runs first and a '/' is looked for only in a path that
+    // has no backslash at all, so one with both is cut at the backslash.
+    assert_eq!(strutil::file_name_from_path("a\\b/c"), "b/c");
+    assert_eq!(strutil::file_name_from_path("a/b\\c"), "c");
+    assert_eq!(strutil::file_name_from_path("C:\\log\\"), "C:\\log\\");
+    assert_eq!(strutil::file_name_from_path(""), "");
+}
+
+#[test]
 fn finds_a_substring_ignoring_case() {
     assert_eq!(strutil::ci_find_substr("Hello World", "world", 0), Some(6));
     assert_eq!(strutil::ci_find_substr("Hello World", "hello", 0), Some(0));
