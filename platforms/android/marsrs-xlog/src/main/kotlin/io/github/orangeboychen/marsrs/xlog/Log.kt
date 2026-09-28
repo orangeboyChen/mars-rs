@@ -32,7 +32,6 @@ object Log {
     const val LEVEL_FATAL = 5
     const val LEVEL_NONE = 6
 
-    // defaults to LEVEL_NONE
     private var level: Int = LEVEL_NONE
 
     @JvmField

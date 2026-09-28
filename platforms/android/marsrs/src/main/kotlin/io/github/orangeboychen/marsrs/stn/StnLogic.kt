@@ -15,10 +15,11 @@
  *  class, so every one is `@JvmStatic` — including the private ones JNI calls
  *  back, which is what the C++'s own Java declares too.
  */
-// The constants below carry the name the C++ project's Java gives them, spelled
-// the way Kotlin spells a constant: `K_PING_CHECK` there is `K_PING_CHECK` here.
-// The JNI reaches a constant by the number it carries and not by its name, so
-// nothing on the Rust side had to change with them.
+// The constants below carry the name the C++ project's Java gives them, which
+// is the name Kotlin spells a constant in: an app migrating from that API
+// writes what it always wrote. The JNI reaches a constant by the number it
+// carries and not by its name, so nothing on the Rust side had to change with
+// them.
 
 package io.github.orangeboychen.marsrs.stn
 
@@ -37,7 +38,7 @@ object StnLogic {
     class Task {
 
         @JvmField
-        var taskID: Int = 0 // unique task identify
+        var taskID: Int = 0
 
         @JvmField
         var channelSelect: Int = 0 // short,long or both
@@ -70,7 +71,7 @@ object StnLogic {
         var networkStatusSensitive: Boolean = false
 
         @JvmField
-        var priority: Int = 0 // @see priority
+        var priority: Int = 0
 
         @JvmField
         var retryCount: Int = -1
@@ -82,7 +83,7 @@ object StnLogic {
         var totalTimeout: Int = 0 // total timeout, in ms
 
         @JvmField
-        var userContext: Any? = null // user context
+        var userContext: Any? = null
 
         @JvmField
         var reportArg: String? = null
@@ -310,14 +311,12 @@ object StnLogic {
         var channelType: Int = 0
 
         @JvmField
-        var protocolType: Int = 0 // the protocol type
+        var protocolType: Int = 0
     }
 
     /**
-     * Created by caoshaokun on 16/2/1.
-     *
-     * An app that uses the signalling channel has to implement this interface — the port asks the
-     * app the fifteen questions below.
+     * An app that uses the signalling channel has to implement this interface —
+     * the port asks the app the fourteen questions below.
      */
     interface ICallBack {
         /**
@@ -408,7 +407,7 @@ object StnLogic {
 
     private var callBack: ICallBack? = null
 
-    /** Sets the instance the network layer calls back on — the app implements NetworkCallBack */
+    /** Sets the instance the network layer calls back on — the app implements [ICallBack] */
     @JvmStatic
     fun setCallBack(callback: ICallBack?) {
         callBack = callback
@@ -626,8 +625,8 @@ object StnLogic {
     external fun trigNooping()
 
     /**
-     * Asks the app to authenticate. If a TASK asks for the AUTH state and there is none right now,
-     * this is the method the component calls back.
+     * Asks the app whether the user is logged in. A task that asks for it gets
+     * this call when no answer is cached.
      */
     @JvmStatic
     private fun makesureAuthed(host: String?): Boolean {

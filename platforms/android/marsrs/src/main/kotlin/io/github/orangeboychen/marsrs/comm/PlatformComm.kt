@@ -1,7 +1,8 @@
-// The constants below carry the name the C++ project's Java gives them, spelled
-// the way Kotlin spells a constant: `K_PING_CHECK` there is `K_PING_CHECK` here.
-// The JNI reaches a constant by the number it carries and not by its name, so
-// nothing on the Rust side had to change with them.
+// The constants below carry the name the C++ project's Java gives them, which
+// is the name Kotlin spells a constant in: an app migrating from that API
+// writes what it always wrote. The JNI reaches a constant by the number it
+// carries and not by its name, so nothing on the Rust side had to change with
+// them.
 
 package io.github.orangeboychen.marsrs.comm
 
@@ -55,7 +56,6 @@ object PlatformComm {
     const val NETTYPE_UNKNOWN: Int = 6
     const val NETTYPE_NON: Int = -1
 
-    /** The WiFi info class */
     class WifiInfo {
         @JvmField
         var ssid: String? = null
@@ -64,7 +64,6 @@ object PlatformComm {
         var bssid: String? = null
     }
 
-    /** The SIM card info class */
     class SIMInfo {
         @JvmField
         var ispCode: String? = null
@@ -73,7 +72,6 @@ object PlatformComm {
         var ispName: String? = null
     }
 
-    /** The access point info */
     class APNInfo {
         @JvmField
         var netType: Int = 0
@@ -184,7 +182,6 @@ object PlatformComm {
             }
         }
 
-        /** Gets the details of the current WiFi */
         @JvmStatic
         fun getCurWifiInfo(): WifiInfo? {
             return try {
@@ -214,7 +211,6 @@ object PlatformComm {
             }
         }
 
-        /** Gets the current SIM card info */
         @JvmStatic
         fun getCurSIMInfo(): SIMInfo? {
             return try {
@@ -235,7 +231,6 @@ object PlatformComm {
             }
         }
 
-        /** Gets the access point info */
         @JvmStatic
         fun getAPNInfo(): APNInfo? {
             return try {

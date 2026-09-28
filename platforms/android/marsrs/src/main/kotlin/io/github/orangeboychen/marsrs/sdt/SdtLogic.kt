@@ -1,7 +1,8 @@
-// The constants below carry the name the C++ project's Java gives them, spelled
-// the way Kotlin spells a constant: `K_PING_CHECK` there is `K_PING_CHECK` here.
-// The JNI reaches a constant by the number it carries and not by its name, so
-// nothing on the Rust side had to change with them.
+// The constants below carry the name the C++ project's Java gives them, which
+// is the name Kotlin spells a constant in: an app migrating from that API
+// writes what it always wrote. The JNI reaches a constant by the number it
+// carries and not by its name, so nothing on the Rust side had to change with
+// them.
 
 package io.github.orangeboychen.marsrs.sdt
 
