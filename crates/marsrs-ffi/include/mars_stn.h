@@ -352,7 +352,8 @@ void mars_stn_clear_tasks(void);
  * another.
  *
  * The C++ runs this on threads of its own; this port has none, so it is the
- * host's loop that calls it, and `mars_stn_due_time` is when. A task that is
+ * host's loop that calls it, and `mars_stn_due_time` is how long it may wait.
+ * A task that is
  * started and never drained sits in its queue until the process ends, which is
  * why the two are one pair: the header that declares `mars_stn_start_task` and
  * none of these leaves a caller a pipeline it can fill and never empty.
@@ -360,11 +361,14 @@ void mars_stn_clear_tasks(void);
 void mars_stn_run_pending(void);
 
 /**
- * `NetCore::GetNextHeartbeatTime` — when the host's loop is to call
- * `mars_stn_run_pending` again: the soonest of the two queues, the zombie check
- * and the timing sync's alarm, as a `gettickcount()`.
+ * `NetCore::GetNextHeartbeatTime` — how long the host's loop may wait before it
+ * calls `mars_stn_run_pending` again: the soonest of the two queues, the zombie
+ * check and the timing sync's alarm, as milliseconds left. Not as the
+ * `gettickcount()` those are measured in, which is a reading of a clock this
+ * library keeps to itself and no caller can subtract from.
  *
- * @return that tick, which is never negative, or MARS_STN_ERR_NO_DUE when there
+ * @return that many milliseconds — 0 is a pass that is already due, which a
+ *         follow-up waiting in the queue is — or MARS_STN_ERR_NO_DUE when there
  *         is nothing to wait for — no task is out, no zombie is being checked,
  *         no alarm is armed — or MARS_STN_ERR_PANIC.
  */

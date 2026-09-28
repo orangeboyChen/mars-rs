@@ -847,12 +847,15 @@ pub extern "C" fn mars_stn_gen_sequence_id() -> u16 {
     guard(0, gen_sequence_id)
 }
 
-/// `NetCore::GetNextHeartbeatTime` — when the host's run loop is to wake: the
-/// soonest of the two queues, the zombie check and the timing sync's alarm, as a
-/// `gettickcount()`.
+/// `NetCore::GetNextHeartbeatTime` — how long the host's run loop may wait
+/// before it has to call [`mars_stn_run_pending`] again: the soonest of the two
+/// queues, the zombie check and the timing sync's alarm, as milliseconds left
+/// and not as a `gettickcount()`, which is a reading of a clock no caller
+/// outside this library can read.
 ///
-/// @return that tick, which is never negative, or [`MARS_STN_ERR_NO_DUE`] when
-/// there is nothing to wait for, or [`MARS_STN_ERR_PANIC`].
+/// @return that many milliseconds — `0` is a pass that is due now — or
+/// [`MARS_STN_ERR_NO_DUE`] when there is nothing to wait for, or
+/// [`MARS_STN_ERR_PANIC`].
 ///
 /// A task that is out is always waiting on something, so this is not a
 /// heartbeat a host may ignore: a task that is started and never drained sits in
@@ -862,7 +865,7 @@ pub extern "C" fn mars_stn_due_time() -> i64 {
     guard(MARS_STN_ERR_PANIC.into(), || {
         with_logic(|logic| {
             logic
-                .due_time()
+                .due_delay()
                 .map_or(MARS_STN_ERR_NO_DUE, |due| due as i64)
         })
     })
@@ -873,7 +876,8 @@ pub extern "C" fn mars_stn_due_time() -> i64 {
 /// queues and the zombies only do when they are asked.
 ///
 /// The C++ runs this on threads of its own; this port has none, so it is the
-/// host's loop that calls it — [`mars_stn_due_time`] is when.
+/// host's loop that calls it — [`mars_stn_due_time`] is how long it may
+/// wait.
 #[no_mangle]
 pub extern "C" fn mars_stn_run_pending() {
     guard((), || with_logic(StnLogic::run_pending));

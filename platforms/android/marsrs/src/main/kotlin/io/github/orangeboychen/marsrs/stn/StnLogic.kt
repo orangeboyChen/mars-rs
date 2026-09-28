@@ -434,7 +434,8 @@ object StnLogic {
      * is started again is another.
      *
      * The C++ runs this on a thread of its own; the port has none, so it is the
-     * app's loop that calls it, and [dueTime] is when. Neither is a call the
+     * app's loop that calls it, and [dueTime] is how long it may wait.
+     * Neither is a call the
      * C++'s Java declares, because there the thread is the caller: a task that
      * is started here and never drained sits in its queue until the process
      * ends, which is why [startTask] is not the whole of the pipeline.
@@ -443,12 +444,15 @@ object StnLogic {
     external fun runPending()
 
     /**
-     * When the app's loop is to call [runPending] again: the soonest of the two
-     * queues, the zombie check and the timing sync's alarm, as a
-     * `gettickcount()`.
+     * How long the app's loop may wait before it calls [runPending] again: the
+     * soonest of the two queues, the zombie check and the timing sync's alarm,
+     * as milliseconds left. Not as the `gettickcount()` those are measured in,
+     * which is a reading of a clock the native side keeps to itself.
      *
-     * @return that tick, or `-1` when there is nothing to wait for — no task is
-     *     out, no zombie is being checked, no alarm is armed.
+     * @return that many milliseconds — `0` is a pass that is already due, which
+     *     a follow-up waiting in the queue is — or `-1` when there is nothing to
+     *     wait for: no task is out, no zombie is being checked, no alarm is
+     *     armed.
      */
     @JvmStatic
     external fun dueTime(): Long

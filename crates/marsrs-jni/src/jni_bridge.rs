@@ -907,7 +907,8 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_clearTas
 /// as one pass the host's loop makes.
 ///
 /// The C++ runs this on a thread of its own; this port has none, so it is the
-/// app's loop that calls it — `StnLogic.dueTime` is when. Declared by no Java of
+/// app's loop that calls it — `StnLogic.dueTime` is how long it may wait.
+/// Declared by no Java of
 /// the C++'s, because the C++ has no need of one: its own thread is the caller.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_runPending<'local>(
@@ -917,8 +918,10 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_runPendi
     guard(run_pending_impl)
 }
 
-/// `StnLogic.dueTime` — when the host's loop is to call `StnLogic.runPending`
-/// again, as a `gettickcount()`; `-1` is nothing to wait for.
+/// `StnLogic.dueTime` — how long the app's loop may wait before it calls
+/// `StnLogic.runPending` again, in milliseconds, `0` for a pass that is already
+/// due and `-1` for nothing to wait for. Not a `gettickcount()`, whose origin is
+/// this process's and means nothing to the JVM.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_dueTime<'local>(
     _env: EnvUnowned<'local>,

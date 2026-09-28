@@ -606,6 +606,28 @@ fn a_short_link_error_the_app_is_asked_about_is_a_retry() {
     assert_eq!(app.sent().len(), 2);
 }
 
+/// The alarm a host sleeps on belongs to what is out, not to what a queue
+/// already asked for. A follow-up is posted by a queue that could not do its
+/// own work while it was running — a retry, a long link that failed — and
+/// nothing arms an alarm for it, so a host that waits for the next one reports
+/// the error whenever that one happens to go off.
+#[test]
+fn a_follow_up_that_is_waiting_is_due_at_the_reading_the_host_has() {
+    let mut app = App::new();
+    app.answer_with(0, TaskFailHandleType::SessionTimeout);
+    app.start(7);
+    assert_eq!(app.answered_short(7), Some(RespHandle::Deferred));
+    assert_eq!(app.core.pending_count(), 1);
+
+    // and not at the retry interval, nor at the timing sync's alarm: both of
+    // those are later than the reading the host is asking about
+    assert_eq!(app.core.due_time_at(START), Some(START));
+
+    // a host that drains it has nothing to wait for but the alarms again
+    app.run_pending();
+    assert!(app.core.due_time_at(START).is_none_or(|due| due > START));
+}
+
 #[test]
 fn a_task_the_network_cannot_take_is_not_started() {
     let mut app = App::new();

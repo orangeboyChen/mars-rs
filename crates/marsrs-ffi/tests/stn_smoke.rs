@@ -343,12 +343,22 @@ fn the_hosts_loop_is_a_pair_the_header_declares() {
 
     assert_eq!(start(7, CHANNEL_ALL), MARS_STN_OK);
 
-    // There is a tick to wait for, and it is not one of the two errors: the
+    // There is a wait to be had, and it is not one of the two errors: the
     // timing sync arms an alarm of its own the moment the core is made, and a
     // task that is out is waiting on its first package besides.
     let due = mars_stn_due_time();
     assert_ne!(due, MARS_STN_ERR_NO_DUE);
     assert_ne!(due, MARS_STN_ERR_PANIC.into());
+
+    // What it answers is the wait that is left and not the tick the alarm is
+    // armed at: a tick is measured from an origin a C caller cannot read, so it
+    // would grow with the age of the process instead of running down.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let later = mars_stn_due_time();
+    assert!(
+        later < due,
+        "the wait ran down instead of growing: {due} then {later}"
+    );
 
     // A pass made before that tick has come is one that leaves the task alone:
     // what would end it is the tick, not the call.

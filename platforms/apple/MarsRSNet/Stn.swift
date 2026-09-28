@@ -313,13 +313,14 @@ public enum MarsStn {
         mars_stn_set_client_version(version)
     }
 
-    /// `NetCore::GetNextHeartbeatTime` — when the host's loop is to call
-    /// [`runPending`] again: the soonest of the two queues, the zombie check and
-    /// the timing sync's alarm, as a `gettickcount()`.
+    /// `NetCore::GetNextHeartbeatTime` — how long the app's loop may wait before
+    /// it calls [`runPending`] again: the soonest of the two queues, the zombie
+    /// check and the timing sync's alarm, as milliseconds left, and `0` for a
+    /// pass that is already due.
     ///
     /// `nil` is an error the C ABI answered with — [`MARS_STN_ERR_NO_DUE`] for a
     /// core with nothing to wait for, [`MARS_STN_ERR_PANIC`] for a panic — and
-    /// not a tick, which is never negative.
+    /// not a delay, which is never negative.
     ///
     /// A task that is out is always waiting on something, so this is not a
     /// heartbeat an app may ignore: a task that is started and never drained
@@ -336,7 +337,8 @@ public enum MarsStn {
     /// another.
     ///
     /// The C++ runs this on threads of its own; this port has none, so it is the
-    /// app's loop that calls it, and [`dueTime`] is when. The two are one pair:
+    /// app's loop that calls it, and [`dueTime`] is how long it may wait. The
+    /// two are one pair:
     /// `MarsStn` that let an app start a task and not drain it would be a
     /// pipeline an app can fill and never empty.
     public static func runPending() {

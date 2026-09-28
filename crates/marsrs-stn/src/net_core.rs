@@ -1006,9 +1006,29 @@ impl NetCore {
         ConnectProfile::new()
     }
 
-    /// When the net core next has something to do: the earliest of the two
-    /// queues, the zombie check and the timing sync's alarm.
+    /// When the net core next has something to do: now, when a follow-up is
+    /// waiting, and otherwise the earliest of the two queues, the zombie check
+    /// and the timing sync's alarm. All of it as a `gettickcount()`, which is a
+    /// reading of a clock the caller of this crate shares and a caller across an
+    /// ABI does not — [`crate::StnLogic::due_delay`] is the same thing as a
+    /// duration.
     pub fn due_time(&mut self) -> Option<u64> {
+        self.due_time_at(gettickcount())
+    }
+
+    /// The same, with the reading handed in.
+    ///
+    /// A follow-up is work that is already due: the queues post one when they
+    /// cannot do it while they are running — a retry, a long link that failed —
+    /// and nothing else is waiting on it, because the alarms below belong to
+    /// the tasks that are out and not to the answer a queue could not give.
+    /// Without this a host that sleeps until the next alarm reports a network
+    /// error minutes late, or not at all: no alarm was ever armed for the
+    /// follow-up itself.
+    pub fn due_time_at(&mut self, now: u64) -> Option<u64> {
+        if self.has_pending() {
+            return Some(now);
+        }
         let zombies = self.zombie.lock().unwrap_or_else(poisoned).due_time();
         let mut due = min_due(self.shortlink.due_time(), self.longlink.due_time());
         due = min_due(due, zombies);
