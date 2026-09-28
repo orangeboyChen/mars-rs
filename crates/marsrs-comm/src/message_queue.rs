@@ -207,7 +207,9 @@ struct QueueState {
     messages: VecDeque<PostedMessage>,
     next_handler_seq: u32,
     next_post_seq: u32,
-    running: bool,
+    /// The message the queue is running, if any: a dispatch sets it before it
+    /// calls the handlers and clears it when they are done.
+    running_post: Option<MessagePost>,
 }
 
 impl QueueState {
@@ -217,7 +219,7 @@ impl QueueState {
             messages: VecDeque::new(),
             next_handler_seq: 1,
             next_post_seq: 1,
-            running: false,
+            running_post: None,
         }
     }
 }
@@ -239,8 +241,11 @@ impl Queue {
         self.state.lock().unwrap()
     }
 
-    fn set_running(&self, running: bool) {
-        self.lock().running = running;
+    /// The message is over: [`found_message`] stops reporting it and a
+    /// [`wait_message`] on it can return, so everyone waiting on the queue is
+    /// woken.
+    fn clear_running(&self) {
+        self.lock().running_post = None;
         self.cond.notify_all();
     }
 }
@@ -594,9 +599,19 @@ pub fn cancel_message_by_handler_title(handler: &MessageHandler, title: MessageT
 }
 
 /// `MessageQueue::FoundMessage(post)`.
+///
+/// `true` for a message that is pending **or** running: the C++ compares
+/// `post` with the `runing_message_id` of every run loop of the queue
+/// before it walks `lst_message`, so a caller that asks from inside the
+/// message — the handler, or something the handler called — is told the
+/// message is there. Looking only at the pending messages answered `false`
+/// for the message the question was asked about.
 pub fn found_message(post: &MessagePost) -> bool {
     queue(post.reg.queue)
-        .map(|queue| queue.lock().messages.iter().any(|m| m.post == *post))
+        .map(|queue| {
+            let state = queue.lock();
+            state.running_post == Some(*post) || state.messages.iter().any(|m| m.post == *post)
+        })
         .unwrap_or(false)
 }
 
@@ -610,7 +625,7 @@ pub fn wait_message(post: &MessagePost, timeout_ms: i64) -> bool {
         (timeout_ms >= 0).then(|| Instant::now() + Duration::from_millis(timeout_ms as u64));
     let mut state = queue.lock();
     loop {
-        if !state.messages.iter().any(|m| m.post == *post) && !state.running {
+        if !state.messages.iter().any(|m| m.post == *post) && state.running_post.is_none() {
             return true;
         }
         state = match deadline {
@@ -714,7 +729,11 @@ impl RunLoop {
                 .filter(|it| it.seq == addressed || (is_broadcast && it.recv_broadcast))
                 .map(|it| Arc::clone(&it.handler))
                 .collect();
-            state.running = true;
+            // `runing_message_id` of the C++'s `RunLoopInfo`, which
+            // `FoundMessage` answers `true` for: from here until the handlers
+            // are done, the queue is running this message and not merely
+            // holding it.
+            state.running_post = Some(entry.post);
             (handlers, Arc::clone(&entry.message))
         };
 
@@ -726,7 +745,7 @@ impl RunLoop {
             }
         }
 
-        queue.set_running(false);
+        queue.clear_running();
         true
     }
 }

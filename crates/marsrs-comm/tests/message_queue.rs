@@ -416,6 +416,44 @@ fn a_broadcast_runs_the_handlers_in_the_order_they_were_installed() {
 }
 
 #[test]
+fn a_message_is_found_while_it_is_running() {
+    let queue = create_message_queue();
+    // The handler has to ask about the post, but the post is only known once
+    // it has been posted — and a post names the handler it is addressed to,
+    // so the handler has to be installed first.
+    let slot = Arc::new(Mutex::new(NULL_POST));
+    let found = Arc::new(AtomicUsize::new(0));
+    let handler_slot = Arc::clone(&slot);
+    let counter = Arc::clone(&found);
+    let handler = install_message_handler(
+        move |_| {
+            let post = *handler_slot.lock().unwrap();
+            if found_message(&post) {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
+        },
+        false,
+        queue,
+    );
+
+    let post = post_message(
+        &handler,
+        Message::new(MessageTitle(1), "running"),
+        MessageTiming::Immediate,
+    );
+    *slot.lock().unwrap() = post;
+    assert!(RunLoop::dispatch_timeout(queue, Duration::from_millis(200)));
+    assert_eq!(
+        found.load(Ordering::SeqCst),
+        1,
+        "the message it is running was not found"
+    );
+    // … and it is gone once it has been handled
+    assert!(!found_message(&post));
+    destroy_message_queue(queue);
+}
+
+#[test]
 fn a_thread_with_no_queue_of_its_own_answers_the_invalid_id() {
     let queue = create_message_queue();
     let (sender, receiver) = mpsc::channel();
