@@ -4,7 +4,7 @@ layout: home
 hero:
   name: mars-rs
   text: mars, in Rust
-  tagline: The .xlog logger, the STN task pipeline and the SDT network diagnosis of Tencent/mars — from Rust, Swift, Kotlin, Kotlin Multiplatform or plain C.
+  tagline: The .xlog logger, the STN task pipeline and the SDT network diagnosis of Tencent/mars — from Rust, Swift, Kotlin, Flutter, React Native, HarmonyOS or plain C.
   actions:
     - theme: brand
       text: Get started
@@ -17,7 +17,7 @@ features:
   - title: Files the C++ tooling already reads
     details: What this writes is the .xlog the C++ implementation writes — same framing, same compression, same encryption — so upstream's decoders, and any tooling built on them, read your logs without a conversion step.
   - title: One shape on every platform
-    details: Open an appender once, write a tag and a message through it, flush before you upload. Rust, Swift, Kotlin, Kotlin Multiplatform and C spell the same three steps with the same options.
+    details: Open an appender once, write a tag and a message through it, flush before you upload. Rust, Swift, Kotlin, Kotlin Multiplatform, Flutter, React Native, HarmonyOS and C spell the same three steps with the same options.
   - title: Off the logging thread
     details: "The default async mode hands the record to a writer thread through a memory-mapped cache, so a write returns without waiting for the disk. `flush(sync: true)` is what drains it."
   - title: Compressed, encrypted, rotated
