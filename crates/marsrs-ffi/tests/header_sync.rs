@@ -30,6 +30,7 @@ fn header_declares_every_exported_symbol() {
         "mars_xlog_close",
         "mars_xlog_set_level",
         "mars_xlog_set_console_log",
+        "mars_xlog_set_console_fun",
         "mars_xlog_set_console_log_instance",
         "mars_xlog_set_max_file_size",
         "mars_xlog_set_max_file_size_instance",
