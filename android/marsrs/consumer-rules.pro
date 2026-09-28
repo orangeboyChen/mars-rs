@@ -16,6 +16,10 @@
 #
 # Two things about the rules below are deliberate:
 #
+# * `{ *; }` is what keeps the members. A bare `-keep class X` keeps the class
+#   and lets R8 drop every member of it, which is the same breakage under a
+#   name that looks fixed: measured against R8 9.4.24, the AAR's classes come
+#   out of a shrunk build with their own names and nothing inside them.
 # * A whole class is kept and not only the members JNI reaches. The name of a
 #   class is part of a JNI *signature* as well —
 #   `(Lio/github/orangeboychen/marsrs/stn/StnLogic$Task;)V` is what
@@ -42,27 +46,27 @@
 ## the rest — are the ones its `GetFieldID` spells.
 
 # `app_logic.rs`: the app directory, the account and the device
--keep,allowoptimization class io.github.orangeboychen.marsrs.app.AppLogic
--keep,allowoptimization class io.github.orangeboychen.marsrs.app.AppLogic$AccountInfo
--keep,allowoptimization class io.github.orangeboychen.marsrs.app.AppLogic$DeviceInfo
+-keep,allowoptimization class io.github.orangeboychen.marsrs.app.AppLogic { *; }
+-keep,allowoptimization class io.github.orangeboychen.marsrs.app.AppLogic$AccountInfo { *; }
+-keep,allowoptimization class io.github.orangeboychen.marsrs.app.AppLogic$DeviceInfo { *; }
 
 # `platform_comm.rs`: the nine `C2Java` statics, and what three of them answer
--keep,allowoptimization class io.github.orangeboychen.marsrs.comm.PlatformComm
--keep,allowoptimization class io.github.orangeboychen.marsrs.comm.PlatformComm$C2Java
--keep,allowoptimization class io.github.orangeboychen.marsrs.comm.PlatformComm$WifiInfo
--keep,allowoptimization class io.github.orangeboychen.marsrs.comm.PlatformComm$SIMInfo
--keep,allowoptimization class io.github.orangeboychen.marsrs.comm.PlatformComm$APNInfo
+-keep,allowoptimization class io.github.orangeboychen.marsrs.comm.PlatformComm { *; }
+-keep,allowoptimization class io.github.orangeboychen.marsrs.comm.PlatformComm$C2Java { *; }
+-keep,allowoptimization class io.github.orangeboychen.marsrs.comm.PlatformComm$WifiInfo { *; }
+-keep,allowoptimization class io.github.orangeboychen.marsrs.comm.PlatformComm$SIMInfo { *; }
+-keep,allowoptimization class io.github.orangeboychen.marsrs.comm.PlatformComm$APNInfo { *; }
 
 # `sdt.rs`: the signal detection results
--keep,allowoptimization class io.github.orangeboychen.marsrs.sdt.SdtLogic
+-keep,allowoptimization class io.github.orangeboychen.marsrs.sdt.SdtLogic { *; }
 
 # `stn_c2java.rs`: the fifteen `ICallBack` questions, and the task and the
 # profile the two halves pass to each other
--keep,allowoptimization class io.github.orangeboychen.marsrs.stn.StnLogic
--keep,allowoptimization class io.github.orangeboychen.marsrs.stn.StnLogic$Task
--keep,allowoptimization class io.github.orangeboychen.marsrs.stn.StnLogic$CgiProfile
+-keep,allowoptimization class io.github.orangeboychen.marsrs.stn.StnLogic { *; }
+-keep,allowoptimization class io.github.orangeboychen.marsrs.stn.StnLogic$Task { *; }
+-keep,allowoptimization class io.github.orangeboychen.marsrs.stn.StnLogic$CgiProfile { *; }
 
 # `jni_bridge.rs`: what `appenderOpen` and `logWrite` read out of their argument
--keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.Xlog
--keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.Xlog$XLogConfig
--keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.Xlog$XLoggerInfo
+-keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.Xlog { *; }
+-keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.Xlog$XLogConfig { *; }
+-keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.Xlog$XLoggerInfo { *; }

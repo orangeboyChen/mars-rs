@@ -16,6 +16,9 @@
 #
 # Two things about the rules below are deliberate:
 #
+# * `{ *; }` is what keeps the members. A bare `-keep class X` keeps the class
+#   and lets R8 drop every member of it, which is the same breakage under a
+#   name that looks fixed.
 # * A whole class is kept and not only the members JNI reaches. The name of a
 #   class is part of a JNI *signature* as well —
 #   `(Lio/github/orangeboychen/marsrs/xlog/XLogConfigJni;)J` is what
@@ -43,5 +46,5 @@
 ##
 ## What `marsrs-jni` asks for by name: the `@JvmField`s of `XLogConfigJni` are
 ## the ones its `config_from_java` reads.
--keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.Xlog
--keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.XLogConfigJni
+-keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.Xlog { *; }
+-keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.XLogConfigJni { *; }
