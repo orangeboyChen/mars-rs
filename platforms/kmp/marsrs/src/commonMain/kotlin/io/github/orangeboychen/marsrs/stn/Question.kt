@@ -12,10 +12,9 @@ package io.github.orangeboychen.marsrs.stn
  * [Kind.IdentifyCheckBuffer] and [Kind.IdentifyResponse]; [body] what was
  * pushed, what came back and what the server answered.
  *
- * The readings are `var`s with an `internal` setter because there are
- * twenty-five of them — more than a constructor this Kotlin is held to — and
- * because the only code that fills one in is the `actual` that was asked: what
- * an app gets is a question it reads.
+ * The readings are `var`s with an `internal` setter because the only code that
+ * fills one in is the `actual` that was asked: what an app gets is a question
+ * it reads, and twenty-five of them is not a list an app writes out.
  *
  * Five of the eighteen are asked on Kotlin/Native and not on Android, because
  * the JNI bridge asks Java thirteen — the thirteen the C++'s own
@@ -25,7 +24,6 @@ package io.github.orangeboychen.marsrs.stn
  * [Kind.ReportDnsProfile] are the five the bridge answers itself.
  */
 public class Question internal constructor() {
-    /** Which of the eighteen questions STN asked. */
     public var kind: Kind = Kind.Nothing
         internal set
 
@@ -144,7 +142,7 @@ public class Question internal constructor() {
      * eighteen virtuals do by name.
      */
     public enum class Kind(internal val value: Int) {
-        /** Nothing was asked: what a question starts out as, and what no question is ever asked as. */
+        /** Nothing was asked: the kind a question starts out as, and one STN never asks with. */
         Nothing(0),
 
         /** Is the app logged in for this host and user? */

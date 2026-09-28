@@ -85,6 +85,9 @@ public enum class IdentifyMode(internal val value: Int) {
     /** With the next connect. */
     NextConnect(1),
 
-    /** Never — which is any other integer, and stops STN asking. */
+    /**
+     * The check never goes out, and STN stops asking: every integer but
+     * `0` and `1` is read as this one.
+     */
     Never(2)
 }

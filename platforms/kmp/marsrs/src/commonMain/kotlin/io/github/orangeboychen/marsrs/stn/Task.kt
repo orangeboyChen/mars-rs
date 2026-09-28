@@ -93,7 +93,6 @@ public class Task {
         /** `ENORMAL` — the channel strategy that is not the fast one. */
         public const val ENORMAL: Int = 0
 
-        /** `EFAST`. */
         public const val EFAST: Int = 1
 
         /** The highest priority, and the [ETASK_PRIORITY_0] the C++ numbers it. */
