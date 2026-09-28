@@ -123,13 +123,14 @@ jobs:
   # for six destinations: iOS 12 on device arm64 and on both simulator
   # architectures, arm64 and x86_64, and watchOS 10 on the two architectures
   # of a watch and on the simulator. A device triple compiles no
-  # `targetEnvironment(simulator)` and no `arch(x86_64)` branch at all, which
-  # is why the simulators are in the list and not left to the release.
+  # `targetEnvironment(simulator)` and no `arch(x86_64)` branch at all, and
+  # that is why the simulators are in the list and not left to the release.
   #
   # Which is the question a pull request was not asked: the release compiles
   # the Swift when it builds the xcframework, so the first compile of a change
-  # happened after the merge. A watchOS app got a source that named `UIApplication` — a symbol the watchOS SDK marks unavailable, and
-  # one `canImport(UIKit)` answers `true` for on watchOS — and nothing between
+  # happened after the merge. A watchOS app got a source that named
+  # `UIApplication` — a symbol the watchOS SDK marks unavailable, and one
+  # `canImport(UIKit)` answers `true` for on watchOS — and nothing between
   # the pull request and the release said so.
   #
   # A module is emitted rather than the sources being `-typecheck`ed: a type

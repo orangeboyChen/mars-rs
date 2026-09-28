@@ -34,8 +34,8 @@
 # `#if arch(x86_64)` or a symbol the simulator's SDK answers differently are
 # compiled by a simulator triple and by nothing else — and the iOS simulator
 # is two architectures, arm64 and x86_64, which is why its slice is lipo'd
-# out of both. A watchOS simulator is arm64 only, and nothing asks for the
-# x86_64 one.
+# out of both. A watchOS simulator is arm64, and nothing asks for the x86_64
+# one.
 
 set -euo pipefail
 
