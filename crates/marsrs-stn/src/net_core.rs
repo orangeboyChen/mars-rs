@@ -902,8 +902,16 @@ impl NetCore {
 
     /// `HasTask(_taskid)`.
     pub fn has_task(&self, taskid: u32) -> bool {
-        let saved = self.zombie.lock().unwrap_or_else(poisoned).has_task(taskid);
-        saved || self.longlink.has_task(taskid) || self.shortlink.has_task(taskid)
+        // the C++'s `if (need_use_longlink_)` (net_core.cc:552-559): a core
+        // that is not using a long link has no long-link task to answer for,
+        // and neither has the queue the zombies were saved in
+        if self.use_long_link {
+            let saved = self.zombie.lock().unwrap_or_else(poisoned).has_task(taskid);
+            if saved || self.longlink.has_task(taskid) {
+                return true;
+            }
+        }
+        self.shortlink.has_task(taskid)
     }
 
     /// `ClearTasks()` — the long link's and the zombies' only while the core
@@ -2940,6 +2948,27 @@ mod tests {
         assert!(!core.has_task(8));
         assert_eq!(core.shortlink().len(), 0);
         assert_eq!(core.longlink().len(), 0);
+    }
+
+    /// `net_core.cc:552-559` — the long link and the zombies are asked only
+    /// while the core uses one, so a core that stopped is not one that answers
+    /// for the tasks it put on it.
+    #[test]
+    fn a_core_that_stopped_using_the_long_link_has_none_of_its_tasks() {
+        let (mut core, _rec) = wired();
+        up(&core, LongLinkStatus::Connected);
+        assert!(core.start_task_at(NOW, task(7)));
+        let mut short = task(8);
+        short.channel_select = Task::CHANNEL_SHORT;
+        assert!(core.start_task_at(NOW, short));
+        assert!(core.has_task(7));
+
+        core.set_need_use_long_link(false);
+        assert!(
+            !core.has_task(7),
+            "the long link's queue is not the core's to answer for now"
+        );
+        assert!(core.has_task(8), "the short link's still is");
     }
 
     /// `if (need_use_longlink_)` in the C++'s `StopTask` and `ClearTasks`:
