@@ -1,11 +1,12 @@
 //! `xlog-compat` — the Rust half of the differential format test.
 //!
 //! The port can only be trusted if the bytes it produces are the bytes the
-//! original C++ implementation read, and the other way round. That used to be
-//! checked live by driving both implementations over the same inputs; with the
-//! C++ gone the very same claim is checked against the golden `.xlog` files of
-//! `fixtures/` (see `tests/golden.rs`), which the C++ encoders produced. This
-//! binary is the CLI that generates and decodes them:
+//! original C++ implementation read, and the other way round. That used to
+//! be checked live by driving both implementations over the same inputs;
+//! with the C++ gone the very same claim is checked against the golden
+//! `.xlog` files of `fixtures/` (see `tests/golden.rs`), which the C++
+//! encoders produced. This binary is the CLI that generates and decodes
+//! them:
 //!
 //! ```text
 //! xlog-compat encode --mode=zlib --compress=1 --sync=0 --pubkey=<hex> \
@@ -14,18 +15,18 @@
 //! ```
 //!
 //! * `encode` runs the real [`LogBuffer`] (`log_base_buffer.cc` +
-//!   `log_zlib_buffer.cc` / `log_zstd_buffer.cc`) over a region and flushes it,
-//!   exactly like `XloggerAppender` does with its mmap'd cache file.
+//!   `log_zlib_buffer.cc` / `log_zstd_buffer.cc`) over a region and flushes
+//!   it, exactly like `XloggerAppender` does with its mmap'd cache file.
 //! * `decode` is the reader side: it walks the `header + body + tailer`
-//!   records, undoes TEA (ECDH between the *server* private key and the client
-//!   public key stored in the header) and inflates/decompresses the payload.
-//!   The reader itself is `marsrs-xlog`'s — the port of
-//!   `mars/xlog/crypt/decode_log_file_c_impl/decode_log_file.c` lives there
-//!   now, where the CLI reads through it too — so the golden files below are
-//!   what proves the reader this workspace ships.
+//!   records, undoes TEA (ECDH between the *server* private key and the
+//!   client public key stored in the header) and inflates or decompresses
+//!   the payload. The reader itself is `marsrs-xlog`'s — the port of
+//!   `mars/xlog/crypt/decode_log_file_c_impl/decode_log_file.c` lives
+//!   there now, where the CLI reads through it too — so the golden files
+//!   below are what proves the reader this workspace ships.
 //!
-//! Nothing here is production code: it exists so the two implementations can
-//! be diffed byte for byte in CI, and so the golden fixtures under
+//! Nothing here is production code: it exists so the two implementations
+//! can be diffed byte for byte in CI, and so the golden fixtures under
 //! `fixtures/` can be replayed after the C++ side is gone.
 //!
 //! The `xlog-compat` binary is a thin CLI over [`encode`] and [`decode`].
@@ -39,7 +40,8 @@ use marsrs_crypt::{magic, HEADER_LEN, TAILER_LEN};
 
 /// `kBufferBlockLength` in `mars/xlog/src/appender.cc` (150 KiB).
 const DEFAULT_REGION: usize = 150 * 1024;
-/// `ZSTD_c_compressionLevel` default of `XlogConfig` in the C++ appender.
+/// `XLogConfig::compress_level_` in `mars/xlog/appender.h`: the zstd level
+/// the C++ appender builds its `LogZstdBuffer` with.
 const DEFAULT_LEVEL: i32 = 6;
 
 /// The `--key=value` options of one subcommand: `main.rs` fills one in from
@@ -70,21 +72,22 @@ fn number<T: std::str::FromStr>(opts: &Opts, key: &str, default: T) -> Result<T,
     }
 }
 
-/// Rewrites `data` into a canonical form so two encodings can be compared byte
-/// for byte.
+/// Rewrites `data` into a canonical form so two encodings can be compared
+/// byte for byte.
 ///
-/// * both hours of every header: the begin hour is stamped when the record is
-///   opened and the end hour when it is flushed, so a run (or a re-encode)
-///   that crosses an hour boundary would report a spurious diff. The end hour
-///   being written at all is covered by
+/// * both hours of every header: the begin hour is stamped when the
+///   record is opened and the end hour when it is flushed, so a run (or a
+///   re-encode) that crosses an hour boundary would report a spurious
+///   diff. The end hour being written at all is covered by
 ///   `marsrs_buffer`'s `flush_stamps_the_end_hour` test instead.
-/// * seq: `__GetSeq()` is a process-global counter in the C++ and a `static` in
-///   the port, so the starting value depends on what the process did before.
-///   Records are renumbered from 1, which still checks that they increase by
-///   one in order.
-/// * the 64-byte client public key slot, when `mask_pubkey`: `LogCrypt` leaves
-///   it uninitialised when no server key is configured and copies it into the
-///   header anyway, so the C++ writes whatever was on the heap.
+/// * seq: `__GetSeq()` is a process-global counter in the C++ and a
+///   `static` in the port, so the starting value depends on what the
+///   process did before. Records are renumbered from 1, which still
+///   checks that they increase by one in order.
+/// * the 64-byte client public key slot, when `mask_pubkey`: `LogCrypt`
+///   leaves it uninitialised when no server key is configured and copies
+///   it into the header anyway, so the C++ writes whatever was on the
+///   heap.
 pub fn normalize_for_compare(data: &[u8], mask_pubkey: bool) -> Vec<u8> {
     let mut out = data.to_vec();
     let mut offset = 0;
@@ -152,9 +155,9 @@ pub fn encode(opts: &Opts) -> Result<(), String> {
     let mut bytes = Vec::new();
 
     if sync {
-        // `__WriteFile` hands `Write(data, len, out_buff)` a fresh `AutoBuffer`
-        // per record, and `LogCrypt::CryptSyncLog` overwrites it, so the blocks
-        // are copied out one at a time on both sides.
+        // `__WriteFile` hands `Write(data, len, out_buff)` a fresh
+        // `AutoBuffer` per record, and `LogCrypt::CryptSyncLog` overwrites
+        // it, so the blocks are copied out one at a time on both sides.
         let mut block = AutoBuffer::new();
         for record in &records {
             if !buffer.write_sync(record, &mut block) {
@@ -167,14 +170,15 @@ pub fn encode(opts: &Opts) -> Result<(), String> {
         for (index, record) in records.iter().enumerate() {
             // Flush every `flush_every` records instead of testing
             // `index % flush_every`, which clippy now wants spelled as
-            // `is_multiple_of()` (too new for the toolchains this builds on).
+            // `is_multiple_of()` (too new for the toolchains this builds
+            // on).
             if flush_every > 0 && buffered >= flush_every {
                 let mut block = AutoBuffer::new();
                 buffer.flush(&mut region, &mut block);
                 bytes.extend_from_slice(block.as_slice());
-                // The block is out of the region now, so the next record opens
-                // one of its own: `drained` is what the appender calls after
-                // these bytes have reached the file.
+                // The block is out of the region now, so the next record
+                // opens one of its own: `drained` is what the appender
+                // calls after these bytes have reached the file.
                 buffer.drained(&mut region);
                 buffered = 0;
             }
@@ -232,9 +236,10 @@ pub fn count_blocks(bytes: &[u8]) -> Result<usize, String> {
 /// Reads a file produced by either implementation and writes the plain log
 /// text, mirroring `decode_log_file.c`.
 ///
-/// `parseFile` there writes the output it has whether or not the walk ended in
-/// an error, so this does too: a file whose last record is missing its end is
-/// still written out up to the damage, and the error is what comes back.
+/// `parseFile` there writes the output it has whether or not the walk
+/// ended in an error, so this does too: a file whose last record is
+/// missing its end is still written out up to the damage, and the error
+/// is what comes back.
 pub fn decode(opts: &Opts) -> Result<(), String> {
     let privkey_hex = required(opts, "privkey")?;
     let input = required(opts, "in")?;
@@ -252,8 +257,8 @@ pub fn decode(opts: &Opts) -> Result<(), String> {
             Ok(())
         }
         Err(err) => {
-            // What was recovered is the file's text as far as it goes, and it
-            // is the only copy of the records before the damage.
+            // What was recovered is the file's text as far as it goes,
+            // and it is the only copy of the records before the damage.
             fs::write(&out_path, &err.recovered).map_err(|e| format!("write {out_path}: {e}"))?;
             Err(err.reason)
         }
@@ -269,11 +274,11 @@ pub fn decode(opts: &Opts) -> Result<(), String> {
 /// in it. Half of them were written with no public key, and theirs are the
 /// records the key is never used on.
 ///
-/// A record that cannot be read is skipped and marked rather than ending the
-/// walk, so a damaged file still yields the records behind the damage. What
-/// does end it is a file with no record left in it at all, and
-/// [`marsrs_xlog::DecodeError::recovered`] is then the text of the records
-/// before that point.
+/// A record that cannot be read is skipped and marked rather than ending
+/// the walk, so a damaged file still yields the records behind the
+/// damage. What does end it is a file with no record left in it at all,
+/// and [`marsrs_xlog::DecodeError::recovered`] is then the text of the
+/// records before that point.
 pub fn decode_records(
     data: &[u8],
     privkey: &[u8; 32],
