@@ -34,13 +34,29 @@ fn spans_and_differences_behave_like_the_cpp() {
 
 #[test]
 fn the_first_reading_is_valid() {
-    // `0` means "invalid", so a freshly sampled tick count must never be one
-    // — which is what it was for the whole first millisecond of the process.
+    // `0` means "invalid", and a real reading starts at `sg_tick_init`, so
+    // the two can never be confused.
     assert!(TickCount::now().is_valid());
     assert!(marsrs_comm::tickcount::gettickcount() > 0);
     let mut tick = TickCount::invalid();
     tick.refresh();
     assert!(tick.is_valid(), "refreshing makes it valid again");
+}
+
+#[test]
+fn a_tick_count_nothing_wrote_into_reads_as_long_expired() {
+    // Every reading the C++ takes has `sg_tick_init` — two billion
+    // milliseconds, about twenty-three days — under it, so a `0` is that far
+    // in the past. An origin of zero would make a never-set reading look
+    // fresh, and every `gettickspan() > timeout` in the tree would call a
+    // timeout that should have gone off still pending.
+    let never = TickCount::invalid();
+    assert!(
+        never.tickspan().get() >= 2_000_000_000,
+        "a zero tick count is about twenty-three days old"
+    );
+    assert!(never.tickspan().get() > 60_000, "older than any timeout");
+    assert!(TickCount::now().get() >= 2_000_000_000);
 }
 
 #[test]
