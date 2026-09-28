@@ -27,8 +27,12 @@
  * The one thing a caller supplies is the network: DNS, TCP, HTTP and ping are
  * four probes this library refuses to open for itself, so they cross the
  * boundary as one function pointer — `MarsSdtProbe` — and `mars_sdt_run_checks`
- * drives the run the C++ drives from `__RunOn`. Answer nothing and every check
- * fails, which is what a host with no network gets.
+ * drives the run the C++ drives from `__RunOn`. Answer nothing and the
+ * check that asked is a failed one, and a failed check ends the run: what
+ * stands behind it in the plan is not checked. A ping is the one exception
+ * — a ping nobody sent is a check that did not run, so it is left out of
+ * the report and the run goes on behind it. That is what a host with no
+ * network gets.
  *
  * The header is hand-written and checked in next to the crate so that a C/C++
  * or Swift caller can include it without running cbindgen. It is kept in sync
@@ -68,10 +72,11 @@ extern "C" {
 
 /**
  * Which probe is being asked: the four of mars/sdt/src/checkimpl/, plus
- * `MarsSdtNothing` for a probe nobody answered.
+ * `MarsSdtNothing` for a probe nobody answered: a failure for the check
+ * that asked, and a skip for a ping.
  */
 typedef enum {
-    MarsSdtNothing = 0, /* nobody answered; every check reads it as a failure */
+    MarsSdtNothing = 0, /* nobody answered: a failure, but a ping is skipped */
     MarsSdtDns = 1,     /* socket_gethostbyname                              */
     MarsSdtTcp = 2,     /* TcpQuery: a long-link noop out, and what comes back */
     MarsSdtHttp = 3,    /* SendHttpQuery: the net-check CGI                  */

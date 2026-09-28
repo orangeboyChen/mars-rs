@@ -139,8 +139,10 @@ public actual object SdtLogic {
 
     /**
      * One probe, handed to the [IProbe] of the run that is in flight: `null` when
-     * there is none, which every check reads as a failure — and when the app's own
-     * probe threw, which is the C++'s `printStackTrace` and not a diagnosis that
+     * there is none, which the check that asked reads as a failure — and a
+     * failed check ends the run — every check but the ping, which is one that
+     * did not run — and when the app's own probe
+     * threw, which is the C++'s `printStackTrace` and not a diagnosis that
      * stops.
      */
     private fun asked(probe: (IProbe) -> ProbeAnswer): Answer? {

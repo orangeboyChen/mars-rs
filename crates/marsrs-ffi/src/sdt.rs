@@ -10,7 +10,9 @@
 //! `mars/comm/dns` are the platform's), so they cross this boundary as one
 //! function pointer — [`MarsSdtProbe`] — the way [`marsrs_sdt::checkimpl::Ask`]
 //! hands them to the checkers. A caller that answers nothing gets the diagnosis
-//! a host with no network gets: every check fails.
+//! a host with no network gets: the check that asked fails, and a failed
+//! check ends the run. A ping is the one exception — a ping nobody sent is
+//! a check that did not run.
 //!
 //! What a run finds is handed back as the JSON
 //! `SdtLogic.reportSignalDetectResults(String)` gets in the C++ — the document
@@ -58,8 +60,11 @@ pub const MARS_SDT_ERR_NO_CHECK: c_int = -6;
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarsSdtKind {
-    /// Nobody answered — a host with no network to probe with, which every check
-    /// reads as a failure.
+    /// Nobody answered — a host with no network to probe with, which the
+    /// check that asked reads as a failure, and a failed check ends the
+    /// run. A ping is the one exception: a ping nobody sent is a check that
+    /// did
+    /// not run, and the plan goes on behind it.
     Nothing = 0,
     /// `socket_gethostbyname` — the resolve of one host name.
     Dns = 1,

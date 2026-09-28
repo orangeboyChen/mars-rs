@@ -57,8 +57,9 @@ object SdtLogic {
 
     /**
      * Which probe one query asks for: the `probe` of an [Answer], which is how
-     * an app says it has no network to probe with — every check reads that as a
-     * failure.
+     * an app says it has no network to probe with — the check that asked reads
+     * that as a failure and ends the run, and a ping is a check that did not
+     * run, so the run goes on behind it.
      */
     object Probe {
         /** Nobody answered. */
@@ -362,9 +363,10 @@ object SdtLogic {
 
     /**
      * One probe, handed to the [IProbe] of the run that is in flight: `null`
-     * when there is none, which every check reads as a failure — and when the
-     * app's own probe threw, which is the C++'s `e.printStackTrace()` and not a
-     * diagnosis that stops.
+     * when there is none, which every check but the ping reads as a failure — a
+     * ping nobody sent is a check that did not run — and when the app's own
+     * probe threw, which is the C++'s `e.printStackTrace()` and not a diagnosis
+     * that stops.
      */
     private fun ask(probe: (IProbe) -> Answer): Answer? {
         return try {

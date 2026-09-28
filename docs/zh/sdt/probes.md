@@ -27,8 +27,10 @@ App 要网络，App 回答什么，报告就记下什么：
 
 这一趟在调用它的那个线程上，按计划的顺序一个一个地问，所有探测都回答了它才返回 ——
 所以不像[任务](/zh/stn/getting-started)那样要 sleep、要循环。一个没什么可说的探测就
-回答“没什么” —— Swift 里 `.nothing`，共享 Kotlin 里 `Answer.None`，C 里
-`MarsSdtAnswerNothing` —— 那一项检查就被记成没跑的一项。
+回答“没什么” —— Swift 里 `.nothing`，共享 Kotlin 里 `ProbeAnswer.None`，C 里
+`MarsSdtNothing` —— 问它的那一项检查就被记成失败的一项，而一项失败的检查会结束这一趟：
+排在它后面的就不查了。ping 是唯一的例外：一次没发出去的 ping 是一项没跑的检查，报告里
+没有它，排在它后面的那一项照查。
 
 ## 那些回答
 

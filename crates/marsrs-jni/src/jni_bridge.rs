@@ -2139,8 +2139,9 @@ const PROBE_PING: i32 = 4;
 /// so the app's network is the one a run probes with.
 ///
 /// Without a VM (a host that linked the library instead of loading it from
-/// Java) there is nobody to ask, and the answer is the one every check reads as
-/// a failure. Nothing here panics into Rust either way.
+/// Java) there is nobody to ask, and the answer is the one a check reads as
+/// a failure — and a failed check ends the run — every check but the ping,
+/// which is one that did not run. Nothing here panics into Rust either way.
 pub(crate) fn ask_probe(query: ProbeQuery) -> ProbeAnswer {
     guard(|| {
         let Some(vm) = VM.get() else {
