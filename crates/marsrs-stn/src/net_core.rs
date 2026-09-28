@@ -1171,7 +1171,22 @@ impl NetCore {
         self.dynamic_timeout.reset();
         if self.use_long_link {
             self.timing_sync.on_network_change_at(now);
-            self.longlink.on_network_change_at(now);
+            // the C++'s `longlink_task_manager_->OnNetworkChange()` asks each
+            // channel's own monitor, which drops the link and asks for a new
+            // one, and looks at the tasks of a channel that answered again.
+            // The names live in the queue and the links live here, so the
+            // asking is here: a link nothing took down is one a task still
+            // goes out on.
+            let names: Vec<String> = self.links.keys().cloned().collect();
+            for name in names {
+                let changed = self
+                    .links
+                    .get_mut(&name)
+                    .is_some_and(|meta| meta.monitor().network_change_at(now));
+                if changed {
+                    self.longlink.redo_tasks_of_at(now, &name);
+                }
+            }
             self.zombie().redo_tasks_at(now);
         }
         self.shortlink.redo_tasks_at(now);
@@ -3298,7 +3313,9 @@ mod tests {
         assert!(core.shortlink().has_task(7));
         assert!(rec.ended().is_empty());
         // ... and the counters the connect status is worked out from start
-        // over, so the next error is the first one again
+        // over, so the next error is the first one again. The long link is
+        // `Connecting` now and not `ServerFailed`: the change asked its
+        // monitor for a new one, which is what took the old one down
         core.on_shortlink_network_error_at(
             NOW + 100,
             ErrCmdType::Socket,
@@ -3309,7 +3326,53 @@ mod tests {
         );
         assert_eq!(
             rec.status().last(),
-            Some(&(NetStatus::Unknown, NetStatus::ServerFailed))
+            Some(&(NetStatus::Connecting, NetStatus::Connecting))
+        );
+    }
+
+    #[test]
+    fn a_network_change_takes_the_links_down_and_looks_at_their_tasks_again() {
+        let (mut core, rec) = wired();
+        let second = core
+            .create_long_link(LonglinkConfig::new("second"))
+            .expect("the second link");
+        // a run in flight is what the C++'s `Disconnect` has to have: it is
+        // `if (!thread_.isruning()) return;` on both sides
+        for name in [MAIN, "second"] {
+            let meta = core.long_link_meta(name).expect("the channel");
+            assert!(!meta.monitor().make_sure_connected_at(NOW));
+            assert!(meta.channel().lock().unwrap_or_else(poisoned).is_running());
+        }
+        up(&core, LongLinkStatus::Connected);
+        second
+            .lock()
+            .unwrap_or_else(poisoned)
+            .set_status(LongLinkStatus::Connected);
+
+        assert!(core.start_task_at(NOW, task(7)));
+        assert_eq!(
+            rec.sent(),
+            vec![(MAIN.to_string(), 7, "/cgi-bin/7".to_string())]
+        );
+
+        core.on_network_change_at(NOW + 100);
+
+        // the change asked each channel's own monitor, which took the link
+        // down with the code the C++ uses and asked for a new one
+        for name in [MAIN, "second"] {
+            let link = Arc::clone(core.long_link(name).expect("the link"));
+            let link = link.lock().unwrap_or_else(poisoned);
+            assert_eq!(
+                link.disconnect_code(),
+                DisconnectInternalCode::NetworkChange,
+                "{name} was taken down by the change"
+            );
+            assert!(link.is_running(), "{name} was asked for a new run");
+        }
+        // ... and the task that was out on one of them goes out again
+        assert_eq!(
+            rec.sent(),
+            vec![(MAIN.to_string(), 7, "/cgi-bin/7".to_string())]
         );
     }
 
