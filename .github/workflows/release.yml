@@ -937,9 +937,10 @@ jobs:
       - name: Publish the HarmonyOS package to ohpm
         if: needs.version.outputs.is_new == 'true'
         env:
-          # The publish id ohpm gives the publisher of the package, and the
-          # private half of the keypair whose public half is uploaded to ohpm —
-          # the two halves of one credential, and the two secrets this job reads.
+          # The publish code ohpm gives the publisher of the package — its
+          # `publish_id` — which is what the repository's OHOS_PUBLIC_TOKEN
+          # holds; and the private half of the keypair whose public half is
+          # uploaded to ohpm.
           OHOS_PUBLIC_TOKEN: ${{ secrets.OHOS_PUBLIC_TOKEN }}
           OHPM_KEY: ${{ secrets.OHPM_KEY }}
         run: .github/scripts/publish_ohpm.sh "${{ needs.version.outputs.version }}"

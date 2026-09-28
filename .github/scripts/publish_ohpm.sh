@@ -11,10 +11,10 @@
 # trusted publisher, so unlike .github/scripts/publish_npm.sh this one needs a
 # credential in the environment, and it is a credential made of two halves:
 #
-#   OHOS_PUBLIC_TOKEN  the publish id — the code ohpm gives the package's
-#                      publisher, and the name the repository's secret has.
-#                      OHPM_PUBLISH_ID is read too, for a hand run that sets
-#                      it in the environment instead.
+#   OHOS_PUBLIC_TOKEN  the publish code — ohpm's `publish_id` — that it gives
+#                      the publisher of the package, and the name the
+#                      repository's secret has. OHPM_PUBLISH_ID is read too,
+#                      for a hand run that sets it in the environment instead.
 #   OHPM_KEY_PATH      the private half of an SSH keypair whose public half is
 #                      uploaded to ohpm — or OHPM_KEY, the key itself, which
 #                      this script writes to a file of its own
