@@ -253,6 +253,40 @@ fn oneshot_flush_drains_a_foreign_cache_file() {
     assert!(text.contains("begin of mmap from other process"), "{text}");
 }
 
+/// A process that was killed leaves the records it wrote in the cache file it
+/// mmap'd, and the next `appender_open` is what takes them to the log file —
+/// the region is the kernel's, so nothing of a killed process is lost, it is
+/// only not in a `.xlog` yet. That is the whole reason an app does not have to
+/// flush on its way out.
+#[test]
+fn open_drains_the_cache_a_killed_process_left() {
+    use marsrs_buffer::{CompressMode, LogBuffer};
+
+    let _guard = singleton();
+    let tmp = tempfile::tempdir().unwrap();
+
+    // The cache file the way a killed process left it: a region with one record
+    // in it, and no writer holding it.
+    let mut region = vec![0u8; 150 * 1024];
+    let mut buffer = LogBuffer::new(true, None, CompressMode::Zlib, 6);
+    buffer.attach(&mut region);
+    assert!(buffer.write(&mut region, b"the last record of a killed process"));
+    std::fs::write(tmp.path().join("Mars.mmap3"), &region).unwrap();
+
+    // A start, and nothing else: no `flush`, and no call that names the cache.
+    appender_open(config(tmp.path(), AppenderMode::Async)).unwrap();
+    appender_close();
+
+    let bytes = std::fs::read(today_log_file(tmp.path())).unwrap();
+    let text = payload_text(&bytes);
+    assert!(
+        text.contains("the last record of a killed process"),
+        "{text}"
+    );
+    // The banner `Open` brackets the drained records with.
+    assert!(text.contains("begin of mmap"), "{text}");
+}
+
 /// `xlogger_dump`: the dump that leaves a file in the log directory behind, so
 /// the blob is still there after the process is gone.
 #[test]

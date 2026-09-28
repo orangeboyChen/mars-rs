@@ -82,7 +82,7 @@ if (xlog.isLoggable(LogLevel.debug)) {
 |---|---|---|
 | what a write does | compresses the record into a memory-mapped cache and hands it to a writer thread | writes it through to the file |
 | what it costs | the `write` syscall is not on the logging thread | the thread that logs waits for the file |
-| what you must do | `flush(sync: true)` before the file is read or uploaded, and before the process goes away | nothing |
+| what you must do | `flush(sync: true)` before the file is read or uploaded — and nothing at all when the app goes away ([log files](/log-files)) | nothing |
 
 Async is the default because the file is slower than the record; sync is what you
 want when a record has to be on disk before the next line runs — a crash log, or

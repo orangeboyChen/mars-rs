@@ -358,6 +358,7 @@ public final class Xlog: NSObject {
         self.namePrefix = config.namePrefix
         self.handle = opened
         self.currentMode = config.mode
+        XlogBackgroundFlush.shared.add(self)
     }
 
     deinit {
