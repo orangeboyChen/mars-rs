@@ -13,16 +13,28 @@
 use std::sync::OnceLock;
 use std::time::Instant;
 
-/// The process start, the origin of [`gettickcount`].
+/// `sg_tick_init` — what `tickcount.cc` puts under every reading, and so what
+/// a span from a `tickcount_t` nothing ever wrote into is: two billion
+/// milliseconds, about twenty-three days.
+///
+/// The origin is the point of it. A `tickcount_t` that is still `0` — the
+/// "invalid" one, or one the host has not touched yet — reads as long
+/// expired, and every `gettickspan() > timeout` test in the tree is written
+/// for that: with an origin of zero the same test calls a never-set reading
+/// fresh, and a timeout that should have gone off has not.
+pub const TICK_INIT: u64 = 2_000_000_000;
+
+/// The process start, the origin of [`gettickcount`] underneath [`TICK_INIT`].
 static START: OnceLock<Instant> = OnceLock::new();
 
-/// `::gettickcount()` — milliseconds since the process started.
+/// `::gettickcount()` — [`TICK_INIT`] plus the milliseconds since the process
+/// started.
 ///
-/// The count starts at `1`: [`TickCount`] reserves `0` for "invalid", so the
-/// very first reading — the one a freshly constructed `TickCount::now()`
-/// takes — must not look like one.
+/// The reading is never `0`, which is what lets [`TickCount`] keep `0` for
+/// "invalid" — and never small, which is what puts an invalid one far enough
+/// in the past for the expiry tests to read it as expired.
 pub fn gettickcount() -> u64 {
-    START.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
+    TICK_INIT + START.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
 /// `tickcountdiff_t` — a signed difference between two [`TickCount`]s.
@@ -71,6 +83,9 @@ pub struct TickCount(u64);
 
 impl TickCount {
     /// A zero tick count, i.e. [`TickCount::is_valid`] is `false`.
+    ///
+    /// A zero reading is [`TICK_INIT`] milliseconds in the past, so one
+    /// nothing set reads as long expired and not as fresh.
     pub const fn invalid() -> Self {
         Self(0)
     }
