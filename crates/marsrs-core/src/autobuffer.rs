@@ -26,7 +26,7 @@ impl AutoBuffer {
         }
     }
 
-    /// Builds a buffer that already holds `_data`.
+    /// Builds a buffer that already holds `data`.
     pub fn from_bytes(data: Vec<u8>) -> Self {
         let length = data.len();
         Self {
@@ -54,13 +54,13 @@ impl AutoBuffer {
         self.data.reserve(extra);
     }
 
-    /// Appends `_src` at the cursor and advances it.
+    /// Appends `src` at the cursor and advances it.
     pub fn write(&mut self, src: &[u8]) {
         self.write_at(self.pos, src);
         self.seek(src.len() as isize, Seek::Cur);
     }
 
-    /// Writes `_src` at `_pos`, growing the buffer when needed.
+    /// Writes `src` at `pos`, growing the buffer when needed.
     pub fn write_at(&mut self, pos: usize, src: &[u8]) {
         debug_assert!(pos <= self.length);
         self.fit(pos + src.len());
@@ -68,7 +68,7 @@ impl AutoBuffer {
         self.length = self.length.max(pos + src.len());
     }
 
-    /// Reads `_dst.len()` bytes from `_pos`.
+    /// Reads `dst.len()` bytes from `pos`.
     pub fn read_at(&self, pos: usize, dst: &mut [u8]) -> usize {
         if pos >= self.length {
             return 0;

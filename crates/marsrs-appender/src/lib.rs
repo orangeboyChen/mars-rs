@@ -217,8 +217,6 @@ fn instance_cache_path(id: AppenderId) -> Option<PathBuf> {
 /// with console logging off. Use the `*_instance` functions below to change
 /// that.
 ///
-/// Returns `None` when the directory is empty or cannot be created.
-///
 /// # Errors
 ///
 /// Propagates [`AppenderError`] when the directory cannot be created or
@@ -719,7 +717,6 @@ mod tests {
         assert!(name.ends_with(".xlog"), "{name}");
         assert_eq!(paths[0].parent(), Some(dir));
 
-        // Empty logdir -> nothing.
         assert!(appender_make_logfile_name(0, "Mars", Path::new("")).is_empty());
         assert!(appender_getfilepath_from_timespan(0, "Mars", Path::new("")).is_empty());
     }

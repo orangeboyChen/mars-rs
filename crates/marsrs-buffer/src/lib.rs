@@ -257,7 +257,7 @@ impl LogBuffer {
         };
 
         // `before_len -= remain_nocrypt_len_` — rewind over the bytes the last
-        // write could not encrypt, they are part of this chunk's input.
+        // write could not encrypt; they are part of this chunk's input.
         let last_remain_len = self.remain_nocrypt_len;
         let crypt_start = before_len - last_remain_len;
 

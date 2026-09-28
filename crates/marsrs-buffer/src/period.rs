@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use marsrs_crypt::{magic, LogCrypt, HEADER_LEN, TAILER_LEN};
 
-/// `GetPeriodLogs` — scans `_log_path` for the byte range covering
+/// `GetPeriodLogs` — scans `path` for the byte range covering
 /// `[begin_hour, end_hour)`.
 ///
 /// Returns `(begin_pos, end_pos)`, or `Err` with the C++-style diagnostic

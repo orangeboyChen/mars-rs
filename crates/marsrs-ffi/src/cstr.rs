@@ -1,7 +1,7 @@
 //! Null-safe conversions from caller-owned C memory.
 //!
 //! Every `unsafe` in the crate funnels through this module so the audit surface
-//! stays tiny: three functions, each with one `CStr`/raw-pointer read.
+//! stays tiny: four functions, each with one `CStr`/raw-pointer read.
 //!
 //! The rule enforced here is the one the JNI layer already relied on
 //! (`Java2C_Xlog.cc` null-checks every `jstring` before `ScopedJstring`):

@@ -246,7 +246,8 @@ pub mod platform_comm;
 // `///` here would push them out of it, which is why this one is a `//` too.
 pub mod baseevent;
 
-/// `Xlog.appenderOpen`.
+/// The `Java_…_*` symbols the library exports: every `native` method, and the
+/// readers beside them that turn Java objects into Rust values.
 pub mod jni_bridge;
 
 /// The state of this crate is process-wide — one alarm set, one long-link
@@ -406,7 +407,8 @@ mod tests {
 
     /// `write` is the write of the Kotlin API, and the level has to mean
     /// something there: handle `0` reaches the C++'s `xlogger_Write`, which has
-    /// no filter of its own, so the one `Xlog.i(tag, message)` promises is this.
+    /// no filter of its own, so the filter `Xlog.i(tag, message)` promises is
+    /// this one.
     #[test]
     fn write_drops_a_record_the_level_is_above() {
         let _guard = singleton();

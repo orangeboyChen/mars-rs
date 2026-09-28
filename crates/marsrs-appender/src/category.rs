@@ -46,9 +46,8 @@ pub const DEFAULT_HANDLE: XloggerHandle = 0;
 
 /// `mars::comm::XloggerCategory`.
 ///
-/// The C++ also stores an appender and a write callback; the port only needs
-/// the level, because writing always goes through the process-wide appender
-/// (see the module note).
+/// The C++ keeps a write callback here as well; what the port keeps is the
+/// level and the appender the instance writes through — see the module note.
 #[derive(Debug, Clone, Copy)]
 pub struct XloggerCategory {
     level: LogLevel,

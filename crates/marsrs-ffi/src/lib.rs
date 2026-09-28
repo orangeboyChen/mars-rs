@@ -27,8 +27,8 @@
 //!
 //! # Safety contract
 //!
-//! This is the **only** crate in the workspace allowed to use `unsafe`, and it
-//! is confined to reading/writing caller-owned C memory:
+//! This is the crate the workspace's `unsafe` lives in, and it is confined to
+//! reading/writing caller-owned C memory:
 //!
 //! * every entry point is wrapped in `guard` (`catch_unwind` +
 //!   `AssertUnwindSafe`), so a panic never unwinds into C;
@@ -42,8 +42,10 @@
 //! pointer. The raw-pointer arguments themselves are only ever touched inside
 //! the audited [`cstr`] helpers.
 
-// `unsafe` is a deliberate, audited part of this crate (and only of this crate:
-// every sibling crate is `#![deny(unsafe_code)]`).
+// `unsafe` is a deliberate, audited part of this crate: this is the boundary a
+// caller's raw pointers are read across. The appender allows it too, beside
+// the mapping that cannot be written without it; the rest of the tree denies
+// it outright.
 #![allow(unsafe_code)]
 // Any `unsafe fn` we add must document why it is sound, and unsafe operations
 // inside `unsafe fn`s must still be explicit blocks.
@@ -98,9 +100,8 @@ use std::panic::{self, AssertUnwindSafe};
 /// stderr, which is intentional: it is the only diagnostics channel a host
 /// process (e.g. the JVM) gives us.
 ///
-/// Ungated: it is the barrier every entry point of this crate crosses, xlog's
-/// included but not only theirs — the diagnosis' and the task pipeline's are
-/// built without `xlog` for the Apple net framework.
+/// Ungated: the diagnosis' and the task pipeline's entry points cross it too,
+/// and both are built without `xlog` for the Apple net framework.
 pub(crate) fn guard<T>(fallback: T, f: impl FnOnce() -> T) -> T {
     // `AssertUnwindSafe` is sound here: the closures only touch interior-mutable
     // process state (atomics + the appender's own locks) and no panic can leave

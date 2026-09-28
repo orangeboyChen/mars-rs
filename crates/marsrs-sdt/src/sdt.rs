@@ -11,7 +11,6 @@ use crate::netchecker_profile::CheckResultProfile;
 pub struct CheckIPPort {
     /// The host, as an IP or a name.
     pub ip: String,
-    /// The port.
     pub port: u16,
 }
 

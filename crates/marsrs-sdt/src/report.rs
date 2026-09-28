@@ -2,8 +2,8 @@
 //!
 //! `SdtManagerJniCallback::ReportNetCheckResult()` — and now the C ABI too —
 //! hands a diagnosis to the app as one JSON document, field for field the
-//! C++'s. It is here and not in `marsrs-jni` or `marsrs-ffi` because the fields are
-//! [`CheckResultProfile`]'s, and both seams that hand a report over have to
+//! C++'s. It is here and not in `marsrs-jni` or `marsrs-ffi` because the fields
+//! are [`CheckResultProfile`]'s, and both seams that hand a report over have to
 //! spell them the same way.
 
 use crate::netchecker_profile::CheckResultProfile;

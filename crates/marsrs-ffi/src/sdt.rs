@@ -14,10 +14,9 @@
 //!
 //! What a run finds is handed back as the JSON
 //! `SdtLogic.reportSignalDetectResults(String)` gets in the C++ — the document
-//! [`marsrs_sdt::report_json`] builds, which is also what the JNI seam hands over.
-//! The fields are [`CheckResultProfile`]'s and there are fourteen of them, so
-//! the report crosses as one string instead of as a struct the caller would
-//! have to mirror.
+//! [`marsrs_sdt::report_json`] builds, which is also what the JNI seam hands
+//! over. Every field of it is [`CheckResultProfile`]'s, so the report crosses
+//! as one string instead of as a struct the caller would have to mirror.
 //!
 //! Panics: no Rust panic ever crosses this boundary. Every entry point is
 //! wrapped in `catch_unwind` and reports [`MARS_SDT_ERR_PANIC`] (or swallows it,
@@ -186,13 +185,12 @@ impl MarsSdtCheck {
     }
 }
 
-/// One host and port of a link: `CheckIPPort` of `mars/sdt/src/sdt.h`.
+/// One host and port of a link: `CheckIPPort` of `mars/sdt/sdt.h`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MarsSdtIpPort {
     /// The host, as an IP or a name.
     pub ip: *const c_char,
-    /// The port.
     pub port: u16,
 }
 
@@ -259,8 +257,8 @@ fn new_state() -> SdtState {
 /// inside the diagnosis, and this is the copy the boundary keeps of it.
 fn cancel() -> &'static Mutex<CancelHandle> {
     static CANCEL: OnceLock<Mutex<CancelHandle>> = OnceLock::new();
-    // A flag of its own, and not [`new_state`]'s: that one reaches for this,
-    // so asking it here would be asking the question the answer is made of.
+    // Its own handle, and not [`new_state`]'s: that function is what writes
+    // this slot, so reaching for it here would ask for the slot being filled.
     // Every state that follows overwrites it with the handle of the core it
     // holds, which is the one a run of that core reads.
     CANCEL.get_or_init(|| Mutex::new(CancelHandle::new()))

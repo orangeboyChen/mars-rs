@@ -126,8 +126,8 @@ impl ActiveLogic {
         self.on_inactive();
     }
 
-    /// `SignalActive(isactive)` — what the C++ broadcast is what the port
-    /// calls: the net core is the only thing that listened.
+    /// `SignalActive(isactive)` — the C++ broadcast, as a call to the one thing
+    /// that listened: the net core.
     fn signal_active(&mut self) {
         let is_active = self.is_active;
         crate::stn::with_logic(|logic| logic.set_active(is_active));

@@ -102,7 +102,7 @@ const LOG_FLUSH_THRESHOLD: usize = 4 * 1024;
 /// bigger than this, and a batch is handed to the OS whole, so the buffer grows
 /// to whatever a drain needs — once, and not again.
 const PENDING_CAPACITY: usize = 2 * LOG_FLUSH_THRESHOLD;
-/// `gettimeofday`-free recursion guard threshold (`recursion_count > 10`).
+/// The recursion guard of `XloggerAppender::Write` (`recursion_count > 10`).
 const MAX_RECURSION: u32 = 10;
 /// A local day no log file can be opened on: [`AppenderInner::open_file_day`]
 /// holds it whenever no file is open.
@@ -968,8 +968,15 @@ impl AppenderInner {
         // `boost::filesystem::space(cachedir).available >= 1 GiB`.
         match crate::sys::available_space(cachedir) {
             Some(available) => available >= MIN_FREE_SPACE,
-            // The query failed: behave like the old port and do not block the
-            // flush on an unknown disk.
+            // A failed query leaves the space unknown, and unknown is read
+            // as roomy rather than full: the value boost's own non-throwing
+            // overload reports, `uintmax_t(-1)` for `available`, clears the
+            // threshold, and the C++ has no arm to mirror — its `space()`
+            // throws and the exception escapes `__Log2File`. An unreadable
+            // disk therefore caches, and [`Self::log2file`] holds a cached
+            // record back: it writes the cache file and returns without
+            // moving it into the log directory, which a later call that can
+            // read the disk does.
             None => true,
         }
     }
@@ -1116,9 +1123,10 @@ impl AppenderInner {
     /// Hands `Self::pending` to the OS — the point where the C++'s `FILE*`
     /// buffer is flushed into a `write`.
     ///
-    /// Returns `false` on I/O failure, after truncating back to `Self::flushed_len`
-    /// and appending an error record (as `__WriteFile` does) — and **keeping**
-    /// the batch, so it is neither lost nor written twice: see `Self::pending`.
+    /// Returns `false` on I/O failure, after truncating the file back to where
+    /// this write started and appending an error record (as `__WriteFile`
+    /// does) — and **keeping** the batch, so it is neither lost nor written
+    /// twice: see `Self::pending`.
     fn flush_pending(&mut self) -> bool {
         if self.pending.is_empty() {
             return true;

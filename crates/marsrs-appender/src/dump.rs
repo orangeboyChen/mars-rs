@@ -61,7 +61,6 @@ pub fn xlogger_memory_dump(bytes: &[u8]) -> String {
 
         out.push_str(&dump_line(&bytes[offset..offset + line]));
         offset += line;
-        // next line
         out.push('\n');
     }
 

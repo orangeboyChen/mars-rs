@@ -22,7 +22,7 @@
 //! ([`MarsStnCgiProfile`], [`MarsStnDnsProfile`]) cross as structs, because a
 //! caller fills the first one in and reads the other two. The *report* of a
 //! task crosses as the JSON [`marsrs_stn::task_profile_json`] writes, which is
-//! the document the JNI hands Java: thirty-odd readings of a run, as one string
+//! the document the JNI hands Java: every reading of a run, as one string
 //! instead of a struct a caller would have to mirror.
 //!
 //! Panics: no Rust panic ever crosses this boundary. Every entry point is
@@ -55,8 +55,8 @@ pub const MARS_STN_ERR_NULL_TASK: c_int = -2;
 pub const MARS_STN_ERR_REFUSED: c_int = -3;
 /// What [`mars_stn_due_time`] answers when there is nothing for the host to
 /// wait for: no task is out, no zombie is being checked and no alarm is armed.
-/// It is not [`MARS_STN_ERR_PANIC`], which every other symbol answers with and
-/// this one may too, so the two are two values and not one.
+/// Its own value and not [`MARS_STN_ERR_PANIC`], which that symbol answers as
+/// well, so a host can tell "nothing to wait for" from "a panic was caught".
 pub const MARS_STN_ERR_NO_DUE: i64 = -4;
 
 /// Which of the eighteen questions STN asked.
@@ -144,9 +144,7 @@ pub enum MarsStnAnswerKind {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MarsStnHeader {
-    /// The name.
     pub name: *const c_char,
-    /// The value.
     pub value: *const c_char,
 }
 
@@ -1539,7 +1537,7 @@ impl DnsView {
         addr_of!(self.raw)
     }
 
-    /// The question as the C side reads it.
+    /// The dns profile as the C side reads it.
     fn of(profile: &DnsProfile) -> Self {
         let mut strings = Vec::new();
         let raw = MarsStnDnsProfile {

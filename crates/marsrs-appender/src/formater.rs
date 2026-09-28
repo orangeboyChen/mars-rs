@@ -76,8 +76,6 @@ pub(crate) fn extract_function_name(func: Option<&str>) -> &str {
     }
 
     match end {
-        // `start + 1 >= end`: a one-byte name is not a name, so the C++ keeps
-        // the whole signature.
         Some(end) if start + 1 < end => {
             // Both ends are ASCII delimiters, so the range is a whole slice;
             // only the 127-byte cut can land inside a character, and it is
@@ -88,6 +86,8 @@ pub(crate) fn extract_function_name(func: Option<&str>) -> &str {
             }
             &func[start..start + len]
         }
+        // `start + 1 >= end`: a one-byte name is not a name, so the C++ keeps
+        // the whole signature.
         _ => cap(func),
     }
 }
@@ -203,7 +203,7 @@ impl Write for Snprintf<'_> {
     }
 }
 
-/// `"yyyy-mm-dd +12.75 hh:mm:ss."` — the widest `"%Y-%m-%d %+.1f %H:%M:%S."`
+/// `"yyyy-mm-dd +13.75 hh:mm:ss."` — the widest `"%Y-%m-%d %+.1f %H:%M:%S."`
 /// there is, and the buffer is never indexed past what was written.
 const STAMP_TEXT_SIZE: usize = 32;
 

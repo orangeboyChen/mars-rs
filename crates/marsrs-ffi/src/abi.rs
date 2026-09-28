@@ -165,15 +165,13 @@ unsafe fn to_xlog_config(cfg: &MarsXLogConfig) -> Result<XLogConfig, c_int> {
         return Err(MARS_XLOG_ERR_EMPTY_LOG_DIR);
     }
 
-    // Non-positive level falls back to the default. `name_prefix` still
-    // goes through UTF-8 (XLogConfig stores a String), so a non-UTF-8
-    // prefix is converted lossily — noted in the header; the directories
-    // above are byte-exact.
-    // An empty prefix must
-    // stay empty: the C++ `XLogConfig::nameprefix_` has no default, so it
-    // produces `.mmap3` / `_YYYYMMDD.xlog` and cache discovery is
-    // prefix-based — substituting "Mars" would stop the Rust port from
-    // draining (or being drained by) a C++ process's cache file.
+    // A non-positive compress level keeps the appender's default. An empty
+    // prefix must stay empty: the C++ `XLogConfig::nameprefix_` has no default
+    // either, so it produces `.mmap3` / `_YYYYMMDD.xlog` and cache discovery is
+    // prefix-based — substituting "Mars" would stop the Rust port from draining
+    // (or being drained by) a C++ process's cache file. The prefix does go
+    // through UTF-8, `XLogConfig` storing a `String`, so a non-UTF-8 one is
+    // converted lossily; the directories above are byte-exact.
     let defaults = XLogConfig::default();
     Ok(XLogConfig {
         mode,
@@ -508,13 +506,14 @@ pub unsafe extern "C" fn mars_xlog_release_instance(name_prefix: *const c_char) 
 
 /// Writes through a specific instance (`0` = the process-wide appender).
 ///
-/// The instance's own level decides: a record below it is dropped, and an
-/// unknown non-zero handle writes nothing. For `0` that level is the one
-/// [`mars_xlog_set_level`] set, the same one [`mars_xlog_write`] asks.
+/// A non-zero instance's own level decides: a record below it is dropped, and a
+/// handle that is not one writes nothing. `0` is the C++'s `xlogger_Write`,
+/// which filters nothing — the level [`mars_xlog_set_level`] set is the one
+/// [`mars_xlog_is_enabled_for`] answers from and [`mars_xlog_write`] asks.
 ///
 /// # Safety
 ///
-/// `tag`, `filename`, `func_name` and `message` must each be null, or a NUL-terminated C string
+/// `tag`, `filename`, `func_name` and `log` must each be null, or a NUL-terminated C string
 /// that stays alive for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn mars_xlog_write_instance(
