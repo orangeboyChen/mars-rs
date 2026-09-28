@@ -7,25 +7,35 @@ name: Label
 # person. The comment at the top of the configuration says which families are
 # derived and which are not.
 #
-# The event is `pull_request_target` and not `pull_request`, and that is the one
-# line here worth explaining. A pull request opened from a fork runs
-# `pull_request` with a token that can read and not write, so the action could
-# see the diff and could not label anything. `pull_request_target` runs in the
-# context of the base branch instead, and its token can write. What makes that
-# safe is what this workflow does not do: it never checks the pull request out
-# and never runs a line of it — the action reads the diff through the API and
-# writes a label back. The two files that decide what it does are this one and
-# the configuration beside it, both from the base branch, both reviewed like
-# anything else. Nothing else in this workflow may change that: a step that
-# checked the pull request out, or ran one of its scripts, would hand a fork
-# the write token of the base.
+# The event is `pull_request` and not `pull_request_target`, and that is the one
+# line here worth explaining. `pull_request_target` runs in the context of the
+# base branch, and so carries a token that can write: that is how a pull
+# request opened from a fork could be labelled at all, the token of
+# `pull_request` from a fork being one that can only read. GitHub blocks the
+# event in a public repository by default from 2 November 2026 unless the
+# repository carries an Actions policy that allows it, and what this workflow
+# asks for is not worth a policy of its own: no secret, no checkout, no line of
+# the pull request run, only a token that may write a label back. A pull
+# request opened from a branch of this repository — which is every pull
+# request it has had — gets exactly that from `pull_request`.
 #
+# What it costs is the fork, and the job below says so out loud rather than
+# failing on one: a pull request whose head is another repository is skipped,
+# because the token it would run with could not write the label in any case.
+#
+# What it does not cost is what the old event was chosen for. The workflow
+# never checks the pull request out and never runs a line of it — the action
+# reads the diff through the API and writes a label back — and a fork cannot
+# buy a write by editing this file or the configuration beside it, because a
+# fork's pull request is run with a read-only token whichever permissions are
+# asked for here.
+
 # This is not one of the checks the ruleset asks for, so a run that does not
 # happen cannot leave a pull request waiting for a status that is not coming.
 # It is a convenience and not a gate: it holds no merge up.
 
 on:
-  pull_request_target:
+  pull_request:
     # Labelled when it opens, and again on every push that changes what it
     # touches. Nothing else: a rebased pull request keeps its labels, and a
     # retitled one is not re-labelled.
@@ -34,10 +44,9 @@ on:
       - synchronize
       - reopened
 
-# A push supersedes the run it interrupts. The group is the pull request and
-# not `github.ref`, because `pull_request_target` runs with the ref of the
-# *base* branch: every pull request would otherwise share one group with every
-# other, and cancel each other's labelling.
+# A push supersedes the run it interrupts, and the group is the pull request so
+# that it supersedes that one's run and no other's: two pull requests never
+# share a group, and never cancel each other's labelling.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -49,6 +58,10 @@ jobs:
   label:
     name: Label by the paths changed
     runs-on: ubuntu-latest
+    # A fork's pull request is left unlabelled rather than failed on: the token
+    # it runs with can only read, so a job that asked for a label would be a
+    # red run that could never have been green.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: read
       # The label is written back through the API, which is the whole of what
