@@ -4,6 +4,19 @@
 //! defaults; the port keeps the same field names (snake case) and the same
 //! defaults, and gives the channel/priority/protocol constants as associated
 //! constants like the C++ statics.
+//!
+//! Four fields of the C++'s are not here, and none of the four is one an app
+//! can ask for another way:
+//!
+//! * `void* user_context` and `server_sequence_id`, which the C++ hands to
+//!   its `req2buf` callback and takes the second one back out of — a Rust
+//!   encoder is a value the app built, so what it needs goes in it;
+//! * `extra_info`, a map the C++ passes to `get_real_host()` when it asks for
+//!   the hosts of a long link, which this crate's hook does not take;
+//! * `need_realtime_netinfo`, which the C++ asks where it labels the network
+//!   of a short-link connect (`shortlink.cc:208`): `getRealtimeNetLabel` or
+//!   `getCurrNetLabel`. Here it is the one label the app's own hook answers
+//!   with, whichever of the two that hook is.
 
 use std::collections::BTreeMap;
 
@@ -87,7 +100,13 @@ pub struct Task {
     pub minorlong_host_list: Vec<String>,
     /// Hosts of the QUIC link.
     pub quic_host_list: Vec<String>,
-    /// How many minor long links may be open at once.
+    /// How many minor long links may be open at once. The C++'s
+    /// `Task::Task()` gives `1` (`stn.cc:60`) and [`Task::new`] gives `0`,
+    /// which is room for none: a task whose minor hosts have no link yet is
+    /// not one this puts on a channel that has none, where the C++ queues it
+    /// and waits. The one time there is no link is a task started while the
+    /// app is in the background, which is when no link is made for it
+    /// (`net_core.cc:471`).
     pub max_minorlinks: i32,
     /// The function name, for reporting.
     pub function: String,

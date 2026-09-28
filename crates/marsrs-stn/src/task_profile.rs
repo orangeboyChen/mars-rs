@@ -715,8 +715,12 @@ pub enum FirstAuthFlag {
 /// `TaskProfile` — one task, from the moment it was asked for to the moment it
 /// was answered, and everything its retries left behind.
 ///
-/// The C++ has one field this does not: `is_weak_network`, which only the
-/// report reads and which comes with the code that writes the report.
+/// The C++ has two fields this does not: `is_weak_network` and
+/// `is_last_valid_connect_fail`, both written just before a finished task is
+/// handed over (`shortlink_task_manager.cc:1200`,
+/// `longlink_task_manager.cc:757`) and read by nothing in its tree — the
+/// report that would read them is the app's own, which comes with the code
+/// that writes it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskProfile {
     /// `task`.
@@ -750,7 +754,11 @@ pub struct TaskProfile {
     /// `last_failed_dyntime_status` — what the network was called when the try
     /// before this one failed.
     pub last_failed_dyntime_status: DynamicTimeoutStatus,
-    /// `current_dyntime_status` — what it is called now.
+    /// `current_dyntime_status` — what it is called now. The C++ starts it at
+    /// `0`, which is not one of its `DynamicTimeoutStatus`
+    /// (`dynamic_timeout.h:27`), where the default here starts it at
+    /// `Evaluating`: a task reported before anything set it names a network
+    /// that was never called one.
     pub current_dyntime_status: DynamicTimeoutStatus,
     /// `use_proxy` — whether this try goes through a proxy.
     pub use_proxy: bool,

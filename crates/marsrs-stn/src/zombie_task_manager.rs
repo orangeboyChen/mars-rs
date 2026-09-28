@@ -19,6 +19,20 @@
 //!
 //! Both `fun_start_task_` and `fun_callback_` are set with `set_*` here, and
 //! an unset one does nothing — the C++ would have hit `xassert2`.
+//!
+//! Two more places the two part company, both about what a reading of the
+//! clock is taken for:
+//!
+//! * `__StartTask` reads `gettickcount()` for every zombie, inside its loop
+//!   (`zombie_task_manager.cc:130`), where
+//!   [`ZombieTaskManager::redo_tasks_at`] is handed one reading for the whole
+//!   batch: a zombie the C++ would have found past its deadline, because an
+//!   earlier `fun_start_task_` took its time, is started here with the wait
+//!   measured before any of them ran;
+//! * `RedoTasks` leaves the check posted — `__TimerChecker` is the only place
+//!   the C++ cancels it (`:186`) — so a `SaveTask` that follows one inherits a
+//!   schedule that may already have come due, where the due time here goes
+//!   with the list and the next save arms a whole [`TIMER_INTERVAL`].
 
 use crate::task::Task;
 use crate::task_profile::{ErrCmdType, TaskFailHandleType, LOCAL_TASK_TIMEOUT};
