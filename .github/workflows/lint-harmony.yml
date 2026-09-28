@@ -111,7 +111,7 @@ jobs:
         env:
           TSC: ${{ runner.temp }}/tsc/node_modules/.bin/tsc
         run: scripts/check_harmony_arkts.sh
-      # The rest: the four `json5` manifests, the fields ohpm requires, the
+      # The rest: the three `json5` manifests, the fields ohpm requires, the
       # NAPI names of the C and of the declarations and of the ArkTS being one
       # list, and the ArkTS rules tsc has never heard of.
       - name: Check the manifests, the names and the rules
