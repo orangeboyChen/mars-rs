@@ -14,12 +14,17 @@ name: Lint (Swift)
 # than installed by a package manager: Homebrew has no `swiftlint@0.65.1`, and a
 # new SwiftLint release brings new rules with it.
 #
-# It reads `platforms/apple` and its own configuration, and nothing else: a pull
-# request that touches only `crates/` or only `platforms/android/` has no Swift
-# in it, and this is the one gate of the three that has to run on macOS, the
-# host a minute of which is billed at ten times a Linux one. Which is why
-# `swiftlint` skips when the commit touches neither — see the comment on
-# `changes`.
+# It reads `platforms/apple`, the C headers that Swift is written over, its own
+# configuration, and nothing else: a pull request that touches only `crates/`
+# or only `platforms/android/` has no Swift in it, and this is the one gate of
+# the three that has to run on macOS, the host a minute of which is billed at
+# ten times a Linux one. Which is why both jobs skip when the commit touches
+# neither — see the comment on `changes`.
+#
+# Two jobs and not one, because they answer different questions: `swiftlint`
+# is what the sources look like, and `compile (apple)` is whether they compile
+# for iOS and for watchOS. A check keeps the name the ruleset asks it by, so
+# the compile is a job of its own rather than a second step of the lint.
 
 on:
   # Every run starts, whatever the commit touched: what decides whether the job
@@ -58,6 +63,10 @@ jobs:
           # The diff is against the base of the pull request, which is behind
           # the tip of the branch it was cut from.
           fetch-depth: 0
+      # `crates/marsrs-ffi/include/**` is in the list because the compile job
+      # below writes the module maps it compiles against out of those headers:
+      # a symbol the Swift calls that the header no longer declares is a
+      # failure of this gate, and not of the release that builds the framework.
       - id: paths
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -65,6 +74,7 @@ jobs:
         run: |
           .github/scripts/changed_paths.sh \
             'platforms/apple/**' '.swiftlint.yml' '.github/scripts/**' \
+            'crates/marsrs-ffi/include/**' \
             '.github/workflows/lint-swift.yml'
 
   swiftlint:
@@ -100,3 +110,38 @@ jobs:
       # opt-in rules run on top of the defaults; `--strict` is what fails the
       # job.
       - run: ./swiftlint lint --strict
+
+  # The other half of the gate, and the half a linter cannot do: whether the
+  # Swift compiles for the two platforms the package is published for.
+  #
+  # `swift build` is not how it is asked, because two of the five targets of
+  # Package.swift are binary ones holding a prebuilt iOS and watchOS
+  # xcframework: a macOS host links neither, and a pull request would have to
+  # download the release asset first. What the script does instead is write
+  # module maps over `crates/marsrs-ffi/include` — a C module is all a Swift
+  # file takes from either target — and emit every Swift module of the package
+  # for three triples: iOS 12 on arm64, and watchOS 10 on `arm64_32` and on
+  # `arm64`.
+  #
+  # Which is the question a pull request was not asked: the release compiles
+  # the Swift when it builds the xcframework, so the first compile of a change
+  # happened after the merge. A watchOS app got a source that named `UIApplication` — a symbol the watchOS SDK marks unavailable, and
+  # one `canImport(UIKit)` answers `true` for on watchOS — and nothing between
+  # the pull request and the release said so.
+  #
+  # A module is emitted rather than the sources being `-typecheck`ed: a type
+  # check stops before SILGen, which is where a `self` handed over before the
+  # `super.init()` Swift writes for an `NSObject` subclass is caught, and
+  # which is the other thing this job found.
+  compile:
+    name: compile (apple)
+    needs: changes
+    if: needs.changes.outputs.needed == 'true'
+    # The SDKs of both platforms are in the Xcode the image carries; a
+    # `macos-15` image with no iOS SDK cannot ask the question at all.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Swift version
+        run: swift --version
+      - run: .github/scripts/typecheck_swift.sh
