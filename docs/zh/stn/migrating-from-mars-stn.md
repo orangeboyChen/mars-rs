@@ -34,7 +34,20 @@ while (due >= 0) {
 }
 ```
 
+```kotlin [Kotlin Multiplatform]
+var due = StnLogic.dueTime()                  // null 是"没有可等的东西"
+while (due != null) {
+    wait(due)                                 // App 自己的：共享 Kotlin 里没有 sleep
+    StnLogic.runPending()
+    due = StnLogic.dueTime()
+}
+```
+
 :::
+
+共享 Kotlin 里那个等也是 App 自己的：共享 Kotlin 没有自己的 sleep，所以上面的
+`wait` 是 App 写的一个 `expect` —— Android 上 `Thread.sleep(due)`，native 目标上
+`usleep(due * 1000)`。
 
 一个发起了却从没被排空的任务会一直待在它的队列里 —— `has_task` 对一个哪儿也去不了
 的任务照样回答 `true`。
@@ -60,12 +73,17 @@ C++ 里 `net_channel_factory.cc` 那两个钩子。Kotlin、Swift 和 C 的绑�
 | `mars::stn::MarkMainLonglink_ext` | `stn.mark_main_longlink(name)` | `StnLogic.markMainLonglink(name)` | `MarsStn.markMainLongLink(name)` | `mars_stn_mark_main_longlink(name)` |
 | 队列那个线程 | `stn.run_pending()` | `StnLogic.runPending()` | `MarsStn.runPending()` | `mars_stn_run_pending()` |
 
+共享 Kotlin 模块里这几个也是 `StnLogic` 的，名字跟 Android 的一样，只有 App 那个不
+一样：`StnLogic.setApp { question -> … }` 接的是一个闭包而不是 `ICallBack`，
+`dueTime()` 回答 `null` 而不是 `-1`。
+
 ## 那些问题
 
-C++ 作为 `mars::stn::Callback` 的虚函数问的那十八个问题，在 Rust 里是一个 `App`
-trait，在 Kotlin 里是一个 `ICallBack`，在 Swift 里是一个闭包，每一个都为 App 没回
-答的问题准备了默认值 —— 只有 Android 那个例外，它是 C++ 项目的 Java 声明的那个普通
-interface，所以那个对象得由 App 补完。
+C++ 作为 `mars::stn::Callback` 的虚函数问的那十八个问题，在每个平台上有一种形状：
+Rust 里一个 `App` trait，Android 上一个 `ICallBack`，共享 Kotlin 模块里一个 `ask`
+闭包，Swift 里一个闭包，C 里一个回调。每一个都为 App 没回答的问题准备了默认值 ——
+只有 Android 那个例外，它是 C++ 项目的 Java 声明的那个普通 interface，所以那个对象
+得由 App 补完。
 
 名字是 C++ 用的那几个：`req2Buf` 是任务要发的字节，`buf2Resp` 是回答，`onTaskEnd`
 是结束，`onPush` 是服务器从长连接上推下来的东西，`onNewDns` 是一个 host 的地址。见
