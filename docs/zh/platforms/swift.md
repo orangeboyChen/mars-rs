@@ -103,7 +103,18 @@ if log.isEnabled(for: .debug) {
 C 的那些符号也在：`import MarsRSXlog` 重新导出了 `MarsRSFFI`，所以
 `mars_xlog_open`、`mars_xlog_write` 这些照样能直接调。
 
-见[日志文件](/zh/log-files)。
+## App 退出的时候
+
+**什么都不用调用。** App 离开屏幕时 `Xlog` 自己会 flush：它监听
+`didEnterBackground` —— 有 scene 的 App 监听的是 scene 的那个，因为有 scene 的 App
+根本收不到 `UIApplication` 的生命周期通知 —— 再加上 `willTerminate`，两个通知一到就地
+跑一次 `flush(sync: true)`。watchOS 上没有 UIKit，监听的是 `WKExtension` 的
+`applicationDidEnterBackground`。
+
+之所以是这一刻，是因为这是系统还会开口的最后一刻：从后台被杀掉的 App 不会收到任何通知，
+再往后就没有能跑 `flush` 的地方了。少了这一下也不会丢记录 —— 记录还在缓存文件里，下一次
+打开同一个 `namePrefix` 的 `Xlog` 会把它们排进日志文件 —— 但正在结束的这次会话的文件，
+要跑过这一下才是完整的。见[日志文件](/zh/log-files#app-退出的时候)。
 
 ## 任务链路
 

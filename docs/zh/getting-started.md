@@ -58,6 +58,11 @@ marsrs-<version>-<host>.zip      （Windows）
     marsrs-ffi 的静态库和动态库
 ```
 
+```bash [HarmonyOS]
+ohpm install ./marsrs-harmonyos-xlog-<version>.har
+# 从 release 取：ohpm 还没开始发布 —— 见 /zh/platforms/harmonyos
+```
+
 :::
 
 ## 2. 打开、写、flush
@@ -171,6 +176,22 @@ mars_xlog_write(MarsLevelInfo, "startup", __FILE__, __func__, __LINE__, "hello f
 
 mars_xlog_flush_sync();  // 返回时记录已经在磁盘上了
 mars_xlog_close();
+```
+
+```typescript [HarmonyOS]
+import { LogLevel, Xlog } from 'marsrs-harmonyos-xlog';
+
+const xlog: Xlog = Xlog.open({
+    logDir: `${getContext().filesDir}/xlog/log`,
+    namePrefix: 'marsrs',
+    level: LogLevel.Info,
+});
+xlog.consoleLogEnabled = true;
+
+xlog.i('startup', 'hello from mars');
+
+xlog.flush(true);   // 返回时记录已经在磁盘上了
+xlog.close();
 ```
 
 :::

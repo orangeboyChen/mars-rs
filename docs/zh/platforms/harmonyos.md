@@ -11,10 +11,12 @@ ArkTS 写的 HAR；`marsrs-harmony-<version>.tar.gz` 是三个 `libmars_ffi.so` 
 ohpm install marsrs-harmonyos-xlog
 ```
 
-包发在 ohpm 上 —— 发布流程还没开，在那之前
-`scripts/package_harmony.sh <version> <asset-dir>` 写出的是同一个模块：
-`marsrs-harmonyos-xlog-<version>.har`，版本戳进 `oh-package.json5`，三个 `.so` 放
-在 `libs/` 里。装它用 `ohpm install ./marsrs-harmonyos-xlog-<version>.har`。
+ohpm 还没开始发布，所以在那之前包是从 release 里拿的：取下
+`marsrs-harmonyos-xlog-<version>.har`，装那个文件。
+
+```bash
+ohpm install ./marsrs-harmonyos-xlog-<version>.har
+```
 
 ```text
 marsrs-harmonyos-xlog-<version>.har
@@ -28,13 +30,9 @@ marsrs-harmonyos-xlog-<version>.har
 ```
 
 `libmarsrs_xlog.so` 是 `libmars_ffi`（C ABI 的静态库）外面套了 `napi_init.cpp`，
-所以拿到 HAR 的 App 不需要再解析别的。那一层是 C 不是 C++，这是个选择：为了
-`std::mutex` 用上 C++ 的 NAPI 模块，等于让加载它的进程去加载一个本来不需要的 C++
-运行时；而构建它的 SDK 在 `scripts/build_harmony.sh` 解出来的那部分里根本没有
-libc++ 的头文件。
-`scripts/build_harmony_napi.sh <dir>` 用 SDK 自己的 clang 一个 ABI 一个地编它，
-这也是为什么 Linux 的 runner 没有 DevEco Studio 也能打鸿蒙包：全程没有 CMake，发出去
-的是二进制，不是 App 构建时要跑一遍的 native 工程。
+所以拿到 HAR 的 App 不需要再解析别的。那一层是 C 不是 C++，这对 App 是有影响的：
+一个为了 `std::mutex` 而用 C++ 写的 NAPI 模块，等于让加载它的进程去加载一个本来
+不需要的 C++ 运行时。发出去的是二进制，不是 App 构建时要跑一遍的 native 工程。
 
 NAPI 模块叫 `marsrs_xlog`，也就是 `import xlogNapi from 'libmarsrs_xlog.so'` 解析
 的那个名字；它导出什么写在 `src/main/cpp/types/libmarsrs_xlog/index.d.ts` 里 ——
@@ -164,16 +162,14 @@ mars_xlog_open(&config);
 mars_xlog_write(MarsLevelInfo, "startup", __FILE__, __func__, __LINE__, "hello");
 ```
 
-`scripts/build_harmony.sh <dir>` 从源码构建的也是这三个 —— release 就是跑它，没有
-release 的 commit 也用它。SDK 用公开的 OpenHarmony 那份，没设 `OHOS_SDK_HOME`
-时脚本自己下载。[C ABI](/zh/platforms/c-abi)那页都适用：配置、级别、实例和错误码是
+[C ABI](/zh/platforms/c-abi)那页都适用：配置、级别、实例和错误码是
 同一批符号。
 
 ## mars 的另一半
 
-`libmars_ffi.so` 是整个移植，不只是日志那半：`build_harmony.sh` 在默认的 `xlog` 之上
-带着 `sdt,stn` 两个 feature 构建 `marsrs-ffi`，而脚本在库旁边写出的头文件是
-`mars_xlog.h`、`mars_sdt.h`、`mars_stn.h` 三个都有。所以 HarmonyOS 应用可以通过它为
+`libmars_ffi.so` 是整个移植，不只是日志那半：它是在默认的 `xlog` 之上带着 `sdt`
+和 `stn` 两个 feature 构建的，库旁边放着的头文件是 `mars_xlog.h`、`mars_sdt.h`、
+`mars_stn.h` 三个都有。所以 HarmonyOS 应用可以通过它为
 日志写的那个 NAPI 封装，跑一个任务、或者做一次诊断：
 
 ```c
@@ -184,7 +180,7 @@ mars_stn_start_task(&task);
 
 /* 回答是这一趟还能等多少毫秒 */
 long long due = mars_stn_due_time();
-while (due >= 0) {                    /* 这个移植没有线程：App 自己排空队列 */
+while (due >= 0) {                    /* App 自己排空队列 */
     usleep(due * 1000);
     mars_stn_run_pending();
     due = mars_stn_due_time();

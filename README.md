@@ -19,9 +19,10 @@ without a conversion step.
 
 **Documentation** — [English](https://orangeboychen.github.io/mars-rs/) ·
 [简体中文](https://orangeboychen.github.io/mars-rs/zh/) — install, configure,
-write, and read the files back. Those pages are the xlog documentation: STN and
-SDT have no pages of their own yet, and not every package carries them either —
-[where it runs](#where-it-runs) says which do.
+write, and read the files back. The site is one page per piece: the logger,
+[the task pipeline](https://orangeboychen.github.io/mars-rs/stn) and [the network
+diagnosis](https://orangeboychen.github.io/mars-rs/sdt). Not every package
+carries the last two — [where it runs](#where-it-runs) says which do.
 
 ## Where it runs
 
@@ -42,8 +43,7 @@ Windows, each platform compiling the half that reaches this core — JNI on
 Android, cinterop over the C ABI everywhere else. HarmonyOS has both ways in:
 `marsrs-harmonyos-xlog` is the package, a HAR an app installs and writes ArkTS
 through, and `marsrs-harmony-<version>.tar.gz` is the three `.so` and the header
-for an app that would rather write NAPI of its own. `scripts/build_harmony.sh
-<dir>` builds the three from source.
+for an app that would rather write NAPI of its own.
 
 Every release also ships the `xlog` CLI, which writes and reads those files from
 a shell and makes the key pair that decides who can — `cargo install marsrs-xlog`,
