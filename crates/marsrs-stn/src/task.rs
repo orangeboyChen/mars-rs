@@ -7,7 +7,8 @@
 
 use std::collections::BTreeMap;
 
-/// `HostRedirectType`.
+/// Why the host a task went out to is not the one the caller asked for, which
+/// is what the FFI hands the app as one of these: `None` when it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HostRedirectType {
     /// `kHostRedirectNone`
