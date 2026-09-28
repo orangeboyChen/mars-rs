@@ -33,7 +33,7 @@ pub const RUN_CLEAR_RECORDS_INTERVAL: u64 = 60 * 60 * 1000;
 /// burst instead of adding to the one before.
 pub const RESET_RECORD_INTERVAL: u64 = 200;
 
-/// `STAvalancheRecord`.
+/// One body's send history, kept until an hourly sweep finds it cold.
 #[derive(Debug, Clone, Copy)]
 pub struct AvalancheRecord {
     /// adler32 of the body.
@@ -44,8 +44,6 @@ pub struct AvalancheRecord {
     pub last_update: u64,
 }
 
-/// `FrequencyLimit`.
-///
 /// [`FrequencyLimit::check_at`] takes the tick count explicitly so that the
 /// hourly sweep and the intercept count are testable without waiting an hour;
 /// [`FrequencyLimit::check`] is the `Check()` of the C++ against
@@ -139,7 +137,6 @@ impl FrequencyLimit {
         // cap because the branch below evicts as soon as the cap is reached.
         debug_assert!(self.records.len() <= MAX_RECORD_COUNT);
         if MAX_RECORD_COUNT == self.records.len() {
-            // drop the record that was touched longest ago
             let oldest = self
                 .records
                 .iter()
@@ -169,7 +166,8 @@ impl FrequencyLimit {
         self.records[index].last_update = now;
     }
 
-    /// The records currently tracked.
+    /// The records currently tracked, which is what a host reads to see how
+    /// often a body has gone out and when it last did.
     pub fn records(&self) -> &[AvalancheRecord] {
         &self.records
     }
