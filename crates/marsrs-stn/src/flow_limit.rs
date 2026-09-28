@@ -10,8 +10,6 @@ use crate::config::{ACTIVE_SPEED, INACTIVE_MIN_VOL, INACTIVE_SPEED, MAX_VOL};
 use crate::task::Task;
 use marsrs_comm::tickcount::gettickcount;
 
-/// `FlowLimit`.
-///
 /// The `_at` variants take the tick count explicitly so that the drain — which
 /// the C++ computes from whole seconds of wall clock — is testable without
 /// sleeping; the plain ones are the C++ entry points against [`gettickcount`].
@@ -43,7 +41,8 @@ impl FlowLimit {
 
     /// `FlowLimit::Check(task, buffer, len)` — `false` when the task is refused.
     ///
-    /// `len` is the size of the body, which is all the C++ looks at.
+    /// `len` is the size of the body, which is all the C++ looks at. A task that
+    /// does not ask for `limit_flow` is let through and charged nothing.
     pub fn check(&mut self, task: &Task, len: u64) -> bool {
         self.check_at(task, len, gettickcount())
     }
