@@ -9,8 +9,8 @@
 use std::fs;
 
 use mars_ffi::stn::{
-    MARS_STN_ERR_NO_DUE, MARS_STN_ERR_NULL_TASK, MARS_STN_ERR_PANIC, MARS_STN_ERR_REFUSED,
-    MARS_STN_OK,
+    MARS_STN_ERR_NO_DUE, MARS_STN_ERR_NULL_CONFIG, MARS_STN_ERR_NULL_TASK, MARS_STN_ERR_PANIC,
+    MARS_STN_ERR_REFUSED, MARS_STN_OK,
 };
 
 fn header() -> String {
@@ -41,6 +41,9 @@ fn header_declares_every_exported_symbol() {
         "mars_stn_makesure_longlink_connected_ext",
         "mars_stn_longlink_is_connected",
         "mars_stn_longlink_is_connected_ext",
+        "mars_stn_create_longlink",
+        "mars_stn_destroy_longlink",
+        "mars_stn_mark_main_longlink",
         "mars_stn_disable_longlink",
         "mars_stn_noop_task_id",
         "mars_stn_set_signalling_strategy",
@@ -66,6 +69,7 @@ fn header_declares_the_types_and_their_fields() {
         "MarsStnAnswerKind",
         "MarsStnHeader",
         "MarsStnStrings",
+        "MarsStnLonglinkConfig",
         "MarsStnTask",
         "MarsStnCgiProfile",
         "MarsStnDnsProfile",
@@ -134,6 +138,11 @@ fn header_declares_the_types_and_their_fields() {
         "err_type;",
         "err_code;",
         "dnstype;",
+        "is_keep_alive;",
+        "is_main;",
+        "link_type;",
+        "need_tls;",
+        "group;",
     ] {
         assert!(
             header.contains(field),
@@ -184,9 +193,9 @@ fn header_declares_the_types_and_their_fields() {
     // `#[repr(C)]` on the Rust side.
     assert_eq!(
         header.matches("typedef struct").count(),
-        7,
-        "MarsStnHeader, MarsStnStrings, MarsStnTask, MarsStnCgiProfile, MarsStnDnsProfile, \
-         MarsStnQuestion and MarsStnAnswer must be C structs"
+        8,
+        "MarsStnHeader, MarsStnStrings, MarsStnLonglinkConfig, MarsStnTask, MarsStnCgiProfile, \
+         MarsStnDnsProfile, MarsStnQuestion and MarsStnAnswer must be C structs"
     );
 }
 
@@ -199,6 +208,7 @@ fn error_codes_match_the_header_defines() {
         ("MARS_STN_ERR_NULL_TASK", MARS_STN_ERR_NULL_TASK),
         ("MARS_STN_ERR_REFUSED", MARS_STN_ERR_REFUSED),
         ("MARS_STN_ERR_NO_DUE", MARS_STN_ERR_NO_DUE as i32),
+        ("MARS_STN_ERR_NULL_CONFIG", MARS_STN_ERR_NULL_CONFIG),
     ] {
         let needle = format!("{name} (-{n})", n = value.abs());
         let zero = format!("{name} 0");

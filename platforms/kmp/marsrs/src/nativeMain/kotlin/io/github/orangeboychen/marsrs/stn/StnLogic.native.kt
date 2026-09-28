@@ -14,9 +14,12 @@ import io.github.orangeboychen.marsrs.net.ffi.MarsStnAnswerYes
 import io.github.orangeboychen.marsrs.net.ffi.MarsStnCgiProfile
 import io.github.orangeboychen.marsrs.net.ffi.MarsStnDnsProfile
 import io.github.orangeboychen.marsrs.net.ffi.MarsStnHeader
+import io.github.orangeboychen.marsrs.net.ffi.MarsStnLonglinkConfig
 import io.github.orangeboychen.marsrs.net.ffi.MarsStnQuestion
 import io.github.orangeboychen.marsrs.net.ffi.MarsStnTask
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_clear_tasks
+import io.github.orangeboychen.marsrs.net.ffi.mars_stn_create_longlink
+import io.github.orangeboychen.marsrs.net.ffi.mars_stn_destroy_longlink
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_disable_longlink
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_due_time
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_gen_sequence_id
@@ -27,6 +30,7 @@ import io.github.orangeboychen.marsrs.net.ffi.mars_stn_longlink_is_connected
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_longlink_is_connected_ext
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_makesure_longlink_connected
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_makesure_longlink_connected_ext
+import io.github.orangeboychen.marsrs.net.ffi.mars_stn_mark_main_longlink
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_noop_task_id
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_redo_tasks
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_reset
@@ -203,6 +207,14 @@ public actual object StnLogic {
     }
 
     public actual fun noopTaskID(): Int = mars_stn_noop_task_id().toInt()
+
+    public actual fun createLonglink(config: LonglinkConfig): Boolean = memScoped {
+        mars_stn_create_longlink(config.native(this).ptr) == 0
+    }
+
+    public actual fun destroyLonglink(name: String?): Boolean = mars_stn_destroy_longlink(name) != 0
+
+    public actual fun markMainLonglink(name: String?): Boolean = mars_stn_mark_main_longlink(name) != 0
 
     public actual fun setSignallingStrategy(period: Long, keepTime: Long) {
         mars_stn_set_signalling_strategy(period, keepTime)
@@ -474,6 +486,26 @@ private fun Task.native(scope: MemScope): MarsStnTask {
     val pairs = headers?.map { (name, value) -> name to value } ?: emptyList()
     native.headers = scope.headers(pairs)
     native.header_count = pairs.size.toUInt()
+    return native
+}
+
+/**
+ * What a long link of the app's own is made from, as the struct the C ABI reads:
+ * every string is a copy in this scope, because a `const char*` inside a struct
+ * is a pointer the port reads after the call and not the [String] a parameter is.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private fun LonglinkConfig.native(scope: MemScope): MarsStnLonglinkConfig {
+    val native = scope.alloc<MarsStnLonglinkConfig>()
+    native.name = name?.let { scope.cstring(it) }
+    val hosts = hostList ?: emptyList()
+    native.host_list.items = scope.strings(hosts)
+    native.host_list.count = hosts.size.toUInt()
+    native.is_keep_alive = flag(isKeepAlive)
+    native.group = group?.let { scope.cstring(it) }
+    native.is_main = flag(isMain)
+    native.link_type = linkType
+    native.need_tls = flag(needTls)
     return native
 }
 

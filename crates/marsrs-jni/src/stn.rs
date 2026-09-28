@@ -23,7 +23,7 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use marsrs_stn::{App, StnLogic, Task};
+use marsrs_stn::{App, LonglinkConfig, StnLogic, Task};
 
 /// `getLoadLibraries` — what the C++ lists: the modules the process loaded,
 /// which in this port is this one library.
@@ -221,6 +221,29 @@ pub fn disable_longlink_impl() {
 /// cannot name it answers the noop as if it were its own.
 pub fn noop_task_id_impl() -> u32 {
     Task::NOOP_TASK_ID
+}
+/// `StnLogic.createLonglink` — a long link the app named, made the way the
+/// default one was, and `true` when it is there afterwards.
+///
+/// The C++'s `CreateLonglink_ext` is `void`, so it cannot say whether the link
+/// was made; this one can, because a name the factory will not make a link for
+/// is otherwise a call that looks like it worked.
+pub fn create_longlink_impl(config: LonglinkConfig) -> bool {
+    with_logic(|logic| logic.create_long_link(config).is_some())
+}
+
+/// `StnLogic.destroyLonglink` — the link of that name is gone and every task
+/// that was going out on it is failed. `true` when a link of that name was
+/// there, which is the one thing the C++ cannot answer either.
+pub fn destroy_longlink_impl(name: &str) -> bool {
+    with_logic(|logic| logic.destroy_long_link(name))
+}
+
+/// `StnLogic.markMainLonglink` — the link of that name is the one whose errors
+/// and status the app is told about, and the one an app asking for "the" long
+/// link gets. `false` when no link has that name or it already was.
+pub fn mark_main_longlink_impl(name: &str) -> bool {
+    with_logic(|logic| logic.mark_main_longlink(name))
 }
 
 /// `StnLogic.setSignallingStrategy` — a period or a keep time of `0` leaves the
@@ -757,6 +780,31 @@ mod tests {
                     (NetStatus::Connected, NetStatus::Connected),
                 ]
             );
+        })
+    }
+
+    /// A long link the app names is one the three calls that take a name find,
+    /// which is what an app with a second long link asks for. The C++'s
+    /// `CreateLonglink_ext` answers nothing at all, so whether the link is
+    /// there is something only this port can say.
+    #[test]
+    fn a_link_the_app_names_is_one_the_named_calls_find() {
+        sample(|_app| {
+            let mut config = LonglinkConfig::new("minor");
+            config.host_list = vec![HOST.to_owned()];
+
+            assert!(!destroy_longlink_impl("minor"));
+            assert!(!mark_main_longlink_impl("minor"));
+
+            assert!(create_longlink_impl(config));
+
+            // Marking it main is a change the first time and not the second.
+            assert!(mark_main_longlink_impl("minor"));
+            assert!(!mark_main_longlink_impl("minor"));
+
+            assert!(destroy_longlink_impl("minor"));
+            assert!(!destroy_longlink_impl("minor"));
+            assert!(!mark_main_longlink_impl("minor"));
         })
     }
 

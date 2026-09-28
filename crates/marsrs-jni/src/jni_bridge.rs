@@ -18,7 +18,7 @@ use jni::{Env, EnvUnowned, JavaVM};
 use marsrs_appender::{AppenderMode, CompressMode, LogLevel, XLogConfig, XLoggerInfo};
 use marsrs_sdt::checkimpl::{Answer as ProbeAnswer, PingStatus, Query as ProbeQuery};
 use marsrs_sdt::{CheckIPPort, CheckIPPorts};
-use marsrs_stn::{CgiProfile, Task};
+use marsrs_stn::{CgiProfile, LonglinkConfig, Task};
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -43,10 +43,11 @@ use crate::sdt::{
     run_checks_java_impl, set_http_netcheck_cgi_impl, start_active_check_impl, take_reported_impl,
 };
 use crate::stn::{
-    clear_task_impl, disable_longlink_impl, due_time_impl, gen_sequence_id_impl, gen_task_id_impl,
-    get_load_libraries_impl, has_task_impl, keep_signalling_impl, longlink_is_connected_ext_impl,
-    longlink_is_connected_impl, makesure_longlink_connected_ext_impl,
-    makesure_longlink_connected_impl, noop_task_id_impl, redo_task_impl,
+    clear_task_impl, create_longlink_impl, destroy_longlink_impl, disable_longlink_impl,
+    due_time_impl, gen_sequence_id_impl, gen_task_id_impl, get_load_libraries_impl, has_task_impl,
+    keep_signalling_impl, longlink_is_connected_ext_impl, longlink_is_connected_impl,
+    makesure_longlink_connected_ext_impl, makesure_longlink_connected_impl,
+    mark_main_longlink_impl, noop_task_id_impl, redo_task_impl,
     reset_and_init_encoder_version_impl, reset_impl, run_pending_impl, set_backup_ips_impl,
     set_client_version_impl, set_debug_ip_impl, set_longlink_svr_addr_impl,
     set_shortlink_svr_addr_impl, set_signalling_strategy_impl, start_task_impl,
@@ -706,6 +707,39 @@ fn task_from_java(env: &mut Env<'_>, task: &JObject<'_>) -> Option<Task> {
     Some(parsed)
 }
 
+/// What a long link is made from, as `StnLogic.LonglinkConfig` carries it.
+///
+/// An empty `group` and a `link_type` of `0` are the two defaults of
+/// [`marsrs_stn::LonglinkConfig::new`] — the long-link group, and
+/// `Task::CHANNEL_LONG`, which no `CHANNEL_*` is `0` for — the same two the C
+/// ABI reads a zeroed `MarsStnLonglinkConfig` as.
+fn longlink_config_from_java(env: &mut Env<'_>, config: &JObject<'_>) -> Option<LonglinkConfig> {
+    if config.is_null() {
+        return None;
+    }
+    let mut parsed = LonglinkConfig::new(string_field(env, config, jni_str!("name")));
+    parsed.host_list =
+        match env.get_field(config, jni_str!("hostList"), jni_sig!("Ljava/util/List;")) {
+            Ok(field) => field
+                .l()
+                .map(|list| string_list(env, &list))
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+    parsed.is_keep_alive = bool_field(env, config, jni_str!("isKeepAlive"));
+    let group = string_field(env, config, jni_str!("group"));
+    if !group.is_empty() {
+        parsed.group = group;
+    }
+    parsed.is_main = bool_field(env, config, jni_str!("isMain"));
+    let link_type = int_field(env, config, jni_str!("linkType"));
+    if link_type != 0 {
+        parsed.link_type = link_type;
+    }
+    parsed.need_tls = bool_field(env, config, jni_str!("needTls"));
+    Some(parsed)
+}
+
 fn bool_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> bool {
     guard(|| {
         env.get_field(obj, name, jni_sig!("Z"))
@@ -1015,6 +1049,51 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_noopTask
     _class: JClass<'local>,
 ) -> jint {
     guard(|| noop_task_id_impl() as jint)
+}
+
+/// `StnLogic.createLonglink` — a long link the app named, made the way the
+/// default one was.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_createLonglink<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    config: JObject<'local>,
+) -> jboolean {
+    guard_env(&mut env, |env| {
+        longlink_config_from_java(env, &config).is_some_and(create_longlink_impl)
+    })
+}
+
+/// `StnLogic.destroyLonglink`.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_destroyLonglink<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    name: JString<'local>,
+) -> jboolean {
+    guard_env(&mut env, |env| {
+        let name = name
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
+            .unwrap_or_default();
+        destroy_longlink_impl(&name)
+    })
+}
+
+/// `StnLogic.markMainLonglink`.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_markMainLonglink<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    name: JString<'local>,
+) -> jboolean {
+    guard_env(&mut env, |env| {
+        let name = name
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
+            .unwrap_or_default();
+        mark_main_longlink_impl(&name)
+    })
 }
 
 /// `StnLogic.setSignallingStrategy`.

@@ -36,8 +36,8 @@ use std::sync::{Mutex, OnceLock};
 
 use marsrs_stn::{
     gen_sequence_id, gen_task_id, task_profile_json, App as StnApp, CgiProfile, DnsProfile,
-    ErrCmdType, ExtraInfo, HostRedirectType, IdentifyBuffer, LongLinkStatus, NetStatus, StnLogic,
-    Task, TaskFailHandleType, TaskProfile, LOCAL_START_TASK_FAIL,
+    ErrCmdType, ExtraInfo, HostRedirectType, IdentifyBuffer, LongLinkStatus, LonglinkConfig,
+    NetStatus, StnLogic, Task, TaskFailHandleType, TaskProfile, LOCAL_START_TASK_FAIL,
 };
 
 use crate::cstr;
@@ -58,6 +58,8 @@ pub const MARS_STN_ERR_REFUSED: c_int = -3;
 /// Its own value and not [`MARS_STN_ERR_PANIC`], which that symbol answers as
 /// well, so a host can tell "nothing to wait for" from "a panic was caught".
 pub const MARS_STN_ERR_NO_DUE: i64 = -4;
+/// `mars_stn_create_longlink` was handed no config.
+pub const MARS_STN_ERR_NULL_CONFIG: c_int = -5;
 
 /// Which of the eighteen questions STN asked.
 ///
@@ -166,6 +168,36 @@ impl Default for MarsStnStrings {
             count: 0,
         }
     }
+}
+
+/// What a long link is made from: `LonglinkConfig` of `mars/stn/stn.h` with C
+/// types inside.
+///
+/// `name` is what every other call that takes one asks with, `host_list` empty
+/// is "the hosts the app set", `group` empty is the long-link group and a
+/// `link_type` of `0` is [`marsrs_stn::Task::CHANNEL_LONG`] — the two defaults a
+/// zeroed struct is filled with — and the three flags are `0` or `1`. A C `int`
+/// has no "unset" for a flag, so a zeroed struct is a link with no TLS, the one
+/// place it is not what [`marsrs_stn::LonglinkConfig::new`] defaults to. Every
+/// string is owned by the caller and read for the duration of the call it was
+/// handed to.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct MarsStnLonglinkConfig {
+    /// The name every other call that takes one asks with.
+    pub name: *const c_char,
+    /// The hosts the link goes out on.
+    pub host_list: MarsStnStrings,
+    /// `0` leaves the reconnecting to a task.
+    pub is_keep_alive: c_int,
+    /// Which links share a reconnect.
+    pub group: *const c_char,
+    /// Whether this is the link whose status the app is told about.
+    pub is_main: c_int,
+    /// One of the `Task::CHANNEL_*`.
+    pub link_type: c_int,
+    /// Whether the link is a TLS one.
+    pub need_tls: c_int,
 }
 
 /// One unit of work: [`marsrs_stn::Task`] with C types inside.
@@ -858,6 +890,82 @@ pub unsafe extern "C" fn mars_stn_longlink_is_connected_ext(name: *const c_char)
     })
 }
 
+/// `CreateLonglink_ext` — a long link the caller named, made the way the
+/// default one was: by the factory, and wired to the app's identify check like
+/// every other link.
+///
+/// A link of a name that is already there is that link and not a second one,
+/// and a name the factory will not make a link for is a refusal — which is a
+/// shape the C++ has no answer for, `CreateLonglink_ext` being `void`.
+///
+/// @return [`MARS_STN_OK`], or [`MARS_STN_ERR_NULL_CONFIG`], or
+/// [`MARS_STN_ERR_REFUSED`] when there is no net core, when the long link is
+/// off, or when the factory made no link, or [`MARS_STN_ERR_PANIC`].
+///
+/// # Safety
+///
+/// `config` must either be null or point to an initialised
+/// [`MarsStnLonglinkConfig`] whose strings and host list stay alive for the
+/// duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn mars_stn_create_longlink(config: *const MarsStnLonglinkConfig) -> c_int {
+    guard(MARS_STN_ERR_PANIC, || {
+        if config.is_null() {
+            return MARS_STN_ERR_NULL_CONFIG;
+        }
+        // SAFETY: `config` is non-null and the caller promises an initialised
+        // `MarsStnLonglinkConfig` whose strings and list outlive this call.
+        let config = unsafe { longlink_config_from_c(&*config) };
+        let made = with_logic(|logic| logic.create_long_link(config).is_some());
+        if made {
+            MARS_STN_OK
+        } else {
+            MARS_STN_ERR_REFUSED
+        }
+    })
+}
+
+/// `DestroyLonglink_ext` — the link of that name is gone, and every task that
+/// was going out on it is failed.
+///
+/// @return `1` when a link of that name was there, `0` when there was not, and
+/// [`MARS_STN_ERR_PANIC`] when a panic was caught.
+///
+/// # Safety
+///
+/// `name` must either be null or point to a valid NUL-terminated string that is
+/// not mutated while the call runs.
+#[no_mangle]
+pub unsafe extern "C" fn mars_stn_destroy_longlink(name: *const c_char) -> c_int {
+    guard(MARS_STN_ERR_PANIC, || {
+        // SAFETY: forwarded to `ptr_to_str_or_empty`, whose contract the caller
+        // upholds.
+        let name = unsafe { cstr::ptr_to_str_or_empty(name) };
+        with_logic(|logic| logic.destroy_long_link(name)) as c_int
+    })
+}
+
+/// `MarkMainLonglink_ext` — the link of that name is the one whose errors and
+/// status the app is told about, and the one an app asking for "the" long link
+/// gets.
+///
+/// @return `1` when the link is now the main one, `0` when there is no link of
+/// that name or it already was, and [`MARS_STN_ERR_PANIC`].
+///
+/// # Safety
+///
+/// `name` must either be null or point to a valid NUL-terminated string that is
+/// not mutated while the call runs.
+#[no_mangle]
+pub unsafe extern "C" fn mars_stn_mark_main_longlink(name: *const c_char) -> c_int {
+    guard(MARS_STN_ERR_PANIC, || {
+        // SAFETY: forwarded to `ptr_to_str_or_empty`, whose contract the caller
+        // upholds.
+        let name = unsafe { cstr::ptr_to_str_or_empty(name) };
+        with_logic(|logic| logic.mark_main_longlink(name)) as c_int
+    })
+}
+
 /// `DisableLongLink` — no task goes out on a long link again.
 ///
 /// The C++'s is a one-way door: it is `NetCore::need_use_longlink_` set `false`,
@@ -1373,6 +1481,37 @@ unsafe fn bytes_from_c(bytes: *const u8, count: c_uint) -> Vec<u8> {
     // SAFETY: `bytes` is non-null and the caller promises `count` readable
     // bytes, alive for this call.
     unsafe { std::slice::from_raw_parts(bytes, count as usize) }.to_vec()
+}
+
+/// One [`MarsStnLonglinkConfig`], as the [`marsrs_stn::LonglinkConfig`] a link
+/// is made from.
+///
+/// An empty `group` and a `link_type` of `0` are the two defaults of
+/// [`marsrs_stn::LonglinkConfig::new`] — the long-link group, and
+/// [`marsrs_stn::Task::CHANNEL_LONG`], which no `CHANNEL_*` is `0` for — the
+/// way an empty `host_list` is "the hosts the app set".
+///
+/// # Safety
+///
+/// Every string and the host list of `config` must be null or valid for the
+/// duration of the call; see [`strings_from_c`].
+unsafe fn longlink_config_from_c(config: &MarsStnLonglinkConfig) -> LonglinkConfig {
+    // SAFETY: forwarded to `ptr_to_str_or_empty` and `strings_from_c`, whose
+    // contracts the caller upholds.
+    let group = unsafe { cstr::ptr_to_str_or_empty(config.group) };
+    let host_list = unsafe { strings_from_c(config.host_list.items, config.host_list.count) };
+    let mut item = LonglinkConfig::new(unsafe { cstr::ptr_to_str_or_empty(config.name) });
+    item.host_list = host_list;
+    item.is_keep_alive = config.is_keep_alive != 0;
+    if !group.is_empty() {
+        item.group = group.to_owned();
+    }
+    item.is_main = config.is_main != 0;
+    if config.link_type != 0 {
+        item.link_type = config.link_type;
+    }
+    item.need_tls = config.need_tls != 0;
+    item
 }
 
 /// One [`MarsStnTask`], as the [`marsrs_stn::Task`] the queues take.
