@@ -49,6 +49,22 @@ fn record_with_seq(
     out
 }
 
+/// One record of the shortest kind there is — `magic`, a four-byte length, the
+/// text XORed with the key the two of them make, and the tailer: six bytes, and
+/// a file that ends in one is a file with a record in it however short the file
+/// is. `0x01` is `MAGIC_CRYPT_START`, the oldest start `decode_log_file.c`
+/// reads.
+fn legacy_record(text: &[u8]) -> Vec<u8> {
+    // `BASE_KEY ^ (0xff & length) ^ magic`, the cipher of a record whose header
+    // carries no client public key.
+    let key = 0xcc ^ (text.len() as u8) ^ 0x01;
+    let mut out = vec![0x01];
+    out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+    out.extend(text.iter().map(|byte| byte ^ key));
+    out.push(magic::END);
+    out
+}
+
 /// An async record for `text`, compressed the way the appender compresses it.
 fn async_record(seq: u16, text: &[u8]) -> Vec<u8> {
     use std::io::Write;
@@ -288,6 +304,55 @@ fn the_record_that_ends_the_walk_is_numbered_too() {
     assert!(text.contains("a\n"), "{text}");
     assert!(text.contains("log seq:2-2 is missing"), "{text}");
 }
+
+/// A file too short to hold a modern record can still hold an old one, and a
+/// byte that is no magic is not the end of it: six bytes is all the walk has
+/// to leave room for when it does not know what the byte in front of it is.
+#[test]
+fn a_legacy_record_behind_junk_is_read_though_the_file_is_short() {
+    let mut bytes = vec![0xff, 0xfe];
+    bytes.extend_from_slice(&legacy_record(b"x"));
+
+    let plain = marsrs_xlog::decode_records(&bytes, None).expect("a record was found");
+    let text = String::from_utf8_lossy(&plain);
+
+    assert!(
+        text.contains("[F]decode_log_file.py decode error len=2\n"),
+        "{text}"
+    );
+    assert!(text.ends_with('x'), "{text}");
+}
+
+/// The two reasons a walk of a real `.xlog` can end on — a record the file ends
+/// in the middle of, and a tailer that is no longer the end — asserted against
+/// a record built here and not against one the appender wrote: a header carries
+/// the hour it was written at, and an hour of 1 to 13 is a byte `getLogStartPos`
+/// takes for the start of a record, so what a file of the appender's own reports
+/// hangs on the clock. The oldest shape holds a magic and a length and nothing
+/// else, so nothing in it moves.
+#[test]
+fn a_record_the_file_ends_in_the_middle_of_says_where_it_was_cut() {
+    let mut bytes = legacy_record(b"hello");
+    bytes.truncate(bytes.len() - 2);
+
+    let err = marsrs_xlog::decode_records(&bytes, None).expect_err("the record is not whole");
+
+    assert!(err.reason.contains("truncated"), "{err:?}");
+    assert!(err.recovered.is_empty(), "{:?}", err.recovered);
+}
+
+#[test]
+fn a_tailer_that_is_no_longer_the_end_of_the_record_says_so() {
+    let mut bytes = legacy_record(b"hello");
+    let last = bytes.len() - 1;
+    bytes[last] = 0x7f;
+
+    let err = marsrs_xlog::decode_records(&bytes, None).expect_err("the tailer is gone");
+
+    assert!(err.reason.contains("bad tailer"), "{err:?}");
+    assert!(err.recovered.is_empty(), "{:?}", err.recovered);
+}
+
 /// A record whose body will not inflate is a record that is there: the marker
 /// stands in for its text and the walk goes on at the one behind it.
 #[test]

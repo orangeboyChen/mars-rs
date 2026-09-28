@@ -127,10 +127,17 @@ fn decode_records_reports_every_kind_of_damage() {
 
 /// `count` copies of one record, encoded in sync mode: a file of `count` blocks
 /// of the same size, so where a block starts is arithmetic and not a guess.
+///
+/// 64 bytes and not 256, because what the walk makes of a broken block depends
+/// on the bytes of its own header: `getLogStartPos` accepts any byte from
+/// `MAGIC_CRYPT_START` to the last magic as a record start, and a length of 256
+/// is `00 01 00 00` — so the walk resyncs into the block's own length field and
+/// reports where it comes out, and not the damage it started from. `64` is
+/// `40 00 00 00`, and no byte of the block behind that header is one either.
 fn encoded_blocks(dir: &std::path::Path, name: &str, count: usize) -> Vec<u8> {
     let records = dir.join("records.bin");
     // long enough that a header + tailer always fit in the encoded file
-    let record: Vec<u8> = std::iter::repeat_n(b'x', 256)
+    let record: Vec<u8> = std::iter::repeat_n(b'x', 64)
         .chain(b"\n".iter().copied())
         .collect();
     std::fs::write(&records, record.repeat(count)).unwrap();
@@ -142,7 +149,21 @@ fn encoded_blocks(dir: &std::path::Path, name: &str, count: usize) -> Vec<u8> {
         ("out", out.to_str().unwrap()),
     ]))
     .unwrap();
-    std::fs::read(&out).unwrap()
+    let mut bytes = std::fs::read(&out).unwrap();
+
+    // Both hours of every header are written over with 0. An hour of 1 to 13 is
+    // a byte `getLogStartPos` takes for the start of a record, so a file the
+    // encoder wrote at such an hour carries a resync point in its own header:
+    // the walk lands there and reports where it came out, and not the damage
+    // these tests put in — which damage a run sees hung on the clock. `0` is no
+    // magic of any kind, and it is the hour `normalize_for_compare` writes over
+    // both of them with already.
+    let stride = bytes.len() / count;
+    for block in (0..bytes.len()).step_by(stride) {
+        bytes[block + 3] = 0;
+        bytes[block + 4] = 0;
+    }
+    bytes
 }
 
 #[test]
@@ -153,9 +174,10 @@ fn a_file_cut_short_keeps_the_records_before_the_cut() {
     let bytes = encoded_blocks(&dir, "a.xlog", 3);
     let stride = bytes.len() / 3;
     // Inside the third block, past its header: what a write that was cut off
-    // halfway leaves in the file.
+    // halfway leaves in the file, and far enough into it that the header is
+    // whole — a block cut off before its length would not be a block at all.
     let mut cut = bytes;
-    cut.truncate(2 * stride + 150);
+    cut.truncate(2 * stride + 100);
 
     // The damage is reported, and the two whole blocks before it are handed
     // back with it: `parseFile` writes the output it has either way, and the

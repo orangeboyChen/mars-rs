@@ -18,6 +18,14 @@
 //!   64-byte client public key the writer generated for that file, and the TEA
 //!   key is the ECDH secret of it against the private key — the first 16 bytes
 //!   of it, the way `decode_log_file.c` takes them.
+//! * a record written before the public key moved into the header — the five
+//!   magics `0x01` to `0x05`, which no appender writes any more — carries no
+//!   key at all, so its text is XORed with a byte made of the magic and not
+//!   TEA-encrypted, and its header is 5 or 9 bytes instead of 73. These are
+//!   read too: `LogMagicNum` in `mars/xlog/crypt/log_magic_num.h` knows the
+//!   eight from `0x06` to `0x0D` and nothing before them, so what an appender
+//!   writes and what `decode_log_file.c` reads stopped being one set when the
+//!   public key arrived.
 //!
 //! Encryption is a property of the file and not of a command, so the private
 //! key is optional here: an unencrypted file decodes with `None`, and an
@@ -59,9 +67,34 @@ const ZSTD_MARKER: &str = "zstd decompress error";
 /// finds the hole that no byte of the file mentions.
 const MISSING_SEQ_MARKER: &str = "[F]decode_log_file.py log seq:";
 
+/// `MAGIC_CRYPT_START` — the oldest record start `decode_log_file.c` reads, and
+/// one no appender writes: its body is the log text, XORed and nothing more.
+const MAGIC_CRYPT_START: u8 = 0x01;
+/// `MAGIC_COMPRESS_CRYPT_START` — the same, deflated after the XOR.
+const MAGIC_COMPRESS_CRYPT_START: u8 = 0x02;
+/// `NEW_MAGIC_CRYPT_START` — the first header with a sequence and the two hours
+/// in it, and still no key: XORed, and not deflated.
+const NEW_MAGIC_CRYPT_START: u8 = 0x03;
+/// `NEW_MAGIC_COMPRESS_CRYPT_START` — that header, deflated after the XOR.
+const NEW_MAGIC_COMPRESS_CRYPT_START: u8 = 0x04;
+/// `NEW_MAGIC_COMPRESS_CRYPT_START1` — the same, over a body of chunks: one
+/// `uint16_t` length and its bytes per log line, put back to back before the
+/// XOR and the deflate.
+const NEW_MAGIC_COMPRESS_CRYPT_START1: u8 = 0x05;
+/// `BASE_KEY` — what the key of a record with no client public key is made of:
+/// `BASE_KEY ^ (0xff & length) ^ magic` for the two that carry no sequence, and
+/// `BASE_KEY ^ (0xff & seq) ^ magic` for the three that do.
+const BASE_KEY: u8 = 0xcc;
+/// The shortest header `decode_log_file.c` reads — `1 + 4`, of the two oldest
+/// magics — and so what a byte that is no magic at all costs the walk: such a
+/// byte is not the end of the file but the start of a span to look behind.
+const SHORTEST_HEADER_LEN: usize = 1 + 4;
+
 /// Where `uint16_t seq` sits in a record's header: one byte of magic in front
 /// of it. `decodeBuffer` reads it at `headerLen - cryptKeyLen - 4 - 2 - 2`,
-/// which is this offset for both of the header lengths.
+/// which is this offset for every header that has a sequence in it — the two
+/// oldest are `1 + 4` bytes long and hold none, which is why their key is made
+/// of the length instead ([`xor_key`]).
 const SEQ_OFFSET: usize = 1;
 
 /// Reads `path` and returns the log text of every record in it.
@@ -133,7 +166,7 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
     let mut lastseq: u16 = 0;
 
     let stopped = loop {
-        if data.len() - offset < HEADER_LEN + TAILER_LEN {
+        if !whole_record_fits(data, offset) {
             break None;
         }
         match record_text(data, offset, privkey) {
@@ -230,11 +263,12 @@ enum Failure {
 /// walk starts at `lastseq = 0`, and `seq != 1` is what keeps a file opening
 /// on 1 from being read as having lost everything before it.
 fn mark_missing_seq(out: &mut Vec<u8>, data: &[u8], offset: usize, lastseq: &mut u16) {
-    let seq = u16::from_le_bytes(
-        data[offset + SEQ_OFFSET..offset + SEQ_OFFSET + 2]
-            .try_into()
-            .expect("slice of 2"),
-    );
+    // A record with no sequence in its header takes no part in the numbering:
+    // the two oldest magics are the length and nothing else, so there is no
+    // hole for them to name.
+    let Some(seq) = seq_at(data, offset) else {
+        return;
+    };
     let previous = *lastseq;
     if seq != 0 {
         *lastseq = seq;
@@ -261,14 +295,25 @@ fn record_text(
     privkey: Option<&[u8; 32]>,
 ) -> Result<(Vec<u8>, usize), Failure> {
     let magic_start = data[offset];
-    if !magic::magic_start_is_valid(magic_start) {
+    let Some(header) = header_of(magic_start) else {
         return Err(Failure::Damaged(format!(
             "bad magic 0x{magic_start:02x} at {offset}"
         )));
+    };
+    if data.len() - offset < header.len + TAILER_LEN {
+        return Err(Failure::Damaged(format!("record at {offset} is truncated")));
     }
-    let len =
-        u32::from_le_bytes(data[offset + 5..offset + 9].try_into().expect("slice of 4")) as usize;
-    let body_start = offset + HEADER_LEN;
+    // `headerLen - cryptKeyLen - 4`: the C reads the length backwards from the
+    // end of the key, because the key is the last field of a header and not the
+    // first — which is what makes one expression answer for all three shapes.
+    let length = u32::from_le_bytes(
+        data[offset + header.len - header.crypt_key_len - 4..][..4]
+            .try_into()
+            .expect("slice of 4"),
+    );
+    let len = length as usize;
+    let seq = seq_at(data, offset);
+    let body_start = offset + header.len;
     // The length is read out of the file, so it is compared against what is
     // left of the input and never added to an offset: a record declaring
     // `u32::MAX` wraps that sum on a 32-bit target, which would panic on the
@@ -288,6 +333,33 @@ fn record_text(
 
     let body = &data[body_start..body_end];
     match magic_start {
+        // The five no appender writes any more: no client public key in the
+        // header, so there is no secret to agree and the text is XORed with a
+        // byte of the magic ([`xor_key`]) instead of TEA-encrypted.
+        MAGIC_CRYPT_START
+        | MAGIC_COMPRESS_CRYPT_START
+        | NEW_MAGIC_CRYPT_START
+        | NEW_MAGIC_COMPRESS_CRYPT_START
+        | NEW_MAGIC_COMPRESS_CRYPT_START1 => {
+            // `NEW_MAGIC_COMPRESS_CRYPT_START1` files one chunk per log line,
+            // and the chunks are put back to back before the key goes over
+            // them.
+            let chunks = if magic_start == NEW_MAGIC_COMPRESS_CRYPT_START1 {
+                unchunk(body)
+            } else {
+                body.to_vec()
+            };
+            let text = xor(&chunks, xor_key(magic_start, length, seq));
+            match magic_start {
+                // The two that are not compressed end in `decodeBuffer`'s
+                // `else`, which is the XOR and nothing behind it.
+                MAGIC_CRYPT_START | NEW_MAGIC_CRYPT_START => Ok((text, next)),
+                // The three that are: `zlibDecompress` after the XOR.
+                _ => inflate_raw(&text)
+                    .map_err(|reason| Failure::Unreadable(reason, next))
+                    .map(|text| (text, next)),
+            }
+        }
         // `LogCrypt::CryptSyncLog` stores sync records verbatim: no TEA,
         // no compression (the C++ has the TEA loop commented out).
         magic::SYNC_ZLIB_START
@@ -342,21 +414,143 @@ fn next_record_start(data: &[u8], from: usize) -> Option<usize> {
     (from + 1..data.len()).find(|offset| record_is_whole(data, *offset))
 }
 
+/// `isGoodLogBuffer`'s three header shapes, the way `decode_log_file.c` writes
+/// them out: `1 + 4` for the two oldest magics, `1 + 2 + 1 + 1 + 4` for the
+/// three that carry a sequence and the two hours, and
+/// `1 + 2 + 1 + 1 + 4 + 64` — [`HEADER_LEN`] — for the eight an appender
+/// writes now. `None` for a byte no appender ever started a record with.
+fn header_of(magic_start: u8) -> Option<Header> {
+    match magic_start {
+        MAGIC_CRYPT_START | MAGIC_COMPRESS_CRYPT_START => Some(Header {
+            len: 1 + 4,
+            crypt_key_len: 0,
+        }),
+        NEW_MAGIC_CRYPT_START
+        | NEW_MAGIC_COMPRESS_CRYPT_START
+        | NEW_MAGIC_COMPRESS_CRYPT_START1 => Some(Header {
+            len: 1 + 2 + 1 + 1 + 4,
+            crypt_key_len: 0,
+        }),
+        other if magic::magic_start_is_valid(other) => Some(Header {
+            len: HEADER_LEN,
+            crypt_key_len: CLIENT_PUBKEY_LEN,
+        }),
+        _ => None,
+    }
+}
+
+/// One of [`header_of`]'s three: how long the header is, and how much of it the
+/// client public key takes up.
+struct Header {
+    len: usize,
+    crypt_key_len: usize,
+}
+
+impl Header {
+    /// Whether the header has a sequence in it: nine bytes in front of the
+    /// client public key, or in front of the length when there is no key. The
+    /// two oldest magics are five bytes long and hold neither, which is why
+    /// their key is made of the length ([`xor_key`]) and why no hole in the
+    /// numbering can be read out of them.
+    fn has_seq(&self) -> bool {
+        self.len - self.crypt_key_len == 1 + 2 + 1 + 1 + 4
+    }
+}
+
+/// Whether there is room at `offset` for the smallest whole record that could
+/// start there — the tail of a file that holds none is not damage, but which
+/// shape to measure against is the magic byte's to say: five bytes of header
+/// for the oldest, 73 for the eight an appender writes now, and five again for
+/// a byte that is no magic at all, because what follows such a byte may still
+/// be a record of the shortest kind.
+fn whole_record_fits(data: &[u8], offset: usize) -> bool {
+    // A byte no appender started a record with gets the shortest header there
+    // is and not [`HEADER_LEN`]: what the walk does with such a byte is look
+    // for a record behind it, and a record written before the public key is
+    // whole in six bytes, where one written with it needs seventy-four.
+    let shortest = data
+        .get(offset)
+        .and_then(|magic_start| header_of(*magic_start))
+        .map_or(SHORTEST_HEADER_LEN, |header| header.len);
+    data.len() - offset >= shortest + TAILER_LEN
+}
+
+/// `uint16_t seq` of the record at `offset`, when its header carries one.
+fn seq_at(data: &[u8], offset: usize) -> Option<u16> {
+    let header = header_of(data[offset])?;
+    header.has_seq().then(|| {
+        u16::from_le_bytes(
+            data[offset + SEQ_OFFSET..offset + SEQ_OFFSET + 2]
+                .try_into()
+                .expect("slice of 2"),
+        )
+    })
+}
+
+/// `key = BASE_KEY ^ (0xff & length) ^ buffer[offset]`, or `^ (0xff & seq)` for
+/// a header that has a sequence in it: the cipher of every record whose header
+/// carries no client public key, and the reason a file written before the
+/// public key arrived needs no key of the reader's at all.
+fn xor_key(magic_start: u8, length: u32, seq: Option<u16>) -> u8 {
+    let byte = match seq {
+        Some(seq) => seq as u8,
+        None => length as u8,
+    };
+    BASE_KEY ^ byte ^ magic_start
+}
+
+/// `tmpBuffer[i] = key ^ buffer[offset + headerLen + i]` — the whole of that
+/// cipher, over the bytes of one record.
+fn xor(bytes: &[u8], key: u8) -> Vec<u8> {
+    bytes.iter().map(|byte| byte ^ key).collect()
+}
+
+/// The body of a `NEW_MAGIC_COMPRESS_CRYPT_START1` record: `while (readPos <
+/// length)` over one `uint16_t singleLogLen` and its bytes per log line.
+///
+/// A chunk whose declared length runs past the body ends the walk instead of
+/// being read. The C `memcpy`s those bytes out of the buffer all the same — an
+/// overread of whatever stands behind the record — and lands in the same place,
+/// because its `readPos += singleLogLen + 2` leaves the loop either way.
+fn unchunk(body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut read = 0;
+    while read + 2 <= body.len() {
+        let single = usize::from(u16::from_le_bytes(
+            body[read..read + 2].try_into().expect("slice of 2"),
+        ));
+        let start = read + 2;
+        let Some(end) = start.checked_add(single).filter(|end| *end <= body.len()) else {
+            break;
+        };
+        out.extend_from_slice(&body[start..end]);
+        read = end;
+    }
+    out
+}
+
 /// `isGoodLogBuffer(…, 1)` — whether a whole record starts at `offset`.
 ///
 /// All the scan has to go on: the bytes in front of a record are the payload of
 /// the one before it and can be anything, so a span of damage is only over
 /// where a record that checks out begins.
 fn record_is_whole(data: &[u8], offset: usize) -> bool {
-    if data.len() - offset < HEADER_LEN + TAILER_LEN {
+    let Some(header) = data
+        .get(offset)
+        .and_then(|magic_start| header_of(*magic_start))
+    else {
+        return false;
+    };
+    if data.len() - offset < header.len + TAILER_LEN {
         return false;
     }
-    if !magic::magic_start_is_valid(data[offset]) {
-        return false;
-    }
-    let len =
-        u32::from_le_bytes(data[offset + 5..offset + 9].try_into().expect("slice of 4")) as usize;
-    let body_start = offset + HEADER_LEN;
+    let length = u32::from_le_bytes(
+        data[offset + header.len - header.crypt_key_len - 4..][..4]
+            .try_into()
+            .expect("slice of 4"),
+    );
+    let len = length as usize;
+    let body_start = offset + header.len;
     len <= data.len() - body_start - TAILER_LEN && data[body_start + len] == magic::END
 }
 
