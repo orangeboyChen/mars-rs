@@ -4,7 +4,9 @@
 //! down while the app is in the background is retried a minute later and then
 //! two, the wait is cut short by thirty seconds of buffer while the app is not
 //! active, a network change drops the link before asking for a new one, and a
-//! server that has turned the trigger off is never asked at all.
+//! server that has turned the trigger off is never asked at all. The one place
+//! the port is not what the C++ does is the active signal: it comes on both
+//! edges, and only becoming active is a reason to touch the alarms.
 
 use std::sync::{Arc, Mutex};
 
@@ -218,6 +220,50 @@ fn the_signals_the_app_sends_ask_the_same_question() {
     // ... and the heartbeat alarms the C++ only logs are here to be called
     monitor.on_heartbeat_alarm_set(180_000);
     monitor.on_heartbeat_alarm_received(true);
+}
+
+#[test]
+fn going_to_the_background_leaves_the_alarms_alone() {
+    // an app in the background, where the ladder is what decides
+    let (mut monitor, calls) = a_monitor(0);
+    monitor.set_is_active(|| false);
+    monitor.set_is_foreground(|| false);
+    assert_eq!(monitor.on_alarm_at(0, false), 60_000);
+    assert_eq!(monitor.rebuild_due_time(), Some(60_000));
+
+    // it stops being active, and that is not a reason to ask again: the alarm
+    // keeps the time it was armed with, and the ladder keeps the rung it was
+    // left on
+    monitor.on_active_changed_at(1_000, false);
+    assert_eq!(monitor.rebuild_due_time(), Some(60_000));
+    assert_eq!(monitor.current_interval_index(), 1);
+
+    // becoming active is: twenty seconds in, more than the foreground
+    // interval, so the link is asked for now
+    monitor.set_is_active(|| true);
+    monitor.set_is_foreground(|| true);
+    monitor.on_active_changed_at(20_000, true);
+    assert_eq!(
+        *calls.lock().unwrap_or_else(|e| e.into_inner()),
+        vec!["connect"]
+    );
+    assert_eq!(monitor.rebuild_due_time(), None);
+}
+
+#[test]
+fn a_deactivation_does_not_cancel_the_wake_alarm() {
+    let (mut monitor, _calls) = a_monitor(2_000);
+    monitor.on_longlink_status_changed_at(2_000, LongLinkStatus::DisConnected);
+    assert_eq!(monitor.wake_due_time(), Some(2_000 + WAKE_ALARM_INTERVAL));
+    assert_eq!(monitor.rebuild_due_time(), None);
+
+    // the app stops being active right after, which used to cancel both
+    // alarms and arm a rebuild for the background in their place: a
+    // disconnect followed by a deactivation lost the wake-up it had just
+    // been given
+    monitor.on_active_changed_at(2_000, false);
+    assert_eq!(monitor.wake_due_time(), Some(2_000 + WAKE_ALARM_INTERVAL));
+    assert_eq!(monitor.rebuild_due_time(), None);
 }
 
 #[test]
