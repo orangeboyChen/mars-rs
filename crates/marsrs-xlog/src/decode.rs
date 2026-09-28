@@ -85,6 +85,10 @@ const NEW_MAGIC_COMPRESS_CRYPT_START1: u8 = 0x05;
 /// `BASE_KEY ^ (0xff & length) ^ magic` for the two that carry no sequence, and
 /// `BASE_KEY ^ (0xff & seq) ^ magic` for the three that do.
 const BASE_KEY: u8 = 0xcc;
+/// The shortest header `decode_log_file.c` reads — `1 + 4`, of the two oldest
+/// magics — and so what a byte that is no magic at all costs the walk: such a
+/// byte is not the end of the file but the start of a span to look behind.
+const SHORTEST_HEADER_LEN: usize = 1 + 4;
 
 /// Where `uint16_t seq` sits in a record's header: one byte of magic in front
 /// of it. `decodeBuffer` reads it at `headerLen - cryptKeyLen - 4 - 2 - 2`,
@@ -456,12 +460,18 @@ impl Header {
 /// Whether there is room at `offset` for the smallest whole record that could
 /// start there — the tail of a file that holds none is not damage, but which
 /// shape to measure against is the magic byte's to say: five bytes of header
-/// for the oldest, and 73 for the eight an appender writes now.
+/// for the oldest, 73 for the eight an appender writes now, and five again for
+/// a byte that is no magic at all, because what follows such a byte may still
+/// be a record of the shortest kind.
 fn whole_record_fits(data: &[u8], offset: usize) -> bool {
+    // A byte no appender started a record with gets the shortest header there
+    // is and not [`HEADER_LEN`]: what the walk does with such a byte is look
+    // for a record behind it, and a record written before the public key is
+    // whole in six bytes, where one written with it needs seventy-four.
     let shortest = data
         .get(offset)
         .and_then(|magic_start| header_of(*magic_start))
-        .map_or(HEADER_LEN, |header| header.len);
+        .map_or(SHORTEST_HEADER_LEN, |header| header.len);
     data.len() - offset >= shortest + TAILER_LEN
 }
 
