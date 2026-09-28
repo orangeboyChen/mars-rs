@@ -203,8 +203,9 @@ mod tests {
     use crate::IpPortItem;
 
     /// The two readings the tests use: the link asked for its ips at `50_000`,
-    /// and the monitor is asked at `60_000` — ten seconds later, which is the
-    /// first rung of the reconnect ladder and therefore a connect that is due.
+    /// and the monitor is asked at `60_000` — ten seconds later, which is well
+    /// inside the ten minutes a link has to hold before the ladder comes back
+    /// down, so a connect that came and went moves it up.
     const DNS_AT: u64 = 50 * 1000;
     const NOW: u64 = 60 * 1000;
 
