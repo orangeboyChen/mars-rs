@@ -111,7 +111,12 @@ pub struct Message {
     pub name: String,
     /// `anr_timeout` — kept for parity, see the module note.
     pub anr_timeout: u64,
-    /// `create_time` — when it was posted, in [`gettickcount`] ms.
+    /// `create_time` — when this message was built, in [`gettickcount`] ms.
+    /// Nothing stamps it again on the way into the queue, so one built now
+    /// and posted a minute from now is a minute old when it is queued: read
+    /// it as the start of the message's life, and not of its wait in the
+    /// queue. The C++ is no different — its `Message` constructors are the
+    /// only writers — so posting is not where to move it.
     pub create_time: u64,
     /// Set when the loop picks the message up, in [`gettickcount`] ms.
     pub execute_time: u64,
