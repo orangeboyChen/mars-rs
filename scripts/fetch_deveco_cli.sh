@@ -18,19 +18,25 @@
 # scripts/assemble_harmony_har.sh takes `DEVECO_HOME` of its own for a DevEco
 # Studio that is already on the machine, and CI points that at this directory.
 #
-# What is unpacked is the whole archive minus two components of the SDK, and it
-# is the same subtraction scripts/build_harmony.sh makes on the OHOS SDK:
+# What is unpacked is the whole archive minus the innards of two components of
+# the SDK, and it is the same subtraction scripts/build_harmony.sh makes on the
+# OHOS SDK:
 #
-#   sdk/default/*/native      1.5 GB of clang, sysroots and unwinders, which
-#                             build a C++ CMake project — and this module has
-#                             no CMake project: its natives are built by
-#                             scripts/build_harmony_napi.sh and arrive in the
-#                             module already built
+#   sdk/default/*/native      1.5 GB of clang, sysroots and unwinders
 #   sdk/default/*/previewer   0.3 GB of the IDE's previewer
 #
 # The two are the difference between 2.1 GB and 0.4 GB, which is the difference
 # between a cache entry that is most of a repository's budget and one that is a
-# thirtieth of it. Set DEVECO_CLI_PRUNE=0 to keep them.
+# thirtieth of it. A HAR build of this module runs neither: it has no CMake
+# project, because its natives are built by scripts/build_harmony_napi.sh and
+# arrive already built, and what hvigor is asked for here is an ArkTS compile.
+#
+# What is kept of the two is the one file each that names it — `native`'s
+# `oh-uni-package.json`, `previewer`'s — because an SDK is complete to hvigor's
+# loader component by component, and a component it cannot find at all is
+# `SDK component missing` before a task runs, whether or not the build would
+# have opened a file inside it. Give this module a CMake project and the whole
+# `native` component has to come back; set DEVECO_CLI_PRUNE=0 to keep all of it.
 
 set -euo pipefail
 
@@ -88,9 +94,13 @@ else
         'command-line-tools/sdk/default/sdk-pkg.json' \
         'command-line-tools/sdk/default/hms/ets/*' \
         'command-line-tools/sdk/default/hms/toolchains/*' \
+        'command-line-tools/sdk/default/hms/native/uni-package.json' \
+        'command-line-tools/sdk/default/hms/previewer/uni-package.json' \
         'command-line-tools/sdk/default/openharmony/ets/*' \
         'command-line-tools/sdk/default/openharmony/js/*' \
-        'command-line-tools/sdk/default/openharmony/toolchains/*'
+        'command-line-tools/sdk/default/openharmony/toolchains/*' \
+        'command-line-tools/sdk/default/openharmony/native/oh-uni-package.json' \
+        'command-line-tools/sdk/default/openharmony/previewer/oh-uni-package.json'
 fi
 # Larger than what was taken out of it, and a cache entry nobody wants.
 rm -f "$zip"
