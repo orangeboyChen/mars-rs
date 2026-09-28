@@ -68,9 +68,9 @@ empty `logDir` or `namePrefix`, or one the process cannot write to.
 The module's method queue is `RCTJSThread`, so a method of it is made on the JS
 thread and returns from there: a call that answers a value answers it before the
 next line runs, and none of them answers a `Promise`. That is what lets this
-`Xlog` be the `Xlog` of `Sources/MarsRSXlog` and of `android/marsrs` member for
-member — `Xlog.open(config)` answers the appender, and `xlog.i(tag, message)` has
-landed by the time it returns.
+`Xlog` be the `Xlog` of `platforms/apple/MarsRSXlog` and of
+`platforms/android/marsrs` member for member — `Xlog.open(config)` answers the
+appender, and `xlog.i(tag, message)` has landed by the time it returns.
 
 The five settings are properties and not `setLevel` / `getLevel` pairs, because a
 JS property is the spelling the Swift and the Kotlin use and a TurboModule setter

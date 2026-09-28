@@ -4,9 +4,9 @@
 # What the pod is made of is what the release packs into
 # `marsrs-cocoapods-net-<version>.zip`: `marsrs-net.xcframework` — the same
 # artefact the net binary target of Package.swift resolves — and the Swift of
-# `Sources/MarsRSNet`, which CocoaPods compiles into the pod's module. One
-# archive, because a pod has one `source` and it is the only thing `pod install`
-# fetches; see MarsRSXlog.podspec for why that is.
+# `platforms/apple/MarsRSNet`, which CocoaPods compiles into the pod's module.
+# One archive, because a pod has one `source` and it is the only thing `pod
+# install` fetches; see MarsRSXlog.podspec for why that is.
 #
 # The framework is the one built `--no-default-features --features sdt,stn`, so
 # it carries `mars_sdt_*` and `mars_stn_*` and no `mars_xlog_*` at all: an app
@@ -48,6 +48,6 @@ Pod::Spec.new do |s|
   # What Package.swift's `swift-tools-version` asks of the sources: they are
   # Swift 5, so that a Swift 5 project can depend on the port.
   s.swift_version = '5.0'
-  s.source_files = 'Sources/MarsRSNet/*.swift'
+  s.source_files = 'platforms/apple/MarsRSNet/*.swift'
   s.vendored_frameworks = 'marsrs-net.xcframework'
 end

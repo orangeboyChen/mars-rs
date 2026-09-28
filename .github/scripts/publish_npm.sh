@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 #
 # Publishes the two React Native modules to npm, at the version of the release:
-# `react-native/marsrs` and `react-native/marsrs-xlog`, under the `name` of
-# their own package.json — `marsrs-react-native` and `marsrs-react-native-xlog`,
-# which is also the name scripts/package_react_native.sh's tarballs carry.
+# `platforms/react-native/marsrs` and `platforms/react-native/marsrs-xlog`,
+# under the `name` of their own package.json — `marsrs-react-native` and
+# `marsrs-react-native-xlog`, which is also the name
+# scripts/package_react_native.sh's tarballs carry.
 #
 #   .github/scripts/publish_npm.sh <version>
 #
@@ -33,7 +34,7 @@ version="${version#v}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$root"
 
-for pkg in react-native/marsrs react-native/marsrs-xlog; do
+for pkg in platforms/react-native/marsrs platforms/react-native/marsrs-xlog; do
     name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])' "$pkg/package.json")"
 
     # The two questions the crates.io step asks crates.io. The first is the one

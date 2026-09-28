@@ -2,7 +2,8 @@
 #
 #   cargo          — Cargo.toml and Cargo.lock of the workspace
 #   github-actions — every `uses:` of .github/workflows
-#   gradle         — the Android Gradle Plugin of android/build.gradle.kts
+#   gradle         — the Android Gradle Plugin of
+#                    platforms/android/build.gradle.kts
 #
 # A pull request Dependabot raises is a pull request like any other, so it is
 # the gate rust.yml and lint.yml run on a hand-written branch: rustfmt, clippy
@@ -20,8 +21,8 @@
 # The Gradle wrapper is not here, and not because it is left out: GitHub's own
 # ecosystem table says the `gradle` entry updates what a build script declares,
 # and Gradle itself is declared nowhere but
-# android/gradle/wrapper/gradle-wrapper.properties — a file Dependabot does not
-# read. So the wrapper has an updater of its own,
+# platforms/android/gradle/wrapper/gradle-wrapper.properties — a file
+# Dependabot does not read. So the wrapper has an updater of its own,
 # .github/workflows/gradle-wrapper.yml: weekly, a `gradlew wrapper` against the
 # newest Gradle services.gradle.org names, and a pull request, which is what
 # makes the branch it opens go through the gate like any other.
@@ -75,10 +76,11 @@ updates:
       prefix: 'deps(actions)'
 
   - package-ecosystem: gradle
-    directory: /android
+    directory: /platforms/android
     schedule:
       interval: weekly
-    # AGP 9.4.1 is declared in the `plugins` block of android/build.gradle.kts,
+    # AGP 9.4.1 is declared in the `plugins` block of
+    # platforms/android/build.gradle.kts,
     # and it is published on Google's Maven and on the plugin portal, not on
     # Maven Central — where com.android.tools.build:gradle stopped being
     # published. Neither is a repository Dependabot asks by default, so the
@@ -91,9 +93,9 @@ updates:
       prefix: 'deps(gradle)'
 
 # Nothing here is private: the two repositories are the public ones
-# android/settings.gradle.kts already resolves against (`google()` and
-# `gradlePluginPortal()`), written out because a version is only looked up in
-# a repository that is named.
+# platforms/android/settings.gradle.kts already resolves against (`google()`
+# and `gradlePluginPortal()`), written out because a version is only looked up
+# in a repository that is named.
 registries:
   maven-google:
     type: maven-repository

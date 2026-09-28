@@ -4,11 +4,12 @@
 # What the pod is made of is what the release packs into
 # `marsrs-cocoapods-xlog-<version>.zip`: `marsrs-xlog.xcframework` — the same
 # artefact the xlog binary target of Package.swift resolves, down to the checksum
-# a release computes for it — and the Swift of `Sources/MarsRSXlog`, which
-# CocoaPods compiles into the pod's module. One archive and not two downloads,
-# because a pod has one `source` and it is the only thing `pod install` fetches:
-# SwiftPM reads a manifest from a tag and a framework from a url, and CocoaPods
-# reads a pod's files from its source and from nowhere else.
+# a release computes for it — and the Swift of `platforms/apple/MarsRSXlog`,
+# which CocoaPods compiles into the pod's module. One archive and not two
+# downloads, because a pod has one `source` and it is the only thing `pod
+# install` fetches: SwiftPM reads a manifest from a tag and a framework from a
+# url, and CocoaPods reads a pod's files from its source and from nowhere
+# else.
 #
 # The Swift is compiled by the app's Xcode and not by the release, which is what
 # makes this pod the Objective-C seam of the port too: `Xlog` and `XlogConfig`
@@ -57,7 +58,7 @@ Pod::Spec.new do |s|
   # What Package.swift's `swift-tools-version` asks of the sources: they are
   # Swift 5, so that a Swift 5 project can depend on the port.
   s.swift_version = '5.0'
-  s.source_files = 'Sources/MarsRSXlog/*.swift'
+  s.source_files = 'platforms/apple/MarsRSXlog/*.swift'
   s.vendored_frameworks = 'marsrs-xlog.xcframework'
   s.frameworks   = 'CoreFoundation'
 end

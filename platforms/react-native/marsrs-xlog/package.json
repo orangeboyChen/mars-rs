@@ -1,0 +1,46 @@
+{
+  "name": "marsrs-react-native-xlog",
+  "version": "0.1.0-alpha.2",
+  "description": "React Native module for xlog, the logging half of mars-rs: a Rust implementation of Tencent/mars that writes the .xlog the C++ implementation produced.",
+  "license": "MIT",
+  "homepage": "https://github.com/orangeboyChen/mars-rs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/orangeboyChen/mars-rs.git",
+    "directory": "platforms/react-native/marsrs-xlog"
+  },
+  "bugs": {
+    "url": "https://github.com/orangeboyChen/mars-rs/issues"
+  },
+  "keywords": [
+    "mars",
+    "xlog",
+    "logging",
+    "react-native"
+  ],
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "files": [
+    "src",
+    "android",
+    "ios",
+    "*.podspec",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "codegenConfig": {
+    "name": "NativeXlogSpec",
+    "type": "modules",
+    "jsSrcsDir": "src",
+    "android": {
+      "javaPackageName": "io.github.orangeboychen.marsrs.xlog.reactnative"
+    }
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-native": ">=0.74.0"
+  }
+}

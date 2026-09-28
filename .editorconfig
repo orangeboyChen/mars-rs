@@ -1,4 +1,5 @@
-# ktlint reads this file for the Kotlin of the Android packaging (android/);
+# ktlint reads this file for the Kotlin of the Android packaging
+# (platforms/android/);
 # nothing else in the repository does, so the section below is the only one
 # here. Editors read it too, so the style a developer types in is the one the
 # gate checks.

@@ -14,11 +14,12 @@ name: Lint (Swift)
 # than installed by a package manager: Homebrew has no `swiftlint@0.65.1`, and a
 # new SwiftLint release brings new rules with it.
 #
-# It reads `Sources` and its own configuration, and nothing else: a pull
-# request that touches only `crates/` or only `android/` has no Swift in it,
-# and this is the one gate of the three that has to run on macOS, the host a
-# minute of which is billed at ten times a Linux one. Which is why `swiftlint`
-# skips when the commit touches neither — see the comment on `changes`.
+# It reads `platforms/apple` and its own configuration, and nothing else: a pull
+# request that touches only `crates/` or only `platforms/android/` has no Swift
+# in it, and this is the one gate of the three that has to run on macOS, the
+# host a minute of which is billed at ten times a Linux one. Which is why
+# `swiftlint` skips when the commit touches neither — see the comment on
+# `changes`.
 
 on:
   # Every run starts, whatever the commit touched: what decides whether the job
@@ -63,7 +64,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.after || github.sha }}
         run: |
           .github/scripts/changed_paths.sh \
-            'Sources/**' '.swiftlint.yml' '.github/scripts/**' \
+            'platforms/apple/**' '.swiftlint.yml' '.github/scripts/**' \
             '.github/workflows/lint-swift.yml'
 
   swiftlint:
@@ -95,6 +96,7 @@ jobs:
           mv SwiftLintBinary.artifactbundle/macos/swiftlint ./swiftlint
           chmod +x ./swiftlint
           ./swiftlint version
-      # `.swiftlint.yml` says what is linted (`Sources`) and which opt-in rules
-      # run on top of the defaults; `--strict` is what fails the job.
+      # `.swiftlint.yml` says what is linted (`platforms/apple`) and which
+      # opt-in rules run on top of the defaults; `--strict` is what fails the
+      # job.
       - run: ./swiftlint lint --strict

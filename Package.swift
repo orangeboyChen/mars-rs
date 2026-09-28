@@ -141,7 +141,7 @@ let package = Package(
         .target(
             name: "MarsRSXlog",
             dependencies: ["MarsRSFFI"],
-            path: "Sources/MarsRSXlog",
+            path: "platforms/apple/MarsRSXlog",
             linkerSettings: [
                 .linkedFramework("CoreFoundation"),
             ]
@@ -150,9 +150,16 @@ let package = Package(
         // enough. It carries no binary of its own — it re-exports the xlog one
         // and the net one, which is what `MarsRS` is made of, and an app that
         // only logs keeps importing `MarsRSXlog` and nothing more.
+        //
+        // The three Swift modules are `platforms/apple/`, one directory each:
+        // every platform of the port has a directory of its own under
+        // `platforms/` — `android`, `flutter`, `kmp` and `react-native` are
+        // the packaging of the others — and a target that names no `path` is
+        // a target SwiftPM looks for at the root.
         .target(
             name: "MarsRS",
-            dependencies: ["MarsRSXlog", "MarsRSNet"]
+            dependencies: ["MarsRSXlog", "MarsRSNet"],
+            path: "platforms/apple/MarsRS"
         ),
         // The net half's binary: the same slices, built `--no-default-features
         // --features sdt,stn`, with `mars_sdt.h` and `mars_stn.h` under one
@@ -183,7 +190,7 @@ let package = Package(
         .target(
             name: "MarsRSNet",
             dependencies: ["MarsRSNetFFI"],
-            path: "Sources/MarsRSNet"
+            path: "platforms/apple/MarsRSNet"
         )
     ]
 )

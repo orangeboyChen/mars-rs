@@ -331,12 +331,12 @@ jobs:
           # the same .so in both modules: marsrs wraps all of it, marsrs-xlog
           # only the logging half
           for MODULE in marsrs marsrs-xlog; do
-            mkdir -p "android/$MODULE/libs"
-            cp -r dist/native/. "android/$MODULE/libs/"
+            mkdir -p "platforms/android/$MODULE/libs"
+            cp -r dist/native/. "platforms/android/$MODULE/libs/"
           done
-          (cd android && ./gradlew --no-daemon :marsrs:assembleRelease :marsrs-xlog:assembleRelease)
-          cp android/marsrs/build/outputs/aar/marsrs-release.aar "dist/$MARSRS_AAR"
-          cp android/marsrs-xlog/build/outputs/aar/marsrs-xlog-release.aar "dist/$MARSRS_XLOG_AAR"
+          (cd platforms/android && ./gradlew --no-daemon :marsrs:assembleRelease :marsrs-xlog:assembleRelease)
+          cp platforms/android/marsrs/build/outputs/aar/marsrs-release.aar "dist/$MARSRS_AAR"
+          cp platforms/android/marsrs-xlog/build/outputs/aar/marsrs-xlog-release.aar "dist/$MARSRS_XLOG_AAR"
           # An AAR with no R8 rules in it is an AAR that breaks the app that
           # shrinks its release build — the .so and the Kotlin name each
           # other, and R8 renames both halves — so say so here and not in
@@ -562,7 +562,7 @@ jobs:
           # itself succeeded.
           { yes || true; } | "$SDKMANAGER" --licenses > /dev/null
           "$SDKMANAGER" --install "platforms;android-36" "build-tools;34.0.0"
-          echo "sdk.dir=$ANDROID_HOME" > kmp/local.properties
+          echo "sdk.dir=$ANDROID_HOME" > platforms/kmp/local.properties
       - name: Collect the JNI libraries
         uses: actions/download-artifact@v8
         with:
@@ -571,29 +571,31 @@ jobs:
       - name: Unpack the JNI libraries
         run: |
           set -euo pipefail
-          # `kmp/native/` is not of the repository — .gitignore keeps out what
-          # these jobs assemble into it — so there is nothing to unpack into
-          # yet, and `unzip -d` makes the directory it is given and not the one
-          # above it. Hence the `mkdir`, and hence a step that failed on a
-          # runner and never on a machine that had built the module before.
-          mkdir -p kmp/native/android
-          unzip -q -o "dist/$NATIVE_ZIP" -d kmp/native/android
+          # `platforms/kmp/native/` is not of the repository — .gitignore
+          # keeps out what these jobs assemble into it — so there is nothing
+          # to unpack into yet, and `unzip -d` makes the directory it is given
+          # and not the one above it. Hence the `mkdir`, and hence a step that
+          # failed on a runner and never on a machine that had built the
+          # module before.
+          mkdir -p platforms/kmp/native/android
+          unzip -q -o "dist/$NATIVE_ZIP" -d platforms/kmp/native/android
       - name: Collect the Apple archives
         # Every one of them, for a test of the Linux one: cinterop is
         # commonized, so the klib of a single target cannot be built without the
-        # headers of all thirteen being read — see `kmp/gradle.properties`.
+        # headers of all thirteen being read — see
+        # `platforms/kmp/gradle.properties`.
         uses: actions/download-artifact@v8
         with:
           name: kmp-native-apple
-          path: kmp/native
+          path: platforms/kmp/native
       - name: Collect the archives of this host
-        run: cp -R dist/kmp-native/. kmp/native/
+        run: cp -R dist/kmp-native/. platforms/kmp/native/
       - name: Prove an archive links
         # The same proof the `kmp` job makes on macOS, for the target this host
         # can execute: `linuxX64`. It is the only check the Linux linker flags of
         # `mars_ffi.def` ever get, and the Windows ones get none — there is no
         # runner that can execute a mingw binary here.
-        run: (cd kmp && ./gradlew --no-daemon :marsrs-xlog:linuxX64Test)
+        run: (cd platforms/kmp && ./gradlew --no-daemon :marsrs-xlog:linuxX64Test)
 
   # The Kotlin Multiplatform release: `marsrs-kmp` and `xlog-kmp` as a
   # maven repository, on GitHub Packages and, as a zip, on the release.
@@ -646,13 +648,13 @@ jobs:
           # itself succeeded.
           { yes || true; } | "$sdkmanager" --licenses > /dev/null
           "$sdkmanager" --install "platforms;android-36" "build-tools;34.0.0"
-          echo "sdk.dir=$android_home" > kmp/local.properties
+          echo "sdk.dir=$android_home" > platforms/kmp/local.properties
       - name: Collect the native archives
         uses: actions/download-artifact@v8
         with:
           pattern: kmp-native-*
           merge-multiple: true
-          path: kmp/native
+          path: platforms/kmp/native
       - name: Collect the JNI libraries
         uses: actions/download-artifact@v8
         with:
@@ -661,22 +663,22 @@ jobs:
       - name: Unpack the JNI libraries
         run: |
           set -euo pipefail
-          mkdir -p kmp/native/android
-          unzip -q -o "dist/$NATIVE_ZIP" -d kmp/native/android
-          find kmp/native -name '*.a' -o -name '*.so' | sort
+          mkdir -p platforms/kmp/native/android
+          unzip -q -o "dist/$NATIVE_ZIP" -d platforms/kmp/native/android
+          find platforms/kmp/native -name '*.a' -o -name '*.so' | sort
       - name: Prove an archive links
         # Nothing on the way to Maven links a klib, so without this a wrong
         # linker flag in mars_ffi.def is a link error in an app a month later
         # instead of a failed release. It builds and runs the test of the host's
         # own target: macosArm64 here, the one Kotlin/Native target this runner
         # can execute.
-        run: (cd kmp && ./gradlew --no-daemon :marsrs-xlog:macosArm64Test)
+        run: (cd platforms/kmp && ./gradlew --no-daemon :marsrs-xlog:macosArm64Test)
       - name: Publish to GitHub Packages
         if: needs.version.outputs.is_new == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          (cd kmp && ./gradlew --no-daemon -PpublishedVersion="${{ needs.version.outputs.version }}" \
+          (cd platforms/kmp && ./gradlew --no-daemon -PpublishedVersion="${{ needs.version.outputs.version }}" \
             -PmavenUser="$GITHUB_ACTOR" -PmavenPassword="$GITHUB_TOKEN" \
             :marsrs:publishAllPublicationsToGitHubPackagesRepository \
             :marsrs-xlog:publishAllPublicationsToGitHubPackagesRepository)
@@ -684,7 +686,7 @@ jobs:
         # GitHub Packages is immutable — a version it has cannot be overwritten
         # — so a tag that exists already is only ever republished as the zip.
         run: |
-          (cd kmp && ./gradlew --no-daemon -PpublishedVersion="${{ needs.version.outputs.version }}" \
+          (cd platforms/kmp && ./gradlew --no-daemon -PpublishedVersion="${{ needs.version.outputs.version }}" \
             :marsrs:publishToMavenLocal :marsrs-xlog:publishToMavenLocal)
       - name: Package the maven repository
         # Zipped from the root of the repository and not from the group's
@@ -704,7 +706,7 @@ jobs:
               || { echo "::error::$ZIP holds no io/github/orangeboychen/marsrs/$ARTIFACT"; exit 1; }
           done
       - name: Package the native archives
-        run: (cd kmp/native && zip -q -r "$GITHUB_WORKSPACE/dist/$KMP_NATIVE_ZIP" .)
+        run: (cd platforms/kmp/native && zip -q -r "$GITHUB_WORKSPACE/dist/$KMP_NATIVE_ZIP" .)
       - uses: actions/upload-artifact@v7
         with:
           name: release-kmp

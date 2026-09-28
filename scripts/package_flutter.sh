@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# Packages the pair of Flutter plugins — flutter/marsrs_flutter and
-# flutter/marsrs_flutter_xlog — as <asset-dir>/marsrs-flutter-<version>.tar.gz and
+# Packages the pair of Flutter plugins — platforms/flutter/marsrs and
+# platforms/flutter/marsrs-xlog — as
+# <asset-dir>/marsrs-flutter-<version>.tar.gz and
 # <asset-dir>/marsrs-flutter-xlog-<version>.tar.gz: the plugins of a release,
 # complete with the two things a consumer cannot resolve for itself.
 #
@@ -12,16 +13,16 @@
 # Rust is needed: the framework is the apple job's, and the AAR the Android half
 # of each plugin depends on is JitPack's.
 #
-# The two are the pair android/ publishes as `marsrs` and `xlog`, and
+# The two are the pair platforms/android/ publishes as `marsrs` and `xlog`, and
 # they are two directories rather than one shared tree because a plugin that
 # took the other's sources would take all of them, which is what the xlog one
 # exists not to do. So what there is to stamp, this script stamps twice:
 #
 #   * `version:` of pubspec.yaml and `s.version` of the podspec — the version of
 #     the release;
-#   * the AAR coordinate of android/build.gradle.kts — `marsrs` for the whole
-#     port and `xlog` for the xlog half, at the version of this release
-#     and not at the one the file was written against;
+#   * the AAR coordinate of platforms/android/build.gradle.kts — `marsrs` for
+#     the whole port and `xlog` for the xlog half, at the version of this
+#     release and not at the one the file was written against;
 #   * MarsRSXlog.xcframework into ios/Frameworks, because CocoaPods cannot
 #     resolve the SwiftPM binary target of Package.swift;
 #   * mars_xlog.h into ios/include, out of crates/marsrs-ffi/include rather than
@@ -62,8 +63,9 @@ mkdir -p "$out"
 # <directory> <package> <AAR> <archive>: the pair, whole port first. The
 # directory is the one in the repository and the one in the tarball; the package
 # is the name of pubspec.yaml and of the podspec, which is not the same
-# spelling — `flutter/marsrs` publishes `marsrs_flutter`. The only thing the AAR
-# argument changes is which AAR the Android half of the plugin resolves.
+# spelling — `platforms/flutter/marsrs` publishes `marsrs_flutter`. The only
+# thing the AAR argument changes is which AAR the Android half of the plugin
+# resolves.
 package_one() {
     local pkg="$1" name="$2" aar="$3" archive="$4"
     # The name the tarball holds the plugin under.
@@ -111,9 +113,9 @@ assert n == 1, "android/build.gradle.kts has no AAR coordinate to stamp"
 open(path, "w").write(src)
 PY
 
-    tar -czf "$out/$archive-$version.tar.gz" -C flutter "$dir"
+    tar -czf "$out/$archive-$version.tar.gz" -C platforms/flutter "$dir"
     ls -l "$out/$archive-$version.tar.gz"
 }
 
-package_one flutter/marsrs marsrs_flutter marsrs marsrs-flutter
-package_one flutter/marsrs-xlog marsrs_flutter_xlog xlog marsrs-flutter-xlog
+package_one platforms/flutter/marsrs marsrs_flutter marsrs marsrs-flutter
+package_one platforms/flutter/marsrs-xlog marsrs_flutter_xlog xlog marsrs-flutter-xlog

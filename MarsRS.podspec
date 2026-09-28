@@ -1,10 +1,11 @@
 # The `MarsRS` pod: both halves of the port in one `import`.
 #
 # The umbrella, and the one pod of the three that carries no binary: what `MarsRS`
-# is made of is `Sources/MarsRS/MarsRS.swift` — two `@_exported import` lines,
-# one per half — so its `source` is the git tag this version was published from
-# and not an archive of a release. The two pods it names are the ones that carry
-# the frameworks, and they are pinned to this version because a pod that
+# is made of is `platforms/apple/MarsRS/MarsRS.swift` — two `@_exported import`
+# lines, one per half — so its `source` is the git tag this version was
+# published from and not an archive of a release. The two pods it names are the
+# ones that carry the frameworks, and they are pinned to this version because a
+# pod that
 # resolved a newer half than the one it was published against is not the pair a
 # release tested.
 #
@@ -41,7 +42,7 @@ Pod::Spec.new do |s|
   # What Package.swift's `swift-tools-version` asks of the sources: they are
   # Swift 5, so that a Swift 5 project can depend on the port.
   s.swift_version = '5.0'
-  s.source_files = 'Sources/MarsRS/*.swift'
+  s.source_files = 'platforms/apple/MarsRS/*.swift'
   # The two halves, at the version of this pod: an umbrella that resolved a newer
   # half than it was published against is not the pair a release tested.
   s.dependency 'MarsRSXlog', s.version.to_s

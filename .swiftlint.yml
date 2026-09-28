@@ -1,9 +1,9 @@
 # SwiftLint configuration for the Swift face of the port.
 #
-# `Sources/` is all the Swift there is: `MarsRSXlog` is the Swift over the C ABI
-# of `marsrs-ffi`, and `MarsRS` is the umbrella over it. The rest of the port is
-# Rust, and Package.swift is a manifest the release workflow rewrites, so
-# neither is linted here.
+# `platforms/apple/` is all the Swift there is: `MarsRSXlog` is the Swift over
+# the C ABI of `marsrs-ffi`, and `MarsRS` is the umbrella over it. The rest of
+# the port is Rust, and Package.swift is a manifest the release workflow
+# rewrites, so neither is linted here.
 #
 # CI runs `swiftlint lint --strict`, which turns every warning into an error:
 # a finding fails the job. That is the point of having the gate at all.
@@ -52,7 +52,7 @@
 # `excluded` key, and there is no `// swiftlint:disable` in the sources.
 
 included:
-  - Sources
+  - platforms/apple
 
 opt_in_rules:
   - anonymous_argument_in_multiline_closure
