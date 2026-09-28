@@ -13,6 +13,11 @@ platforms/android/*/build/
 platforms/android/local.properties
 /dist
 
+# platforms/harmonyos: where scripts/fetch_deveco_cli.sh unpacks the DevEco
+# Command Line Tools — a cache of someone else's archive, and not a source of
+# this repository
+/.deveco-cli
+
 # platforms/kmp: the native libraries the release unpacks into it
 # (platforms/kmp/native/<kotlin-target>/libmars_ffi.a,
 # platforms/kmp/native/android/<abi>/) and what Gradle writes
@@ -32,13 +37,10 @@ docs/.vitepress/cache/
 # the Flutter and React Native packages: what scripts/package_flutter.sh and
 # scripts/package_react_native.sh drop into a package before it is packed — the
 # Apple framework of the release, the C ABI's own header, and the licence of the
-# port. None of the three is a source of this repository, though the licence is
-# one under platforms/flutter/: pub.dev refuses a package whose root has no
-# LICENSE file, and the first version of a plugin is published by hand out of a
-# checkout, which is a package `package_flutter.sh` has not been through. That
-# one is checked in — see the comment above the `cp` in package_flutter.sh.
+# port. None of the three is a source of this repository.
 platforms/flutter/*/ios/Frameworks/
 platforms/flutter/*/ios/include/
+platforms/flutter/*/LICENSE
 platforms/react-native/*/ios/Frameworks/
 platforms/react-native/*/ios/include/
 platforms/react-native/*/LICENSE

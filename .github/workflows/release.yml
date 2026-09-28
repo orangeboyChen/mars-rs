@@ -20,6 +20,7 @@ name: Release
 #   * marsrs-react-native-<version>.tgz / marsrs-react-native-xlog-<version>.tgz
 #                           -> the two React Native modules, named by `npm pack`
 #   * marsrs-harmony-<version>.tar.gz -> the three HarmonyOS `.so` files
+#   * marsrs-harmonyos-xlog-<version>.har -> the HarmonyOS package, for ohpm
 #   * crates.io: `marsrs` and `marsrs-xlog`, at the version of the tag
 #
 # The four plugin packages are packaged on every release, which is what the docs
@@ -772,15 +773,21 @@ jobs:
         if: needs.version.outputs.is_new == 'true'
         run: .github/scripts/publish_npm.sh "${{ needs.version.outputs.version }}"
 
-  # HarmonyOS: the three `libmars_ffi.so` a HarmonyOS module carries, one per
-  # ABI, as marsrs-harmony-<version>.tar.gz. There is no package and no ArkTS
-  # wrapper — the docs say so, and an app reaches the C ABI through NAPI of its
-  # own — so what the release has to give that platform is the natives and the
-  # headers, and nothing else.
+  # HarmonyOS: two assets, because there are two ways in. The three
+  # `libmars_ffi.so` of marsrs-harmony-<version>.tar.gz, one per ABI, are for an
+  # app that writes its own NAPI module against the C ABI; the
+  # marsrs-harmonyos-xlog-<version>.har of the second half of this job is the
+  # package, ArkTS and all, for an app that does not. `libmarsrs_xlog.so` of the
+  # HAR is the same Rust core with the NAPI seam of
+  # platforms/harmonyos/marsrs-xlog linked around it, so the two are one crate
+  # built twice and not two ports.
   #
-  # No credential gates this one: the OpenHarmony SDK is public and the script
+  # No credential gates the build: the OpenHarmony SDK is public and the script
   # downloads it. What does gate it is the 2.7 GB that download is, which a
-  # cache answers once and not once per release.
+  # cache answers once and not once per release. ohpm is the one registry here
+  # that needs a secret, and it is gated in the script and not in the job: with
+  # no publish code configured, .github/scripts/publish_ohpm.sh says so and the
+  # HAR goes out as a release asset alone.
   harmony:
     needs: version
     if: needs.version.outputs.skip != 'true'
@@ -825,10 +832,36 @@ jobs:
           cp LICENSE README.md "$stage/"
           tar -czf "$stage.tar.gz" -C dist "marsrs-harmony-$version"
           ls -l "$stage.tar.gz"
+      # The package: the NAPI module of platforms/harmonyos/marsrs-xlog, one per
+      # ABI, and the HAR the ArkTS above it and those three `.so` are packed
+      # into. The SDK is already downloaded and the Rust core is already built
+      # by the step above, so this is the NAPI shim and the link of each ABI —
+      # and no CMake, which is why a Linux runner can do it.
+      - name: Build the NAPI module and package the ohpm HAR
+        run: |
+          set -euo pipefail
+          scripts/build_harmony_napi.sh target/harmony-napi
+          scripts/package_harmony.sh "${{ needs.version.outputs.version }}" dist \
+            target/harmony-napi
       - uses: actions/upload-artifact@v7
         with:
           name: release-harmony
-          path: dist/marsrs-harmony-*.tar.gz
+          path: |
+            dist/marsrs-harmony-*.tar.gz
+            dist/marsrs-harmonyos-xlog-*.har
+      # ohpm, last, and only for a tag that is new. Unlike npm it takes no OIDC
+      # token, so this is the one publish here that a secret gates — and it is
+      # the script that decides what an unset secret means, which is a warning
+      # and an unpublished HAR rather than a failed release.
+      - name: Publish the HarmonyOS package to ohpm
+        if: needs.version.outputs.is_new == 'true'
+        env:
+          # The 发布号 ohpm gives the publisher of the package, which is the
+          # repository's OHOS_PUBLIC_TOKEN, and the private half of the keypair
+          # whose public half is uploaded to ohpm.
+          OHOS_PUBLIC_TOKEN: ${{ secrets.OHOS_PUBLIC_TOKEN }}
+          OHPM_KEY: ${{ secrets.OHPM_KEY }}
+        run: .github/scripts/publish_ohpm.sh "${{ needs.version.outputs.version }}"
 
   publish:
     needs: [version, apple, cocoapods, android, host, cli, kmp, plugins, harmony]

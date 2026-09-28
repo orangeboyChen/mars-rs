@@ -1,0 +1,53 @@
+// What ohpm sees: the name an app installs, the entry point an ArkTS
+// `import` resolves, and the four fields ohpm will not publish without —
+// `name`, `version`, `main` and `license`.
+//
+// `name` is the one that is expensive: an ohpm central-repo name is asked for
+// once and kept, so `marsrs-harmonyos-xlog` is the name this package is
+// published under and the name it stays under. It is spelled the way the
+// React Native and Flutter modules are — the platform in the middle, because
+// ohpm's namespace is one namespace and not one per platform.
+//
+// `main` is `Index.ets` and not a `.d.ts`: this package ships ArkTS source,
+// which is what a HAR is — a static library an app compiles with its own —
+// and not a closed-source binary with declarations beside it. The one
+// declaration file in the tree, `src/main/cpp/types/libmarsrs_xlog/index.d.ts`,
+// is the NAPI module's and hvigor finds it where it is.
+//
+// The compatibility fields hvigor writes into a HAR of its own —
+// `compatibleSdkVersion`, `compatibleSdkType`, `obfuscated`,
+// `nativeComponents` — are not here, because hvigor is not what assembles
+// this one. `scripts/package_harmony.sh` says what that costs at publish
+// time.
+{
+  "name": "marsrs-harmonyos-xlog",
+  "version": "1.0.0",
+  "description": "xlog for a HarmonyOS app: the .xlog the C++ Tencent/mars writes, written from ArkTS over a NAPI module with the Rust core linked into it.",
+  "keywords": [
+    "mars",
+    "xlog",
+    "logging",
+    "harmonyos",
+    "openharmony",
+    "arkts"
+  ],
+  "homepage": "https://github.com/orangeboyChen/mars-rs",
+  "repository": "https://github.com/orangeboyChen/mars-rs",
+  "bugs": {
+    "url": "https://github.com/orangeboyChen/mars-rs/issues"
+  },
+  "license": "MIT",
+  "author": "orangeboyChen",
+  "main": "Index.ets",
+  // Open source, and so the package is the source and not an obfuscated
+  // build of it: `artifactType` is what tells ohpm which of the two it is
+  // being handed.
+  "artifactType": "original",
+  // A stage-model module: no `app.ets`, no FA lifecycle, and the app's own
+  // `UIAbility` is what owns the appender.
+  "apiType": "stageMode",
+  // A logger has nothing to depend on, and a HAR has to declare every
+  // dependency of its own rather than inherit the project's — this is the
+  // field that says so.
+  "dependencies": {}
+}

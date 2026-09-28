@@ -34,15 +34,16 @@ SDT have no pages of their own yet, and not every package carries them either �
 | Flutter | `marsrs_flutter_xlog` / `marsrs_flutter` | [pub.dev](https://pub.dev), or the release's `marsrs-flutter-xlog-<version>.tar.gz` |
 | React Native 0.74+ | `marsrs-react-native-xlog` / `marsrs-react-native` | [npm](https://www.npmjs.com), or the release's `marsrs-react-native-xlog-<version>.tgz` |
 | anything with a C FFI | the `marsrs-<version>-<host>` archive | the release: Linux, macOS and Windows hosts |
-| HarmonyOS | the three `.so` of `marsrs-harmony-<version>.tar.gz` | the release |
+| HarmonyOS | `marsrs-harmonyos-xlog`, or the three `.so` of `marsrs-harmony-<version>.tar.gz` | the release — ohpm is not switched on yet |
 
 The Kotlin Multiplatform package is the widest of them: the same calls in shared
 code write the same file on Android, iOS, watchOS, tvOS, macOS, Linux and
 Windows, each platform compiling the half that reaches this core — JNI on
-Android, cinterop over the C ABI everywhere else. HarmonyOS is the one platform
-with no package: a release hands it the three `.so` and the header and nothing
-else, and an app drops them into its module and reaches them through NAPI of its
-own. `scripts/build_harmony.sh <dir>` builds the same three from source.
+Android, cinterop over the C ABI everywhere else. HarmonyOS has both ways in:
+`marsrs-harmonyos-xlog` is the package, a HAR an app installs and writes ArkTS
+through, and `marsrs-harmony-<version>.tar.gz` is the three `.so` and the header
+for an app that would rather write NAPI of its own. `scripts/build_harmony.sh
+<dir>` builds the three from source.
 
 Every release also ships the `xlog` CLI, which writes and reads those files from
 a shell and makes the key pair that decides who can — `cargo install marsrs-xlog`,
@@ -81,6 +82,10 @@ implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")  // + STN, SDT
 // build.gradle.kts of a Kotlin Multiplatform shared module
 implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")
 implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")
+```
+
+```bash
+ohpm install marsrs-harmonyos-xlog    # HarmonyOS — ArkTS; xlog only, for now
 ```
 
 Then the same three steps on every platform: open an appender once when the app

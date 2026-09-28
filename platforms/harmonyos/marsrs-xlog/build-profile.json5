@@ -1,0 +1,42 @@
+// What hvigor builds this module as.
+//
+// There is no `externalNativeOptions`, and that is the interesting part: the
+// usual job of a module that carries natives is to name a CMake project for
+// hvigor to run, and this one has none. `libmarsrs_xlog.so` is built by
+// `scripts/build_harmony_napi.sh` with the SDK's clang — the same way
+// `libmars_ffi.so` next to it is — and is dropped into `libs/<abi>/` already
+// built, so an app that takes the HAR compiles ArkTS and nothing else.
+//
+// Which is also why this file says nothing about ABIs: the three in `libs/`
+// are the three the package carries, and `abiFilters` is a filter over what a
+// CMake project can build and not a list of what is shipped.
+{
+  "apiType": "stageMode",
+  "buildOption": {},
+  "buildOptionSet": [
+    {
+      "name": "release",
+      // Open source: the ArkTS an app compiles is the ArkTS in the repo, and
+      // an obfuscated HAR of it would be a package whose source nobody can
+      // read for no gain.
+      "arkOptions": {
+        "obfuscation": {
+          "ruleOptions": {
+            "enable": false,
+            "files": [
+              "./obfuscation-rules.txt"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "targets": [
+    {
+      "name": "default",
+      // HarmonyOS and not OpenHarmony: the APIs this package reaches are the
+      // system's, which is the difference between the two.
+      "runtimeOS": "HarmonyOS"
+    }
+  ]
+}

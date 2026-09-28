@@ -49,12 +49,13 @@ Native 的两个包今天都只有日志库。
 | Flutter | `marsrs_flutter_xlog` / `marsrs_flutter` | [Flutter](/zh/platforms/flutter) |
 | React Native | `marsrs-react-native-xlog` / `marsrs-react-native` | [React Native](/zh/platforms/react-native) |
 | 任何能调 C 的语言 | `marsrs-<version>-<host>` 压缩包 | [C ABI](/zh/platforms/c-abi) |
-| HarmonyOS | `marsrs-harmony-<version>.tar.gz` 里的三个 `.so` | [HarmonyOS](/zh/platforms/harmonyos) |
+| HarmonyOS | `marsrs-harmonyos-xlog`，或 `marsrs-harmony-<version>.tar.gz` 里的三个 `.so` | [HarmonyOS](/zh/platforms/harmonyos) |
 
 `xlog` 只有日志；`marsrs` 再加上 STN 任务链路和 SDT 网络诊断 —— 和 crates.io 上那两个 crate 是同一对。只打日志的 App 用前者，而每个平台做的都是同一个切分：Apple 上是 `MarsRSXlog` 或 `MarsRSNet`，JitPack 上是 `xlog` 或 `marsrs`，共享 Kotlin 模块是 `xlog-kmp` 或 `marsrs-kmp`。
 
 Flutter 插件和 React Native 模块在 pub.dev 和 npm 上：`flutter pub add`、
-`npm install` 装的是上面最新的版本。
+`npm install` 装的是上面最新的版本。HarmonyOS 的包是 release 里带的一个 HAR：
+ohpm 的发布流程还没开。
 
 ## 不是日志的那一半
 
