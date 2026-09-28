@@ -32,9 +32,11 @@ set -euo pipefail
 
 version="${1:-}"
 if [ -z "$version" ]; then
-    echo "usage: $(basename "$0") <version>" >&2
+    echo "usage: $(basename "$0") <version> [<dir>...]" >&2
     exit 2
 fi
+# The version is not a directory, and what is left is the pair to publish.
+shift
 version="${version#v}"
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
