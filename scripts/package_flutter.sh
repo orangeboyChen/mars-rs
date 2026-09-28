@@ -67,10 +67,10 @@ mkdir -p "$out"
 
 # <directory> <package> <AAR> <archive>: the pair, whole port first. The
 # directory is the one in the repository and the one in the tarball; the package
-# is the name of pubspec.yaml and of the podspec, which is not the same
-# spelling — `platforms/flutter/marsrs` publishes `marsrs_flutter`. The only
-# thing the AAR argument changes is which AAR the Android half of the plugin
-# resolves.
+# is the name of pubspec.yaml and of the podspec, which is the directory's with
+# the hyphen an underscore — pub.dev spells a name that way, and a directory
+# this tree spells with one. The only thing the AAR argument changes is which
+# AAR the Android half of the plugin resolves.
 package_one() {
     local pkg="$1" name="$2" aar="$3" archive="$4"
     # The name the tarball holds the plugin under.
@@ -148,5 +148,5 @@ PY
     ls -l "$out/$archive-$version.tar.gz"
 }
 
-package_one platforms/flutter/marsrs marsrs_flutter marsrs marsrs-flutter
-package_one platforms/flutter/marsrs-xlog marsrs_flutter_xlog xlog marsrs-flutter-xlog
+package_one platforms/flutter/marsrs marsrs marsrs marsrs-flutter
+package_one platforms/flutter/marsrs-xlog marsrs_xlog xlog marsrs-flutter-xlog

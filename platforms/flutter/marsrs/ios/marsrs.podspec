@@ -1,4 +1,4 @@
-# The iOS half of the `marsrs_flutter` plugin — byte-for-byte the `marsrs_flutter_xlog` one
+# The iOS half of the `marsrs` plugin — byte-for-byte the `marsrs_xlog` one
 # but for its name, because the port is xlog today and the two plugins are the
 # same package under two names.
 #
@@ -14,7 +14,7 @@
 # SwiftPM makes of the two — is nothing CocoaPods can hand a pod.
 
 Pod::Spec.new do |s|
-  s.name             = 'marsrs_flutter'
+  s.name             = 'marsrs'
   s.version          = '0.1.0-alpha.2'
   s.summary          = 'Flutter plugin for mars-rs, a Rust implementation of Tencent/mars: the whole port, xlog today.'
   s.homepage         = 'https://github.com/orangeboyChen/mars-rs'

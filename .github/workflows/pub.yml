@@ -18,9 +18,9 @@ name: pub.dev
 #     with the tag as its ref, and the tag-push trigger below is what is left for
 #     a tag pushed by hand.
 #   * the package has to be on pub.dev already. Automation cannot create one, so
-#     the first version of `marsrs_flutter` and `marsrs_flutter_xlog` is
-#     published by hand, once, and "Enable publishing from GitHub Actions" is
-#     clicked in the Admin tab then. Until that day this workflow warns and
+#     the first version of `marsrs` and `marsrs_xlog` is published by hand,
+#     once, and "Enable publishing from GitHub Actions" is clicked in the Admin
+#     tab then. Until that day this workflow warns and publishes nothing, which
 #     publishes nothing, which is a release that is complete either way.
 #
 # What is published is the plugin the release carries and not the one the tag's

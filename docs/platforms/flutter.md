@@ -1,17 +1,16 @@
 # Flutter
 
-Two plugins, one API: `marsrs_flutter_xlog` for an app that only logs, and
-`marsrs_flutter` for the whole port — which today is the same thing, because what
-the plugin exposes is the logger. STN and SDT land in `marsrs_flutter` and in
-nothing else: the C ABI behind both carries them — see
-[the C ABI](/platforms/c-abi#the-task-pipeline) — but neither is in the Dart
-yet. Take one of the two, not both: both carry the same native library, and an
-app with two of it does not build.
+Two plugins, one API: `marsrs_xlog` for an app that only logs, and `marsrs` for
+the whole port — which today is the same thing, because what the plugin exposes
+is the logger. STN and SDT land in `marsrs` and in nothing else: the C ABI
+behind both carries them — see [the C ABI](/platforms/c-abi#the-task-pipeline)
+— but neither is in the Dart yet. Take one of the two, not both: both carry the
+same native library, and an app with two of it does not build.
 
 ## Install
 
 ```bash
-flutter pub add marsrs_flutter_xlog        # or marsrs_flutter, for the whole port
+flutter pub add marsrs_xlog    # or marsrs, for the whole port
 ```
 
 The plugin is on pub.dev: `flutter pub add` takes the newest version there. A
@@ -21,7 +20,7 @@ and a `path:` dependency on the directory inside the tarball installs that one:
 ```yaml
 # pubspec.yaml
 dependencies:
-  marsrs_flutter_xlog:
+  marsrs_xlog:
     path: marsrs-xlog
 ```
 
@@ -38,7 +37,7 @@ plugin is a normal Flutter plugin with a podspec, and nothing in the app's
 ## Open, write, flush
 
 ```dart
-import 'package:marsrs_flutter_xlog/marsrs_flutter_xlog.dart';
+import 'package:marsrs_xlog/marsrs_xlog.dart';
 
 final dir = await getTemporaryDirectory();          // path_provider
 final xlog = await Xlog.open(

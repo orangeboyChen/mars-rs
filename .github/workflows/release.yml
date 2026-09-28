@@ -1106,8 +1106,8 @@ jobs:
             echo "Flutter — pub.dev:"
             echo ""
             echo '```bash'
-            echo "flutter pub add marsrs_flutter@${TAG#v}"
-            echo "flutter pub add marsrs_flutter_xlog@${TAG#v}"
+            echo "flutter pub add marsrs@${TAG#v}"
+            echo "flutter pub add marsrs_xlog@${TAG#v}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

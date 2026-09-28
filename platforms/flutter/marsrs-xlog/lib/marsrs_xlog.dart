@@ -1,7 +1,4 @@
-// The Dart face of mars-rs: the whole port, which today is xlog. The plugin
-// this file is in is `marsrs_flutter`, and `marsrs_flutter_xlog` is the same
-// plugin with the logging half only — two names for one package until STN and
-// SDT land in the C ABI, and they land here.
+// The Dart face of the xlog half of mars-rs.
 //
 // A method channel, and not `dart:ffi`: the Apple binary is a static library
 // inside `MarsRSXlog.xcframework`, and `DynamicLibrary.open` has nothing to open
@@ -119,7 +116,7 @@ class XlogConfig {
 class Xlog {
   Xlog._(this.namePrefix);
 
-  static const MethodChannel _channel = MethodChannel('marsrs_flutter');
+  static const MethodChannel _channel = MethodChannel('marsrs_xlog');
 
   /// What every file of this appender starts with, and what it is known by.
   final String namePrefix;
@@ -131,7 +128,7 @@ class Xlog {
 
   /// Opens an appender of its own with [config].
   ///
-  /// The platform side answers `marsrs_flutter` / `the appender refused the
+  /// The platform side answers `marsrs_xlog` / `the appender refused the
   /// configuration` when the appender would not take it, and
   /// `logDir is empty` when [XlogConfig.logDir] is.
   static Future<Xlog> open(XlogConfig config) async {

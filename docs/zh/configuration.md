@@ -36,7 +36,7 @@ appender 会留下 `warning`，丢掉 `debug`。
 | 6 | `LogLevel::None` | `.none` | `LogLevel.NONE` | `LogLevel.NONE` | `LogLevel.none` | `MARS_LEVEL_NONE` |
 
 两个 Kotlin 列是故意写成一样的：`xlog-kmp` 和 `xlog` 发布的是同一个 API，所以在两者
-之间搬动的共享模块什么都不用改。跟着它们的那两列也一样 —— `marsrs_flutter_xlog` 和
+之间搬动的共享模块什么都不用改。跟着它们的那两列也一样 —— `marsrs_xlog` 和
 `marsrs-react-native-xlog` 用的是同一套选项的同一个拼法，就是 Kotlin 的那套。
 
 `none` 什么都不写，连 `fatal` 也不写 —— 这是不关掉 appender 而让它安静下来的办法。

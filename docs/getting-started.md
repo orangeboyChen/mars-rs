@@ -43,7 +43,7 @@ implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")
 ```
 
 ```bash [Flutter]
-flutter pub add marsrs_flutter_xlog        # marsrs_flutter, for the whole port
+flutter pub add marsrs_xlog    # marsrs, for the whole port
 ```
 
 ```bash [React Native]

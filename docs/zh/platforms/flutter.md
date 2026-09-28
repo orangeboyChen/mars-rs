@@ -1,15 +1,15 @@
 # Flutter
 
-两个插件，一份 API：只打日志的 App 用 `marsrs_flutter_xlog`，要整个端口的用
-`marsrs_flutter` —— 今天两者是同一个东西，因为这个插件露出来的是日志那半。STN 和 SDT
-将来只落在 `marsrs_flutter` 里、不落在别处：两个插件背后的那个 C ABI 是带着它们的 ——
-见[C ABI](/zh/platforms/c-abi#任务链路) —— 但两者都还不在 Dart 里。两个里挑一个，不要
-都要：它们带着同一份 native 库，一个 App 里有两份是编不过的。
+两个插件，一份 API：只打日志的 App 用 `marsrs_xlog`，要整个端口的用 `marsrs`
+—— 今天两者是同一个东西，因为这个插件露出来的是日志那半。STN 和 SDT 将来只落在
+`marsrs` 里、不落在别处：两个插件背后的那个 C ABI 是带着它们的 ——
+见[C ABI](/zh/platforms/c-abi#任务链路) —— 但两者都还不在 Dart 里。两个里挑一个，
+不要都要：它们带着同一份 native 库，一个 App 里有两份是编不过的。
 
 ## 安装
 
 ```bash
-flutter pub add marsrs_flutter_xlog        # 要整个端口就 marsrs_flutter
+flutter pub add marsrs_xlog    # 要整个端口就 marsrs
 ```
 
 插件在 pub.dev 上：`flutter pub add` 装的是上面最新的版本。release 里也带着插件本身，
@@ -18,7 +18,7 @@ flutter pub add marsrs_flutter_xlog        # 要整个端口就 marsrs_flutter
 ```yaml
 # pubspec.yaml
 dependencies:
-  marsrs_flutter_xlog:
+  marsrs_xlog:
     path: marsrs-xlog
 ```
 
@@ -34,7 +34,7 @@ framework，而仓库里不放。Android 不需要额外东西：它从 JitPack 
 ## 打开、写、flush
 
 ```dart
-import 'package:marsrs_flutter_xlog/marsrs_flutter_xlog.dart';
+import 'package:marsrs_xlog/marsrs_xlog.dart';
 
 final dir = await getTemporaryDirectory();          // path_provider
 final xlog = await Xlog.open(

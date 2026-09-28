@@ -1,6 +1,6 @@
-// The Android half of the `marsrs_flutter` plugin: a method channel over `Xlog`, the
+// The Android half of the `marsrs` plugin: a method channel over `Xlog`, the
 // Kotlin face of `libmarsrsxlog.so` in the `marsrs` AAR — the AAR of the whole
-// port, which today is xlog. `marsrs_flutter_xlog` is the same plugin over
+// port, which today is xlog. `marsrs_xlog` is the same plugin over
 // `xlog`, the AAR an app that only logs takes, and the AAR is the whole
 // difference between the two.
 //
