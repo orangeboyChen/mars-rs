@@ -695,10 +695,30 @@ impl RunLoop {
     }
 
     /// Handles at most one message, waiting up to `timeout` for one to be due.
+    ///
+    /// The calling thread is bound to `id` for as long as the dispatch lasts,
+    /// the way [`RunLoop::run`] binds the thread it runs the loop on: a
+    /// handler asking [`current_thread_message_queue`] from inside its message
+    /// is answered the queue it is running on. Only `run` bound it before, so
+    /// a queue driven this way — the default queue is, by the JNI glue —
+    /// answered [`INVALID_QUEUE_ID`] from inside its own handlers, and a
+    /// caller that asks whether it may run queue work inline
+    /// (`CurrentThreadMessageQueue() == Handler2Queue(...)`, the macros of
+    /// `comm/messagequeue/message_queue.h`) took the wrong way round.
+    ///
+    /// The binding the thread had is put back when the dispatch is over: a
+    /// thread is a queue's thread for exactly as long as it is running that
+    /// queue's work, so dispatching another queue from inside a message does
+    /// not unbind the thread from the one it is running.
     pub fn dispatch_timeout(id: MessageQueueId, timeout: Duration) -> bool {
-        queue(id)
-            .map(|queue| Self::dispatch(&queue, Some(timeout)))
-            .unwrap_or(false)
+        let Some(queue) = queue(id) else {
+            return false;
+        };
+        let previous = current_thread_message_queue();
+        set_current_thread_message_queue(id);
+        let ran = Self::dispatch(&queue, Some(timeout));
+        set_current_thread_message_queue(previous);
+        ran
     }
 
     fn dispatch(queue: &Arc<Queue>, timeout: Option<Duration>) -> bool {

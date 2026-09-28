@@ -853,6 +853,54 @@ fn wait_message_waits_for_the_post_it_was_asked_about() {
     destroy_message_queue(queue);
 }
 
+/// A queue driven by single dispatches and not by `RunLoop::run` is still the
+/// queue its handler is running on: `dispatch_timeout` is how the JNI glue
+/// drains the default queue, and it did not bind the thread at all. A handler
+/// asking `current_thread_message_queue()` — which is what the
+/// `CurrentThreadMessageQueue() == Handler2Queue(handler)` macros of
+/// `comm/messagequeue/message_queue.h` ask before running queue work inline —
+/// was answered `INVALID_QUEUE_ID`, the answer a thread with no queue of its
+/// own gets, from inside a message of that very queue.
+///
+/// The queue is one this test owns and not the default one: the binding is by
+/// id, and the default queue is the whole process's.
+#[test]
+fn a_dispatch_binds_the_thread_running_it_to_the_queue() {
+    let queue = create_message_queue();
+    let (sender, receiver) = mpsc::channel();
+    let handler = install_message_handler(
+        move |_| {
+            let _ = sender.send(current_thread_message_queue());
+        },
+        false,
+        queue,
+    );
+    post_message(
+        &handler,
+        Message::new(MessageTitle(1), "bound"),
+        MessageTiming::Immediate,
+    );
+
+    // On a worker, so that a handler that never runs is a test that fails and
+    // not one that never finishes.
+    let worker = thread::spawn(move || {
+        let ran = RunLoop::dispatch_timeout(queue, Duration::from_millis(500));
+        (ran, current_thread_message_queue())
+    });
+
+    let answered = receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the message never ran");
+    assert_eq!(answered, queue, "the queue did not bind the thread");
+    let (ran, after) = worker.join().unwrap();
+    assert!(ran, "the message did not run");
+    // … and a thread is a queue's thread only while it dispatches it, so a
+    // dispatch of one queue from inside a message of another leaves the
+    // thread bound to the one it is running
+    assert_eq!(after, INVALID_QUEUE_ID);
+    destroy_message_queue(queue);
+}
+
 /// `FasterMessage` is handed a handler, and upstream posts it to that handler
 /// (`MessageWrapper(_handlerid, ...)`, `comm/messagequeue/message_queue.cc`).
 /// Posted as a broadcast it ran every handler that had asked for broadcasts
