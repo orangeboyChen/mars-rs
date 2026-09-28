@@ -133,6 +133,14 @@ public class Question internal constructor() {
     public var checkType: Int = 0
         internal set
 
+    /**
+     * `reportTaskLimited` — what that gate weighed it against: how long ago the
+     * same body went out, or how many bytes the funnel would not take. What the
+     * app answers is this number, changed or not.
+     */
+    public var limit: Int = 0
+        internal set
+
     /** `reportTaskLimited` — the task itself. */
     public var task: Task? = null
         internal set

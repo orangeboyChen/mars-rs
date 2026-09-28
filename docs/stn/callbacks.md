@@ -58,6 +58,9 @@ never reaches a queue, so nothing else the app hears carries it. What the app is
 handed is which gate refused it and the reading it weighed the task against —
 how long ago the same body went out, or how many bytes the funnel would not
 take — and what it answers is that reading, changed or not, which is what ends
+up on the task's profile. The reading is `limit` on the question, and
+`Answer.Limit` or `.limit(…)` is how the shared Kotlin and Swift hand it back;
+in C it is the `limit` of `MarsStnQuestion` and a `MarsStnAnswerLimit`.
 See [the long link](/stn/long-link) for the link a task goes out on.
 
 The account and the device are not one of the eighteen: on Android they are

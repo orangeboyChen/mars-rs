@@ -53,7 +53,9 @@ api 没有对应的方法，于是 STN 用自己的答案 —— 外加一个它
 务都要过两道防雪崩闸门，被拦下的那个根本到不了队列，所以 App 听到的别的事情里都
 带不上它。交到 App 手上的是拦下它的那道闸门，以及那道闸门量出来的数 —— 同样的一
 份 body 多久之前发出去过，或者 funnel 装不下的那几个字节；App 回答的就是这个数，
-改过或者没改，它最后落在任务的 profile 上。任务是从哪条连接上发出去的，见[长连
+改过或者没改，它最后落在任务的 profile 上。这个数在问题上是 `limit`，共享 Kotlin
+和 Swift 用 `Answer.Limit` 和 `.limit(…)` 把它交回去；C 里它是 `MarsStnQuestion`
+的 `limit` 和一个 `MarsStnAnswerLimit`。任务是从哪条连接上发出去的，见[长连
 接](/zh/stn/long-link)。
 
 账号和设备不在这十八个里：Android 上它们是 `AppLogic.ICallBack`，其余平台上它们
