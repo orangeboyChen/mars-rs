@@ -4,12 +4,13 @@ name: Gradle wrapper
 #
 # GitHub's own ecosystem table says what the `gradle` entry of
 # .github/dependabot.yml updates: dependencies declared in a build script —
-# here the Android Gradle Plugin of android/build.gradle.kts — and not Gradle
-# itself, whose only declaration in the tree is the `distributionUrl` of
-# android/gradle/wrapper/gradle-wrapper.properties. So the wrapper has an
-# updater of its own: a `gradlew wrapper` against the newest Gradle there is,
-# and a pull request, which is what puts the branch through rust.yml and
-# lint.yml the way every other pull request goes through them.
+# here the Android Gradle Plugin of platforms/android/build.gradle.kts — and
+# not Gradle itself, whose only declaration in the tree is the
+# `distributionUrl` of
+# platforms/android/gradle/wrapper/gradle-wrapper.properties. So the wrapper
+# has an updater of its own: a `gradlew wrapper` against the newest Gradle
+# there is, and a pull request, which is what puts the branch through rust.yml
+# and lint.yml the way every other pull request goes through them.
 #
 # Nothing here runs a Gradle build: `wrapper` is a task of the distribution the
 # wrapper already points at, and all it rewrites is the wrapper.
@@ -32,9 +33,9 @@ jobs:
     env:
       # Asked for before any task runs: the Android Gradle Plugin looks for the
       # SDK while the build is being *configured*, and `wrapper` is a task of a
-      # build that configures all of android/. The runner image ships the SDK;
-      # release.yml names it for the same reason, and a job that runs once a
-      # week should not leave this to the first Monday run to discover.
+      # build that configures all of platforms/android/. The runner image ships
+      # the SDK; release.yml names it for the same reason, and a job that runs
+      # once a week should not leave this to the first Monday run to discover.
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
@@ -63,7 +64,7 @@ jobs:
           LATEST: ${{ steps.latest.outputs.version }}
         run: |
           set -euo pipefail
-          cd android
+          cd platforms/android
           ./gradlew wrapper --gradle-version "$LATEST" --distribution-type bin
       - name: Open the pull request
         env:
@@ -72,7 +73,7 @@ jobs:
           BASE: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          if [ -z "$(git status --porcelain android)" ]; then
+          if [ -z "$(git status --porcelain platforms/android)" ]; then
             echo "the wrapper is already Gradle $LATEST"
             exit 0
           fi
@@ -80,7 +81,7 @@ jobs:
           # place when the next Gradle comes out, and not stacked on itself.
           branch=deps/gradle-wrapper
           git switch -C "$branch"
-          git add -A android
+          git add -A platforms/android
           git -c user.name='github-actions[bot]' \
               -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
               commit -m "deps(gradle): the wrapper moves to Gradle $LATEST"
@@ -92,7 +93,7 @@ jobs:
 
           Dependabot cannot do this one: its \`gradle\` entry updates what a build
           script declares, and Gradle itself is declared only in
-          \`android/gradle/wrapper/gradle-wrapper.properties\`.
+          \`platforms/android/gradle/wrapper/gradle-wrapper.properties\`.
 
           Everything else in the pull request is the gate every branch goes
           through: rustfmt, clippy, the test suite, the cross builds, ktlint

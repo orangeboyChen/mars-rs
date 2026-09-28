@@ -1,21 +1,21 @@
 /target
 
-# the Android project: what the release workflow unpacks and what Gradle writes
-android/*/libs/
-android/.gradle/
-android/build/
-android/*/build/
-android/local.properties
+# platforms/android: what the release workflow unpacks and what Gradle writes
+platforms/android/*/libs/
+platforms/android/.gradle/
+platforms/android/build/
+platforms/android/*/build/
+platforms/android/local.properties
 /dist
 
-# the Kotlin Multiplatform project: the native libraries the release unpacks
-# into it (kmp/native/<kotlin-target>/libmars_ffi.a, kmp/native/android/<abi>/)
-# and what Gradle writes
-kmp/native/
-kmp/.gradle/
-kmp/build/
-kmp/*/build/
-kmp/local.properties
+# platforms/kmp: the native libraries the release unpacks into it
+# (platforms/kmp/native/<kotlin-target>/libmars_ffi.a,
+# platforms/kmp/native/android/<abi>/) and what Gradle writes
+platforms/kmp/native/
+platforms/kmp/.gradle/
+platforms/kmp/build/
+platforms/kmp/*/build/
+platforms/kmp/local.properties
 
 # the VitePress site: what `npm ci` installs and what `vitepress build` and its
 # dev server write. `docs/package-lock.json` is checked in, so the install is
@@ -28,9 +28,9 @@ docs/.vitepress/cache/
 # scripts/package_react_native.sh drop into a package before it is packed — the
 # Apple framework of the release, the C ABI's own header, and the licence of the
 # port. None of the three is a source of this repository.
-flutter/*/ios/Frameworks/
-flutter/*/ios/include/
-flutter/*/LICENSE
-react-native/*/ios/Frameworks/
-react-native/*/ios/include/
-react-native/*/LICENSE
+platforms/flutter/*/ios/Frameworks/
+platforms/flutter/*/ios/include/
+platforms/flutter/*/LICENSE
+platforms/react-native/*/ios/Frameworks/
+platforms/react-native/*/ios/include/
+platforms/react-native/*/LICENSE

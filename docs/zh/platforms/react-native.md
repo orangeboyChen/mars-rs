@@ -63,9 +63,9 @@ xlog.close();
 
 这个模块的 method queue 是 `RCTJSThread`，所以它的方法在 JS 线程上被调用、也从
 那里返回：返回值的方法在下一行之前就把值给回来了，没有哪个方法返回 `Promise`。
-这就是这个 `Xlog` 能和 `Sources/MarsRSXlog` 的、`android/marsrs` 的那个逐成员对
-上的原因 —— `Xlog.open(config)` 给出 appender，`xlog.i(tag, message)` 在它返回
-的时候已经落盘了。
+这就是这个 `Xlog` 能和 `platforms/apple/MarsRSXlog` 的、
+`platforms/android/marsrs` 的那个逐成员对上的原因 —— `Xlog.open(config)` 给出
+appender，`xlog.i(tag, message)` 在它返回的时候已经落盘了。
 
 五个设置项是属性而不是 `setLevel` / `getLevel` 成对出现，因为 JS 的属性正是
 Swift 和 Kotlin 用的那个写法，而 TurboModule 的 setter 在写下的地方就被调用了：

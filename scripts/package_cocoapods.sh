@@ -13,8 +13,9 @@
 # beside what it was made from would still have to be moved there. In the
 # release the two are one directory; run by hand, dist/ is where it lands.
 # Nothing is built here and no Rust toolchain is needed: the frameworks are the
-# apple job's, and the Swift is the port's own, taken out of Sources/ rather
-# than compiled — the app's Xcode is what compiles it.
+# apple job's, and the Swift is the port's own, taken out of
+# `platforms/apple/` rather than compiled — the app's Xcode is what compiles
+# it.
 #
 # Why a pod is a zip of a framework *and* the sources, when the Swift package
 # takes the first out of a url and the second out of a git tag: a pod has one
@@ -54,7 +55,7 @@ mkdir -p "$out"
 
 # One entry per pod that carries a binary: `<xcframework>:<swift module>` — the
 # artefact the release built, named the way the crates are, and the module of
-# Sources/ whose Swift goes into the archive beside it.
+# `platforms/apple/` whose Swift goes into the archive beside it.
 pods=(
     marsrs-xlog.xcframework:MarsRSXlog
     marsrs-net.xcframework:MarsRSNet
@@ -71,17 +72,17 @@ package_one() {
     test -f "$zip" || { echo "::error::$zip is missing, nothing to package"; exit 1; }
 
     rm -rf "$stage"
-    mkdir -p "$stage/Sources/$module"
+    mkdir -p "$stage/platforms/apple/$module"
     unzip -q "$zip" -d "$stage"
     test -d "$stage/$name" || { echo "::error::$zip held no $name"; exit 1; }
-    cp Sources/"$module"/*.swift "$stage/Sources/$module/"
+    cp platforms/apple/"$module"/*.swift "$stage/platforms/apple/$module/"
     # The licence of the port, which `s.license` of every podspec names.
     cp LICENSE "$stage/LICENSE"
 
     # Flat, and not under a directory of the version's: CocoaPods extracts an
     # archive and takes its root as the pod's, which is where the podspec's
     # `vendored_frameworks` and `source_files` look for what they name.
-    (cd "$stage" && zip -q -r "$archive" "$name" Sources LICENSE)
+    (cd "$stage" && zip -q -r "$archive" "$name" platforms LICENSE)
     test -f "$archive" || { echo "::error::no $archive was written"; exit 1; }
     ls -l "$archive"
 }

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Packages the pair of React Native modules — react-native/marsrs-react-native
-# and react-native/marsrs-react-native-xlog — with `npm pack`, as
-# <asset-dir>/<name>-<version>.tgz each: the modules of a release, complete with
-# the two things a consumer cannot resolve for itself.
+# Packages the pair of React Native modules — platforms/react-native/marsrs
+# and platforms/react-native/marsrs-xlog — with `npm pack`, as
+# <asset-dir>/<name>-<version>.tgz each: the modules of a release, complete
+# with the two things a consumer cannot resolve for itself.
 #
 #   scripts/package_react_native.sh <version> <asset-dir>
 #
@@ -12,16 +12,16 @@
 # Rust is needed: the framework is the apple job's, and the AAR the Android half
 # of each module depends on is JitPack's.
 #
-# The two are the pair android/ publishes as `marsrs` and `xlog`, and
+# The two are the pair platforms/android/ publishes as `marsrs` and `xlog`, and
 # they are two directories rather than one shared tree because a module that
 # took the other's sources would take all of them, which is what the xlog one
 # exists not to do. So what there is to stamp, this script stamps twice:
 #
 #   * `version` of package.json, which the podspec reads on its own, so one
 #     number is stamped and not two;
-#   * the AAR coordinate of android/build.gradle.kts — `marsrs` for the whole
-#     port and `xlog` for the xlog half, at the version of this release
-#     and not at the one the file was written against;
+#   * the AAR coordinate of platforms/android/build.gradle.kts — `marsrs` for
+#     the whole port and `xlog` for the xlog half, at the version of this
+#     release and not at the one the file was written against;
 #   * MarsRSXlog.xcframework into ios/Frameworks, because CocoaPods cannot
 #     resolve the SwiftPM binary target of Package.swift;
 #   * mars_xlog.h into ios/include, out of crates/marsrs-ffi/include rather than
@@ -70,7 +70,7 @@ mkdir -p "$out"
 # changes is which AAR the Android half of the module resolves; the tarball is
 # named by `npm pack`, after the name of package.json — which is the name of the
 # module and not the name of the directory, `marsrs-react-native` for
-# `react-native/marsrs`.
+# `platforms/react-native/marsrs`.
 package_one() {
     local pkg="$1" aar="$2"
     local name
@@ -120,5 +120,5 @@ PY
     ls -l "$archive"
 }
 
-package_one react-native/marsrs marsrs
-package_one react-native/marsrs-xlog xlog
+package_one platforms/react-native/marsrs marsrs
+package_one platforms/react-native/marsrs-xlog xlog

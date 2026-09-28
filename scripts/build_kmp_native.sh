@@ -3,9 +3,9 @@
 # Builds the native libraries the Kotlin Multiplatform packaging needs:
 # `marsrs-ffi` as a static library for every Kotlin/Native target the release
 # ships, laid out as <output-dir>/<kotlin-target>/libmars_ffi.a — the shape
-# `kmp/*/build.gradle.kts` asks for and the shape cinterop embeds into a klib,
-# which is how an app of that target links `marsrs-ffi` without being told where
-# it is.
+# `platforms/kmp/*/build.gradle.kts` asks for and the shape cinterop embeds
+# into a klib, which is how an app of that target links `marsrs-ffi` without
+# being told where it is.
 #
 #   scripts/build_kmp_native.sh [output-dir]
 #
@@ -25,10 +25,11 @@ out="${1:-$root/target/kmp-native}"
 
 # <kotlin-target>:<rust-triple>[:build-std]
 #
-# The Kotlin name is the one `kmp/*/build.gradle.kts` declares the target under
-# and the one cinterop is configured for; the triple is what the archive of that
-# Kotlin target is built for. `build-std` marks the tier 3 triples no channel
-# ships a std for, which `cargo` can only build out of a nightly's own sources.
+# The Kotlin name is the one `platforms/kmp/*/build.gradle.kts` declares the
+# target under and the one cinterop is configured for; the triple is what the
+# archive of that Kotlin target is built for. `build-std` marks the tier 3
+# triples no channel ships a std for, which `cargo` can only build out of a
+# nightly's own sources.
 #
 # Two Kotlin targets are not in the list, because Rust has no triple for either:
 # `watchosX64` and `tvosX64`, the x86_64 simulators. A watchOS simulator is

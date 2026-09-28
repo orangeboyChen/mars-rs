@@ -14,12 +14,12 @@ name: Lint (Kotlin)
 # than installed by a package manager, so that a new release of either — and
 # the new rules it brings — is a change made here on purpose.
 #
-# It reads `android/`, `kmp/` and the Kotlin of the two bridging plugins —
-# `flutter/` and `react-native/`, whose Android halves are Kotlin over the AAR
-# — plus the two configuration files the tools are told to use, and nothing
-# else: a pull request that touches none of them is not a Kotlin pull request,
-# whatever else it is. So `kotlin` skips when the commit touches none of them
-# — see the comment on `changes`.
+# It reads `platforms/android/`, `platforms/kmp/` and the Kotlin of the two
+# bridging plugins — `platforms/flutter/` and `platforms/react-native/`, whose
+# Android halves are Kotlin over the AAR — plus the two configuration files
+# the tools are told to use, and nothing else: a pull request that touches
+# none of them is not a Kotlin pull request, whatever else it is. So `kotlin`
+# skips when the commit touches none of them — see the comment on `changes`.
 
 on:
   # Every run starts, whatever the commit touched: what decides whether the job
@@ -64,13 +64,15 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.after || github.sha }}
         run: |
-          # `kmp/**` is the Kotlin Multiplatform build: the same two tools hold
-          # it to the same configuration, so it is a Kotlin source tree like
-          # `android/` is. `flutter/**` and `react-native/**` are the Android
-          # halves of the two plugins, which are Kotlin over the same AAR and
-          # are held to it for the same reason.
+          # `platforms/kmp/**` is the Kotlin Multiplatform build: the same two
+          # tools hold it to the same configuration, so it is a Kotlin source
+          # tree like `platforms/android/` is. `platforms/flutter/**` and
+          # `platforms/react-native/**` are the Android halves of the two
+          # plugins, which are Kotlin over the same AAR and are held to it for
+          # the same reason.
           .github/scripts/changed_paths.sh \
-            'android/**' 'kmp/**' 'flutter/**' 'react-native/**' 'detekt.yml' \
+            'platforms/android/**' 'platforms/kmp/**' 'platforms/flutter/**' \
+            'platforms/react-native/**' 'detekt.yml' \
             '.editorconfig' '.github/scripts/**' \
             '.github/workflows/lint-kotlin.yml'
 
@@ -98,22 +100,22 @@ jobs:
             "https://github.com/detekt/detekt/releases/download/v${DETEKT_VERSION}/detekt-cli-${DETEKT_VERSION}-all.jar"
       # `.editorconfig` is the whole of ktlint's configuration: the
       # `android_studio` code style, the 120-column line and the end-of-file
-      # rules. ktlint exits non-zero on any violation. `kmp/` is the Kotlin
-      # Multiplatform build: the same style, and the same `.editorconfig`.
-      # `flutter/` and `react-native/` are the Android halves of the two
-      # plugins, held to it like the rest.
+      # rules. ktlint exits non-zero on any violation. `platforms/kmp/` is the
+      # Kotlin Multiplatform build: the same style, and the same
+      # `.editorconfig`. `platforms/flutter/` and `platforms/react-native/` are
+      # the Android halves of the two plugins, held to it like the rest.
       - run: |
           ./ktlint --relative \
-            'android/**/*.kt' 'android/**/*.kts' \
-            'kmp/**/*.kt' 'kmp/**/*.kts' \
-            'flutter/**/*.kt' 'flutter/**/*.kts' \
-            'react-native/**/*.kt' 'react-native/**/*.kts'
+            'platforms/android/**/*.kt' 'platforms/android/**/*.kts' \
+            'platforms/kmp/**/*.kt' 'platforms/kmp/**/*.kts' \
+            'platforms/flutter/**/*.kt' 'platforms/flutter/**/*.kts' \
+            'platforms/react-native/**/*.kt' 'platforms/react-native/**/*.kts'
       # `--build-upon-default-config`: detekt.yml names only what differs from
       # detekt's own defaults, and its `build.maxIssues: 0` is what fails the
       # job. The main sources, and not the test ones: the same line the android
       # modules are held to.
       - run: |
           java -jar detekt-cli-all.jar \
-            --input android/marsrs/src/main/kotlin,android/marsrs-xlog/src/main/kotlin,kmp/marsrs/src/commonMain/kotlin,kmp/marsrs-xlog/src/commonMain/kotlin,kmp/marsrs-xlog/src/androidMain/kotlin,kmp/marsrs-xlog/src/nativeMain/kotlin,flutter/marsrs/android/src/main/kotlin,flutter/marsrs-xlog/android/src/main/kotlin,react-native/marsrs/android/src/main/kotlin,react-native/marsrs-xlog/android/src/main/kotlin \
+            --input platforms/android/marsrs/src/main/kotlin,platforms/android/marsrs-xlog/src/main/kotlin,platforms/kmp/marsrs/src/commonMain/kotlin,platforms/kmp/marsrs-xlog/src/commonMain/kotlin,platforms/kmp/marsrs-xlog/src/androidMain/kotlin,platforms/kmp/marsrs-xlog/src/nativeMain/kotlin,platforms/flutter/marsrs/android/src/main/kotlin,platforms/flutter/marsrs-xlog/android/src/main/kotlin,platforms/react-native/marsrs/android/src/main/kotlin,platforms/react-native/marsrs-xlog/android/src/main/kotlin \
             --config detekt.yml \
             --build-upon-default-config

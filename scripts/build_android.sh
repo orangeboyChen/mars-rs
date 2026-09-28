@@ -2,8 +2,8 @@
 #
 # Builds `libmarsrsxlog.so` (crate `marsrs-jni`) for every Android ABI the release
 # ships, and lays them out as <output-dir>/<abi>/libmarsrsxlog.so — the shape of
-# marsrs-android-native.zip and of android/marsrs-xlog/libs/, which is what the AAR
-# is assembled from.
+# marsrs-android-native.zip and of `platforms/android/marsrs-xlog/libs/`,
+# which is what the AAR is assembled from.
 #
 #   scripts/build_android.sh [output-dir]
 #
