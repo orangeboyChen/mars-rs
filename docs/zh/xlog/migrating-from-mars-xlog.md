@@ -153,7 +153,7 @@ Swift 会在调用点填上文件、函数和行号；Objective-C 没有 `#file`
 framework，下面是 `@objc` 的接口。[SwiftPM](/zh/xlog/getting-started#swiftpm)和
 [CocoaPods](/zh/xlog/getting-started#cocoapods)是它的两页。
 
-## 接下来
+## 接着看
 
 - [配置项](/zh/xlog/configuration) —— appender 的每个配置项和默认值，按每个平台的写法。
 - [日志文件](/zh/xlog/log-files) —— 文件落在哪、怎么读回来，给上传路径已经认识 C++
