@@ -82,6 +82,9 @@ pub const ECT_DNS_MAKE_SOCKET_PREPARED: i32 = -10606;
 pub const ECT_SOCKET_MAKE_SOCKET_PREPARED: i32 = -10087;
 /// `EBADMSG` — what the C++ reports for an answer it could not read.
 pub const EBADMSG: i32 = 74;
+/// `SOCKET_ERRNO(ETIMEDOUT)` — what the C++ reports for a pair it had dialled
+/// and that another pair answered before.
+pub const ETIMEDOUT: i32 = 110;
 /// `kEctSocketShutdown` — a read of `0`, which is the peer hanging up.
 pub const ECT_SOCKET_SHUTDOWN: i32 = -10090;
 /// `kEctSocketRecvErr` — a heartbeat that did not answer in time.
@@ -997,6 +1000,24 @@ impl LongLink {
             }
         }
 
+        // the pairs that lost, and only the ones the dial had started:
+        // `longlink.cc:700-709` reports each of them as a timeout, with its own
+        // ip and port and not the winner's, in the order they were tried
+        for (index, candidate) in candidates
+            .iter()
+            .enumerate()
+            .take(usize::try_from(connected.index).unwrap_or(0))
+        {
+            if connected.is_connecting(index) {
+                self.report_at(
+                    ErrCmdType::Socket,
+                    ETIMEDOUT,
+                    &candidate.item.ip,
+                    candidate.item.port,
+                );
+            }
+        }
+
         if let Some(local) = self.local_address(socket) {
             self.profile.local_ip = local.ip().to_string();
             self.profile.local_port = local.port();
@@ -1731,8 +1752,14 @@ impl LongLink {
     fn network_report(&mut self, err_type: ErrCmdType, err_code: i32) {
         let ip = self.profile.ip.clone();
         let port = self.profile.port;
+        self.report_at(err_type, err_code, &ip, port);
+    }
+
+    /// The same, about a pair that is not the one in the profile: a pair the
+    /// connect dialled and lost is reported with its own ip and port.
+    fn report_at(&mut self, err_type: ErrCmdType, err_code: i32, ip: &str, port: u16) {
         if let Some(report) = self.network_report.as_mut() {
-            report(err_type, err_code, &ip, port);
+            report(err_type, err_code, ip, port);
         }
     }
 
@@ -2165,6 +2192,46 @@ mod tests {
         assert_eq!(profile.dns_endtime, 1_000);
         assert!(!profile.nat64, "the local stack is v4");
         assert_eq!(profile.ip_items.len(), 2);
+    }
+
+    #[test]
+    fn a_connect_reports_the_pairs_it_dialled_and_lost() {
+        let (mut link, _) = link();
+        let mut profile = SocketProfile {
+            index: 2,
+            ..SocketProfile::default()
+        };
+        // of the two pairs below the winner, only the first was dialled
+        profile.set_connecting(0, true);
+        link.operator = Some(Box::new(Host {
+            profile,
+            ..Host::new(Seen::default())
+        }));
+        link.set_longlink_items(|_| {
+            vec![
+                item("1.1.1.1", 443, "long.example"),
+                item("2.2.2.2", 80, "long.example"),
+                item("3.3.3.3", 80, "long.example"),
+            ]
+        });
+        let reported = Arc::new(Mutex::new(Vec::new()));
+        let sink = reported.clone();
+        link.set_network_report(move |err_type, err_code, ip, port| {
+            sink.lock()
+                .unwrap()
+                .push((err_type, err_code, ip.to_string(), port));
+        });
+        link.make_sure_connected();
+        assert!(link.connect_at(1_000).is_ok());
+
+        // the pair that lost, and then the winner saying it came up
+        assert_eq!(
+            reported.lock().unwrap().clone(),
+            vec![
+                (ErrCmdType::Socket, ETIMEDOUT, "1.1.1.1".to_string(), 443),
+                (ErrCmdType::Ok, 0, "3.3.3.3".to_string(), 80)
+            ]
+        );
     }
 
     #[test]
