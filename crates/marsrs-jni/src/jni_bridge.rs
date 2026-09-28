@@ -1961,8 +1961,8 @@ const ASK_TCP_SIG: MethodSignature =
     jni_sig!("(Ljava/lang/String;II)Lio/github/orangeboychen/marsrs/sdt/SdtLogic$Answer;");
 
 /// The `SdtLogic.Probe` integers: what `SdtLogic.Answer.probe` is read against,
-/// and not what a query asks with — a query calls one of the `SdtLogic.Ask*`
-/// methods instead.
+/// and not what a query asks with — a query calls one of the four `on*Query`
+/// statics beside them instead.
 const PROBE_DNS: i32 = 1;
 const PROBE_TCP: i32 = 2;
 const PROBE_HTTP: i32 = 3;
