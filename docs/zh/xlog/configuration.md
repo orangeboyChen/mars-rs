@@ -45,7 +45,11 @@ HarmonyOS 那一列也是 Kotlin 的拼法，只是大小写不同：`LogLevel.V
 `none` 什么都不写，连 `fatal` 也不写 —— 想让 appender 安静下来又不关掉它，用这个。
 
 assert 是唯一不受级别管的一条记录：不管 appender 开在哪一级，它都按 `fatal` 写进去
-—— assert 是写给崩溃看的，不是写给日志看的。
+—— assert 说的是一件不该发生的事。
+
+两个调用都不结束进程，这也是 C++ 在这里做了、而本移植没做的唯一一件事：上游写完这条
+记录之后会在 Android 上 `raise(SIGTRAP)`、在 Apple 上调 `__assert_rtn`。想让进程停在
+assert 上的 App 得自己停 —— `std::process::abort()`，或者平台自己的陷阱 —— 写完再停。
 
 ::: code-group
 
@@ -138,8 +142,11 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 ## 控制台那一副本去哪
 
 `appender_set_console_log(true)` —— 在那些这么拼的平台上写作
-`xlog.consoleLogEnabled = true` —— 让每条记录除了进文件，还抄一份到控制台。
-控制台指的是哪个，是平台的事：Apple 和 Android 上是系统日志，Rust 和 C 上是标准错误。
+`xlog.consoleLogEnabled = true` —— 让每条记录除了进文件，还抄一份到控制台；是“带着
+`XLoggerInfo` 的每条记录”：Rust 的 `appender_write(None, …)` 没给 info，它就没有副本。
+
+内置的出口是标准错误，每个平台、每个包都是 —— 这里没有任何一处写进 `os_log` 或
+logcat。App 想要的是系统日志的话，得靠下面那个自己的出口把记录送过去。
 
 想让它去别处的 App 可以给 logger 一个自己的出口，原本要进控制台的那一份就改去那里：
 

@@ -50,8 +50,14 @@ HarmonyOS is the Kotlin spelling in a different case: `LogLevel.Verbose` and not
 without being closed.
 
 An assert is the one record the level does not gate: it is written at `fatal`
-whatever the appender's level is, because what an assert is for is the crash,
-and not the log.
+whatever the appender's level is, because what an assert names is a condition
+that is not supposed to be possible.
+
+Neither call ends the process, and that is the one thing the C++ does here that
+this port does not: upstream raises `SIGTRAP` on Android and calls
+`__assert_rtn` on Apple once the record is written. An app that wants its
+process stopped on an assert stops it itself — `std::process::abort()`, or a
+platform trap — after the write.
 
 ::: code-group
 
@@ -153,8 +159,12 @@ dropped — the C++ keeps its own ten days.
 
 `appender_set_console_log(true)` — `xlog.consoleLogEnabled = true` on the
 platforms that spell it that way — mirrors every record to the console as well
-as to the file. Which console that is, is the platform's: the system log on
-Apple and on Android, standard error on Rust and C.
+as to the file, a record that carries an `XLoggerInfo` that is: a Rust
+`appender_write(None, …)` hands none in, and no copy is made of it.
+
+The built-in sink is standard error, on every platform and in every package —
+nothing here writes to `os_log` or to logcat. Where the system log is what an
+app wants, it is the app's own sink below that puts it there.
 
 An app that wants it somewhere else hands the logger a sink of its own, and
 what was going to the console goes to that instead:
