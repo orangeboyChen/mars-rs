@@ -1099,6 +1099,13 @@ impl LongLinkTaskManager {
             }
         }
 
+        // `batchMap` is a `std::map` in the C++
+        // (`longlink_task_manager.cc:326`), so a pass that timed two channels
+        // out fails them in the order of their names and not in the order the
+        // queue holds them: two channels answered, two `notify_network_err`
+        // calls, and which of them the app is told first is the names'
+        batch.sort_by(|left, right| left.0.cmp(&right.0));
+
         for (name, code, src_taskid) in batch {
             if code == LONG_TASK_TIMEOUT {
                 // a task that ran out of its own time is one the queue failed
@@ -2339,6 +2346,40 @@ mod tests {
         );
         assert!(manager.has_task(7), "and it is tried again");
         assert_eq!(manager.retry_interval(), RETRY_INTERNAL);
+    }
+
+    #[test]
+    fn two_channels_that_timed_out_in_one_pass_are_failed_by_name() {
+        let mut manager = LongLinkTaskManager::new();
+        manager.add_long_link(LonglinkConfig::new("long.zeta.qq.com"));
+        manager.add_long_link(LonglinkConfig::new("long.alpha.qq.com"));
+        let (_, _, notified, _) = wire(&mut manager);
+
+        let mut zeta = task(7);
+        zeta.channel_name = "long.zeta.qq.com".to_string();
+        let mut alpha = task(8);
+        alpha.channel_name = "long.alpha.qq.com".to_string();
+        manager.start_task_at(NOW, zeta, Task::CHANNEL_LONG);
+        manager.start_task_at(NOW, alpha, Task::CHANNEL_LONG);
+        manager.on_send_at(NOW, 7);
+        manager.on_send_at(NOW, 8);
+
+        let first_pkg = manager
+            .tasks()
+            .iter()
+            .map(|profile| profile.transfer_profile.first_pkg_timeout)
+            .max()
+            .expect("two tasks");
+        manager.run_loop_at(NOW + first_pkg);
+
+        // `batchMap` is a `std::map` (`longlink_task_manager.cc:326`), so what
+        // the app is told first is the channel whose name comes first, and not
+        // the one whose task went out first
+        let notified = notified
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let names: Vec<&str> = notified.iter().map(|(name, _, _)| name.as_str()).collect();
+        assert_eq!(names, vec!["long.alpha.qq.com", "long.zeta.qq.com"]);
     }
 
     #[test]
