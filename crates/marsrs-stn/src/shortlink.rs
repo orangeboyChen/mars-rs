@@ -157,7 +157,9 @@ pub enum KeepAlive {
     Closed,
     /// The socket goes into the pool, good for this many seconds.
     Reuse {
-        /// `keepalive_timeout`.
+        /// `keepalive_timeout` — in seconds, which is what the pool turns into
+        /// the milliseconds it counts in: `5` when the answer named no timeout
+        /// of its own, and `30` on QUIC whatever it named.
         timeout: u32,
     },
 }
