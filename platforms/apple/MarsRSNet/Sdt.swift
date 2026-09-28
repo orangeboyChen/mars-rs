@@ -104,6 +104,20 @@ public enum MarsSdt {
         public var port: UInt16
         /// Milliseconds, or seconds for a ping.
         public var timeout: UInt32
+
+        /// One probe to answer, which is the only way an app builds a
+        /// [`Query`] of its own: a public struct's memberwise initializer is
+        /// internal, so without this one the type is one an app can read and
+        /// never write — the same reason [`Noop`] carries an initializer.
+        ///
+        /// A run hands the app its [`Query`]s, so what this one is for is a
+        /// test, or a caller that replays a probe it recorded.
+        public init(probe: Probe, host: String, port: UInt16, timeout: UInt32) {
+            self.probe = probe
+            self.host = host
+            self.port = port
+            self.timeout = timeout
+        }
     }
 
     /// What a noop round trip recorded: how much went out, how much came back
