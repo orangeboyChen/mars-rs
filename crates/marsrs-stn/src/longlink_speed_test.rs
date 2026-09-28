@@ -457,7 +457,8 @@ impl LongLinkSpeedTest {
     }
 
     /// One round of the loop: every candidate is stepped with its event, and
-    /// what it wants written or read is done on its socket.
+    /// what it wants written or read is done on its socket — until one of them
+    /// is answered, which ends the round.
     pub fn round(&mut self, events: &[SocketEvent], now: u64) -> Vec<Need> {
         let mut needs = Vec::with_capacity(events.len());
         for (index, event) in events.iter().copied().enumerate() {
@@ -465,27 +466,34 @@ impl LongLinkSpeedTest {
                 continue;
             };
             let need = item.apply(event, now);
-            match need {
-                Need::Nothing => {}
+            let need = match need {
+                Need::Nothing => need,
                 Need::Write => {
                     let bytes = item.pending().to_vec();
                     let written = match self.sockets.get_mut(index) {
                         Some(socket) => (socket.send)(&bytes),
                         None => -1,
                     };
-                    needs.push(item.on_sent(written));
-                    continue;
+                    item.on_sent(written)
                 }
                 Need::Read => {
                     let bytes = match self.sockets.get_mut(index) {
                         Some(socket) => (socket.recv)(),
                         None => Vec::new(),
                     };
-                    needs.push(item.on_received(&bytes));
-                    continue;
+                    item.on_received(&bytes)
                 }
-            }
+            };
             needs.push(need);
+
+            // `if (kLongLinkSpeedTestSuc == (*iter)->GetState()) break` — the
+            // pair whose noop was answered ends the round, so the candidates
+            // behind it are not stepped: nothing is written or read on a socket
+            // that has already lost, and the report sees a pair still in flight
+            // rather than one the port itself failed.
+            if item.state() == SpeedTestState::Suc {
+                break;
+            }
         }
         needs
     }
@@ -746,6 +754,30 @@ mod tests {
         assert_eq!(
             test.results().map(|(_, state)| state).collect::<Vec<_>>(),
             vec![SpeedTestState::Resp, SpeedTestState::Suc]
+        );
+    }
+
+    /// The round ends at the pair that was answered: the C++ breaks out of the
+    /// per-item loop there, so the candidates behind the winner are never given
+    /// their `HandleFDISSet` — no read on a socket that has already lost, and a
+    /// report that says the pair was still in flight.
+    #[test]
+    fn the_round_is_over_at_the_pair_that_answered() {
+        let _guard = crate::test_lock();
+        let mut test = LongLinkSpeedTest::new_at(0, [pair("1.1.1.1", 80), pair("2.2.2.2", 80)]);
+        test.set_select(select(vec![
+            vec![SocketEvent::Writable, SocketEvent::Writable],
+            vec![SocketEvent::Readable, SocketEvent::Readable],
+        ]));
+        test.set_open(host(|index| index == 0));
+
+        let fastest = test.fastest_at(0).expect("the first pair answers");
+        assert_eq!(fastest.pair.ip, "1.1.1.1");
+        assert_eq!(fastest.socket, 0);
+        assert_eq!(
+            test.results().map(|(_, state)| state).collect::<Vec<_>>(),
+            vec![SpeedTestState::Suc, SpeedTestState::Resp],
+            "the pair behind the winner is not read again"
         );
     }
 
