@@ -73,11 +73,12 @@ pub enum SmartHeartBeatAction {
 pub struct NetHeartbeatInfo {
     /// `net_detail_` — the network the record is for; empty is "no network".
     pub net_detail: String,
-    /// `net_type_`.
+    /// `net_type_` — which kind of network it is: [`NO_NET`] until one is
+    /// known.
     pub net_type: i32,
     /// `cur_heart_` — the interval in force, in milliseconds.
     pub cur_heart: u32,
-    /// `heart_type_`.
+    /// `heart_type_` — how the interval in force was arrived at.
     pub heart_type: SmartHeartBeatType,
     /// `is_stable_` — whether `cur_heart` is one that was settled on.
     pub is_stable: bool,
@@ -113,7 +114,9 @@ impl NetHeartbeatInfo {
         }
     }
 
-    /// `NetHeartbeatInfo::Clear()`.
+    /// `NetHeartbeatInfo::Clear()` — back to a record of no network, which is
+    /// what a host hands [`SmartHeartbeat::info_mut`] for a network it has
+    /// nothing on yet.
     pub fn clear(&mut self) {
         *self = Self::new();
     }
@@ -154,7 +157,13 @@ pub type ReportSmartHeart = dyn FnMut(SmartHeartBeatAction, &NetHeartbeatInfo, b
 /// unanswered while the device is offline say nothing about the network.
 pub type IsNetworkConnected = dyn FnMut() -> bool + Send;
 
-/// `SmartHeartbeat`.
+/// The heartbeat interval a long link settles on: it looks for the longest
+/// one that still answers, inside [`MIN_HEART_INTERVAL`]…
+/// [`MAX_HEART_INTERVAL`], and reports what it did to the host.
+///
+/// What the C++ keeps in `Heartbeat.ini` the host keeps instead, so the
+/// record of a network is handed in and out through
+/// [`SmartHeartbeat::info_mut`] and [`SmartHeartbeat::info`].
 pub struct SmartHeartbeat {
     report: Option<Box<ReportSmartHeart>>,
     is_network_connected: Option<Box<IsNetworkConnected>>,
@@ -254,12 +263,14 @@ impl SmartHeartbeat {
         self.last_heart
     }
 
-    /// `cur_heart_`.
+    /// `cur_heart_` — the interval the computation is on, which is not always
+    /// the one the next heartbeat goes out with: an interval from outside
+    /// and an app in the foreground both win over it.
     pub fn cur_heart(&self) -> u32 {
         self.cur_heart
     }
 
-    /// `success_heart_count_`.
+    /// `success_heart_count_` — how many heartbeats answered on this TCP.
     pub fn success_heart_count(&self) -> u32 {
         self.success_heart_count
     }
@@ -576,9 +587,9 @@ mod tests {
     }
 
     /// `outer_setted_heart_` is one value for the whole process, and
-    /// [`with_outer_heart`] holds the crate's turn while it moves it — so a test
-    /// that *reads* it has to take the same turn, or it reads the interval
-    /// another test set. These tests run in parallel.
+    /// [`with_outer_heart`] holds the crate's turn while it moves it — so a
+    /// test that *reads* it has to take the same turn, or it reads the
+    /// interval another test set. These tests run in parallel.
     fn next_interval(hb: &mut SmartHeartbeat, is_active: bool) -> u32 {
         let _guard = crate::test_lock();
         hb.get_next_heartbeat_interval(is_active)
