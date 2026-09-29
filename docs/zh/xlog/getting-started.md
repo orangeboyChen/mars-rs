@@ -43,7 +43,7 @@ marsrs = { version = "0.1", default-features = false, features = ["xlog"] }
 ```
 
 ```rust
-use marsrs::xlog::{appender_close, appender_flush_sync, appender_open, appender_write, XLogConfig};
+use marsrs::xlog::{appender_close, appender_flush_now, appender_open, appender_write, XLogConfig};
 
 let mut config = XLogConfig::default();
 config.logdir = std::path::PathBuf::from("/tmp/mars-log");
@@ -52,7 +52,8 @@ appender_open(config)?;
 
 appender_write(None, "hello from mars");
 
-appender_flush_sync();   // 返回时记录已经在磁盘上
+appender_flush_now();    // 返回时记录已经在磁盘上
+// appender_flush().await 是同一场排空，只是不在本线程上
 appender_close();
 ```
 
@@ -62,7 +63,9 @@ appender_close();
 行号，`None` 是默认的那个。要把一部分日志分开读的 App，给那部分自己开一个
 appender，用 `*_instance` 这一族 —— `appender_open_instance(config)` 回答一个
 handle，`appender_write_instance`、`appender_flush_instance` 和
-`appender_close_instance` 收下它。
+`appender_close_instance` 收下它 —— flush 也是同样的三种形态：
+`appender_signal_flush_instance`、`appender_flush_now_instance`，以及
+`appender_flush_instance(id).await`。
 
 ## SwiftPM
 

@@ -49,7 +49,7 @@ marsrs = { version = "0.1", default-features = false, features = ["xlog"] }
 ```
 
 ```rust
-use marsrs::xlog::{appender_close, appender_flush_sync, appender_open, appender_write, XLogConfig};
+use marsrs::xlog::{appender_close, appender_flush_now, appender_open, appender_write, XLogConfig};
 
 let mut config = XLogConfig::default();
 config.logdir = std::path::PathBuf::from("/tmp/mars-log");
@@ -58,7 +58,8 @@ appender_open(config)?;
 
 appender_write(None, "hello from mars");
 
-appender_flush_sync();   // the records are on disk when this returns
+appender_flush_now();    // the records are on disk when this returns
+// appender_flush().await is the same drain off this thread
 appender_close();
 ```
 
@@ -69,7 +70,9 @@ with the level, the tag and the file, function and line of the call site, and
 `None` is the default one. An app that reads one part of its logs apart from the
 rest gives that part an appender of its own, through the `*_instance` family —
 `appender_open_instance(config)` answers a handle, and `appender_write_instance`,
-`appender_flush_instance` and `appender_close_instance` take it.
+`appender_flush_instance` and `appender_close_instance` take it — the flush in
+the same three shapes: `appender_signal_flush_instance`,
+`appender_flush_now_instance` and `appender_flush_instance(id).await`.
 
 ## SwiftPM
 

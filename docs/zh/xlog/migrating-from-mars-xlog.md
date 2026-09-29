@@ -35,8 +35,8 @@ appender 在 `mars/xlog/appender.h` 里是一组选项构成的一个 struct 加
 |---|---|---|
 | `appender_open(const XLogConfig&)` | `appender_open(XLogConfig)` | `mars_xlog_open(&config)` |
 | `xlogger_Write(info, log)`，或 `xinfo2` 那一族 | `appender_write(info, message)` | `mars_xlog_write(...)` |
-| `appender_flush()` | `appender_flush()` | `mars_xlog_flush()` |
-| `appender_flush_sync()` | `appender_flush_sync()` | `mars_xlog_flush_sync()` |
+| `appender_flush()` | `appender_signal_flush()` | `mars_xlog_flush()` |
+| `appender_flush_sync()` | `appender_flush_now()` | `mars_xlog_flush_sync()` |
 | `appender_close()` | `appender_close()` | `mars_xlog_close()` |
 | `xlogger_SetLevel(level)` | `set_level(handle, level)` | `mars_xlog_set_level(level)` |
 | `appender_setmode(mode)` | `appender_set_mode(mode)` | `mars_xlog_set_mode(mode)` |
@@ -44,6 +44,11 @@ appender 在 `mars/xlog/appender.h` 里是一组选项构成的一个 struct 加
 | `appender_set_max_file_size(bytes)` | `appender_set_max_file_size(bytes)` | `mars_xlog_set_max_file_size(bytes)` |
 | `appender_set_max_alive_duration(secs)` | `appender_set_max_alive_duration(secs)` | `mars_xlog_set_max_alive_duration(secs)` |
 | `appender_get_current_log_path(out, len)` | `appender_get_current_log_path()` | `mars_xlog_current_log_path(out, len)` |
+
+两行 flush 是 Rust 那一列唯一不沿用 C++ 名字的地方：C++ 的 `appender_flush` 在这里叫
+`appender_signal_flush`，因为 Rust 的 `appender_flush` 是调用方要 `await` 的那次排空
+—— 见[日志文件](/zh/xlog/log-files)。`appender_flush_sync` 仍然能编译，做的事和
+`appender_flush_now` 一样，只是标了 deprecated，好让照着 C++ 名字写的代码继续编过。
 
 config 在三种写法里都是一个 struct，八个字段还是那八个：C++ 里是 `mode_`、
 `logdir_`、`nameprefix_`、`pub_key_`、`compress_mode_`、`compress_level_`、

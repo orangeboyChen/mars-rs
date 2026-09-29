@@ -43,8 +43,8 @@ The appender is one struct of options and a handful of free calls in
 |---|---|---|
 | `appender_open(const XLogConfig&)` | `appender_open(XLogConfig)` | `mars_xlog_open(&config)` |
 | `xlogger_Write(info, log)`, or the `xinfo2` family | `appender_write(info, message)` | `mars_xlog_write(...)` |
-| `appender_flush()` | `appender_flush()` | `mars_xlog_flush()` |
-| `appender_flush_sync()` | `appender_flush_sync()` | `mars_xlog_flush_sync()` |
+| `appender_flush()` | `appender_signal_flush()` | `mars_xlog_flush()` |
+| `appender_flush_sync()` | `appender_flush_now()` | `mars_xlog_flush_sync()` |
 | `appender_close()` | `appender_close()` | `mars_xlog_close()` |
 | `xlogger_SetLevel(level)` | `set_level(handle, level)` | `mars_xlog_set_level(level)` |
 | `appender_setmode(mode)` | `appender_set_mode(mode)` | `mars_xlog_set_mode(mode)` |
@@ -52,6 +52,13 @@ The appender is one struct of options and a handful of free calls in
 | `appender_set_max_file_size(bytes)` | `appender_set_max_file_size(bytes)` | `mars_xlog_set_max_file_size(bytes)` |
 | `appender_set_max_alive_duration(secs)` | `appender_set_max_alive_duration(secs)` | `mars_xlog_set_max_alive_duration(secs)` |
 | `appender_get_current_log_path(out, len)` | `appender_get_current_log_path()` | `mars_xlog_current_log_path(out, len)` |
+
+The two flush rows are the one place the Rust column is not the C++'s name:
+what the C++ calls `appender_flush` is `appender_signal_flush` here, because
+`appender_flush` in Rust is the drain a caller `await`s — see
+[log files](/xlog/log-files). `appender_flush_sync` still compiles and does what
+`appender_flush_now` does, deprecated, so that code written against the C++'s
+name keeps building.
 
 The config is one struct in all three, and the eight fields are the same eight:
 `mode_`, `logdir_`, `nameprefix_`, `pub_key_`, `compress_mode_`,

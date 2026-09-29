@@ -80,8 +80,8 @@ reads it while this one is still logging into it:
 ::: code-group
 
 ```rust [Rust]
-appender_flush_sync()                    // waits for the file
-appender_flush_instance(id, true)
+appender_flush_now()                     // waits for the file
+appender_flush_now_instance(id)
 ```
 
 ```swift [Swift]
@@ -118,17 +118,19 @@ The drain is three calls and not one with a flag:
 
 | call | what it does |
 |---|---|
-| `signalFlush()` — `appender_flush()`, `mars_xlog_flush()` | tells the writer thread it may drain, and returns at once: nothing is in the file because it returned |
-| `flushNow()` — `appender_flush_sync()`, `mars_xlog_flush_sync()` | drains on the calling thread: the records are on disk when it returns |
-| `await flush()` | the same drain, off the calling thread |
+| `signalFlush()` — `appender_signal_flush()`, `mars_xlog_flush()` | tells the writer thread it may drain, and returns at once: nothing is in the file because it returned |
+| `flushNow()` — `appender_flush_now()`, `mars_xlog_flush_sync()` | drains on the calling thread: the records are on disk when it returns |
+| `await flush()` — `appender_flush()`, `flush(handle)` | the same drain, off the calling thread |
 
 `signalFlush()` is the one a timer calls. It guarantees nothing about when the
 drain is over, and nothing is lost while it is not: a record still in the cache
 is in a file the kernel holds. `flushNow()` is the one to call before the file is
 read or uploaded, and `await flush()` is that same drain for a caller that would
-rather not hold a thread. Dart has no `flushNow()`, because a method channel
-cannot block the Dart side of it, and HarmonyOS has no `await flush()`, because
-every method of its NAPI module is synchronous.
+rather not hold a thread. Rust carries all three, and its `await flush()` is a
+`Future` written against `std::thread::spawn` — no runtime, and any executor
+waits on it. Dart has no `flushNow()`, because a method channel cannot block the
+Dart side of it, and HarmonyOS has no `await flush()`, because every method of
+its NAPI module is synchronous.
 
 ## When the app goes away
 
