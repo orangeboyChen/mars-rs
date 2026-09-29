@@ -76,11 +76,12 @@ MarsXLogConfig cfg = {
 };
 
 /* The level is the second argument and not a field of the config: it belongs
-   to the logger and not to the file. `0` is both the handle of the
-   process-wide appender and what an instance that could not be opened
-   answers, so it is the one failure to handle. */
+   to the logger and not to the file. An instance that could not be opened is
+   answered with a negative `MARS_XLOG_ERR_*` code — one per cause — and `0`
+   is not one of them: it is the handle of the process-wide appender, which
+   this call never opens. So the test is "not a positive handle". */
 long long xlog = mars_xlog_new_instance(&cfg, MarsLevelInfo);
-if (xlog == 0) { /* handle */ }
+if (xlog <= 0) { /* handle */ }
 mars_xlog_write_instance(xlog, MarsLevelInfo, "tag", __FILE__, __func__, __LINE__, "hello");
 mars_xlog_flush_now_instance(xlog);
 
@@ -160,8 +161,8 @@ argument, and not a second call — and `logWrite` becomes one
 * **No null dereference.** Every incoming pointer is null-checked; null and
   invalid UTF-8 degrade to an empty string. `mars_xlog_oneshot_flush` returns
   `MARS_XLOG_ERR_NULL_CONFIG` / `MARS_XLOG_ERR_EMPTY_LOG_DIR` instead of failing
-  later; `mars_xlog_new_instance` has no code to answer with, so it gives back
-  handle `0`.
+  later, and `mars_xlog_new_instance` answers the `MARS_XLOG_ERR_*` code of the
+  cause — never `0`, which is the process-wide appender's handle.
 * **No truncation surprises.** `mars_xlog_current_log_path` and
   `mars_xlog_current_log_path_instance` either write a
   NUL-terminated path and returns its byte count (excluding the NUL) or returns
