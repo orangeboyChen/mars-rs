@@ -164,10 +164,11 @@ let package = Package(
         // promised: `scripts/build_xcframework.sh` fails the build the day a
         // slice of either framework exports a symbol that is not its own.
         //
-        // No release carries this asset yet, so the url and the checksum are
-        // the placeholders the release workflow rewrites: it points each binary
-        // target at the tag it is publishing, one asset and one checksum per
-        // artifact.
+        // The url and the checksum are the tag the release published last, and
+        // the workflow writes both again on every release: a binary target
+        // names one asset of one tag, and a checksum is bound to the zip its
+        // tag carries — which is why a release that is out is never published
+        // over.
         .binaryTarget(
             name: "MarsRSNetFFI",
             url: "https://github.com/orangeboyChen/mars-rs/releases/download/v0.1.0-alpha.3/marsrs-net.xcframework.zip",

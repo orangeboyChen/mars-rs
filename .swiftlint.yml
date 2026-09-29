@@ -179,7 +179,7 @@ line_length:
   warning: 120
   error: 121
 
-# One type per file is the rule the sources already keep; 542 lines is what the
+# One type per file is the rule the sources already keep; 558 lines is what the
 # largest of them is, which is `MarsRSXlog/Xlog.swift`: `Xlog` is the whole
 # surface of `mars_xlog.h` in one class, and an extension may not carry an
 # access modifier nor may its members, so no part of it can move to a file of
@@ -192,19 +192,24 @@ line_length:
 # took it from 476 to 511 is the flush split in three — the signal that wakes
 # the writer, the drain that is the caller's own thread's, and the same drain
 # off it: three declarations and three doc comments where one took a `Bool`.
-# What took the two of them from 511 and 448 to 542 and 484: `Xlog` answered
-# the path its own files are written to, which is the one spelling an appender
-# of its own has, and the two process-wide ones said whose they are; `MarsStn`
-# took the app it installed back out again, and guarded the swap that does it.
+# The two of them are 558 and 484 now: `Xlog` answered the path its own files
+# are written to, which is the one spelling an appender of its own has, and the
+# two process-wide ones said whose they are; `MarsStn` took the app it
+# installed back out again, and guarded the swap that does it; and the day of
+# log files says, in the two spellings of it, what it does with a count `Int32`
+# cannot hold — clamped into one, and not trapped on.
 file_length:
-  warning: 560
+  # 580, and not the 560 it was: a threshold is a margin over the largest
+  # file, and two lines above a 558-line one is a tripwire the next doc
+  # comment sets off rather than a measure of a file that grew.
+  warning: 580
   error: 1000
 
 # SwiftLint's own default is a 200-line warning, which `--strict` turns into an
 # error — a threshold the two bodies the file above is about cannot be under,
 # for the reason it gives: `Xlog` is `mars_xlog.h` in one class and `MarsStn` is
 # `mars_stn.h` in one enum, and no part of either can move to an extension of
-# its own. 500 is what a body is held to, and the largest is `Xlog` at 470
+# its own. 500 is what a body is held to, and the largest is `Xlog` at 486
 # lines, `MarsStn` at 450: counted from the opening brace to the closing one,
 # which is every line of the body, or with the comments and the blanks left
 # out, which is 256 and 216, 500 is above both ways of counting. The error is
