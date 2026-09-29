@@ -1431,9 +1431,6 @@ impl LongLinkTaskManager {
             // `longlink_task_manager.cc:760` — the task is only whole now: the
             // error it ended on and the history of its tries are both in it,
             // and this is the last moment the queue has it
-            // `longlink_task_manager.cc:760` — the task is only whole now: the
-            // error it ended on and the history of its tries are both in it,
-            // and this is the last moment the queue has it
             let finished = self.tasks[at].clone();
             if let Some(report) = self.report_profile.as_mut() {
                 report(&finished);

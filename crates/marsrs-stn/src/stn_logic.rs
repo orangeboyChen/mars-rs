@@ -237,8 +237,23 @@ impl StnLogic {
     /// `OnDestroy` — the net core is dropped, which is the C++'s
     /// `NetCore::__Release`. `false` when there was none, which is the C++'s
     /// "net core is nullptr. ignore destroy".
+    ///
+    /// The core takes every queue with it, so a task that was still out on one
+    /// is a task nothing will report: whoever awaited one is answered here.
     pub fn destroy(&mut self) -> bool {
-        self.core.take().is_some()
+        // Taken out and kept until this call is over, and not dropped where it
+        // is taken: dropping the core ends every task it still holds — with
+        // `kEctLocal` / `kEctLocalReset`, "the net core itself is gone" — and
+        // then answers them *before* the cancel below gets to them. Which is
+        // not a hang, but it is a different answer from the one a task broken
+        // off any other way gets, so the cancel comes first and the drop that
+        // ends this call finds nothing left to end.
+        let core = self.core.take();
+        let destroyed = core.is_some();
+        if destroyed {
+            self.cancel_all();
+        }
+        destroyed
     }
 
     /// `Reset` — a net core made again from nothing, which is what the C++ does
@@ -250,7 +265,9 @@ impl StnLogic {
 
     /// The same, with the reading handed in.
     pub fn reset_at(&mut self, now: u64) {
-        self.core = None;
+        // a reset is a destroy and a create, and what the destroy answers is
+        // every task the core it drops was still holding
+        self.destroy();
         self.create_at(now);
     }
 
@@ -402,11 +419,37 @@ impl StnLogic {
             .is_some_and(|core| core.start_task_at(now, task))
     }
 
-    /// `StopTask(_taskid)`.
+    /// `StopTask(_taskid)` — `true` is a task a queue had.
+    ///
+    /// The queue drops the task and says nothing about it, which is what the
+    /// C++ does, so what ends here is the await and not the task: no queue
+    /// holds it any more, no pass is ever going to report it, and a [`Sent`]
+    /// left waiting for one would stay
+    /// [`Pending`](std::task::Poll::Pending) for the life of the process.
     pub fn stop_task(&mut self, taskid: u32) -> bool {
-        self.core
+        let stopped = self
+            .core
             .as_mut()
-            .is_some_and(|core| core.stop_task(taskid))
+            .is_some_and(|core| core.stop_task(taskid));
+        if stopped {
+            self.cancel(taskid);
+        }
+        stopped
+    }
+
+    /// A task no queue is going to report again is answered as cancelled, and
+    /// whoever awaited it is woken.
+    fn cancel(&mut self, taskid: u32) {
+        locked(&self.ends).cancel(taskid);
+        self.flush();
+    }
+
+    /// The same, for every task still being awaited. The ends outlive the net
+    /// core, so what a core that throws its queues away drops is an id nothing
+    /// is going to answer.
+    fn cancel_all(&mut self) {
+        locked(&self.ends).cancel_all();
+        self.flush();
     }
 
     /// `HasTask(_taskid)`.
@@ -445,6 +488,8 @@ impl StnLogic {
     pub fn clear_tasks(&mut self) {
         if let Some(core) = self.core.as_mut() {
             core.clear_tasks();
+            // the queues are empty, and none of what they held is coming back
+            self.cancel_all();
         }
     }
 

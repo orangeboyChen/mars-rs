@@ -774,3 +774,61 @@ fn a_task_no_queue_took_ends_before_the_app_awaits_it() {
     let awaited = host.logic.send_at(START, Task::new(9, 12), Vec::new());
     assert_eq!(settled(awaited), Err(Failure::Refused));
 }
+
+/// `StopTask` — the queue drops the task and reports nothing, which in the C++
+/// is the whole of it. Here an app may be awaiting the task, and nothing is
+/// ever going to report it again, so the stop is what answers it.
+#[test]
+fn a_task_the_app_stopped_is_answered_as_cancelled() {
+    let mut host = Host::new();
+    host.bring_up(MAIN, LongLinkStatus::Connected);
+    let awaited = awaited(&mut host, 7);
+
+    assert!(
+        host.logic.stop_task(7),
+        "the long link's queue had the task"
+    );
+    assert!(!host.logic.has_task(7));
+
+    // the app is not asked about a task it broke off itself, so what ends the
+    // await is the stop and not a pass
+    assert!(host.said().ended.is_empty());
+    assert_cancelled(settled(awaited));
+}
+
+/// `ClearTasks` and `OnDestroy` throw the queues away with everything on them,
+/// and [`StnLogic`] outlives both: every task still being awaited is answered
+/// here or not at all.
+#[test]
+fn tasks_a_core_threw_away_are_answered_as_cancelled() {
+    let mut host = Host::new();
+    host.bring_up(MAIN, LongLinkStatus::Connected);
+    let first = awaited(&mut host, 7);
+    let second = awaited(&mut host, 8);
+    host.logic.clear_tasks();
+    assert!(!host.logic.has_task(7));
+    assert!(!host.logic.has_task(8));
+    assert_cancelled(settled(first));
+    assert_cancelled(settled(second));
+
+    // and a core the app destroyed takes every queue with it
+    let mut host = Host::new();
+    host.bring_up(MAIN, LongLinkStatus::Connected);
+    let awaited = awaited(&mut host, 9);
+    assert!(host.logic.destroy());
+    assert_cancelled(settled(awaited));
+}
+
+/// What a task that was dropped rather than run out ends with: `kEctCanceld`,
+/// and no error code of its own.
+fn assert_cancelled(outcome: Result<Answer, Failure>) {
+    match outcome {
+        Err(Failure::Ended {
+            err_type, err_code, ..
+        }) => {
+            assert_eq!(err_type, ErrCmdType::Canceld);
+            assert_eq!(err_code, 0);
+        }
+        other => panic!("the task was cancelled, and not like this: {other:?}"),
+    }
+}

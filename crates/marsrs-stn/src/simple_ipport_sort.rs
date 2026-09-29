@@ -697,11 +697,19 @@ impl SimpleIpPortSort {
         if total == 0 {
             return;
         }
-        if self.random(total) < history.len() {
-            if let Some(item) = history.pop_front() {
-                items.push(item);
-            }
-        } else if let Some(item) = fresh.pop_front() {
+        let drawn = self.random(total);
+        // a host whose `Random` answers its bound is out of the `0..total` the
+        // C++'s `rand() % total` cannot leave, and the draw is thrown away: a
+        // round that took from neither queue is a round that moved nothing, and
+        // the `while` this is called from would sit in it for ever
+        let picked = if drawn >= total {
+            history.pop_front().or_else(|| fresh.pop_front())
+        } else if drawn < history.len() {
+            history.pop_front()
+        } else {
+            fresh.pop_front()
+        };
+        if let Some(item) = picked {
             items.push(item);
         }
     }

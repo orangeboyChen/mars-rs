@@ -1502,7 +1502,19 @@ impl ShortLinkTaskManager {
             return;
         }
 
-        let Some(item) = profile.ip_items.get(profile.ip_index as usize) else {
+        // `ip_index` is the host's own `SocketProfile::index`, and a host that
+        // answers `-1` for "none" is out of the list: a socket that cannot be
+        // named for a pair is not one the pool can hand out again, so it is
+        // closed and reported the way the branch above reports one
+        let indexed = usize::try_from(profile.ip_index)
+            .ok()
+            .and_then(|index| profile.ip_items.get(index));
+        let Some(item) = indexed else {
+            if let Some(close) = self.close.as_mut() {
+                close(socket);
+            }
+            self.socket_pool
+                .report_at(now, profile.is_reused_fd, false, false);
             return;
         };
         self.socket_pool.add_cache(CachedSocket::new_at(

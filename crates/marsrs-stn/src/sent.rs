@@ -38,7 +38,10 @@
 //! host with a loop of its own keeps it, and the two work together, because a
 //! pass that ends a task wakes whoever awaited it. A [`Sent`] that nothing
 //! drains stays [`Pending`](std::task::Poll::Pending) — the same way a task
-//! that is started and never drained stays in its queue.
+//! that is started and never drained stays in its queue. A task the app
+//! stopped, or one a core that was destroyed or cleared threw away, is not
+//! waiting for a pass at all: no queue holds it any more, so it is answered
+//! as cancelled on the spot.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -61,6 +64,11 @@ pub struct Answer {
     /// The timings of the connect the task ran on.
     pub profile: CgiProfile,
 }
+
+/// The error code a task the app broke off is given, which is none of its own:
+/// a cancellation is a failure, and it is the one [`Failure::Ended::err_code`]
+/// answers `0` for where everything else gets a negative code.
+const CANCELLED: i32 = 0;
 
 /// Why a task has no answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -278,6 +286,37 @@ impl Ends {
         }
     }
 
+    /// The end of a task that was dropped rather than run out, which is what
+    /// [`StnLogic::stop_task`] and a core that throws its queues away leave
+    /// behind: no queue holds the task any more, so no pass is ever going to
+    /// report it, and an await that was not answered here would stay
+    /// [`Pending`](std::task::Poll::Pending) for the life of the process. The
+    /// app is not asked about it, which is the C++'s own answer to `StopTask`.
+    ///
+    /// A task nobody is awaiting is left alone, the way [`Ends::finish`] leaves
+    /// one alone.
+    pub(crate) fn cancel(&mut self, taskid: u32) {
+        self.finish(
+            taskid,
+            ErrCmdType::Canceld,
+            CANCELLED,
+            CgiProfile::default(),
+        );
+    }
+
+    /// [`Ends::cancel`] for every task still being awaited.
+    pub(crate) fn cancel_all(&mut self) {
+        for taskid in self.pending() {
+            self.cancel(taskid);
+        }
+    }
+
+    /// The ids an end has not come for yet, which is every task an app may
+    /// still be awaiting.
+    fn pending(&self) -> Vec<u32> {
+        self.requests.keys().copied().collect()
+    }
+
     /// The end of a task, which is taken once and is the one thing that stops
     /// it being awaited.
     pub(crate) fn take(&mut self, taskid: u32) -> Option<Ended> {
@@ -468,6 +507,54 @@ mod tests {
         assert!(poll(&mut sent).is_pending());
         drop(sent);
         assert_eq!(ends.lock().unwrap().request(7), None);
+    }
+
+    /// A task no queue holds any more — one the app stopped, or one a core that
+    /// was cleared or destroyed threw away — is answered here or not at all:
+    /// nothing is ever going to report it, so an end that was not made now
+    /// would be a `Sent` that stays `Pending` for the life of the process.
+    #[test]
+    fn a_task_that_was_dropped_ends_as_cancelled_and_wakes_whoever_awaited_it() {
+        let ends = ends();
+        let mut sent = Sent::waiting(Arc::clone(&ends), 7);
+        assert!(poll(&mut sent).is_pending());
+
+        ends.lock().unwrap().cancel(7);
+        assert_eq!(ends.lock().unwrap().wakes().len(), 1);
+
+        let mut sent = Sent::waiting(Arc::clone(&ends), 7);
+        match poll(&mut sent) {
+            Poll::Ready(Err(Failure::Ended {
+                err_type, err_code, ..
+            })) => {
+                assert_eq!(err_type, ErrCmdType::Canceld);
+                assert_eq!(err_code, 0, "a cancellation carries no code of its own");
+            }
+            other => panic!("the task was cancelled: {other:?}"),
+        }
+
+        // and a task nobody is awaiting is not one there is an end to make
+        let mut ends = Ends::default();
+        ends.cancel(9);
+        assert!(ends.take(9).is_none());
+    }
+
+    #[test]
+    fn every_task_that_was_dropped_ends_as_cancelled() {
+        let ends = Arc::new(Mutex::new(Ends::default()));
+        ends.lock().unwrap().start(7, b"ask".to_vec());
+        ends.lock().unwrap().start(8, b"ask".to_vec());
+        ends.lock().unwrap().cancel_all();
+
+        for taskid in [7, 8] {
+            let mut sent = Sent::waiting(Arc::clone(&ends), taskid);
+            match poll(&mut sent) {
+                Poll::Ready(Err(Failure::Ended { err_type, .. })) => {
+                    assert_eq!(err_type, ErrCmdType::Canceld);
+                }
+                other => panic!("task {taskid} was cancelled: {other:?}"),
+            }
+        }
     }
 
     #[test]

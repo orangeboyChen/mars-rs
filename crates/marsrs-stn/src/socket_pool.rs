@@ -230,6 +230,10 @@ impl SocketPool {
             // on it, and the socket keeps its own timeout from here on
             let stream = self.create_stream(socket);
             if !stream.is_valid() {
+                // The socket leaves the pool but is *not* closed: it is a quic
+                // socket, and the streams already open on it are the host's and
+                // not this pool's — a parent closed here takes every one of them
+                // down with it. What the pool gives up is the caching of it.
                 self.pool.remove(index);
                 return None;
             }

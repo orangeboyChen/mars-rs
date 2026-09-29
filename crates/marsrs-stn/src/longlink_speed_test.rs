@@ -435,6 +435,7 @@ impl LongLinkSpeedTest {
             // the C++'s item reads the clock when its socket takes the first
             // write, which is here: after the select, before the round
             let now = clock();
+            let before: Vec<SpeedTestState> = self.items.iter().map(SpeedTestItem::state).collect();
             self.round(&events, now);
 
             if self
@@ -449,6 +450,20 @@ impl LongLinkSpeedTest {
                 .iter()
                 .all(|item| item.state() == SpeedTestState::Fail)
             {
+                break;
+            }
+            // `Select(kTimeout)` answering `0` is what ends the race in the
+            // C++: nothing was ready inside the timeout. A host that says the
+            // same thing with an `Ok` full of `SocketEvent::Nothing` is one
+            // this loop would otherwise sit in for ever, so a round that moved
+            // nobody — nobody answered, nobody failed — is read the way the
+            // C++ reads a `0`.
+            let moved = self
+                .items
+                .iter()
+                .zip(before.iter())
+                .any(|(item, was)| item.state() != *was);
+            if !moved {
                 break;
             }
         }

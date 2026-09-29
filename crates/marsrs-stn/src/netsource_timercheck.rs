@@ -280,8 +280,13 @@ impl NetSourceTimerCheck {
             return false;
         }
 
-        let ip_index = self.random(ips.len());
-        let port_index = self.random(ports.len());
+        // a host's `Random` is asked for `0..bound`, and one that answers its
+        // bound is out of that range: the draw is clamped to a pair there is
+        // rather than indexed with, because a check that panicked on the host's
+        // arithmetic is not one the ip is ever unbanned by. Both lists are
+        // known to be non-empty here.
+        let ip_index = self.random(ips.len()).min(ips.len() - 1);
+        let port_index = self.random(ports.len()).min(ports.len() - 1);
         let ip = ips[ip_index].clone();
         let port = ports[port_index];
 
