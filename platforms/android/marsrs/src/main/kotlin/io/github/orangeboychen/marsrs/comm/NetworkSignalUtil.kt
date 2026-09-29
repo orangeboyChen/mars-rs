@@ -43,9 +43,22 @@ object NetworkSignalUtil {
     @Volatile
     private var strength: Long = DEFAULT_STRENGTH
 
+    /**
+     * The context the Wifi signal is read through: written by
+     * [initNetworkSignalUtil] and [release] on the thread an app called them
+     * on, and read by `getWifiSignalStrength` on whichever thread
+     * `C2Java.getSignal` comes in on.
+     */
+    @Volatile
     private var context: Context? = null
 
-    /** What [initNetworkSignalUtil] put on the air, and what [release] takes off it. */
+    /**
+     * What [initNetworkSignalUtil] put on the air, and what [release] takes off
+     * it: one call writes it and the next reads it, and the two are not always
+     * made on one thread — `Mars.init` and `Mars.release` are an app's to call
+     * from wherever it likes.
+     */
+    @Volatile
     private var listener: PhoneStateListener? = null
 
     /**
@@ -59,7 +72,7 @@ object NetworkSignalUtil {
         // What the call before this one put on the air, if there was one:
         // `TelephonyManager` keeps every listener it is handed, so a second
         // `init` that did not take the first one off is two of them reading
-        // the signal, and the first one's context held for the process.
+        // the signal — and [release] knows the last one's and no other's.
         release()
         context = ncontext?.applicationContext
         val mgr = context?.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager ?: return
@@ -87,7 +100,9 @@ object NetworkSignalUtil {
     /**
      * Takes the listener off the air and drops the context: the way an app lets
      * go of what [initNetworkSignalUtil] kept, which nothing else does — a
-     * listener left registered is a context held for the life of the process.
+     * listener left registered is one `TelephonyManager` goes on reading the
+     * signal into for the rest of the process. The context is not what leaks:
+     * it is the application context, which the process keeps in any case.
      *
      * `TelephonyManager.listen` and `PhoneStateListener` are deprecated from
      * API 31 on, and what took their place is a `TelephonyCallback` this module
