@@ -17,14 +17,7 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 
 use marsrs_appender::{
-    AppenderError,
-    AppenderMode,
-    FileIoAction,
-    Flush,
-    LogLevel,
-    XLogConfig,
-    XLoggerInfo,
-    Xlog,
+    AppenderError, AppenderMode, FileIoAction, Flush, LogLevel, XLogConfig, XLoggerInfo, Xlog,
 };
 use marsrs_buffer::CompressMode;
 

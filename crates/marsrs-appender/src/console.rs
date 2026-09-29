@@ -97,7 +97,6 @@ pub(crate) fn console_log(info: Option<&XLoggerInfo>, log: &str) {
 mod tests {
     use super::*;
     use crate::config::LogLevel;
-    
 
     #[test]
     fn console_log_does_not_panic() {
@@ -126,5 +125,4 @@ mod tests {
         };
         console_log(Some(&info), "message");
     }
-
 }

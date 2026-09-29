@@ -2024,7 +2024,6 @@ mod tests {
     use marsrs_buffer::CompressMode;
     use marsrs_crypt::{magic, LogCrypt, HEADER_LEN, TAILER_LEN};
     use std::collections::HashSet;
-    
 
     /// A trace record — one an app marked with
     /// `XLogger::ForwardToSysTrace` — is echoed only where the C++ echoes

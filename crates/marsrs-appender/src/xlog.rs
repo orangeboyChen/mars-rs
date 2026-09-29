@@ -56,8 +56,7 @@ use crate::flush::Flush;
 use crate::{
     appender_close_instance, appender_flush_instance, appender_flush_now_instance,
     appender_get_current_log_path_instance, appender_getfilepath_from_timespan,
-    appender_make_logfile_name,
-    appender_request_flush_instance, appender_set_console_log_instance,
+    appender_make_logfile_name, appender_request_flush_instance, appender_set_console_log_instance,
     appender_set_max_alive_duration_instance, appender_set_max_file_size_instance,
     appender_set_mode_instance, appender_write_instance, AppenderId,
 };
@@ -185,7 +184,7 @@ impl Xlog {
     /// # Errors
     ///
     /// The same two as [`Xlog::open`], plus whatever the appender refuses.
-     /// What every file of this appender starts with, and what it is known by.
+    /// What every file of this appender starts with, and what it is known by.
     pub fn name_prefix(&self) -> &str {
         &self.name_prefix
     }
@@ -328,7 +327,7 @@ impl Xlog {
             }
         }
     }
-     /// [`Xlog::log`] at [`LogLevel::Verbose`].
+    /// [`Xlog::log`] at [`LogLevel::Verbose`].
     pub fn v(&self, tag: &str, message: &str) -> bool {
         self.log(LogLevel::Verbose, tag, message)
     }

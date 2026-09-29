@@ -6,8 +6,6 @@
 //! returns an owned [`String`] instead, which is the same text without the
 //! lifetime trap.
 
-
-
 /// `kMaxDumpLength` in `appender.cc`.
 const MAX_DUMP_LENGTH: usize = 4096;
 /// Bytes per dump line (`32` in `xlogger_memory_dump`, `16` in `Dump`).
@@ -168,5 +166,4 @@ mod tests {
         // and the space and DEL either side of them are blanks
         assert_eq!(lines.next().unwrap(), "   !  ~     ");
     }
-
 }

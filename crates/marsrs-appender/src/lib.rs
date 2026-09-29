@@ -107,8 +107,8 @@ pub use category::{
     is_enabled_for, new_xlogger_instance, release_xlogger_instance, request_flush,
     set_appender_mode, set_console_log_open, set_filter, set_level,
     set_max_alive_duration as category_set_max_alive_duration,
-    set_max_file_size as category_set_max_file_size, xlogger_write, XloggerCategory,
-    XloggerFilter, XloggerHandle, XloggerScopeTracer, DEFAULT_HANDLE,
+    set_max_file_size as category_set_max_file_size, xlogger_write, XloggerCategory, XloggerFilter,
+    XloggerHandle, XloggerScopeTracer, DEFAULT_HANDLE,
 };
 pub use config::{AppenderError, AppenderMode, FileIoAction, LogLevel, XLogConfig, XLoggerInfo};
 pub use console::ConsoleFun;
@@ -521,7 +521,11 @@ pub(crate) fn appender_write(info: Option<&XLoggerInfo>, logbody: &str) -> bool 
 ///
 /// The log file names for the day `timespan` days ago (0 = today). Uses the
 /// process-wide max file size set by `appender_set_max_file_size`.
-pub(crate) fn appender_make_logfile_name(timespan: i64, prefix: &str, logdir: &Path) -> Vec<PathBuf> {
+pub(crate) fn appender_make_logfile_name(
+    timespan: i64,
+    prefix: &str,
+    logdir: &Path,
+) -> Vec<PathBuf> {
     // When an appender is open for exactly this directory its own lookup is
     // used, which (like the C++) also reports the matching cache-dir files.
     let appender = current();
@@ -643,7 +647,6 @@ static COUNTER: test_alloc::Counter = test_alloc::Counter;
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn setters_are_sticky_before_open() {

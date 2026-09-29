@@ -10,13 +10,7 @@
 use std::path::PathBuf;
 
 use marsrs_appender::{
-    get_xlogger_instance,
-    AppenderError,
-    AppenderMode,
-    LogLevel,
-    XLogConfig,
-    Xlog,
-    DEFAULT_HANDLE,
+    get_xlogger_instance, AppenderError, AppenderMode, LogLevel, XLogConfig, Xlog, DEFAULT_HANDLE,
 };
 use marsrs_crypt::magic;
 

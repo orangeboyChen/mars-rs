@@ -36,8 +36,8 @@ use crate::{
     appender_set_console_log_instance, appender_set_max_alive_duration,
     appender_set_max_alive_duration_instance, appender_set_max_file_size,
     appender_set_max_file_size_instance, appender_set_mode, appender_set_mode_instance,
-    appender_write, appender_write_instance, AppenderId, AppenderMode,
-    Flush, LogLevel, XLogConfig, XLoggerInfo,
+    appender_write, appender_write_instance, AppenderId, AppenderMode, Flush, LogLevel, XLogConfig,
+    XLoggerInfo,
 };
 
 /// Opaque id of a [`XloggerCategory`]; `0` is the default logger.
@@ -1014,5 +1014,4 @@ mod tests {
         assert!(!category.is_enabled_for(LogLevel::Verbose));
         assert_eq!(get_level(12345), None, "unknown handle");
     }
-
 }

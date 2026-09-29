@@ -13,16 +13,10 @@ use std::os::raw::{c_int, c_longlong};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use mars_ffi::abi::{
-    mars_xlog_new_instance,
-    mars_xlog_release_instance,
-};
+use mars_ffi::abi::{mars_xlog_new_instance, mars_xlog_release_instance};
 use mars_ffi::{
-    mars_xlog_flush_now_instance,
-    mars_xlog_request_flush_instance,
-    mars_xlog_set_level_instance,
-    mars_xlog_write_instance,
-    MarsXLogConfig,
+    mars_xlog_flush_now_instance, mars_xlog_request_flush_instance, mars_xlog_set_level_instance,
+    mars_xlog_write_instance, MarsXLogConfig,
 };
 
 /// Closes the appender when the test ends, even if it failed.

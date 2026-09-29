@@ -55,8 +55,7 @@ use crate::stn::{
 };
 
 use crate::{
-    flush_impl, flush_now_impl, get_level_impl, guard,
-    level_from_java, new_instance_impl,
+    flush_impl, flush_now_impl, get_level_impl, guard, level_from_java, new_instance_impl,
     release_instance_impl, request_flush_impl, set_appender_mode_impl, set_console_log_open_impl,
     set_level_impl, set_max_alive_time_impl, set_max_file_size_impl, write_impl,
 };

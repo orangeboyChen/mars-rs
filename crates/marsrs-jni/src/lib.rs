@@ -40,10 +40,10 @@ use std::borrow::Cow;
 
 use marsrs_appender::{
     category_set_max_alive_duration as set_max_alive_duration,
-    category_set_max_file_size as set_max_file_size, flush_now, get_level,
-    is_enabled_for, new_xlogger_instance, release_xlogger_instance, request_flush,
-    set_appender_mode, set_console_log_open, set_level, xlogger_write, AppenderMode, LogLevel,
-    XLogConfig, XLoggerInfo,
+    category_set_max_file_size as set_max_file_size, flush_now, get_level, is_enabled_for,
+    new_xlogger_instance, release_xlogger_instance, request_flush, set_appender_mode,
+    set_console_log_open, set_level, xlogger_write, AppenderMode, LogLevel, XLogConfig,
+    XLoggerInfo,
 };
 
 /// `gettimeofday(&info.timeval, NULL)` — seconds + microseconds since the

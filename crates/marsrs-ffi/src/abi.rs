@@ -12,18 +12,10 @@ use std::ffi::{c_char, c_int, c_longlong, c_uchar, c_uint, c_ulonglong};
 use std::path::Path;
 
 use marsrs_appender::{
-    XloggerHandle,
     category_set_max_alive_duration as set_max_alive_duration,
-    category_set_max_file_size as set_max_file_size,
-    current_log_path,
-    flush_now,
-    request_flush,
-    set_console_log_open,
-    set_level,
-    AppenderMode,
-    LogLevel,
-    XLogConfig,
-    XLoggerInfo,
+    category_set_max_file_size as set_max_file_size, current_log_path, flush_now, request_flush,
+    set_console_log_open, set_level, AppenderMode, LogLevel, XLogConfig, XLoggerInfo,
+    XloggerHandle,
 };
 use marsrs_buffer::CompressMode;
 
@@ -559,7 +551,8 @@ pub unsafe extern "C" fn mars_xlog_make_logfile_name_instance(
     len: c_uint,
 ) -> c_int {
     guard(MARS_XLOG_ERR_PANIC, || {
-        let paths = marsrs_appender::current_log_file_names(instance as XloggerHandle, i64::from(timespan));
+        let paths =
+            marsrs_appender::current_log_file_names(instance as XloggerHandle, i64::from(timespan));
         // SAFETY: `out`/`len` are checked inside `path_at`.
         unsafe { path_at(&paths, index, out, len) }
     })
@@ -585,7 +578,8 @@ pub unsafe extern "C" fn mars_xlog_getfilepath_from_timespan_instance(
     len: c_uint,
 ) -> c_int {
     guard(MARS_XLOG_ERR_PANIC, || {
-        let paths = marsrs_appender::current_log_files(instance as XloggerHandle, i64::from(timespan));
+        let paths =
+            marsrs_appender::current_log_files(instance as XloggerHandle, i64::from(timespan));
         // SAFETY: `out`/`len` are checked inside `path_at`.
         unsafe { path_at(&paths, index, out, len) }
     })

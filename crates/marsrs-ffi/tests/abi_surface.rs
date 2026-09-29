@@ -10,15 +10,9 @@ use std::os::raw::c_int;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_ffi::abi::{
-    mars_xlog_flush_now_instance,
-    mars_xlog_get_instance,
-    mars_xlog_get_level,
-    mars_xlog_is_enabled_for,
-    mars_xlog_new_instance,
-    mars_xlog_release_instance,
-    mars_xlog_set_level_instance,
-    mars_xlog_set_mode_instance,
-    mars_xlog_write_instance,
+    mars_xlog_flush_now_instance, mars_xlog_get_instance, mars_xlog_get_level,
+    mars_xlog_is_enabled_for, mars_xlog_new_instance, mars_xlog_release_instance,
+    mars_xlog_set_level_instance, mars_xlog_set_mode_instance, mars_xlog_write_instance,
     MarsXLogConfig,
 };
 
