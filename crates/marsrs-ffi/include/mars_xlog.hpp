@@ -469,14 +469,17 @@ public:
         // without a capture of its own: a function pointer carries no state.
         //
         // It is leaked, and that is the point. The trampoline is a plain C
-        // function pointer Rust keeps until the process goes away — there is no
-        // teardown symbol in the C ABI to hand it back with — so a sink the
-        // runtime destroys would leave it calling a `std::function` whose
-        // lifetime had already ended, which is what a record written during
-        // exit, or by another thread, lands on. The alternative is a
-        // `clearConsoleSink()` nobody is left to call at exit: an app that
-        // wanted its sink destroyed would have to know the last record has
-        // been written, and a library is the one thing that cannot. One
+        // function pointer Rust keeps until the process goes away, and
+        // `mars_xlog_set_console_fun(nullptr)` — which is what an empty sink
+        // below does — takes the calls away but not the `std::function` they
+        // were aimed at: nothing can tell this side that the last record has
+        // been written, so a sink the runtime destroys would leave the
+        // trampoline calling one whose lifetime had already ended, which is
+        // what a record written during exit, or by another thread, lands on.
+        // The alternative is a `clearConsoleSink()` nobody is left to call at
+        // exit: an app that wanted its sink destroyed would have to know the
+        // last record has been written, and a library is the one thing that
+        // cannot. One
         // `ConsoleSink` for the life of the process is what that costs.
         static ConsoleSink* installed = new ConsoleSink();
         *installed = std::move(sink);
