@@ -797,7 +797,10 @@ pub unsafe extern "C" fn mars_stn_set_longlink_svr_addr(
                 cstr::ptr_to_str_or_empty(debug_ip),
             )
         };
-        let mut ports_vec = Vec::with_capacity(port_count as usize);
+        // Nothing is reserved: `port_count` is the caller's to get wrong, and
+        // a reservation is what turns a number it made up into a request for
+        // gigabytes. The vector grows with what is read.
+        let mut ports_vec = Vec::new();
         if !ports.is_null() {
             for index in 0..port_count as usize {
                 // SAFETY: `ports` is non-null and the caller promises
@@ -1676,7 +1679,10 @@ unsafe fn headers_from_c(headers: *const MarsStnHeader, count: c_uint) -> BTreeM
 /// `items` must either be null or point to `count` valid NUL-terminated strings
 /// that stay alive for the duration of the call.
 unsafe fn strings_from_c(items: *const *const c_char, count: c_uint) -> Vec<String> {
-    let mut strings = Vec::with_capacity(count as usize);
+    // Nothing is reserved: `count` is the caller's to get wrong, and a
+    // reservation is what turns a number it made up into a request for
+    // gigabytes. The vector grows with what is read.
+    let mut strings = Vec::new();
     if items.is_null() {
         return strings;
     }

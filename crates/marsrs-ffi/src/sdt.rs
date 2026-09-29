@@ -639,7 +639,10 @@ fn answer_from_c(answer: &MarsSdtAnswer) -> Answer {
     match answer.kind {
         MarsSdtKind::Nothing => Answer::Nothing,
         MarsSdtKind::Dns => {
-            let mut ips = Vec::with_capacity(answer.ip_count as usize);
+            // Nothing is reserved: `ip_count` is the caller's to get wrong,
+            // and a reservation is what turns a number it made up into a
+            // request for gigabytes. The vector grows with what is read.
+            let mut ips = Vec::new();
             if !answer.ips.is_null() {
                 for index in 0..answer.ip_count as usize {
                     // SAFETY: `ips` is non-null and the caller promises
@@ -700,7 +703,8 @@ unsafe fn hosts_from_c(hosts: *const MarsSdtHosts, count: c_uint) -> CheckIPPort
         // SAFETY: `host.name` is null or a valid NUL-terminated string, per the
         // caller's contract.
         let name = unsafe { cstr::ptr_to_str_or_empty(host.name) };
-        let mut ports = Vec::with_capacity(host.port_count as usize);
+        // Nothing is reserved, for the reason `ips` above is not.
+        let mut ports = Vec::new();
         if !host.ports.is_null() {
             for port_index in 0..host.port_count as usize {
                 // SAFETY: `host.ports` is non-null and the caller promises
