@@ -349,7 +349,7 @@ if (mars_xlog_open(&config) != MARS_XLOG_OK) { /* see the return code */ }
 
 mars_xlog_write(MarsLevelInfo, "startup", __FILE__, __func__, __LINE__, "hello from mars");
 
-mars_xlog_flush_now();  /* the records are on disk when this returns */
+mars_xlog_flush_now_instance(0);  /* the records are on disk when this returns */
 mars_xlog_close();
 ```
 

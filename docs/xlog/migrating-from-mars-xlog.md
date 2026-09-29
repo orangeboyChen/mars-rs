@@ -43,14 +43,14 @@ The appender is one struct of options and a handful of free calls in
 |---|---|---|
 | `appender_open(const XLogConfig&)` | `appender_open(XLogConfig)` | `mars_xlog_open(&config)` |
 | `xlogger_Write(info, log)`, or the `xinfo2` family | `appender_write(info, message)` | `mars_xlog_write(...)` |
-| `appender_flush()` | `appender_signal_flush()` | `mars_xlog_signal_flush()` |
-| `appender_flush_sync()` | `appender_flush_now()` | `mars_xlog_flush_now()` |
+| `appender_flush()` | `appender_signal_flush()` | `mars_xlog_signal_flush_instance(0)` |
+| `appender_flush_sync()` | `appender_flush_now()` | `mars_xlog_flush_now_instance(0)` |
 | `appender_close()` | `appender_close()` | `mars_xlog_close()` |
-| `xlogger_SetLevel(level)` | `set_level(handle, level)` | `mars_xlog_set_level(level)` |
-| `appender_setmode(mode)` | `appender_set_mode(mode)` | `mars_xlog_set_mode(mode)` |
-| `appender_set_console_log(bool)` | `appender_set_console_log(bool)` | `mars_xlog_set_console_log(on)` |
-| `appender_set_max_file_size(bytes)` | `appender_set_max_file_size(bytes)` | `mars_xlog_set_max_file_size(bytes)` |
-| `appender_set_max_alive_duration(secs)` | `appender_set_max_alive_duration(secs)` | `mars_xlog_set_max_alive_duration(secs)` |
+| `xlogger_SetLevel(level)` | `set_level(handle, level)` | `mars_xlog_set_level_instance(0, level)` |
+| `appender_setmode(mode)` | `appender_set_mode(mode)` | `mars_xlog_set_mode_instance(0, mode)` |
+| `appender_set_console_log(bool)` | `appender_set_console_log(bool)` | `mars_xlog_set_console_log_instance(0, on)` |
+| `appender_set_max_file_size(bytes)` | `appender_set_max_file_size(bytes)` | `mars_xlog_set_max_file_size_instance(0, bytes)` |
+| `appender_set_max_alive_duration(secs)` | `appender_set_max_alive_duration(secs)` | `mars_xlog_set_max_alive_duration_instance(0, secs)` |
 | `appender_get_current_log_path(out, len)` | `appender_get_current_log_path()` | `mars_xlog_current_log_path(out, len)` |
 
 The two flush rows are the one place the Rust column is not the C++'s name:
@@ -59,8 +59,8 @@ what the C++ calls `appender_flush` is `appender_signal_flush` here, because
 [log files](/xlog/log-files). `appender_flush_sync` still compiles and does what
 `appender_flush_now` does, deprecated, so that code written against the C++'s
 name keeps building. The C ABI column is the same story, and it takes no `sync` anywhere: the C++'s
-`appender_flush` is `mars_xlog_signal_flush` and its `appender_flush_sync` is
-`mars_xlog_flush_now`, and the instance pair is two calls too — what a caller
+`appender_flush` is `mars_xlog_signal_flush_instance(0)` and its `appender_flush_sync` is
+`mars_xlog_flush_now_instance(0)`, and the instance pair is two calls too — what a caller
 wrote as `mars_xlog_flush_instance(handle, 0)` or `(handle, 1)` is
 `mars_xlog_signal_flush_instance(handle)` or
 `mars_xlog_flush_now_instance(handle)`. The two names the process-wide pair had

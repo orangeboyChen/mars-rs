@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_ffi::{
-    mars_xlog_close, mars_xlog_open, mars_xlog_set_level, mars_xlog_write, MarsXLogConfig,
+    mars_xlog_close, mars_xlog_open, mars_xlog_set_level_instance, mars_xlog_write, MarsXLogConfig,
     MARS_XLOG_OK,
 };
 
@@ -96,7 +96,7 @@ fn open(dir: &std::path::Path) {
     let opened = unsafe { mars_xlog_open(&cfg) };
     assert_eq!(opened, MARS_XLOG_OK, "mars_xlog_open failed");
     // Another test may have raised the process-wide level.
-    mars_xlog_set_level(0);
+    mars_xlog_set_level_instance(0, 0);
 }
 
 /// Writes one record the way a C caller does: with pointers it owns.

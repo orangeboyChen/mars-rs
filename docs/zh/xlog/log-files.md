@@ -103,7 +103,7 @@ xlog.flushNow()
 ```
 
 ```c [C]
-mars_xlog_flush_now();
+mars_xlog_flush_now_instance(0);
 ```
 
 :::
@@ -112,8 +112,8 @@ mars_xlog_flush_now();
 
 | 调用 | 做什么 |
 |---|---|
-| `signalFlush()` —— `appender_signal_flush()`、`mars_xlog_signal_flush()` | 通知写线程可以排空，然后立刻返回：它返回了，不代表记录已经在文件里 |
-| `flushNow()` —— `appender_flush_now()`、`mars_xlog_flush_now()` | 在调用方线程上排空：它返回时记录已经在磁盘上 |
+| `signalFlush()` —— `appender_signal_flush()`、`mars_xlog_signal_flush_instance(0)` | 通知写线程可以排空，然后立刻返回：它返回了，不代表记录已经在文件里 |
+| `flushNow()` —— `appender_flush_now()`、`mars_xlog_flush_now_instance(0)` | 在调用方线程上排空：它返回时记录已经在磁盘上 |
 | `await flush()` —— `appender_flush()`、`flush(handle)` | 同一次排空，只是不在调用方线程上 |
 
 `signalFlush()` 是定时器该调的那个。它不保证排空什么时候结束，而没结束也不丢东西：

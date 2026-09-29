@@ -14,10 +14,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_ffi::{
-    mars_xlog_assert, mars_xlog_close, mars_xlog_current_log_path, mars_xlog_flush_now,
-    mars_xlog_open, mars_xlog_set_console_fun, mars_xlog_set_console_log, mars_xlog_set_level,
-    mars_xlog_set_max_alive_duration, mars_xlog_set_max_file_size, mars_xlog_signal_flush,
-    mars_xlog_write, MarsXLogConfig, MARS_XLOG_ERR_BAD_COMPRESS, MARS_XLOG_ERR_BAD_MODE,
+    mars_xlog_assert, mars_xlog_close, mars_xlog_current_log_path, mars_xlog_flush_now_instance,
+    mars_xlog_open, mars_xlog_set_console_fun, mars_xlog_set_console_log_instance,
+    mars_xlog_set_level_instance, mars_xlog_set_max_alive_duration_instance,
+    mars_xlog_set_max_file_size_instance, mars_xlog_signal_flush_instance, mars_xlog_write,
+    MarsXLogConfig, MARS_XLOG_ERR_BAD_COMPRESS, MARS_XLOG_ERR_BAD_MODE,
     MARS_XLOG_ERR_EMPTY_LOG_DIR, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE,
     MARS_XLOG_ERR_NULL_CONFIG, MARS_XLOG_ERR_NULL_OUT, MARS_XLOG_OK,
 };
@@ -101,7 +102,7 @@ fn open_sync(dir: &Path) {
         "mars_xlog_open failed"
     );
     // The level is process-wide and other tests may have raised it.
-    mars_xlog_set_level(0);
+    mars_xlog_set_level_instance(0, 0);
 }
 
 fn write(level: c_int, tag: &str, message: &str) {
@@ -251,8 +252,8 @@ fn open_write_flush_close_lands_on_disk() {
     open_sync(dir.path());
     write(2, "smoke", "hello-from-the-c-abi");
     write(4, "smoke", "second-record-42");
-    mars_xlog_signal_flush();
-    mars_xlog_flush_now();
+    mars_xlog_signal_flush_instance(0);
+    mars_xlog_flush_now_instance(0);
 
     let path = log_file(dir.path());
     let bytes = fs::read(&path).unwrap();
@@ -283,7 +284,7 @@ fn current_log_path_is_reported() {
     open_sync(dir.path());
     // The log file is created lazily, on the first record.
     write(2, "smoke", "path-check-record");
-    mars_xlog_flush_now();
+    mars_xlog_flush_now_instance(0);
 
     let mut buf = [0u8; 512];
     let n =
@@ -361,10 +362,10 @@ fn the_level_one_function_sets_is_the_one_every_write_sees() {
     let dir = tempfile::tempdir().unwrap();
     open_sync(dir.path());
 
-    // `mars_xlog_set_level` is the level of the default logger, and instance
-    // `0` is that logger: a level of its own would have `get_level(0)` and
+    // Instance `0` is the process-wide appender, and its level is the one
+    // `get_level(0)` and
     // `is_enabled_for(0, ..)` disagree with the level that was set.
-    mars_xlog_set_level(4); // Error
+    mars_xlog_set_level_instance(0, 4); // Error
     assert_eq!(mars_ffi::abi::mars_xlog_get_level(0), 4);
 
     // A write through instance `0` is `XloggerWrite(0, …)`, i.e. the C++'s
@@ -373,7 +374,7 @@ fn the_level_one_function_sets_is_the_one_every_write_sees() {
     // `is_enabled_for` answers from — the C++'s own `xinfo2` asks that itself,
     // before it ever reaches `xlogger_Write`.
     write_instance(2, "smoke", "instance-path-has-no-filter");
-    mars_xlog_flush_now();
+    mars_xlog_flush_now_instance(0);
 
     let bytes = fs::read(log_file(dir.path())).unwrap();
     assert!(
@@ -384,14 +385,14 @@ fn the_level_one_function_sets_is_the_one_every_write_sees() {
     // `MARS_LEVEL_NONE` through the instance path, which used to be ignored.
     mars_ffi::abi::mars_xlog_set_level_instance(0, 6);
     write(5, "smoke", "a-level-none-filter-drops-everything");
-    mars_xlog_flush_now();
+    mars_xlog_flush_now_instance(0);
     let bytes = fs::read(log_file(dir.path())).unwrap();
     assert!(!any_view_contains(
         &bytes,
         "a-level-none-filter-drops-everything"
     ));
 
-    mars_xlog_set_level(0); // back to Verbose
+    mars_xlog_set_level_instance(0, 0); // back to Verbose
 }
 
 #[test]
@@ -401,10 +402,10 @@ fn level_filter_gates_writes() {
     let dir = tempfile::tempdir().unwrap();
     open_sync(dir.path());
 
-    mars_xlog_set_level(4); // Error
+    mars_xlog_set_level_instance(0, 4); // Error
     write(2, "smoke", "this-info-record-must-be-dropped");
     write(4, "smoke", "this-error-record-must-survive");
-    mars_xlog_flush_now();
+    mars_xlog_flush_now_instance(0);
 
     let bytes = fs::read(log_file(dir.path())).unwrap();
     assert!(any_view_contains(&bytes, "this-error-record-must-survive"));
@@ -413,9 +414,9 @@ fn level_filter_gates_writes() {
         "level filter did not drop the record"
     );
 
-    mars_xlog_set_level(0); // back to Verbose
+    mars_xlog_set_level_instance(0, 0); // back to Verbose
     write(1, "smoke", "verbose-again-after-reset");
-    mars_xlog_flush_now();
+    mars_xlog_flush_now_instance(0);
     let bytes = fs::read(log_file(dir.path())).unwrap();
     assert!(any_view_contains(&bytes, "verbose-again-after-reset"));
 
@@ -431,10 +432,10 @@ fn an_assert_is_written_whatever_the_level_is() {
 
     // A level no record below it survives — and `xlogger_Assert` is annotated
     // "no level filter" in `xloggerbase.h`, so it goes out anyway.
-    mars_xlog_set_level(5); // Fatal
+    mars_xlog_set_level_instance(0, 5); // Fatal
     write(0, "smoke", "this-verbose-record-must-be-dropped");
     assert_expr("x == y", "the two are not equal");
-    mars_xlog_flush_now();
+    mars_xlog_flush_now_instance(0);
 
     let bytes = fs::read(log_file(dir.path())).unwrap();
     assert!(any_view_contains(
@@ -446,7 +447,7 @@ fn an_assert_is_written_whatever_the_level_is() {
         "the level did not gate the write"
     );
 
-    mars_xlog_set_level(0); // back to Verbose
+    mars_xlog_set_level_instance(0, 0); // back to Verbose
     mars_xlog_close();
 }
 
@@ -456,11 +457,11 @@ fn a_console_callback_an_app_set_is_handed_the_record() {
     let _close = CloseOnDrop;
     let dir = tempfile::tempdir().unwrap();
     open_sync(dir.path());
-    mars_xlog_set_console_log(1);
+    mars_xlog_set_console_log_instance(0, 1);
     mars_xlog_set_console_fun(Some(console_seen));
 
     write(2, "console", "to-the-callback");
-    mars_xlog_flush_now();
+    mars_xlog_flush_now_instance(0);
 
     let seen = SEEN
         .lock()
@@ -469,7 +470,7 @@ fn a_console_callback_an_app_set_is_handed_the_record() {
     // Both are process-wide, so take them away again before the assertion:
     // a panic here must not leave the next test writing through the callback.
     mars_xlog_set_console_fun(None);
-    mars_xlog_set_console_log(0);
+    mars_xlog_set_console_log_instance(0, 0);
     mars_xlog_close();
 
     assert_eq!(seen, "2:console:42:to-the-callback");
@@ -511,7 +512,7 @@ fn null_pointers_are_never_dereferenced() {
     // ...and the same object keeps working once it is valid again.
     cfg.compress_mode = 0;
     assert_eq!(unsafe { mars_xlog_open(&cfg) }, MARS_XLOG_OK);
-    mars_xlog_set_level(0);
+    mars_xlog_set_level_instance(0, 0);
 
     // A write with every pointer null (level 6 == kLevelNone is also dropped).
     unsafe {
@@ -545,22 +546,22 @@ fn null_pointers_are_never_dereferenced() {
             std::ptr::null(),
         );
     }
-    mars_xlog_flush_now();
+    mars_xlog_flush_now_instance(0);
 
     // The setters must tolerate being called with junk too.
-    mars_xlog_set_level(-3);
-    mars_xlog_set_level(0);
-    mars_xlog_set_console_log(1);
-    mars_xlog_set_console_log(0);
-    mars_xlog_set_max_file_size(0);
-    mars_xlog_set_max_file_size(4 * 1024 * 1024);
-    mars_xlog_set_max_alive_duration(-1);
-    mars_xlog_set_max_alive_duration(10 * 24 * 3600);
+    mars_xlog_set_level_instance(0, -3);
+    mars_xlog_set_level_instance(0, 0);
+    mars_xlog_set_console_log_instance(0, 1);
+    mars_xlog_set_console_log_instance(0, 0);
+    mars_xlog_set_max_file_size_instance(0, 0);
+    mars_xlog_set_max_file_size_instance(0, 4 * 1024 * 1024);
+    mars_xlog_set_max_alive_duration_instance(0, -1);
+    mars_xlog_set_max_alive_duration_instance(0, 10 * 24 * 3600);
 
     mars_xlog_close();
     // Closing twice, flushing while closed: none of it may abort the process.
-    mars_xlog_signal_flush();
-    mars_xlog_flush_now();
+    mars_xlog_signal_flush_instance(0);
+    mars_xlog_flush_now_instance(0);
     mars_xlog_close();
 }
 
@@ -585,14 +586,14 @@ fn async_mode_also_writes() {
     fs::create_dir_all(dir.path()).unwrap();
     let cfg = Config::new(dir.path(), 0, 0); // Async + Zlib
     assert_eq!(unsafe { mars_xlog_open(cfg.as_ptr()) }, MARS_XLOG_OK);
-    mars_xlog_set_level(0);
+    mars_xlog_set_level_instance(0, 0);
     write(3, "smoke", "async-mode-record");
 
     // Async mode hands the record to the writer thread, so poll a little:
     // `flush_now` only guarantees the thread has been signalled.
     let mut bytes = Vec::new();
     for _ in 0..20 {
-        mars_xlog_flush_now();
+        mars_xlog_flush_now_instance(0);
         bytes = fs::read(log_file(dir.path())).unwrap_or_default();
         if any_view_contains(&bytes, "async-mode-record") {
             break;
@@ -614,9 +615,9 @@ fn zstd_mode_is_accepted() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = Config::new(dir.path(), 1, 1); // Sync + Zstd
     assert_eq!(unsafe { mars_xlog_open(cfg.as_ptr()) }, MARS_XLOG_OK);
-    mars_xlog_set_level(0);
+    mars_xlog_set_level_instance(0, 0);
     write(2, "smoke", "zstd-mode-record");
-    mars_xlog_flush_now();
+    mars_xlog_flush_now_instance(0);
     // Sync mode stores the payload verbatim, so the record must be readable as
     // text: "the file is not empty" would also pass if compress_mode were
     // ignored or the body were garbage.
@@ -671,12 +672,12 @@ fn c_types_line_up_with_the_header() {
         c_int,
         *const c_char,
     ) = mars_xlog_write;
-    let _f: extern "C" fn() = mars_xlog_signal_flush;
-    let _f: extern "C" fn() = mars_xlog_flush_now;
+    let _f: extern "C" fn(c_longlong) = mars_xlog_signal_flush_instance;
+    let _f: extern "C" fn(c_longlong) = mars_xlog_flush_now_instance;
     let _f: extern "C" fn() = mars_xlog_close;
-    let _f: extern "C" fn(c_int) = mars_xlog_set_level;
-    let _f: extern "C" fn(c_int) = mars_xlog_set_console_log;
-    let _f: extern "C" fn(c_ulonglong) = mars_xlog_set_max_file_size;
-    let _f: extern "C" fn(c_longlong) = mars_xlog_set_max_alive_duration;
+    let _f: extern "C" fn(c_longlong, c_int) = mars_xlog_set_level_instance;
+    let _f: extern "C" fn(c_longlong, c_int) = mars_xlog_set_console_log_instance;
+    let _f: extern "C" fn(c_longlong, c_ulonglong) = mars_xlog_set_max_file_size_instance;
+    let _f: extern "C" fn(c_longlong, c_longlong) = mars_xlog_set_max_alive_duration_instance;
     let _f: unsafe extern "C" fn(*mut c_char, c_uint) -> c_int = mars_xlog_current_log_path;
 }

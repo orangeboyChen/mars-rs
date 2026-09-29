@@ -109,7 +109,7 @@ xlog.flushNow()
 ```
 
 ```c [C]
-mars_xlog_flush_now();
+mars_xlog_flush_now_instance(0);
 ```
 
 :::
@@ -118,8 +118,8 @@ The drain is three calls and not one with a flag:
 
 | call | what it does |
 |---|---|
-| `signalFlush()` — `appender_signal_flush()`, `mars_xlog_signal_flush()` | tells the writer thread it may drain, and returns at once: nothing is in the file because it returned |
-| `flushNow()` — `appender_flush_now()`, `mars_xlog_flush_now()` | drains on the calling thread: the records are on disk when it returns |
+| `signalFlush()` — `appender_signal_flush()`, `mars_xlog_signal_flush_instance(0)` | tells the writer thread it may drain, and returns at once: nothing is in the file because it returned |
+| `flushNow()` — `appender_flush_now()`, `mars_xlog_flush_now_instance(0)` | drains on the calling thread: the records are on disk when it returns |
 | `await flush()` — `appender_flush()`, `flush(handle)` | the same drain, off the calling thread |
 
 `signalFlush()` is the one a timer calls. It guarantees nothing about when the
