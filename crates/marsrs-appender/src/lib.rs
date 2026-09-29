@@ -581,16 +581,23 @@ pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
 
     // Without a lock a live cache file cannot be told from a dead one, so all
     // that is left is the C++'s own behaviour: the single fixed name, drained
-    // only when no appender of this process is using it.
+    // only when no writer of *this* prefix and log directory is using it.
     if !crate::sys::lock_excludes(&slot_lock_path) {
-        if appender_get_current_log_path().is_some()
-            || crate::category::instance_owns_mmap_path(&mmap_file_path(config))
+        let path = mmap_file_path(config);
+        // Scoped to the one file there is, and not to "an appender is open":
+        // `appender_get_current_log_path` answers for any appender of the
+        // process, so a logger of another prefix — or of another log
+        // directory — would leave this one's dead cache slots undrained for
+        // as long as it happened to be open, which is the whole run of the
+        // app that owns them.
+        if current().is_some_and(|appender| {
+            appender.claimed_cache_path().as_deref() == Some(path.as_path())
+        }) || crate::category::instance_owns_mmap_path(&path)
         {
             return FileIoAction::Unnecessary;
         }
         // A lock nobody on this platform can take is not a reason not to read
         // the file: the drain reads it through this handle either way.
-        let path = mmap_file_path(config);
         let Ok(mut file) = std::fs::File::open(&path) else {
             appender.close();
             return FileIoAction::OpenFailed;
