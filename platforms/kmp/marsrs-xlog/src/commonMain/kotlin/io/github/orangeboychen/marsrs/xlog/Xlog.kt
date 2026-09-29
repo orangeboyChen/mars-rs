@@ -60,6 +60,37 @@ public expect class Xlog(config: XlogConfig) {
      * builds a message that is expensive to build. `false` once [close] ran,
      * which is the one honest answer of an appender that writes nothing.
      */
+    /**
+     * The file this appender is writing to, or `null` when it has none open yet
+     * — the first record of a day is what opens one.
+     *
+     * A day is one file, so this is the path an app hands to something that
+     * reads the log while it is being written.
+     */
+    public val currentLogPath: String?
+
+    /**
+     * The log files of the day [daysAgo] days ago that are *there* — what an app
+     * that uploads yesterday's asks for. Empty when the directory holds none of
+     * that day's. `0` is today, `1` is yesterday, and so on.
+     *
+     * This is a day of files and not the file being written: what
+     * [currentLogPath] answers is one, and this is this appender's own prefix
+     * and directory.
+     */
+    public fun logFiles(daysAgo: Long): List<String>
+
+    /**
+     * The names of the log files of the day [daysAgo] days ago, whether or not
+     * they are *there yet* — the name an app that is about to write, or that is
+     * naming a file to someone else, asks for.
+     *
+     * A day's answer is the log-dir file and, when a cache dir is configured and
+     * the file exists, its cache-dir twin, so this can answer two where
+     * [logFiles] answers one.
+     */
+    public fun logFileNames(daysAgo: Long): List<String>
+
     public fun isLoggable(level: LogLevel): Boolean
 
     /** Writes one record of [level]. */
