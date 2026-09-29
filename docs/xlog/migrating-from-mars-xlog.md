@@ -141,16 +141,10 @@ it has no category to share one with.
 
 ### From the C++ project's Java
 
-The Android package is the one place the old spelling is still there:
-`Xlog.open` with its seven arguments, `XLogConfig`, `XLoggerInfo`, `logWrite`
-and the `LEVEL_*` constants all work. What carries a `@Deprecated` — and the
-spelling that replaces it — is the seven-argument `Xlog.open`, `logWrite`, the
-`Xlog()` with no argument and the `Log` facade around them; `XLogConfig`,
-`XLoggerInfo` and the `LEVEL_*` constants carry no such pointer, so a call site
-that uses them compiles with nothing pointing it at the new spelling, and
-finding it is the app's own grep. `Log.setLogImp(Xlog())` and
-`Log.d(tag, message)` still write through the same appender `Xlog.open`
-installs, so the rest of a migration can go one call site at a time:
+None of the old spelling is there any more. The Android package is the `Xlog`
+of the Kotlin Multiplatform module, member for member, so an app that called
+`Log.d(tag, message)`, `Log.setLogImp(Xlog())` or the seven-argument `Xlog.open`
+writes the one call every platform of the port opens an appender with:
 
 ```kotlin
 // before
