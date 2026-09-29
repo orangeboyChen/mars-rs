@@ -52,9 +52,10 @@ import kotlinx.cinterop.toKString
  * The report is the one thing the C ABI hands back differently from the JNI
  * bridge: there the port calls `SdtLogic.reportSignalDetectResults` itself, here
  * it is [takeReport] the caller asks. So [runChecks] takes the report of a run
- * that went and hands it to [SdtLogic.ICallBack] — and when no callback is
- * listening it puts it by for the [takeReport] that comes looking for it, which
- * is what makes the two platforms one API.
+ * that went, hands it to [SdtLogic.ICallBack] when one is listening, and puts it
+ * by for the [takeReport] that comes looking for it — which is what makes the
+ * two platforms one API, and what makes the two ways of asking answer the same
+ * document however the app chose to be told.
  */
 @OptIn(ExperimentalForeignApi::class)
 public actual object SdtLogic {
@@ -62,16 +63,20 @@ public actual object SdtLogic {
     private var callBack: ICallBack? = null
 
     /**
-     * The reports of runs that are over, that no callback was listening for, and
-     * that nothing has taken yet.
+     * The reports of runs that are over and that nothing has taken yet.
      *
      * The C ABI has one buffer and [takeReport] empties it, so a report handed
-     * to a callback is a report a later [takeReport] would find gone. What the
+     * to a callback is a report a later [takeReport] would find gone: what the
      * common API promises is one document either way — the callback gets it, and
-     * an app that would rather ask keeps its own copy to ask for. Which is why
-     * the copy is kept *only* while nobody is listening: an app that installed a
-     * callback is an app that never polls, and one complete document per run for
-     * the life of the process is a report nobody can ever take.
+     * an app that would rather ask keeps its own copy to ask for.
+     *
+     * Kept for a listener as much as for a caller that polls, because the other
+     * `actual` does: Android's [takeReport] is an `external` over the list the
+     * JNI bridge fills on every delivery, whether or not a callback was there to
+     * be handed one, so an app that installed a callback and asked anyway got
+     * the document there and `null` here. What an app that never asks pays for
+     * the ones it leaves is what it pays on Android today — a run of two links'
+     * hosts is a few hundred bytes — and [reset] is what throws them away.
      */
     private val pending = mutableListOf<String>()
 
@@ -140,21 +145,19 @@ public actual object SdtLogic {
                 networkType
             )
             // The report of the run, which is the one thing the C ABI has no
-            // callback of its own for: taken here, and handed to the callback,
-            // the way the JNI bridge hands it over from inside the run. The take
-            // empties the buffer it takes from, so what a caller that asks
-            // instead gets is the copy put by below — and only when there is no
-            // callback to hand this one to.
+            // callback of its own for: taken here, put by for the `takeReport`
+            // that comes looking for it, and handed to the callback as well, the
+            // way the JNI bridge hands it over from inside the run. The take
+            // empties the buffer it takes from, so a report that was not put by
+            // is one no later `takeReport` finds: the copy is what lets an app
+            // that installed a callback still ask, which is the same answer the
+            // Android `actual` gives it.
             if (ran == MARS_SDT_OK) {
                 val report = drainReport()
-                val listener = callBack
-                if (listener == null) {
-                    if (report != null) {
-                        pending.add(report)
-                    }
-                } else {
-                    listener.reportSignalDetectResults(report)
+                if (report != null) {
+                    pending.add(report)
                 }
+                callBack?.reportSignalDetectResults(report)
             }
             ran == MARS_SDT_OK
         } finally {
