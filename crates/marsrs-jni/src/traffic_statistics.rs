@@ -200,14 +200,22 @@ mod tests {
     use marsrs_comm::tickcount::gettickcount;
 
     use super::*;
-    use crate::platform_comm::set_net_info_impl;
+    use crate::platform_comm::{net_info_impl, set_net_info_impl};
 
-    /// The network the device is on is one value for the whole crate, so the
-    /// tests that move it take the crate's lock and put it back.
+    /// The network the device is on is one value for the whole crate, so a test
+    /// that moves it takes the crate's lock and puts back what it found.
+    ///
+    /// What it is for is the slot: [`TrafficStatistics`] counts into the wifi
+    /// pair or the mobile pair by the network the device is on, so a test that
+    /// counts outside this helper is one whose answer depends on whichever
+    /// test moved that value last — the count is right and the assertion on
+    /// where it landed is not.
     fn on_network<R>(net_info: NetInfo, f: impl FnOnce() -> R) -> R {
         let guard = crate::test_lock();
+        let was = net_info_impl();
         set_net_info_impl(net_info.as_i32());
         let result = f();
+        set_net_info_impl(was.as_i32());
         drop(guard);
         result
     }
@@ -260,16 +268,18 @@ mod tests {
         let reported = reported();
         let mut statistics = counting(&reported);
 
-        statistics.data_at(0, 0, 1_001);
-        statistics.flush_at(1_002);
-        assert!(reported.lock().unwrap().is_empty());
+        on_network(NetInfo::Wifi, || {
+            statistics.data_at(0, 0, 1_001);
+            statistics.flush_at(1_002);
+            assert!(reported.lock().unwrap().is_empty());
 
-        // a report starts the counters over, so what was reported is not
-        // reported twice
-        statistics.data_at(1, 1, 1_003);
-        statistics.flush_at(1_004);
-        statistics.flush_at(1_005);
-        assert_eq!(*reported.lock().unwrap(), vec![(1, 1, 0, 0)]);
+            // a report starts the counters over, so what was reported is not
+            // reported twice
+            statistics.data_at(1, 1, 1_003);
+            statistics.flush_at(1_004);
+            statistics.flush_at(1_005);
+            assert_eq!(*reported.lock().unwrap(), vec![(1, 1, 0, 0)]);
+        });
     }
 
     #[test]
@@ -277,18 +287,20 @@ mod tests {
         let reported = reported();
         let mut statistics = counting(&reported);
 
-        // on the threshold: counted, not reported — `>` and not `>=`
-        statistics.data_at(10 * 1024, 0, 1_001);
-        assert!(reported.lock().unwrap().is_empty());
+        on_network(NetInfo::Wifi, || {
+            // on the threshold: counted, not reported — `>` and not `>=`
+            statistics.data_at(10 * 1024, 0, 1_001);
+            assert!(reported.lock().unwrap().is_empty());
 
-        // and the byte that crosses it
-        statistics.data_at(1, 0, 1_002);
-        assert_eq!(*reported.lock().unwrap(), vec![(0, 10 * 1024 + 1, 0, 0)]);
+            // and the byte that crosses it
+            statistics.data_at(1, 0, 1_002);
+            assert_eq!(*reported.lock().unwrap(), vec![(0, 10 * 1024 + 1, 0, 0)]);
 
-        // the threshold is the four counters added up, not any one of them
-        statistics.data_at(5 * 1024, 0, 1_003);
-        statistics.data_at(0, 5 * 1024 + 1, 1_004);
-        assert_eq!(reported.lock().unwrap().len(), 2);
+            // the threshold is the four counters added up, not any one of them
+            statistics.data_at(5 * 1024, 0, 1_003);
+            statistics.data_at(0, 5 * 1024 + 1, 1_004);
+            assert_eq!(reported.lock().unwrap().len(), 2);
+        });
     }
 
     #[test]
@@ -298,15 +310,17 @@ mod tests {
         let reported = reported();
         let mut statistics = counting(&reported);
 
-        statistics.data_at(1, 0, 11_000);
-        assert!(reported.lock().unwrap().is_empty());
+        on_network(NetInfo::Wifi, || {
+            statistics.data_at(1, 0, 11_000);
+            assert!(reported.lock().unwrap().is_empty());
 
-        statistics.data_at(0, 1, 11_001);
-        assert_eq!(*reported.lock().unwrap(), vec![(1, 1, 0, 0)]);
+            statistics.data_at(0, 1, 11_001);
+            assert_eq!(*reported.lock().unwrap(), vec![(1, 1, 0, 0)]);
 
-        // … and the clock moving back under it is no report either
-        statistics.data_at(1, 0, 0);
-        assert_eq!(reported.lock().unwrap().len(), 1);
+            // … and the clock moving back under it is no report either
+            statistics.data_at(1, 0, 0);
+            assert_eq!(reported.lock().unwrap().len(), 1);
+        });
     }
 
     #[test]
@@ -314,12 +328,14 @@ mod tests {
         let reported = reported();
         let mut statistics = counting(&reported);
 
-        statistics.data_at(1, 2, 1_001);
-        statistics.flush_at(1_002);
-        assert_eq!(*reported.lock().unwrap(), vec![(2, 1, 0, 0)]);
+        on_network(NetInfo::Wifi, || {
+            statistics.data_at(1, 2, 1_001);
+            statistics.flush_at(1_002);
+            assert_eq!(*reported.lock().unwrap(), vec![(2, 1, 0, 0)]);
 
-        // `flush` is the same thing with the clock read here
-        on_network(NetInfo::Wifi, || statistics.data(3, 4));
+            // `flush` is the same thing with the clock read here
+            statistics.data(3, 4);
+        });
         statistics.flush();
         assert_eq!(reported.lock().unwrap().len(), 2);
     }
@@ -372,23 +388,25 @@ mod tests {
             }
         });
 
-        statistics.data_at(u32::MAX - 5, 0, 1_001);
-        assert!(
-            reported.lock().unwrap().is_empty(),
-            "a counter one byte short of wrapping is not a report yet"
-        );
+        on_network(NetInfo::Wifi, || {
+            statistics.data_at(u32::MAX - 5, 0, 1_001);
+            assert!(
+                reported.lock().unwrap().is_empty(),
+                "a counter one byte short of wrapping is not a report yet"
+            );
 
-        // ten bytes more wrap it round to four, and the timeout reports that
-        statistics.data_at(10, 0, 11_001);
-        assert_eq!(*reported.lock().unwrap(), vec![(0, 4, 0, 0)]);
+            // ten bytes more wrap it round to four, and the timeout reports that
+            statistics.data_at(10, 0, 11_001);
+            assert_eq!(*reported.lock().unwrap(), vec![(0, 4, 0, 0)]);
 
-        // a counter that wrapped to nothing at all is not reported even on a
-        // flush: the C++ only calls the callback when one of the four is not
-        // zero
-        statistics.data_at(u32::MAX, 0, 11_002);
-        statistics.data_at(1, 0, 11_003);
-        statistics.flush_at(11_004);
-        assert_eq!(reported.lock().unwrap().len(), 1);
+            // a counter that wrapped to nothing at all is not reported even on a
+            // flush: the C++ only calls the callback when one of the four is not
+            // zero
+            statistics.data_at(u32::MAX, 0, 11_002);
+            statistics.data_at(1, 0, 11_003);
+            statistics.flush_at(11_004);
+            assert_eq!(reported.lock().unwrap().len(), 1);
+        });
     }
 
     #[test]
