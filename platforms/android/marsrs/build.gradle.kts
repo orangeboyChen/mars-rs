@@ -73,6 +73,16 @@ android {
     }
 }
 
+// The one dependency this module has, and only because `flush()` hands the
+// drain to another thread: a `suspend` function and `Continuation` are in the
+// standard library, but what parks the caller until a thread of the I/O pool is
+// done is not. `implementation` and not `api`: nothing of kotlinx-coroutines is
+// in the API this module publishes — a `suspend` function is a method with a
+// `Continuation` parameter to its caller, and that is the standard library's.
+dependencies {
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+}
+
 // `components["release"]` does not exist yet while this script runs: AGP
 // registers it in an `afterEvaluate` of its own, so the publication is
 // declared now and pointed at the component later.

@@ -13,6 +13,8 @@ import android.content.Context
 import android.content.res.Configuration
 import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * An appender of an app's own — build one when the app starts, then write
@@ -57,14 +59,15 @@ import java.util.concurrent.ConcurrentHashMap
  * Every member is safe to call from any thread. A record written through
  * [AppenderMode.ASYNC] — the default — sits in a memory-mapped cache file until
  * a writer thread takes it to the log file, so the last lines of a process that
- * is killed reach the disk only after [flush]: call it before the app reads or
- * uploads its logs. Nothing is *lost* without it — the cache file is the
+ * is killed reach the disk only after [flushNow]: call it before the app reads
+ * or uploads its logs. Nothing is *lost* without it — the cache file is the
  * kernel's, and the next [Xlog] of this [namePrefix] drains it when it opens —
- * but the file of the session that is ending is complete only once [flush] ran.
+ * but the file of the session that is ending is complete only once [flushNow]
+ * ran.
  *
- * Which is why an [Xlog] built with a `Context` needs no [flush] on its way out:
- * it flushes itself when Android says the app's UI is no longer on screen, the
- * last moment Android says anything at all before it can end the process.
+ * Which is why an [Xlog] built with a `Context` needs no [flushNow] on its way
+ * out: it flushes itself when Android says the app's UI is no longer on screen,
+ * the last moment Android says anything at all before it can end the process.
  *
  * ## The older spelling
  *
@@ -135,7 +138,8 @@ class Xlog : Log.LogImp {
      * @param context any `Context` of the app, when this appender is to flush
      *                itself when the app's UI goes away — the last thing
      *                Android says before it can end the process without another
-     *                word. `null`, the start, registers nothing; see [flush].
+     *                word. `null`, the start, registers nothing; see
+     *                [flushNow].
      * @throws IllegalArgumentException when `marsrs-jni` opens nothing, which is
      *                                  what a directory it cannot create comes
      *                                  to. [XlogConfig] refuses a config it
@@ -267,23 +271,43 @@ class Xlog : Log.LogImp {
     fun f(tag: String, message: String) = log(LogLevel.FATAL, tag, message)
 
     /**
-     * Takes what is in the cache to the log file, and hands the file's own
-     * buffer to the OS — the last few KiB of a log file are in a `FILE*` until
-     * this runs, so a reader in another process cannot see them yet.
+     * Tells the writer thread to take what is in the cache to the log file, and
+     * returns at once: the drain is the writer's, and nothing here says when it
+     * is over. What it is for is a drain an app wants soon and does not want to
+     * wait for — a record still in the cache sits in a file the kernel holds, so
+     * nothing is lost by a drain that has not happened yet.
+     */
+    fun signalFlush() {
+        if (isOpen) {
+            appenderFlush(handle, false)
+        }
+    }
+
+    /**
+     * Takes what is in the cache to the log file on the calling thread, and
+     * hands the file's own buffer to the OS — the last few KiB of a log file are
+     * in a `FILE*` until this runs, so a reader in another process cannot see
+     * them yet. The records are on disk when it returns, and what it costs is
+     * the time the drain takes, on that thread.
      *
      * An [Xlog] built with a `Context` runs this itself when the app's UI is no
      * longer on screen, so an app that reads its logs in a later session needs
      * no call of its own.
-     *
-     * @param sync `true` drains on the calling thread, which is what an app
-     *             wants before it reads or uploads the files; `false` asks the
-     *             writer thread to do it and returns
      */
-    @JvmOverloads
-    fun flush(sync: Boolean = false) {
+    fun flushNow() {
         if (isOpen) {
-            appenderFlush(handle, sync)
+            appenderFlush(handle, true)
         }
+    }
+
+    /**
+     * [flushNow] for a caller that can suspend and would rather not block the
+     * thread it is on: the records are on disk when this resumes, and what
+     * waited for them is a thread of the I/O pool. A drain blocks whatever
+     * thread it runs on, which is why this one is handed to another one.
+     */
+    suspend fun flush() = withContext(Dispatchers.IO) {
+        flushNow()
     }
 
     /**
@@ -341,8 +365,10 @@ class Xlog : Log.LogImp {
     private var registeredWith: Context? = null
 
     /**
-     * What an [Xlog] built with a `Context` registers: [flush] on the moment the
-     * app's UI is no longer on screen.
+     * What an [Xlog] built with a `Context` registers: [flushNow] on the moment
+     * the app's UI is no longer on screen — and not [signalFlush], which only wakes
+     * the writer: the process can be ended the moment this returns, so a drain
+     * nobody has waited for is a drain that may not have happened.
      *
      * Android has no "the app is quitting" — `Application.onTerminate` is never
      * called on a device, and a process the system ends is told nothing at all.
@@ -359,12 +385,12 @@ class Xlog : Log.LogImp {
 
         override fun onTrimMemory(level: Int) {
             if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
-                log.get()?.flush(sync = true)
+                log.get()?.flushNow()
             }
         }
 
         override fun onLowMemory() {
-            log.get()?.flush(sync = true)
+            log.get()?.flushNow()
         }
 
         override fun onConfigurationChanged(newConfig: Configuration) = Unit
@@ -415,7 +441,7 @@ class Xlog : Log.LogImp {
          *                itself when the app's UI goes away — the last thing
          *                Android says before it can end the process without
          *                another word. `null`, the start, registers nothing;
-         *                see [flush]
+         *                see [flushNow]
          * @throws IllegalArgumentException when `marsrs-jni` opens nothing, which
          *                                  is what a directory it cannot create
          *                                  comes to
