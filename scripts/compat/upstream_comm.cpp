@@ -6,6 +6,7 @@
 //   upstream_comm adler32 --data=HEX [--seed=N]
 //   upstream_comm base64 --data=HEX
 //   upstream_comm http ACTION [--data=HEX] [--set=N:V|N:V] [--in=PATH]
+//                       [--sizes=N,N]
 //   upstream_comm packer pack --url=U --seq=N --data=HEX [--hash=no] --out=PATH
 //   upstream_comm packer unpack --in=PATH
 //   upstream_comm simple pack --kind=short|int --data=HEX --out=PATH
@@ -20,7 +21,9 @@
 // and `looks` the one field `--name` asks for. `build` prints the bytes of a
 // request or of an answer and writes them to `--out`, and `parse` prints what
 // reading those bytes gives — the same line `comm-compat` prints for the same
-// call, so the two can be diffed.
+// call, so the two can be diffed. `pieces` prints that line once a piece, the
+// answer cut into the reads `--sizes` asks for, which is how one reaches a
+// socket.
 //
 // `strutil` is the string helpers: `--data` is the bytes of the string and
 // `--arg` the second string — the delimiters, the prefix or suffix, the
@@ -588,6 +591,31 @@ const char* status_name(http::Parser::TRecvStatus status) {
     return "start";
 }
 
+// One line of what a parser has read, whichever call of `Recv` it is after:
+// the status, the two lengths, how much body there is, the mode the first line
+// decided, and the first line, the head and the body.
+std::string receipt(const http::Parser& parser,
+                    const AutoBuffer& body,
+                    http::Parser::TRecvStatus status) {
+    // The first line whether it was read or not: what a caller asking for it
+    // before the answer is whole gets is the one the parser started with.
+    const bool is_request = (http::kRequest == parser.CsMode());
+    const std::string first = is_request ? parser.Request().ToString() : parser.Status().ToString();
+    char line[4096];
+    snprintf(line,
+             sizeof(line),
+             "%s %zu %zu %zu %s %s %s %s",
+             status_name(status),
+             parser.FirstLineLength(),
+             parser.HeaderLength(),
+             body.Length(),
+             is_request ? "request" : "respond",
+             or_dash(hexs(first)).c_str(),
+             or_dash(hexs(parser.Fields().ToString())).c_str(),
+             or_dash(hex((const unsigned char*)body.Ptr(), body.Length())).c_str());
+    return std::string(line);
+}
+
 // `Parser::Recv` — how far the parser got, the two lengths, the body, the mode
 // the first line decided, and the first line and the head it read.
 int parse_http(int argc, char** argv) {
@@ -603,17 +631,52 @@ int parse_http(int argc, char** argv) {
     const http::Parser::TRecvStatus status =
         parser.Recv(bytes(raw), raw.size(), NULL, only_header);
 
-    const bool is_request = (http::kRequest == parser.CsMode());
-    const std::string first = is_request ? parser.Request().ToString() : parser.Status().ToString();
-    printf("%s %zu %zu %zu %s %s %s %s\n",
-           status_name(status),
-           parser.FirstLineLength(),
-           parser.HeaderLength(),
-           receiver.Length(),
-           is_request ? "request" : "respond",
-           or_dash(hexs(first)).c_str(),
-           or_dash(hexs(parser.Fields().ToString())).c_str(),
-           or_dash(hex((const unsigned char*)body.Ptr(), body.Length())).c_str());
+    printf("%s\n", receipt(parser, body, status).c_str());
+    return 0;
+}
+
+// `Parser::Recv` once a piece: the same line `parse_http` prints, for the bytes
+// the parser has been given so far.
+//
+// `--sizes` is how many bytes one read of the socket gave, in order; a size of
+// nothing is a read of nothing, which is the peer hanging up. The bytes the
+// sizes do not ask for are never read, so a case can leave the last of an
+// answer out.
+int pieces_http(int argc, char** argv) {
+    const char* in_path = opt(argc, argv, "in");
+    const std::vector<unsigned char> raw =
+        (in_path != NULL) ? read_file(in_path) : unhex(opt(argc, argv, "data"));
+    const char* sizes_text = opt(argc, argv, "sizes");
+    if (sizes_text == NULL) {
+        fprintf(stderr, "http pieces needs --sizes=N,N\n");
+        return 1;
+    }
+
+    AutoBuffer body;
+    http::MemoryBodyReceiver receiver(body);
+    http::Parser parser(&receiver, false);
+
+    size_t at = 0;
+    const char* size_text = sizes_text;
+    while (true) {
+        const size_t size = (size_t)strtoul(size_text, NULL, 10);
+        if (at + size > raw.size()) {
+            fprintf(stderr,
+                    "--sizes asks for %zu bytes and there are %zu\n",
+                    at + size,
+                    raw.size());
+            return 1;
+        }
+        const http::Parser::TRecvStatus status =
+            (0 == size) ? parser.Recv(NULL, 0, NULL, false)
+                        : parser.Recv(bytes(raw) + at, size, NULL, false);
+        at += size;
+        printf("%s\n", receipt(parser, body, status).c_str());
+
+        const char* comma = strchr(size_text, ',');
+        if (comma == NULL) break;
+        size_text = comma + 1;
+    }
     return 0;
 }
 
@@ -627,10 +690,11 @@ int http_command(int argc, char** argv) {
     if (0 == strcmp(name, "looks")) return head_looks(argc, argv);
     if (0 == strcmp(name, "build")) return build_http(argc, argv);
     if (0 == strcmp(name, "parse")) return parse_http(argc, argv);
+    if (0 == strcmp(name, "pieces")) return pieces_http(argc, argv);
 
     fprintf(stderr,
-            "usage: upstream_comm http request-line|status-line|fields|reads|looks|build|parse "
-            "...\n");
+            "usage: upstream_comm http request-line|status-line|fields|reads|looks|build|parse"
+            "|pieces ...\n");
     return 1;
 }
 

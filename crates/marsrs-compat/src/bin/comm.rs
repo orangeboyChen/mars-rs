@@ -8,6 +8,7 @@
 //! comm-compat adler32 --data=HEX [--seed=N]
 //! comm-compat base64 --data=HEX
 //! comm-compat http ACTION [--data=HEX] [--set=N:V|N:V] [--in=PATH]
+//!                     [--sizes=N,N]
 //! comm-compat packer pack --url=U --seq=N --data=HEX [--hash=no] --out=PATH
 //! comm-compat packer unpack --in=PATH
 //! comm-compat simple pack --kind=short|int --data=HEX --out=PATH
@@ -21,7 +22,8 @@
 //! `--data`, what `FromString()` read; `fields` prints a head and how many
 //! fields it holds; `reads` the numbers a caller reads out of one; `looks`
 //! the one field `--name` asks for; `build` the bytes of a request or of an
-//! answer, written to `--out`; `parse` what reading those bytes gives.
+//! answer, written to `--out`; `parse` what reading those bytes gives; `pieces`
+//! the same answer read in the pieces `--sizes` cuts it into, one line a piece.
 //!
 //! `socket` is one line of what a caller reads off a [`SocketAddress`]: the
 //! family, the bytes of the address, the port, the four `valid_*`, the three
@@ -289,6 +291,8 @@ fn array<const N: usize>(bytes: Vec<u8>) -> Result<[u8; N], String> {
 /// * `build` prints the bytes of a request or of an answer, and writes them
 ///   to `--out`;
 /// * `parse` prints what reading those bytes gives.
+/// * `pieces` prints what reading them in the pieces `--sizes` asks for gives,
+///   one line a piece, which is how an answer reaches a socket.
 fn http(name: &str, opts: &Opts) -> Result<(), String> {
     match name {
         "request-line" => first_line(opts, true),
@@ -298,6 +302,7 @@ fn http(name: &str, opts: &Opts) -> Result<(), String> {
         "looks" => looks(opts),
         "build" => build(opts),
         "parse" => parse_http(opts),
+        "pieces" => pieces_http(opts),
         _ => Err(format!("http {name} is not an action this CLI drives")),
     }
 }
@@ -442,13 +447,54 @@ fn parse_http(opts: &Opts) -> Result<(), String> {
     } else {
         parser.recv(&bytes)
     };
+    println!("{}", receipt(&parser, status));
+    Ok(())
+}
+
+/// `Parser::Recv` once a piece: the same line [`parse_http`] prints, for the
+/// bytes the parser has been given so far.
+///
+/// `--sizes` is how many bytes one read of the socket gave, in order; a size
+/// of nothing is a read of nothing, which is the peer hanging up. The bytes
+/// the sizes do not ask for are never read, so a case can leave the last of
+/// an answer out.
+fn pieces_http(opts: &Opts) -> Result<(), String> {
+    let bytes = match opts.value("in") {
+        Some(path) => std::fs::read(path).map_err(|err| format!("read {path}: {err}"))?,
+        None => unhex(opts.value("data").unwrap_or(""))?,
+    };
+    let sizes = opts.value("sizes").ok_or("http pieces needs --sizes=N,N")?;
+    let mut parser = Parser::new();
+    let mut at = 0;
+    for size in sizes.split(',') {
+        let size: usize = size
+            .parse()
+            .map_err(|_| format!("--sizes asks for {size}, which is not a size"))?;
+        if at + size > bytes.len() {
+            return Err(format!(
+                "--sizes asks for {} bytes and there are {}",
+                at + size,
+                bytes.len()
+            ));
+        }
+        let status = parser.recv(&bytes[at..at + size]);
+        at += size;
+        println!("{}", receipt(&parser, status));
+    }
+    Ok(())
+}
+
+/// One line of what a parser has read, whichever call of `Recv` it is after:
+/// the status, the two lengths, how much body there is, the mode the first
+/// line decided, and the first line, the head and the body.
+fn receipt(parser: &Parser, status: RecvStatus) -> String {
     // The first line whether it was read or not: what a caller asking for it
     // before the answer is whole gets is the one the parser started with.
     let first = match parser.mode() {
         CsMode::Request => parser.request().to_string(),
         CsMode::Respond => parser.status().to_string(),
     };
-    println!(
+    format!(
         "{} {} {} {} {} {} {} {}",
         status_name(status),
         parser.first_line_len(),
@@ -458,8 +504,7 @@ fn parse_http(opts: &Opts) -> Result<(), String> {
         dash(&hex(first.as_bytes())),
         dash(&hex(parser.fields().to_string().as_bytes())),
         dash(&hex(parser.body())),
-    );
-    Ok(())
+    )
 }
 
 /// `Parser::TRecvStatus`, named the way the C++ names it.

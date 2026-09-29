@@ -78,6 +78,20 @@
 #   and the port keeps none of it. No case feeds one in: what a caller reads
 #   after a refusal is not a line anyone should be reading.
 #
+# `### http in pieces` is the same answer arriving the way one reaches a socket:
+# one `Recv` a piece, and a line for each. The two sides agree on a piece for
+# the reason they agree on a whole answer — a parser consumes what it can before
+# it answers, so what it has read after a piece is what one `Recv` of the bytes
+# so far would have read — and one thing is true of a piece alone: a read of no
+# bytes is the peer hanging up, which is the only thing that ends a body no
+# `Content-Length` ends.
+#
+# What a piece cannot ask for is a read behind an answer the parser refused: the
+# C++ leaves its `while (true)` through a `case` of its own, and the three
+# errors — `kFirstLineError`, `kHeaderFieldsError` and `kBodyError` — are none
+# of them, so a `Recv` that comes after one never returns, where the port
+# answers the error again. The one case below that is refused stops there.
+#
 # A first line of fewer tokens than the C++ asks for aborts it — `xassert2` is
 # on, on every build that is not `NDEBUG` — so a request is always three tokens
 # here and an answer always two, which is what the wire carries anyway.
@@ -1003,6 +1017,41 @@ def fields_of_blocks(block):
     return out
 
 
+def closing(raw):
+    # whether the head of `raw` asks for the connection to be closed, which is
+    # what decides what a read of nothing means
+    crlf = raw.find(b"\r\n")
+    if crlf < 0:
+        return False
+    end = raw.find(b"\r\n\r\n")
+    if end < 0 or end == crlf:
+        # a first line that is the whole head holds no field at all
+        return False
+    values = {name.lower(): value
+              for name, value in fields_of_blocks(raw[crlf + 2:end + 4].decode("latin-1"))}
+    return (values.get("connection") or "").lower() == "close"
+
+
+def pieces_of(raw, sizes):
+    # one `Recv` a piece. A parser consumes everything it can before it
+    # answers, so what it has read after a piece is what one `Recv` of the
+    # bytes so far would have read — but for a read of nothing, which is the
+    # peer hanging up and is the only thing that ends a body no length ends.
+    lines = []
+    at = 0
+    for size in sizes:
+        if size == 0:
+            line = lines[-1] if lines else parse_of(b"")
+            if line.startswith("body ") and closing(raw[:at]):
+                line = "end" + line[4:]
+            lines.append(line)
+            continue
+        at += size
+        assert at <= len(raw), "the sizes of a case ask for more than it has"
+        lines.append(parse_of(raw[:at]))
+    return "\n".join(lines)
+
+
 rows = []
 for name, kind, method, url, version, code, reason, data in [
     ("a-get-request", "request-to", "GET", "/", "HTTP/1.1", "-", "-", "-"),
@@ -1180,6 +1229,45 @@ for name, data in [
     expect(name, parse_of(data))
 
 with open(os.path.join(work, "http-parse.txt"), "w") as f:
+    f.write("\n".join(rows) + "\n")
+
+# --- http pieces: one answer, read in the pieces it arrives in. ---------------
+rows = []
+for name, data, sizes in [
+    # a name a case of another table has is not a name this one may have
+    ("an-answer-of-two-pieces", b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nmars",
+     (10, 30, 2)),
+    ("a-head-that-comes-in-three", b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nmars",
+     (17, 19, 2)),
+    ("an-answer-that-stops-short", b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nmars",
+     (38, 2)),
+    ("a-read-of-nothing-first", b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nmars",
+     (0, 42)),
+    ("a-body-of-no-length", b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nmars",
+     (40, 2, 0)),
+    ("a-body-of-no-length-that-goes-on", b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nmars",
+     (40, 2, 0, 0)),
+    ("a-head-of-no-fields", b"HTTP/1.1 200 OK\r\n\r\nmars", (15, 4, 4)),
+    ("a-request-of-three-pieces", b"GET / HTTP/1.1\r\nHost: mars\r\n\r\n", (16, 12, 2)),
+    ("a-chunked-body-of-four-pieces",
+     b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nmars\r\n0\r\n\r\n",
+     (47, 3, 8, 3)),
+    ("a-chunk-at-a-time",
+     b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nmars\r\n6\r\nsaturn\r\n0\r\n\r\n",
+     (47, 9, 11, 5)),
+    # the error is the last piece of this one: a `Recv` that comes after an
+    # error does not come back on the C++ side, so no case asks for a piece
+    # behind one
+    ("a-chunk-that-is-not-its-size",
+     b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nmar\r\n0\r\n\r\n",
+     (47, 13)),
+]:
+    sizes = ",".join(str(size) for size in sizes)
+    row(name, sizes)
+    artifact(name, data)
+    expect_of("pieces", name, pieces_of(data, [int(size) for size in sizes.split(",")]))
+
+with open(os.path.join(work, "http-pieces.txt"), "w") as f:
     f.write("\n".join(rows) + "\n")
 PY
 
@@ -1467,6 +1555,18 @@ while read -r name; do
     compare_readings "$name" "http parse" "$WORK/in-$name.bin"
     printf '| %s | %s | %s |\n' "$name" "$CROSS" "$EXPECTED"
 done < "$WORK/http-parse.txt"
+
+# The same answers, arriving the way they reach a socket: one `Recv` a piece,
+# and a piece of no bytes is the peer hanging up.
+printf '\n### http in pieces\n\n| case | pieces | cross-read | expected |\n|---|---|---|---|\n'
+while read -r name sizes; do
+    "$RUST" http pieces --in="$WORK/in-$name.bin" --sizes="$sizes" \
+        > "$WORK/$name-rust-pieces.txt"
+    "$CPP" http pieces --in="$WORK/in-$name.bin" --sizes="$sizes" \
+        > "$WORK/$name-cpp-pieces.txt"
+    compare_answer "$name" pieces
+    printf '| %s | %s | %s | %s |\n' "$name" "$sizes" "$CROSS" "$EXPECTED"
+done < "$WORK/http-pieces.txt"
 
 if [ "$FAILED" -ne 0 ]; then
     echo "$FAILED check(s) failed" >&2
