@@ -7,7 +7,7 @@
 //! coverage measurement.
 
 use jni::objects::{
-    JByteArray, JClass, JIntArray, JObject, JObjectArray, JString, JValue, JValueOwned,
+    Global, JByteArray, JClass, JIntArray, JObject, JObjectArray, JString, JValue, JValueOwned,
 };
 use jni::signature::MethodSignature;
 use jni::strings::{JNIStr, MUTF8Chars};
@@ -94,6 +94,44 @@ where
 /// is where this is set.
 static VM: OnceLock<JavaVM> = OnceLock::new();
 
+/// A global reference to one of [`Classes`].
+type CachedClass = Global<JClass<'static>>;
+
+/// The classes of this library the bridge calls into.
+///
+/// `FindClass` resolves a name against the class loader of the code that is
+/// running, and a thread Rust attached itself has no Java frame to take one
+/// from: what it resolves against is the *system* loader, which on Android
+/// knows none of an app's classes, so a lookup made from a task thread answers
+/// `ClassNotFoundException` for every class named here. `JNI_OnLoad` runs on
+/// the thread that called `System.loadLibrary`, and the loader there is the
+/// app's — so the four are found once, there, and what is kept is a reference
+/// any thread may use.
+///
+/// A class of the platform's own is not one of them: those are what a lookup
+/// from an attached thread does find, so `java.util.ArrayList` is still looked
+/// up where it is built.
+struct Classes {
+    /// [`STN_CALLBACK`].
+    stn_callback: CachedClass,
+    /// [`APP_LOGIC`].
+    app_logic: CachedClass,
+    /// [`PLATFORM_COMM`].
+    platform_comm: CachedClass,
+    /// [`SDT_LOGIC`].
+    sdt_logic: CachedClass,
+}
+
+/// What [`JNI_OnLoad`] found: see [`Classes`]. `None` is a library a host
+/// linked rather than loaded from Java, which is a library with no VM and no
+/// one to ask either.
+static CLASSES: OnceLock<Classes> = OnceLock::new();
+
+/// One of [`CLASSES`], picked by the field the caller names.
+fn class_of(classes: fn(&Classes) -> &CachedClass) -> Option<&'static JClass<'static>> {
+    CLASSES.get().map(|cached| &**classes(cached))
+}
+
 /// `JNI_OnLoad` — `System.loadLibrary` calls it, and it is the only place the
 /// library can get hold of the VM.
 ///
@@ -119,7 +157,30 @@ pub unsafe extern "system" fn JNI_OnLoad(
     guard(|| {
         // SAFETY: `vm` is the live VM the JVM handed this call, by the
         // contract above.
-        let _ = VM.set(unsafe { JavaVM::from_raw(vm) });
+        let vm = unsafe { JavaVM::from_raw(vm) };
+        // Found here and nowhere else: this is the thread `System.loadLibrary`
+        // was called on, so its loader is the app's, which is the one that
+        // knows these classes — see [`CLASSES`]. A class the loader does not
+        // have leaves the cache unset and every ask unanswered, the way a
+        // lookup that found nothing did.
+        let classes = vm.attach_current_thread(|env| {
+            // One at a time: the lookup borrows `env` for itself, and the
+            // global reference is taken from what it answered.
+            let mut cached = |name: &JNIStr| -> jni::errors::Result<CachedClass> {
+                let class = env.find_class(name)?;
+                env.new_global_ref(class)
+            };
+            Ok::<_, jni::errors::Error>(Classes {
+                stn_callback: cached(STN_CALLBACK)?,
+                app_logic: cached(APP_LOGIC)?,
+                platform_comm: cached(PLATFORM_COMM)?,
+                sdt_logic: cached(SDT_LOGIC)?,
+            })
+        });
+        if let Ok(classes) = classes {
+            let _ = CLASSES.set(classes);
+        }
+        let _ = VM.set(vm);
         JNI_VERSION_1_6 as jint
     })
 }
@@ -138,7 +199,10 @@ pub fn report_signal_detect_results(json: String) {
         // Attaching lends the `Env` to a closure now rather than handing back
         // a guard, so the whole call moves inside it.
         let _ = vm.attach_current_thread(|env| {
-            let class = env.find_class(jni_str!("io/github/orangeboychen/marsrs/sdt/SdtLogic"))?;
+            // The class [`JNI_OnLoad`] found: see [`CLASSES`].
+            let Some(class) = class_of(|classes| &classes.sdt_logic) else {
+                return Ok(());
+            };
             let message = JObject::from(env.new_string(&json)?);
             env.call_static_method(
                 class,
@@ -1249,7 +1313,7 @@ pub(crate) fn ask_java(question: Question) -> Answer {
             return Answer::Nothing;
         };
         vm.attach_current_thread(|env| -> jni::errors::Result<Answer> {
-            let Ok(class) = env.find_class(STN_CALLBACK) else {
+            let Some(class) = class_of(|classes| &classes.stn_callback) else {
                 return Ok(Answer::Nothing);
             };
             Ok(ask_stn(env, class, question))
@@ -1258,7 +1322,7 @@ pub(crate) fn ask_java(question: Question) -> Answer {
     })
 }
 
-fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answer {
+fn ask_stn<'a>(env: &mut Env<'a>, class: &JClass<'_>, question: Question) -> Answer {
     match question {
         Question::MakesureAuthed { host } => {
             let Ok(host) = env.new_string(&host) else {
@@ -1707,7 +1771,7 @@ pub(crate) fn ask_app_logic(question: AppQuestion) -> AppAnswer {
             return AppAnswer::Nothing;
         };
         vm.attach_current_thread(|env| -> jni::errors::Result<AppAnswer> {
-            let Ok(class) = env.find_class(APP_LOGIC) else {
+            let Some(class) = class_of(|classes| &classes.app_logic) else {
                 return Ok(AppAnswer::Nothing);
             };
             Ok(ask_app(env, class, question))
@@ -1716,7 +1780,7 @@ pub(crate) fn ask_app_logic(question: AppQuestion) -> AppAnswer {
     })
 }
 
-fn ask_app<'a>(env: &mut Env<'a>, class: JClass<'a>, question: AppQuestion) -> AppAnswer {
+fn ask_app<'a>(env: &mut Env<'a>, class: &JClass<'_>, question: AppQuestion) -> AppAnswer {
     match question {
         AppQuestion::AppFilePath => {
             let called = env.call_static_method(
@@ -1789,7 +1853,7 @@ pub(crate) fn ask_platform_comm(question: PlatformQuestion) -> PlatformAnswer {
             return PlatformAnswer::Nothing;
         };
         vm.attach_current_thread(|env| -> jni::errors::Result<PlatformAnswer> {
-            let Ok(class) = env.find_class(PLATFORM_COMM) else {
+            let Some(class) = class_of(|classes| &classes.platform_comm) else {
                 return Ok(PlatformAnswer::Nothing);
             };
             Ok(ask_platform(env, class, question))
@@ -1800,7 +1864,7 @@ pub(crate) fn ask_platform_comm(question: PlatformQuestion) -> PlatformAnswer {
 
 fn ask_platform<'a>(
     env: &mut Env<'a>,
-    class: JClass<'a>,
+    class: &JClass<'_>,
     question: PlatformQuestion,
 ) -> PlatformAnswer {
     match question {
@@ -2220,7 +2284,7 @@ pub(crate) fn ask_probe(query: ProbeQuery) -> ProbeAnswer {
             return ProbeAnswer::Nothing;
         };
         vm.attach_current_thread(|env| -> jni::errors::Result<ProbeAnswer> {
-            let Ok(class) = env.find_class(SDT_LOGIC) else {
+            let Some(class) = class_of(|classes| &classes.sdt_logic) else {
                 return Ok(ProbeAnswer::Nothing);
             };
             Ok(ask_probe_of(env, class, query))
@@ -2229,7 +2293,7 @@ pub(crate) fn ask_probe(query: ProbeQuery) -> ProbeAnswer {
     })
 }
 
-fn ask_probe_of<'a>(env: &mut Env<'a>, class: JClass<'a>, query: ProbeQuery) -> ProbeAnswer {
+fn ask_probe_of<'a>(env: &mut Env<'a>, class: &JClass<'_>, query: ProbeQuery) -> ProbeAnswer {
     match query {
         ProbeQuery::Dns { domain, timeout_ms } => {
             let Ok(host) = env.new_string(&domain) else {
