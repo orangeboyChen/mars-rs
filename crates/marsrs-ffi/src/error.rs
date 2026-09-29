@@ -6,7 +6,7 @@
 //! `mars_xlog.h` repeat these values verbatim, and `tests/header_sync.rs`
 //! asserts the pair stays in sync.
 
-/// `mars_xlog_open` / `mars_xlog_current_log_path` succeeded.
+/// `0`, which `MARS_XLOG_OK` in `mars_xlog.h` names: a call that succeeded.
 pub const MARS_XLOG_OK: i32 = 0;
 /// `config` was null.
 pub const MARS_XLOG_ERR_NULL_CONFIG: i32 = -1;

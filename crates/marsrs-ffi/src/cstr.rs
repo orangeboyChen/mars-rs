@@ -44,8 +44,9 @@ pub unsafe fn ptr_to_str_or_empty<'a>(ptr: *const c_char) -> &'a str {
 /// that are not valid UTF-8.
 ///
 /// Paths are bytes: `ptr_to_str_or_empty` turns a non-UTF-8 directory into
-/// `""`, which `mars_xlog_open` then rejects with `EMPTY_LOG_DIR` — logging
-/// silently off for a perfectly valid path. On unix the bytes are used as-is;
+/// `""`, which `mars_xlog_oneshot_flush` then rejects with `EMPTY_LOG_DIR` —
+/// logging silently off for a perfectly valid path. `mars_xlog_new_instance`
+/// has no code to answer with, so it gives back handle `0` instead. On unix the bytes are used as-is;
 /// elsewhere they are converted lossily so the call still succeeds.
 ///
 /// # Safety
