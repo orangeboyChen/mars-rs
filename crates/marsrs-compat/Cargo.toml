@@ -17,10 +17,12 @@ marsrs-buffer = { workspace = true }
 # copy of it. `flate2`, `zstd` and `k256` came with the reader and are gone
 # with it — what is left here is the writer's side and the comparison itself.
 marsrs-xlog = { workspace = true }
-# The long-link half: `stn-compat` is the Rust of
-# `mars/stn/proto/longlink_packer.cc`, so the same cross-read the fixtures of
-# `fixtures/` are for can be run over the wire format too.
+# The long-link and the short-link halves: `stn-compat` is the Rust of
+# `mars/stn/proto/longlink_packer.cc` and of `shortlink_packer.cc`, so the same
+# cross-read the fixtures of `fixtures/` are for can be run over the wire
+# formats too. `marsrs-comm` is the http head the short link writes.
 marsrs-stn = { workspace = true }
+marsrs-comm = { workspace = true }
 tempfile = { workspace = true }
 serde_json = { workspace = true }
 
