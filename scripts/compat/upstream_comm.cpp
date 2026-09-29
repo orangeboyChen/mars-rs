@@ -1,12 +1,26 @@
-// The C++ half of the comm cross-read test: `mars/comm/basepacker.cc` and
-// `mars/comm/adler32.c`, driven the way `scripts/compat/comm.sh` drives the
-// Rust of the same two files.
+// The C++ half of the comm cross-read test: `mars/comm/basepacker.cc`,
+// `mars/comm/adler32.c` and `mars/comm/strutil.cc`, driven the way
+// `scripts/compat/comm.sh` drives the Rust of the same files.
 //
 //   upstream_comm adler32 --data=HEX [--seed=N]
 //   upstream_comm packer pack --url=U --seq=N --data=HEX [--hash=no] --out=PATH
 //   upstream_comm packer unpack --in=PATH
 //   upstream_comm simple pack --kind=short|int --data=HEX --out=PATH
 //   upstream_comm simple unpack --kind=short|int --in=PATH
+//   upstream_comm socket --ip=TEXT|--v4=HEX|--v6=HEX --port=N [--map=yes]
+//   upstream_comm strutil FN --data=HEX [--arg=HEX] [--pos=N]
+//
+// `strutil` is the string helpers: `--data` is the bytes of the string and
+// `--arg` the second string — the delimiters, the prefix or suffix, the
+// needle — both hex so that a byte the shell would eat is still one a case can
+// name. One line comes back, and it is the same line `comm-compat` prints for
+// the same call.
+//
+// `socket` prints one line of what a caller reads off a `socket_address`: the
+// family, the bytes of the address, the port, the four `valid_*`, the three
+// `is*` and the length, and then `ip`, `ipv6` and `url`, an empty one printed
+// as `-` — the same line `comm-compat` prints for the same address, so the two
+// can be diffed.
 //
 // `packer unpack` and `simple unpack` print one line: the `int` the C++ answers,
 // then what it read out of the package — the URL, the sequence and the length
@@ -29,8 +43,30 @@
 #include "mars/comm/adler32.h"
 #include "mars/comm/autobuffer.h"
 #include "mars/comm/basepacker.h"
+#include "mars/comm/socket/socket_address.h"
+#include "mars/comm/strutil.h"
+
+// `socket_address` asks the platform which network it is on in two places —
+// `v4tonat64_address` and `fix_current_nat64_addr`, which look the NAT64 prefix
+// up over DNS — and a harness has to answer the same line on every run, on a
+// machine with no NAT64 in front of it. Neither is a call the harness drives;
+// what is below is a stand-in for them so that the rest of the class links, and
+// it sits outside the anonymous namespace because a link-time symbol is what
+// the two calls need.
+bool ConvertV4toNat64V6(const struct in_addr&, struct in6_addr&) {
+    return false;
+}
+
+bool GetNetworkNat64Prefix(struct in6_addr&) {
+    return false;
+}
+
+TLocalIPStack local_ipstack_detect() {
+    return ELocalIPStack_IPv4;
+}
 
 namespace {
+
 
 // `NULL` for an option the command line did not give, which is not the same
 // thing as one it gave empty: `--data=` is a body of no bytes at all.
@@ -202,11 +238,151 @@ int simple(int argc, char** argv) {
     return 1;
 }
 
+// An empty string, which is what `ip()` answers for an address that never
+// parsed, is not a field a line can hold: it would move every field behind it.
+const char* or_dash(const char* s) {
+    return (NULL == s || '\0' == *s) ? "-" : s;
+}
+
+socket_address make_address(const char* ip_text,
+                            const std::vector<unsigned char>& v4,
+                            const std::vector<unsigned char>& v6,
+                            uint16_t port) {
+    if (ip_text != NULL) return socket_address(ip_text, port);
+
+    if (16 == v6.size()) {
+        sockaddr_in6 addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin6_family = AF_INET6;
+        addr.sin6_port = htons(port);
+        memcpy(&addr.sin6_addr, &v6[0], 16);
+        return socket_address(addr);
+    }
+
+    if (4 == v4.size()) {
+        sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        memcpy(&addr.sin_addr, &v4[0], 4);
+        return socket_address(addr);
+    }
+
+    // Nothing to build one out of, which is what the C++ is left with when the
+    // ip did not parse either.
+    return socket_address("", port);
+}
+
+// `socket_address` — one line of what a caller reads off an address: the
+// family, the bytes of it, the port, the four `valid_*`, the three `is*` and
+// the length, and then the three strings, an empty one printed as `-`. One of
+// `--ip=TEXT`, `--v4=HEX` and `--v6=HEX` says which address, and `--map=yes`
+// puts `v4tov4mapped_address()` behind it.
+int addresses(int argc, char** argv) {
+    const char* port_text = opt(argc, argv, "port");
+    uint16_t port = (uint16_t)(port_text ? strtoul(port_text, NULL, 10) : 0);
+    socket_address addr = make_address(opt(argc, argv, "ip"),
+                                       unhex(opt(argc, argv, "v4")),
+                                       unhex(opt(argc, argv, "v6")),
+                                       port);
+    if (NULL != opt(argc, argv, "map")) addr.v4tov4mapped_address();
+
+    const sockaddr* sa = &addr.address();
+    if (AF_INET == sa->sa_family) {
+        printf("v4 %s ", hex((const unsigned char*)&((const sockaddr_in*)sa)->sin_addr, 4).c_str());
+    } else if (AF_INET6 == sa->sa_family) {
+        printf("v6 %s ",
+               hex((const unsigned char*)&((const sockaddr_in6*)sa)->sin6_addr, 16).c_str());
+    } else {
+        printf("unspec - ");
+    }
+
+    printf("%u %d %d %d %d %u %d %d %d %d %s %s %s\n",
+           addr.port(),
+           addr.valid(),
+           addr.isv4(),
+           addr.isv6(),
+           addr.isv4mapped_address(),
+           (unsigned int)addr.address_length(),
+           addr.valid_server_address(false, false),
+           addr.valid_loopback_ip(),
+           addr.valid_broadcast_ip(),
+           addr.valid_broadcast_address(),
+           or_dash(addr.ip()),
+           or_dash(addr.ipv6()),
+           or_dash(addr.url()));
+    return 0;
+}
+
 int checksum(int argc, char** argv) {
     const char* seed_text = opt(argc, argv, "seed");
     std::vector<unsigned char> data = unhex(opt(argc, argv, "data"));
     unsigned long seed = seed_text ? strtoul(seed_text, NULL, 10) : 0;
     printf("%lu\n", adler32(seed, bytes(data), (unsigned int)data.size()));
+    return 0;
+}
+
+// The string helpers of `mars/comm/strutil.cc`, named the way `comm-compat`
+// names them: `--data` is the string, `--arg` the second one and `--pos` where
+// a search starts. A helper that found nothing prints what the port prints —
+// `-` for a `Str2Hex` that read no hex and `-1` for an `npos` — since an
+// unsigned `npos` is not a number a case should have to spell.
+int strings(int argc, char** argv) {
+    const char* name = (argc > 2) ? argv[2] : "";
+    std::vector<unsigned char> raw = unhex(opt(argc, argv, "data"));
+    std::string text((const char*)bytes(raw), raw.size());
+    std::vector<unsigned char> arg = unhex(opt(argc, argv, "arg"));
+    std::string second((const char*)bytes(arg), arg.size());
+    const char* pos_text = opt(argc, argv, "pos");
+    size_t pos = pos_text ? (size_t)strtoul(pos_text, NULL, 10) : 0;
+
+    // `Trim`, `ToLower` and their like take the string they change, so what
+    // goes in is a copy.
+    std::string copy = text;
+    std::vector<std::string> tokens;
+
+    if (0 == strcmp(name, "url_encode")) {
+        printf("%s\n", strutil::URLEncode(text).c_str());
+    } else if (0 == strcmp(name, "trim")) {
+        printf("%s\n", strutil::Trim(copy).c_str());
+    } else if (0 == strcmp(name, "trim_left")) {
+        printf("%s\n", strutil::TrimLeft(copy).c_str());
+    } else if (0 == strcmp(name, "trim_right")) {
+        printf("%s\n", strutil::TrimRight(copy).c_str());
+    } else if (0 == strcmp(name, "lower")) {
+        printf("%s\n", strutil::cast_lower(text).c_str());
+    } else if (0 == strcmp(name, "upper")) {
+        printf("%s\n", strutil::cast_upper(text).c_str());
+    } else if (0 == strcmp(name, "starts_with")) {
+        printf("%d\n", strutil::StartsWith(text, second) ? 1 : 0);
+    } else if (0 == strcmp(name, "ends_with")) {
+        printf("%d\n", strutil::EndsWith(text, second) ? 1 : 0);
+    } else if (0 == strcmp(name, "split_token")) {
+        strutil::SplitToken(text, second, tokens);
+        for (size_t at = 0; at < tokens.size(); ++at) {
+            printf("%s%s", 0 == at ? "" : "|", tokens[at].c_str());
+        }
+        printf("\n");
+    } else if (0 == strcmp(name, "hex2str")) {
+        printf("%s\n", strutil::Hex2Str(text).c_str());
+    } else if (0 == strcmp(name, "str2hex")) {
+        std::string out = strutil::Str2Hex(text);
+        printf("%s\n", hex((const unsigned char*)out.data(), out.size()).c_str());
+    } else if (0 == strcmp(name, "file_name_from_path")) {
+        printf("%s\n", strutil::GetFileNameFromPath(text.c_str()).c_str());
+    } else if (0 == strcmp(name, "ci_find_substr")) {
+        size_t at = strutil::ci_find_substr(text, second, pos);
+        if (std::string::npos == at) {
+            printf("-1\n");
+        } else {
+            printf("%zu\n", at);
+        }
+    } else if (0 == strcmp(name, "md5")) {
+        printf("%s\n", strutil::BufferMD5(text).c_str());
+    } else {
+        fprintf(stderr, "strutil %s is not a helper this harness drives\n", name);
+        return 1;
+    }
     return 0;
 }
 
@@ -218,6 +394,8 @@ int main(int argc, char** argv) {
     if (command == "adler32") return checksum(argc, argv);
     if (command == "packer") return packer(argc, argv);
     if (command == "simple") return simple(argc, argv);
+    if (command == "socket") return addresses(argc, argv);
+    if (command == "strutil") return strings(argc, argv);
 
     fprintf(stderr,
             "usage: upstream_comm adler32 --data=HEX [--seed=N]\n"
@@ -226,6 +404,10 @@ int main(int argc, char** argv) {
             "       upstream_comm packer unpack --in=PATH\n"
             "       upstream_comm simple pack --kind=short|int --data=HEX "
             "--out=PATH\n"
-            "       upstream_comm simple unpack --kind=short|int --in=PATH\n");
+            "       upstream_comm simple unpack --kind=short|int --in=PATH\n"
+            "       upstream_comm socket --ip=TEXT|--v4=HEX|--v6=HEX "
+            "--port=N [--map=yes]\n"
+            "       upstream_comm strutil FN --data=HEX [--arg=HEX] "
+            "[--pos=N]\n");
     return 1;
 }

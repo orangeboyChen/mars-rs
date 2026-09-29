@@ -17,6 +17,10 @@
 //! it ([`SocketAddress::v4_to_v6_address`] and
 //! [`SocketAddress::fix_current_nat64_addr`]) instead of a global the code
 //! asks for behind the caller's back.
+//!
+//! Two readings are the port's own and not the C++'s, and both are written
+//! down where they are made: the `ip_` of a NAT64 address, and the ip text
+//! [`SocketAddress::new`] will take.
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -62,7 +66,13 @@ pub struct SocketAddress {
 
 impl SocketAddress {
     /// `socket_address(const char* _ip, uint16_t _port)` — `AF_UNSPEC` when
-    /// neither `inet_pton(AF_INET)` nor `inet_pton(AF_INET6)` takes the ip.
+    /// the ip parses as neither an IPv4 nor an IPv6 one.
+    ///
+    /// What parses it is [`std::net`] and not `inet_pton`, and the two part
+    /// company in one place: a zero-padded octet (`010.1.1.1`) is an address
+    /// `inet_pton` reads as `10.1.1.1` and this one refuses, which is the
+    /// reading the standard library settled on when it stopped reading a
+    /// padded octet as an octal one.
     pub fn new(ip: &str, port: u16) -> Self {
         if let Ok(v4) = ip.parse::<Ipv4Addr>() {
             Self::from_v4(v4.octets(), port)
@@ -100,11 +110,13 @@ impl SocketAddress {
             Address::V4(v4, _) => Ipv4Addr::from(v4).to_string(),
             Address::V6(v6, _) if in6_is_addr_nat64(&v6) => {
                 // The C++ copies `kWellKnownNat64Prefix` in front and then
-                // `inet_ntop`s into `ip_ + 9`, which on the Apple platforms
-                // writes the embedded IPv4 address there (their `inet_ntop`
-                // renders a NAT64 address that way). The port writes the
-                // embedded address directly, which is what the code intends
-                // and what `ip()` assumes when it strips the prefix again.
+                // `inet_ntop`s the address into `ip_ + 9` — but the address
+                // it hands over is the v6 one and not the IPv4 one it has
+                // just pulled out of it, so its `ip_` carries the prefix
+                // twice: `64:ff9b::64:ff9b::c000:201`, which `ip()` strips
+                // back down to the v6 text. The port writes the embedded
+                // address, which is what the line is there for and what
+                // [`SocketAddress::ip`] strips the prefix off.
                 format!(
                     "{}{}",
                     WELL_KNOWN_NAT64_PREFIX_TEXT,
@@ -122,9 +134,12 @@ impl SocketAddress {
         SocketAddress { addr, ip, url }
     }
 
-    /// `ip()` — the text a caller would connect to: for a v4-mapped or NAT64
-    /// address that is the embedded IPv4 address, because the C++ skips the
-    /// `::ffff:` / `64:ff9b::` in front of it.
+    /// `ip()` — the text a caller would connect to: for a v4-mapped address
+    /// that is the embedded IPv4 address, because the C++ skips the `::ffff:`
+    /// in front of it. It skips the NAT64 prefix too, but a NAT64 address is
+    /// where the two sides part: the C++ is left with the v6 text behind its
+    /// doubled prefix (`64:ff9b::c000:201`) and the port with the IPv4
+    /// address the prefix was written in front of (`192.0.2.1`).
     pub fn ip(&self) -> &str {
         match self.addr {
             Address::V4(..) => &self.ip,
@@ -400,6 +415,10 @@ mod tests {
 
     #[test]
     fn a_nat64_address_reports_the_embedded_v4_address() {
+        // The C++ answers `64:ff9b::64:ff9b::c000:201` for `ip_` here and
+        // `64:ff9b::c000:201` for `ip()`: it writes the prefix and then the
+        // v6 text behind it, and not the embedded address. See
+        // [`SocketAddress::ip`].
         let addr = SocketAddress::from_v6(in6_set_addr_nat64([192, 0, 2, 1]), 80);
         assert_eq!(addr.ip(), "192.0.2.1", "the prefix is stripped");
         assert_eq!(addr.ipv6(), "64:ff9b::192.0.2.1", "... but ip_ keeps it");
