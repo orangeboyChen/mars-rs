@@ -550,6 +550,7 @@ dependencies = [
  "flate2",
  "marsrs-appender",
  "marsrs-buffer",
+ "marsrs-comm",
  "marsrs-sdt",
  "marsrs-stn",
  "tempfile",

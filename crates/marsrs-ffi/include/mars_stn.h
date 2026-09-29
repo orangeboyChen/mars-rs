@@ -486,6 +486,31 @@ unsigned short mars_stn_gen_sequence_id(void);
 /** `TrigNooping` — a noop on the default long link, and a heartbeat of 0. */
 void mars_stn_trig_nooping(void);
 
+/**
+ * `ActiveLogic::OnForeground(_isforeground)` — the app came to the front, or
+ * left it, which is what a task asks before it wakes a long link that is down
+ * and what the anti-avalanche check and the timing sync are told about. This is
+ * `BaseEvent.onForeground` on Android and one call of
+ * `mars::baseevent::OnForeground` everywhere else: there is no `BaseEvent` in an
+ * ABI of plain functions, so a host of this header calls it itself.
+ *
+ * A host that never calls it gets the C++'s `ActiveLogic` as it is made: not in
+ * front, so nothing is woken for a task. A change makes the app active again
+ * whichever way it went, and ten minutes in the background end that — the C++
+ * counts them on `alarm_`, and `mars_stn_run_pending` counts them here.
+ *
+ * @param is_foreground 0 for the background, anything else for the front.
+ */
+void mars_stn_on_foreground(int is_foreground);
+
+/**
+ * `mars::baseevent::GetSignalOnNetworkChange()` — the network under the app
+ * changed, which is `BaseEvent.onNetworkChange` on Android: every long link is
+ * taken down and made again, and dns is asked afresh, because the ip the last
+ * connect landed on is one the new network may not route to.
+ */
+void mars_stn_on_network_change(void);
+
 
 #ifdef __cplusplus
 } /* extern "C" */
