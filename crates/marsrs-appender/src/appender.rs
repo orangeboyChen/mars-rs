@@ -1626,8 +1626,11 @@ impl Appender {
             appender.clear_cache_file_if_heap();
         }
 
-        // What a configured `pub_key` does *not* buy, said in the file before
-        // anything else is written to it: see [`Appender::crypt_caveat`].
+        // What a configured `pub_key` does *not* buy, said in the file ahead of
+        // this run's own banner and its records — and not ahead of everything
+        // in the file: a reopened log carries records of the runs before it,
+        // and the block above has just put the ones recovered out of a cache
+        // slot behind them. See [`Appender::crypt_caveat`].
         if let Some(caveat) = appender.crypt_caveat() {
             appender.write_tips2file(caveat);
         }
