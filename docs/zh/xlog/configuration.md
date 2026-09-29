@@ -135,8 +135,8 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 | 同时打到控制台 | `xlog.set_console_log_enabled` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log_instance(0, on)` | `log.setConsoleLogEnabled` | `xlog.consoleLogEnabled` |
 | 到 N 字节就换文件 | `xlog.set_max_file_size_bytes` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size_instance(0, bytes)` | `log.setMaxFileSizeBytes` | `xlog.maxFileSizeBytes` |
 | 超过 N 秒就删文件 | `xlog.set_max_alive_time_seconds` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration_instance(0, secs)` | `log.setMaxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` |
-| 当前文件在哪 | `xlog.current_log_path` | `Xlog.currentLogPath` | — | — | — | — | `mars_xlog_current_log_path` | — | — |
-| 一天的文件在哪 | `appender_getfilepath_from_timespan` | `Xlog.logFiles(…)` | — | — | — | — | `mars_xlog_getfilepath_from_timespan` | — | — |
+| 当前文件在哪 | `xlog.current_log_path` | `xlog.currentLogPath` | — | — | — | — | `mars_xlog_current_log_path` | — | — |
+| 一天的文件在哪 | `appender_getfilepath_from_timespan` | `xlog.logFiles(daysAgo:)` | — | — | — | — | `mars_xlog_getfilepath_from_timespan` | — | — |
 
 大小和时间的 `0` 都表示“不限制”：文件永不切分、永不删除 —— C++ 那边自己保留十天。
 
