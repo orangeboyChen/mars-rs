@@ -337,20 +337,6 @@ pub extern "C" fn mars_xlog_flush_now() {
     guard((), appender_flush_now);
 }
 
-/// `mars::xlog::appender_flush()` — the name [`mars_xlog_signal_flush`] had.
-#[deprecated(note = "renamed `mars_xlog_signal_flush`")]
-#[no_mangle]
-pub extern "C" fn mars_xlog_flush() {
-    guard((), appender_signal_flush);
-}
-
-/// `mars::xlog::appender_flush_sync()` — the name [`mars_xlog_flush_now`] had.
-#[deprecated(note = "renamed `mars_xlog_flush_now`")]
-#[no_mangle]
-pub extern "C" fn mars_xlog_flush_sync() {
-    guard((), appender_flush_now);
-}
-
 /// `mars::xlog::appender_close()`.
 #[no_mangle]
 pub extern "C" fn mars_xlog_close() {
@@ -856,36 +842,6 @@ pub extern "C" fn mars_xlog_signal_flush_all() {
 #[no_mangle]
 pub extern "C" fn mars_xlog_flush_now_all() {
     guard((), flush_now_all);
-}
-
-/// The name [`mars_xlog_signal_flush_instance`] (a `sync` of `0`) and
-/// [`mars_xlog_flush_now_instance`] (a `sync` that is not `0`) had, and the one
-/// place a C caller still has to say which of the two it means with a flag.
-#[deprecated(note = "renamed `mars_xlog_signal_flush_instance` / `mars_xlog_flush_now_instance`")]
-#[no_mangle]
-pub extern "C" fn mars_xlog_flush_instance(instance: c_longlong, sync: c_int) {
-    let _ = guard(0, || {
-        if sync != 0 {
-            flush_now(instance as u64);
-        } else {
-            signal_flush(instance as u64);
-        }
-        0
-    });
-}
-
-/// The name [`mars_xlog_signal_flush_all`] (a `sync` of `0`) and
-/// [`mars_xlog_flush_now_all`] (a `sync` that is not `0`) had.
-#[deprecated(note = "renamed `mars_xlog_signal_flush_all` / `mars_xlog_flush_now_all`")]
-#[no_mangle]
-pub extern "C" fn mars_xlog_flush_all(sync: c_int) {
-    guard((), || {
-        if sync != 0 {
-            flush_now_all();
-        } else {
-            signal_flush_all();
-        }
-    });
 }
 
 /// `mars::xlog::SetConsoleLogOpen` for an instance (`0` = the default logger).

@@ -152,8 +152,9 @@ void mars_xlog_assert(const char* tag,
  * Replaces `mars::xlog::appender_flush()`: tells the writer thread it may
  * drain, and returns at once. Nothing is in the file because this returned.
  *
- * The name the port gives this call on every platform; `mars_xlog_flush` is
- * the C++'s own and is kept below as a deprecated spelling of it.
+ * The C++'s own name for this call is `appender_flush`, and "flush" there said
+ * which mode the appender was opened in and not what the call does to the
+ * thread it was called on: the port names the two drains apart instead.
  */
 void mars_xlog_signal_flush(void);
 
@@ -162,12 +163,6 @@ void mars_xlog_signal_flush(void);
  * so the records are on the disk when this returns.
  */
 void mars_xlog_flush_now(void);
-
-/** `mars::xlog::appender_flush()` — the old name of `mars_xlog_signal_flush`. */
-void mars_xlog_flush(void);
-
-/** `mars::xlog::appender_flush_sync()` — the old name of `mars_xlog_flush_now`. */
-void mars_xlog_flush_sync(void);
 
 /** Replaces `mars::xlog::appender_close()`. */
 void mars_xlog_close(void);
@@ -279,12 +274,6 @@ void mars_xlog_signal_flush_all(void);
  * instance — each of which owns an appender of its own, so a caller that leaves
  * them out misses their records. */
 void mars_xlog_flush_now_all(void);
-
-/* The names the two pairs above had, and the one place a C caller still has to
- * say which drain it means with a flag: `sync` != 0 is the `*_now` one. */
-void mars_xlog_flush_instance(long long instance, int sync);
-
-void mars_xlog_flush_all(int sync);
 
 /* SetConsoleLogOpen for an instance (0 = the default logger). */
 void mars_xlog_set_console_log_instance(long long instance, int open);

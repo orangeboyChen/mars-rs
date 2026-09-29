@@ -58,12 +58,14 @@ what the C++ calls `appender_flush` is `appender_signal_flush` here, because
 `appender_flush` in Rust is the drain a caller `await`s — see
 [log files](/xlog/log-files). `appender_flush_sync` still compiles and does what
 `appender_flush_now` does, deprecated, so that code written against the C++'s
-name keeps building. The C ABI column is the same story: `mars_xlog_flush` and
-`mars_xlog_flush_sync` are the C++'s names and still link, and the instance
-pair no longer takes a `sync` — what a caller wrote as
-`mars_xlog_flush_instance(handle, 0)` or `(handle, 1)` is
+name keeps building. The C ABI column is the same story, and it takes no `sync` anywhere: the C++'s
+`appender_flush` is `mars_xlog_signal_flush` and its `appender_flush_sync` is
+`mars_xlog_flush_now`, and the instance pair is two calls too — what a caller
+wrote as `mars_xlog_flush_instance(handle, 0)` or `(handle, 1)` is
 `mars_xlog_signal_flush_instance(handle)` or
-`mars_xlog_flush_now_instance(handle)`.
+`mars_xlog_flush_now_instance(handle)`. The two names the process-wide pair had
+are gone and not deprecated: they were the port's own spellings and not the
+C++'s, which has no `mars_xlog_*` of its own to keep.
 
 The config is one struct in all three, and the eight fields are the same eight:
 `mode_`, `logdir_`, `nameprefix_`, `pub_key_`, `compress_mode_`,

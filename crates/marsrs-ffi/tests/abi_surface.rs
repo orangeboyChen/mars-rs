@@ -319,24 +319,6 @@ fn the_void_symbols_survive_a_closed_appender() {
     mars_xlog_set_max_alive_duration_instance(0, 0);
 }
 
-/// The names these calls had before the flag was split: a host built against
-/// the older header still links, and its `sync` still picks the drain.
-#[test]
-#[allow(deprecated)]
-fn the_flagged_flush_names_still_dispatch() {
-    use mars_ffi::abi::{
-        mars_xlog_flush, mars_xlog_flush_all, mars_xlog_flush_instance, mars_xlog_flush_sync,
-    };
-
-    let _guard = serial();
-    mars_xlog_flush();
-    mars_xlog_flush_sync();
-    mars_xlog_flush_instance(0, 0);
-    mars_xlog_flush_instance(0, 1);
-    mars_xlog_flush_all(0);
-    mars_xlog_flush_all(1);
-}
-
 /// `XloggerCategory::IsEnabledFor` is `level_ <= _level` on the **raw**
 /// `TLogLevel`, and the C++ casts whatever the caller passes
 /// (`(TLogLevel)_level`), so `MARS_LEVEL_NONE` (6) is a level a caller may ask

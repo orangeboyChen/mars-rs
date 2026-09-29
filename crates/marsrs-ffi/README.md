@@ -20,12 +20,11 @@ layers of Mars talk to `marsrs-appender` **without** a big-bang rewrite.
 Every drain is two calls and not one carrying a flag: `mars_xlog_signal_flush`
 tells the writer thread it may drain and returns at once, and
 `mars_xlog_flush_now` drains on the calling thread, so the records are on the
-disk when it returns. The two names in the table above are the C++'s own and are
-still exported as deprecated spellings of them, and the flag the instance pair
-used to take is gone the same way — `mars_xlog_flush_instance(h, sync)` is
-`mars_xlog_signal_flush_instance(h)` or `mars_xlog_flush_now_instance(h)`, and
-`mars_xlog_flush_all(sync)` is `mars_xlog_signal_flush_all()` or
-`mars_xlog_flush_now_all()`.
+disk when it returns. Every instance and all-appenders pair reads the same way —
+`mars_xlog_signal_flush_instance(h)` / `mars_xlog_flush_now_instance(h)`, and
+`mars_xlog_signal_flush_all()` / `mars_xlog_flush_now_all()` — and no symbol of
+the seam takes a `sync`: the two names a caller had for that are gone with the
+flag they carried.
 
 The header is checked in at **`include/mars_xlog.h`** (hand written, no cbindgen
 step); `tests/header_sync.rs` fails if it drifts from `src/abi.rs`.

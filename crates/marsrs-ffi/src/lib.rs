@@ -74,18 +74,12 @@ pub mod state;
 #[cfg(feature = "stn")]
 pub mod stn;
 
-// `mars_xlog_flush` and `mars_xlog_flush_sync` are the C++'s own names and are
-// what a host built against an older header links against, so they stay in the
-// surface as deprecated spellings of the two above — the re-export is the
-// surface, and dropping it is what would break that host.
-#[allow(deprecated)]
 #[cfg(feature = "xlog")]
 pub use abi::{
-    mars_xlog_assert, mars_xlog_close, mars_xlog_current_log_path, mars_xlog_flush,
-    mars_xlog_flush_now, mars_xlog_flush_sync, mars_xlog_open, mars_xlog_set_console_fun,
-    mars_xlog_set_console_log, mars_xlog_set_level, mars_xlog_set_max_alive_duration,
-    mars_xlog_set_max_file_size, mars_xlog_signal_flush, mars_xlog_write, MarsXLogConfig,
-    MarsXLogConsoleFun,
+    mars_xlog_assert, mars_xlog_close, mars_xlog_current_log_path, mars_xlog_flush_now,
+    mars_xlog_open, mars_xlog_set_console_fun, mars_xlog_set_console_log, mars_xlog_set_level,
+    mars_xlog_set_max_alive_duration, mars_xlog_set_max_file_size, mars_xlog_signal_flush,
+    mars_xlog_write, MarsXLogConfig, MarsXLogConsoleFun,
 };
 #[cfg(feature = "xlog")]
 pub use error::{
