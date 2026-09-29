@@ -2,3 +2,6 @@
 # and its labels are read line by line and do not always survive it. Gradle
 # writes gradlew.bat with CRLF, so it is stored the way it was written.
 platforms/android/gradlew.bat -text
+# The two demos carry the same wrapper, copied out of that one.
+demo/android/gradlew.bat -text
+demo/kmp/gradlew.bat -text
