@@ -17,6 +17,8 @@ import kotlinx.cinterop.alloc
 import kotlinx.cinterop.cstr
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The Kotlin/Native `actual`: the C ABI of `crates/marsrs-ffi` (`mars_xlog.h`)
@@ -98,10 +100,20 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
     public actual fun f(tag: String, message: String) = log(LogLevel.FATAL, tag, message)
 
-    public actual fun flush(sync: Boolean) {
+    public actual fun signalFlush() {
         if (isOpen) {
-            mars_xlog_flush_instance(handle, if (sync) SYNC else ASYNC)
+            mars_xlog_flush_instance(handle, ASYNC)
         }
+    }
+
+    public actual fun flushNow() {
+        if (isOpen) {
+            mars_xlog_flush_instance(handle, SYNC)
+        }
+    }
+
+    public actual suspend fun flush() = withContext(Dispatchers.IO) {
+        flushNow()
     }
 
     public actual fun close() {

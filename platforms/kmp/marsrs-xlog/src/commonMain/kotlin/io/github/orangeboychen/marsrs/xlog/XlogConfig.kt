@@ -7,7 +7,7 @@ package io.github.orangeboychen.marsrs.xlog
  * Android AAR publishes.
  *
  * `ASYNC` is what the C++ opens with: the appender writes from its own thread
- * and [Xlog.flush] is what drains it. `SYNC` is what a caller who cannot afford
+ * and [Xlog.flushNow] is what drains it. `SYNC` is what a caller who cannot afford
  * to lose the last records of a process opens with.
  */
 public enum class AppenderMode {
