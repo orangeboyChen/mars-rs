@@ -13,13 +13,13 @@ use std::path::Path;
 use std::sync::{Mutex, RwLock};
 
 use marsrs_appender::{
-    appender_close, appender_flush, appender_flush_sync, appender_get_current_log_path,
-    appender_open, appender_set_console_log, appender_set_max_alive_duration,
-    appender_set_max_file_size, appender_write,
+    appender_close, appender_flush_now, appender_get_current_log_path, appender_open,
+    appender_set_console_log, appender_set_max_alive_duration, appender_set_max_file_size,
+    appender_signal_flush, appender_write,
     category_set_max_alive_duration as set_max_alive_duration,
-    category_set_max_file_size as set_max_file_size, flush_all, set_console_fun,
-    set_console_log_open, set_level, xlogger_assert, AppenderMode, ConsoleFun, LogLevel,
-    XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
+    category_set_max_file_size as set_max_file_size, flush_now, flush_now_all, set_console_fun,
+    set_console_log_open, set_level, signal_flush, signal_flush_all, xlogger_assert, AppenderMode,
+    ConsoleFun, LogLevel, XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
 };
 use marsrs_buffer::CompressMode;
 
@@ -316,15 +316,21 @@ pub unsafe extern "C" fn mars_xlog_assert(
 }
 
 /// `mars::xlog::appender_flush()` — asks the async writer thread to drain.
+///
+/// Named for the C++ it replaces; what it does is what the port calls
+/// `appender_signal_flush`.
 #[no_mangle]
 pub extern "C" fn mars_xlog_flush() {
-    guard((), appender_flush);
+    guard((), appender_signal_flush);
 }
 
 /// `mars::xlog::appender_flush_sync()` — flushes and waits for the drain.
+///
+/// Named for the C++ it replaces; what it does is what the port calls
+/// `appender_flush_now`.
 #[no_mangle]
 pub extern "C" fn mars_xlog_flush_sync() {
-    guard((), appender_flush_sync);
+    guard((), appender_flush_now);
 }
 
 /// `mars::xlog::appender_close()`.
@@ -799,7 +805,11 @@ pub extern "C" fn mars_xlog_set_mode_instance(instance: c_longlong, mode: c_int)
 #[no_mangle]
 pub extern "C" fn mars_xlog_flush_instance(instance: c_longlong, sync: c_int) {
     let _ = guard(0, || {
-        marsrs_appender::flush(instance as u64, sync != 0);
+        if sync != 0 {
+            flush_now(instance as u64);
+        } else {
+            signal_flush(instance as u64);
+        }
         0
     });
 }
@@ -812,7 +822,13 @@ pub extern "C" fn mars_xlog_flush_instance(instance: c_longlong, sync: c_int) {
 /// otherwise.
 #[no_mangle]
 pub extern "C" fn mars_xlog_flush_all(sync: c_int) {
-    guard((), || flush_all(sync != 0));
+    guard((), || {
+        if sync != 0 {
+            flush_now_all();
+        } else {
+            signal_flush_all();
+        }
+    });
 }
 
 /// `mars::xlog::SetConsoleLogOpen` for an instance (`0` = the default logger).

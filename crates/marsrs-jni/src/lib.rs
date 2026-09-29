@@ -38,10 +38,10 @@ use std::borrow::Cow;
 
 use marsrs_appender::{
     category_set_max_alive_duration as set_max_alive_duration,
-    category_set_max_file_size as set_max_file_size, flush, get_level, get_xlogger_instance,
+    category_set_max_file_size as set_max_file_size, flush_now, get_level, get_xlogger_instance,
     is_enabled_for, new_xlogger_instance, release_xlogger_instance, set_appender_mode,
-    set_console_log_open, set_level, xlogger_write, AppenderMode, LogLevel, XLogConfig,
-    XLoggerInfo, DEFAULT_HANDLE,
+    set_console_log_open, set_level, signal_flush, xlogger_write, AppenderMode, LogLevel,
+    XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
 };
 
 /// `gettimeofday(&info.timeval, NULL)` — seconds + microseconds since the
@@ -118,7 +118,11 @@ pub(crate) fn close_impl() {
 
 /// `Xlog.appenderFlush` body.
 pub(crate) fn flush_impl(instance: u64, is_sync: bool) {
-    flush(instance, is_sync)
+    if is_sync {
+        flush_now(instance);
+    } else {
+        signal_flush(instance);
+    }
 }
 
 /// `Xlog.newXlogInstance` body — `0` is the "bad config" answer.

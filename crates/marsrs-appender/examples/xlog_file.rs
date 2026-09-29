@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use marsrs_appender::{
-    appender_close, appender_flush_sync, appender_open, appender_write, AppenderMode, CompressMode,
+    appender_close, appender_flush_now, appender_open, appender_write, AppenderMode, CompressMode,
     LogLevel, XLogConfig, XLoggerInfo,
 };
 
@@ -112,7 +112,7 @@ fn main() {
         appender_write(Some(&info), record);
     }
 
-    appender_flush_sync();
+    appender_flush_now();
     appender_close();
 
     let mut found = 0;

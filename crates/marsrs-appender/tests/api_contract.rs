@@ -7,11 +7,14 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use marsrs_appender::{
-    appender_close, appender_flush, appender_flush_sync, appender_get_current_log_cache_path,
+    appender_close, appender_flush, appender_flush_instance, appender_flush_now,
+    appender_flush_now_instance, appender_get_current_log_cache_path,
     appender_get_current_log_path, appender_getfilepath_from_timespan, appender_make_logfile_name,
     appender_oneshot_flush, appender_open, appender_set_console_log,
-    appender_set_max_alive_duration, appender_set_max_file_size, appender_set_mode, appender_write,
-    log_formater, AppenderError, AppenderMode, FileIoAction, LogLevel, XLogConfig, XLoggerInfo,
+    appender_set_max_alive_duration, appender_set_max_file_size, appender_set_mode,
+    appender_signal_flush, appender_signal_flush_instance, appender_write, log_formater,
+    AppenderError, AppenderId, AppenderMode, FileIoAction, Flush, LogLevel, XLogConfig,
+    XLoggerInfo,
 };
 use marsrs_buffer::CompressMode;
 use marsrs_core::PtrBuffer;
@@ -19,8 +22,12 @@ use marsrs_core::PtrBuffer;
 #[test]
 fn function_signatures_match_the_contract() {
     let _: fn(XLogConfig) -> Result<(), AppenderError> = appender_open;
-    let _: fn() = appender_flush;
-    let _: fn() = appender_flush_sync;
+    let _: fn() -> Flush = appender_flush;
+    let _: fn() = appender_flush_now;
+    let _: fn() = appender_signal_flush;
+    let _: fn(AppenderId) -> Flush = appender_flush_instance;
+    let _: fn(AppenderId) = appender_flush_now_instance;
+    let _: fn(AppenderId) = appender_signal_flush_instance;
     let _: fn() = appender_close;
     let _: fn(AppenderMode) = appender_set_mode;
     let _: fn(bool) = appender_set_console_log;

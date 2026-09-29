@@ -27,13 +27,13 @@
 //! The C++ deletes the appender under a concurrent write instead.
 //!
 //! ```no_run
-//! use marsrs_appender::{appender_close, appender_flush_sync, appender_open, appender_write, XLogConfig};
+//! use marsrs_appender::{appender_close, appender_flush_now, appender_open, appender_write, XLogConfig};
 //!
 //! let mut config = XLogConfig::default();
 //! config.logdir = std::path::PathBuf::from("/tmp/mars-log");
 //! appender_open(config).unwrap();
 //! appender_write(None, "hello from mars");
-//! appender_flush_sync();
+//! appender_flush_now();
 //! appender_close();
 //! ```
 //!
@@ -72,6 +72,7 @@ mod config;
 mod console;
 mod dump;
 mod file_util;
+mod flush;
 mod formater;
 mod sys;
 
@@ -81,16 +82,18 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 pub use category::{
-    flush, flush_all, get_filter, get_level, get_xlogger_instance, is_enabled_for,
-    new_xlogger_instance, release_xlogger_instance, set_appender_mode, set_console_log_open,
-    set_filter, set_level, set_max_alive_duration as category_set_max_alive_duration,
-    set_max_file_size as category_set_max_file_size, xlogger_assert, xlogger_assert_p,
-    xlogger_write, XloggerCategory, XloggerFilter, XloggerHandle, XloggerScopeTracer,
-    DEFAULT_HANDLE,
+    flush, flush_all, flush_now, flush_now_all, get_filter, get_level, get_xlogger_instance,
+    is_enabled_for, new_xlogger_instance, release_xlogger_instance, set_appender_mode,
+    set_console_log_open, set_filter, set_level,
+    set_max_alive_duration as category_set_max_alive_duration,
+    set_max_file_size as category_set_max_file_size, signal_flush, signal_flush_all,
+    xlogger_assert, xlogger_assert_p, xlogger_write, XloggerCategory, XloggerFilter, XloggerHandle,
+    XloggerScopeTracer, DEFAULT_HANDLE,
 };
 pub use config::{AppenderError, AppenderMode, FileIoAction, LogLevel, XLogConfig, XLoggerInfo};
 pub use console::{get_console_fun, set_console_fun, ConsoleFun};
 pub use dump::xlogger_memory_dump;
+pub use flush::Flush;
 pub use formater::log_formater;
 /// Re-exported so callers (and the FFI layer) do not have to depend on
 /// `marsrs-buffer` just to build a [`XLogConfig`].
@@ -260,15 +263,40 @@ pub fn appender_write_instance(id: AppenderId, info: Option<&XLoggerInfo>, logbo
     !closed
 }
 
-/// Drains a specific instance.
-pub fn appender_flush_instance(id: AppenderId, sync: bool) {
+/// Asks the writer thread to drain one instance, and returns at once.
+///
+/// [`appender_signal_flush`] for one instance: the drain is the writer
+/// thread's, and nothing here says when it is over. Unknown ids are ignored.
+pub fn appender_signal_flush_instance(id: AppenderId) {
     if let Some(appender) = instance(id) {
-        if sync {
-            appender.flush_sync();
-        } else {
-            appender.flush();
-        }
+        appender.flush();
     }
+}
+
+/// Drains one instance on the calling thread.
+///
+/// [`appender_flush_now`] for one instance: the records are on the disk when
+/// this returns. Unknown ids are ignored.
+pub fn appender_flush_now_instance(id: AppenderId) {
+    if let Some(appender) = instance(id) {
+        appender.flush_sync();
+    }
+}
+
+/// [`appender_flush_now_instance`] for a caller that can wait without holding
+/// a thread: the [`Flush`] this hands back drains that instance on a thread of
+/// its own and is Ready when the records are on the disk.
+///
+/// [`appender_flush`] for one instance, and with the same two caveats: nothing
+/// drains until the future is polled, and dropping it does not stop a drain
+/// that has started. A future that drains nothing when the id is unknown.
+pub fn appender_flush_instance(id: AppenderId) -> Flush {
+    let appender = instance(id);
+    Flush::new(move || {
+        if let Some(appender) = appender {
+            appender.flush_sync();
+        }
+    })
 }
 
 /// Sets the mode of a specific instance.
@@ -348,28 +376,80 @@ pub fn appender_open(config: XLogConfig) -> Result<(), AppenderError> {
     Ok(())
 }
 
-/// `mars::xlog::appender_flush` — asks the writer thread to drain the cache.
+/// Asks the writer thread to drain the cache, and returns at once.
+///
+/// The drain is the writer thread's, and nothing here says when it is over:
+/// what is in the cache stays in a file the kernel holds until then, so a
+/// drain that has not happened yet loses nothing. What this is for is a drain
+/// an app wants soon and does not want to wait for — on a timer, say.
+/// [`appender_flush_now`] is the call that comes back with the records on the
+/// disk, and [`appender_flush`] is the one an async caller awaits.
 ///
 /// A no-op when no appender is open.
-pub fn appender_flush() {
+pub fn appender_signal_flush() {
     if let Some(appender) = current() {
         appender.flush();
     }
 }
 
-/// `mars::xlog::appender_flush_sync` — drains the cache on the calling thread.
+/// Drains the cache on the calling thread, and hands the log file's own buffer
+/// to the OS.
 ///
-/// Also hands the log file's own buffer to the OS, in both modes: the C++
-/// leaves the last few KiB in the `FILE*` here, so a reader in another process
-/// could not see them yet.
+/// The records are on the disk when this returns, and what it costs is the
+/// time the drain takes. The buffer, in both modes: the C++ leaves the last
+/// few KiB in the `FILE*` here, so a reader in another process could not see
+/// them yet. This is the call to make before the log files are read, copied or
+/// uploaded, and the one a caller with an executor reaches for
+/// [`appender_flush`] instead of.
 ///
 /// A no-op when no appender is open or when it is already closed; in
 /// [`AppenderMode::Sync`] there is no cache to drain, but the file buffer is
 /// flushed all the same.
-pub fn appender_flush_sync() {
+pub fn appender_flush_now() {
     if let Some(appender) = current() {
         appender.flush_sync();
     }
+}
+
+/// [`appender_flush_now`] for a caller that can wait without holding a thread:
+/// the [`Flush`] this hands back drains on a thread of its own and is Ready
+/// when the records are on the disk.
+///
+/// ```no_run
+/// # async fn drain() {
+/// marsrs_appender::appender_flush().await;
+/// # }
+/// ```
+///
+/// Nothing drains until the future is polled, so this is the one to `await`
+/// and not to drop: a caller that wants the drain whatever happens wants
+/// [`appender_flush_now`]. It is not cancelled with the task that asked for
+/// it, either — the drain is already running on a thread holding its own
+/// handle on the appender.
+///
+/// A future that drains nothing when no appender is open, which is what keeps
+/// a caller from having to match on the appender being there.
+pub fn appender_flush() -> Flush {
+    // Resolved here, on the thread that asked: `current` is a per-thread
+    // cache, so the closure cannot ask for the appender once it is on the
+    // other thread.
+    let appender = current();
+    Flush::new(move || {
+        if let Some(appender) = appender {
+            appender.flush_sync();
+        }
+    })
+}
+
+/// Upstream's name for [`appender_flush_now`]: `mars::xlog::appender_flush_sync`.
+///
+/// Kept so that an app migrating from tencent/mars still finds the call it
+/// knows under the name it knows it by; the three names the port gives the
+/// three behaviours are [`appender_signal_flush`], [`appender_flush_now`] and
+/// [`appender_flush`].
+#[deprecated(note = "renamed `appender_flush_now`")]
+pub fn appender_flush_sync() {
+    appender_flush_now();
 }
 
 /// `mars::xlog::appender_close`.
@@ -537,7 +617,7 @@ pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
 ///
 /// In [`AppenderMode::Sync`] the record is written to the appender's file
 /// buffer before this returns — the C++'s `fwrite` does the same, so a record
-/// is not necessarily on disk until [`appender_flush_sync`] runs, the file
+/// is not necessarily on disk until [`appender_flush_now`] runs, the file
 /// fills up, or the appender is closed.
 pub fn appender_write(info: Option<&XLoggerInfo>, logbody: &str) -> bool {
     // A clone, so the slot's lock is not held while the record is written: N
@@ -703,8 +783,8 @@ mod tests {
         assert!(appender_get_current_log_path().is_none());
         assert!(appender_get_current_log_cache_path().is_none());
         // Harmless no-ops.
-        appender_flush();
-        appender_flush_sync();
+        appender_signal_flush();
+        appender_flush_now();
         appender_close();
     }
 

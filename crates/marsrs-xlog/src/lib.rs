@@ -11,7 +11,7 @@
 //!
 //! | what                       | where                                                |
 //! |----------------------------|------------------------------------------------------|
-//! | open, write, flush, close  | [`appender_open`], [`appender_write`], [`appender_flush_sync`], [`appender_close`] |
+//! | open, write, flush, close  | [`appender_open`], [`appender_write`], [`appender_flush_now`], [`appender_close`] |
 //! | one logger per prefix      | [`appender_open_instance`] and the `*_instance` functions |
 //! | the configuration          | [`XLogConfig`], [`AppenderMode`], [`LogLevel`]        |
 //! | reading a `.xlog` back     | [`decode_log_file`], [`LogBuffer`], [`get_period_logs`] |
@@ -31,13 +31,13 @@
 //! ```
 //!
 //! ```no_run
-//! use marsrs_xlog::{appender_close, appender_flush_sync, appender_open, appender_write, XLogConfig};
+//! use marsrs_xlog::{appender_close, appender_flush_now, appender_open, appender_write, XLogConfig};
 //!
 //! let mut config = XLogConfig::default();
 //! config.logdir = std::path::PathBuf::from("/tmp/mars-log");
 //! appender_open(config).unwrap();
 //! appender_write(None, "hello from mars");
-//! appender_flush_sync();
+//! appender_flush_now();
 //! appender_close();
 //! ```
 
