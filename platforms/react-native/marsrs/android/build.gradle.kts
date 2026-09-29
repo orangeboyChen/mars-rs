@@ -45,5 +45,5 @@ dependencies {
     // `react-android` and not `react-native`: the artifact React Native has
     // published since 0.71, and the one the app's own repository resolves.
     implementation("com.facebook.react:react-android")
-    implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0-alpha.2")
+    implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0-alpha.3")
 }

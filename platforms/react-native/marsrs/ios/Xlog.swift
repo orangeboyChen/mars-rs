@@ -1,6 +1,6 @@
-// The iOS half of `marsrs-react-native`: the eleven methods of the `Xlog` native
-// module, each of them a straight call of a `mars_xlog_*` symbol — the C ABI of
-// `crates/marsrs-ffi`, in the `marsrs-xlog.xcframework` the pod carries.
+// The iOS half of `marsrs-react-native`: the thirteen methods of the `Xlog`
+// native module, each of them a straight call of a `mars_xlog_*` symbol — the
+// C ABI of `crates/marsrs-ffi`, in the `marsrs-xlog.xcframework` the pod carries.
 //
 // Swift, and not Objective-C — except for `Xlog.mm`, which is the one file of
 // the module Swift cannot be, and which says why in its own header: a
@@ -91,7 +91,10 @@ internal final class Xlog: NSObject {
             )
             handle = mars_xlog_new_instance(&native, level)
         }
-        guard handle != 0 else {
+        // A refusal is a negative `MARS_XLOG_ERR_*` code and never `0`, which is
+        // the process-wide appender: a handle of `0` in the table below would
+        // send every write through a logger this module never opened.
+        guard handle > 0 else {
             return false
         }
         handles[namePrefix] = handle
@@ -214,21 +217,32 @@ internal final class Xlog: NSObject {
     /// `mars_xlog_set_max_file_size_instance`. A `Double` and not a `UInt64`:
     /// the module carries every JS number as one, and a file size is below
     /// 2^53.
+    ///
+    /// Narrowed with `exactly` and not with `UInt64(_:)`, which traps: a
+    /// negative, a NaN — what a `number` a sum with `undefined` in it answered
+    /// — and anything above `UInt64.max` are three traps, and a trap in a
+    /// method the JS thread called into is the app going down and not a setting
+    /// that was not taken. What the Kotlin half does with the same number is
+    /// cast it, so this is the cast: a size that does not fit is `0`, the one
+    /// `mars_xlog.h` reads as "do not split".
     @objc(setMaxFileSize:bytes:)
     internal func setMaxFileSize(_ namePrefix: String, bytes: Double) {
         guard let handle = handles[namePrefix] else {
             return
         }
-        mars_xlog_set_max_file_size_instance(handle, UInt64(bytes))
+        mars_xlog_set_max_file_size_instance(handle, UInt64(exactly: bytes.rounded(.down)) ?? 0)
     }
 
-    /// `mars_xlog_set_max_alive_duration_instance`.
+    /// `mars_xlog_set_max_alive_duration_instance`. Narrowed the way the size
+    /// above is, and for the same reason: `Int64(_:)` traps on a NaN too, and
+    /// the C ABI's own clamp is downstream of a conversion that would never
+    /// reach it.
     @objc(setMaxAliveTime:seconds:)
     internal func setMaxAliveTime(_ namePrefix: String, seconds: Double) {
         guard let handle = handles[namePrefix] else {
             return
         }
-        mars_xlog_set_max_alive_duration_instance(handle, Int64(seconds))
+        mars_xlog_set_max_alive_duration_instance(handle, Int64(exactly: seconds.rounded(.down)) ?? 0)
     }
 
     /// `mars_xlog_release_instance`: closes the appender `open` made.

@@ -172,6 +172,19 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
     }
 
     /**
+     * What the module does when the bridge it belongs to goes away: the thread
+     * [flushQueue] drains on is a non-daemon one, and an executor that is
+     * never shut down keeps its thread alive for the life of the process — one
+     * more of them per reload of the bridge, because a reload builds a module
+     * of its own. A drain already queued is one this waits for, and not one
+     * this takes the appender out from under.
+     */
+    override fun invalidate() {
+        flushQueue.shutdown()
+        super.invalidate()
+    }
+
+    /**
      * The appender of [namePrefix], or `null` when there is none — which is a
      * no-op and not a crash, the same answer the Swift and the Kotlin give an
      * `Xlog` that is closed: no appender is the process-wide one to
