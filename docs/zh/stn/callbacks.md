@@ -76,9 +76,9 @@ BaseEvent.onForeground(true)
 BaseEvent.onNetworkChange()
 ```
 
-`AppLogic` 是账号和设备；`BaseEvent` 是屏幕和网络。其余每个平台都没有启动这一步：
-Rust 里的 `stn.create()`，加上[长连接](/zh/stn/long-link)那几个地址和 `reset`，就是
-App 要做的全部。
+`AppLogic` 是账号和设备；`BaseEvent` 是屏幕和网络。屏幕和网络是每个平台都要报的那
+两样，只是名字各平台写法不同 —— [长连接](/zh/stn/long-link)那一页把它们列了出来。
+Android 独有的一步只有启动本身：`Mars.init` 和 `Mars.onCreate`。
 
 ## 接着看
 

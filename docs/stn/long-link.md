@@ -41,14 +41,25 @@ STN is told, in the spelling of the platform:
 |---|---|
 | Android | `BaseEvent.onNetworkChange()`, and `BaseEvent.onForeground(true / false)` when the app comes back or goes away |
 | Rust | `stn.on_network_change { … }` — the closure is the host's own change, and it runs before STN's |
-| everywhere else | `reset` — and the two addresses above, when where it connects has changed |
+| Swift | `MarsStn.onNetworkChange()`, and `MarsStn.onForeground(true / false)` |
+| Kotlin Multiplatform | `BaseEvent.onNetworkChange()`, and `BaseEvent.onForeground(true / false)` — the two names Android's have |
+| the C ABI, and HarmonyOS through it | `mars_stn_on_network_change()`, and `mars_stn_on_foreground(1 / 0)` |
 
 What a network change does is more than note it: every long link is taken down
 and asked for again — at once, or after the interval its own monitor is on — and
 the tasks that were out on one are cancelled and started again, which is what
-puts them on a link that is up. An app on the C ABI, on HarmonyOS, in Swift or in
-a shared Kotlin module has no call for it, so there `reset` is the whole of what
-a change can ask for.
+puts them on a link that is up.
+
+The screen is the half an app forgets, and the half nothing else tells STN about:
+until an app says it came forward, STN takes it as backgrounded — and a task
+wakes a long link that is down only while it is in front, and only within the
+quarter of an hour after it came there. Ten minutes in the background make the
+app inactive, which is what the anti-avalanche check and the timing sync read;
+the C++ counts them on an alarm of its own, and a host that drives `run_pending`
+counts them there.
+
+Rust answers the screen the way it answers the network: `stn.set_is_foreground {
+… }` is a reading STN takes when it asks, so there is nothing to tell it.
 
 A short link needs no telling: a task goes out on whichever link is up, and
 `Task::new` asks for both.
