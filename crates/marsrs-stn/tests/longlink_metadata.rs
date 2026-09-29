@@ -10,9 +10,12 @@
 //! pairs there are — is what a `NetCore` would hand the three helpers, and the
 //! tests put it on them the way a host does.
 
+use marsrs_comm::{ProxyInfo, SocketAddress};
+use marsrs_stn::longlink::longlink_pack;
 use marsrs_stn::{
-    ChannelFactory, DisconnectInternalCode, IpPortItem, IpSourceType, LongLink, LongLinkMetaData,
-    LongLinkStatus, LonglinkConfig, Task, DEFAULT_PERIOD, NET_TYPE_WIFI,
+    tcp_identify, ChannelFactory, DisconnectInternalCode, IpPortItem, IpSourceType, LongLink,
+    LongLinkMetaData, LongLinkStatus, LonglinkConfig, OpBreaker, SocketFd, SocketOperator,
+    SocketProfile, Task, DEFAULT_KEEP_TIME, DEFAULT_PERIOD, NET_TYPE_WIFI,
 };
 
 /// The two readings the tests use: the link asked for its ips at `50_000`, and
@@ -175,7 +178,7 @@ fn a_check_leaves_a_link_that_is_where_dns_put_it_alone() {
 
 #[test]
 fn the_keeper_holds_a_mapping_up_on_the_link_it_shares() {
-    let mut meta = a_metadata();
+    let meta = a_metadata();
     meta.channel()
         .lock()
         .unwrap()
@@ -196,6 +199,141 @@ fn the_keeper_holds_a_mapping_up_on_the_link_it_shares() {
     meta.keeper().on_timeout();
     assert_eq!(meta.keeper().sent(), 2);
     assert!(meta.channel().lock().unwrap().has_data_to_send());
+}
+
+/// A socket the host's run can put the link on: it takes everything the link
+/// writes, and hands one package back on every read.
+struct Socket {
+    package: Vec<u8>,
+    breaker: Never,
+}
+
+impl Socket {
+    fn new(package: Vec<u8>) -> Self {
+        Self {
+            package,
+            breaker: Never,
+        }
+    }
+}
+
+impl SocketOperator for Socket {
+    fn connect(&mut self, _addresses: &[SocketAddress], _proxy: &ProxyInfo) -> SocketFd {
+        SocketFd(3)
+    }
+
+    fn send(&mut self, _socket: SocketFd, buffer: &[u8], _timeout_ms: i32) -> Result<usize, i32> {
+        Ok(buffer.len())
+    }
+
+    fn recv(
+        &mut self,
+        _socket: SocketFd,
+        _max_size: usize,
+        _timeout_ms: i32,
+        _wait_full_size: bool,
+    ) -> Result<Vec<u8>, i32> {
+        Ok(self.package.clone())
+    }
+
+    fn close(&mut self, _socket: SocketFd) {}
+
+    fn identify(&self, socket: SocketFd) -> String {
+        tcp_identify(socket)
+    }
+
+    fn protocol(&self) -> i32 {
+        Task::TRANSPORT_PROTOCOL_TCP
+    }
+
+    fn error_desc(&self, error_code: i32) -> String {
+        format!("{error_code}")
+    }
+
+    fn profile(&self) -> SocketProfile {
+        SocketProfile::default()
+    }
+
+    fn breaker(&mut self) -> &mut dyn OpBreaker {
+        &mut self.breaker
+    }
+
+    fn create_stream(&mut self, _socket: SocketFd) -> SocketFd {
+        SocketFd::INVALID
+    }
+
+    fn set_ip_connection_timeout(&mut self, _v4_timeout_ms: u32, _v6_timeout_ms: u32) {}
+}
+
+/// A pipe nobody wakes.
+struct Never;
+
+impl OpBreaker for Never {
+    fn is_break(&mut self) -> bool {
+        false
+    }
+
+    fn break_(&mut self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn the_link_s_own_traffic_is_what_the_keeper_s_next_buffer_waits_on() {
+    let meta = a_metadata();
+    {
+        let mut link = meta.channel().lock().unwrap();
+        link.set_status(LongLinkStatus::Connected);
+        link.set_socket_operator(Socket::new(longlink_pack(12, 7, b"hello")));
+    }
+
+    meta.keeper().keep_at(1_000);
+    assert_eq!(meta.keeper().sent(), 1, "the first touch sends at once");
+
+    // what the host's run does with the buffer: the whole of it goes out, and
+    // the write is what the C++'s `GetSignalOnNetworkDataChange()` carries to
+    // the keeper, which posts the next one a period later. The carrying is
+    // not the link's to do: its callback runs under the link's lock, which is
+    // the one lock the keeper takes from inside its own, so what the write
+    // leaves on the metadata is a reading
+    assert!(meta
+        .channel()
+        .lock()
+        .unwrap()
+        .write_at(1_500, SocketFd(3), false)
+        .is_ok());
+    assert!(!meta.channel().lock().unwrap().has_data_to_send());
+    assert_eq!(meta.take_network_data_changed(), Some(1_500));
+    assert_eq!(
+        meta.take_network_data_changed(),
+        None,
+        "a reading is taken once"
+    );
+    assert_eq!(
+        meta.keeper().due_time(),
+        None,
+        "the keeper has not been told yet"
+    );
+    // ... and it is the net core that tells it, of every link's readings and
+    // to the keeper of the link that is the main one
+    meta.keeper().on_network_data_changed_at(1_500);
+    assert_eq!(meta.keeper().due_time(), Some(1_500 + DEFAULT_PERIOD));
+
+    // a read is data that moved too, and it leaves a reading of its own
+    let answers = meta.channel().lock().unwrap().read_at(2_000, SocketFd(3));
+    assert_eq!(answers.unwrap().len(), 1);
+    assert_eq!(meta.take_network_data_changed(), Some(2_000));
+    meta.keeper().on_network_data_changed_at(2_000);
+    assert_eq!(meta.keeper().due_time(), Some(2_000 + DEFAULT_PERIOD));
+
+    // ... and one that heard nothing for longer than its `keepTime` is not
+    // keeping any more. The post it had already made is still the host's to
+    // fire, which is the C++'s own answer: `OnNetWorkDataChanged` leaves
+    // `postid_` alone and only `Stop()` cancels one
+    meta.keeper()
+        .on_network_data_changed_at(2_000 + DEFAULT_KEEP_TIME + 1);
+    assert!(!meta.keeper().is_keeping());
+    assert_eq!(meta.keeper().due_time(), Some(2_000 + DEFAULT_PERIOD));
 }
 
 #[test]

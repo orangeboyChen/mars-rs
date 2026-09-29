@@ -19,7 +19,8 @@
 //! from [`LongLinkMetaData::monitor`], [`LongLinkMetaData::checker`] and
 //! [`LongLinkMetaData::keeper`].
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::long_link::{DisconnectInternalCode, LongLink, MakeSure};
 use crate::{
@@ -36,11 +37,30 @@ pub struct LongLinkMetaData {
     monitor: LongLinkConnectMonitor,
     /// `netsource_checker_`.
     checker: NetSourceTimerCheck,
-    /// `signal_keeper_`.
-    keeper: SignallingKeeper,
+    /// `signal_keeper_` — shared with the net core, which is what starts and
+    /// stops it and fires what it posted: the C++ connects the keeper to a
+    /// signal of the process's that its link emits into
+    /// (`net_core.cc:1161`).
+    keeper: Arc<Mutex<SignallingKeeper>>,
+    /// The reading the link's own writes and reads were last seen at, and
+    /// [`NO_DATA_CHANGED`] once [`LongLinkMetaData::take_network_data_changed`]
+    /// has taken it.
+    ///
+    /// The C++'s signal is the process's: every link emits into it, and the
+    /// one thing connected to it is the *main* link's keeper, so data on a
+    /// link that is not the main one is what keeps the mapping up too. A
+    /// metadata does not know whether its link is the main one — that is the
+    /// net core's to say, and it changes — so the link leaves the reading
+    /// here and the net core takes it to whichever keeper is the main one's.
+    data_changed: Arc<AtomicU64>,
     /// `config_`.
     config: LonglinkConfig,
 }
+
+/// What [`LongLinkMetaData::data_changed`] holds when nothing has come in
+/// since the reading was last taken: the clock is milliseconds, and no
+/// reading of it is ever near the ceiling of a `u64`.
+const NO_DATA_CHANGED: u64 = u64::MAX;
 
 impl LongLinkMetaData {
     /// `LongLinkMetaData(…, _config, …)` — the link, and the three helpers wired
@@ -126,12 +146,30 @@ impl LongLinkMetaData {
                 0
             });
         }
+        let keeper = Arc::new(Mutex::new(keeper));
+        let data_changed = Arc::new(AtomicU64::new(NO_DATA_CHANGED));
+        {
+            // the other half of the signal the C++ wires in `NetCore`: the
+            // link's own writes and reads are what the keeper's `keepTime` is
+            // measured from, and it is the link that knows about them. The
+            // callback runs with the link's lock held, so it leaves a reading
+            // behind and does not take the keeper's: the keeper sends over
+            // this very link from inside its own lock, and two threads taking
+            // the two in either order is a deadlock neither gets out of.
+            let data_changed = Arc::clone(&data_changed);
+            link.lock()
+                .unwrap_or_else(poisoned)
+                .set_on_network_data_changed(move |now| {
+                    data_changed.store(now, Ordering::Relaxed);
+                });
+        }
 
         Self {
             link,
             monitor,
             checker,
             keeper,
+            data_changed,
             config,
         }
     }
@@ -153,8 +191,32 @@ impl LongLinkMetaData {
     }
 
     /// `SignalKeeper()`.
-    pub fn keeper(&mut self) -> &mut SignallingKeeper {
-        &mut self.keeper
+    ///
+    /// A guard, and not a `&mut`, because the link shares the keeper: its own
+    /// run says that data moved from inside a lock the host holds, and this is
+    /// what a host starts and stops from the outside
+    /// ([`crate::NetCore::keep_signal`]). The keeper sends over the link it
+    /// shares, so the link's lock is never taken while the keeper's is held —
+    /// and the other way round is what
+    /// [`LongLinkMetaData::take_network_data_changed`] is for: what the link
+    /// has to say about its data is a reading, and not a call into the
+    /// keeper.
+    pub fn keeper(&self) -> MutexGuard<'_, SignallingKeeper> {
+        self.keeper.lock().unwrap_or_else(poisoned)
+    }
+
+    /// The reading the link's writes and reads were last seen at, and `None`
+    /// when no data has moved since the last call.
+    ///
+    /// The C++'s signal is the process's and what is connected to it is the
+    /// main link's keeper, so this is the net core's to take — on every turn of
+    /// the host's, before it asks what the keeper has posted — and not the
+    /// link's to deliver.
+    pub fn take_network_data_changed(&self) -> Option<u64> {
+        match self.data_changed.swap(NO_DATA_CHANGED, Ordering::Relaxed) {
+            NO_DATA_CHANGED => None,
+            now => Some(now),
+        }
     }
 
     /// `Config()`.
@@ -363,7 +425,7 @@ mod tests {
 
     #[test]
     fn the_keeper_sends_on_the_link_it_shares_with_the_metadata() {
-        let mut meta = meta();
+        let meta = meta();
         meta.channel()
             .lock()
             .unwrap()

@@ -240,6 +240,15 @@ pub type Signal = dyn FnMut(bool) -> i32 + Send;
 /// `OnNoopAlarmReceived(_noop_timeout)` — one of the two noop alarms went off,
 /// which on Android is what the connect monitor counts.
 pub type NoopAlarmReceived = dyn FnMut(bool) + Send;
+/// `GetSignalOnNetworkDataChange()(XLOGGER_TAG, ...)` — data moved on this
+/// link, at the reading the host handed in. The C++'s is a signal of the
+/// process's, emitted on every write (`longlink.cc:955`) and every read
+/// (`:1025`) of every link, and what listens to it is the *main* link's
+/// signalling keeper, which `NetCore` connects when it makes one
+/// (`net_core.cc:1161`). The port wires it on every link and leaves what it
+/// hears for the net core to carry to the keeper that is the main one's,
+/// because a link does not know whether it is the main one.
+pub type NetworkDataChanged = dyn FnMut(u64) + Send;
 
 /// `comm::Alarm::TAlarmStatus` — where a one-shot timer is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -539,6 +548,7 @@ pub struct LongLink {
     on_connection: Option<Box<Connection>>,
     on_link_status: Option<Box<LinkStatus>>,
     on_noop_alarm_received: Option<Box<NoopAlarmReceived>>,
+    on_network_data_changed: Option<Box<NetworkDataChanged>>,
 }
 
 impl LongLink {
@@ -594,6 +604,7 @@ impl LongLink {
             on_connection: None,
             on_link_status: None,
             on_noop_alarm_received: None,
+            on_network_data_changed: None,
         }
     }
 
@@ -698,6 +709,18 @@ impl LongLink {
         on_noop_alarm_received: impl FnMut(bool) + Send + 'static,
     ) {
         self.on_noop_alarm_received = Some(Box::new(on_noop_alarm_received));
+    }
+
+    /// `GetSignalOnNetworkDataChange()` — the link moved data, and the reading
+    /// the host handed the run is the one the keeper measures its `keepTime`
+    /// from. [`crate::LongLinkMetaData`] wires this on the link it shares with
+    /// its keeper; a host that runs a link of its own leaves it unset, and a
+    /// keeper that hears nothing never posts and so never sends again.
+    pub fn set_on_network_data_changed(
+        &mut self,
+        on_network_data_changed: impl FnMut(u64) + Send + 'static,
+    ) {
+        self.on_network_data_changed = Some(Box::new(on_network_data_changed));
     }
 
     /// `SocketOperator` — the sockets the link is made on. Unset, a connect
@@ -1261,6 +1284,7 @@ impl LongLink {
                 if self.last_heartbeat != 0 {
                     self.noop_interval.start_at(now, self.last_heartbeat);
                 }
+                self.network_data_changed(now);
                 Ok(Written {
                     len,
                     started: started.into_iter().collect(),
@@ -1293,6 +1317,9 @@ impl LongLink {
             return Err(RunEnd::shutdown());
         }
         self.last_recv = now;
+        // the C++ emits before it hands the bytes to its unpacker, so a read
+        // that is not a package yet is still data that moved
+        self.network_data_changed(now);
         self.recv.extend_from_slice(&bytes);
 
         let mut answers = Vec::new();
@@ -1841,6 +1868,12 @@ impl LongLink {
         match self.signal.as_mut() {
             Some(signal) => signal(is_wifi),
             None => 0,
+        }
+    }
+
+    fn network_data_changed(&mut self, now: u64) {
+        if let Some(changed) = self.on_network_data_changed.as_mut() {
+            changed(now);
         }
     }
 }

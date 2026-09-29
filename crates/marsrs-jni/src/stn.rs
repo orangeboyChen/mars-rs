@@ -437,10 +437,11 @@ mod tests {
     /// The signalling keeper of the default long link.
     fn keeper<R>(f: impl FnOnce(&mut marsrs_stn::SignallingKeeper) -> R) -> R {
         core(|core| {
-            f(core
+            let mut keeper = core
                 .long_link_meta(marsrs_stn::DEFAULT_LONGLINK_NAME)
                 .expect("the default link")
-                .keeper())
+                .keeper();
+            f(&mut keeper)
         })
     }
 
