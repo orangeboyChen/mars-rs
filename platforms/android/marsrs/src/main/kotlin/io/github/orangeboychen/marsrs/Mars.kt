@@ -58,9 +58,6 @@ object Mars {
         }
     }
 
-    /**
-     * Destroys the components when the app exits
-     */
     @JvmStatic
     fun onDestroy() {
         BaseEvent.onDestroy()

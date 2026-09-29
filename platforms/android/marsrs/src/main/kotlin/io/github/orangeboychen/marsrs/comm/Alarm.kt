@@ -41,6 +41,10 @@ class Alarm : BroadcastReceiver() {
 
         if (id == 0L || pid == 0) return
 
+        // A pid is a number Android hands out again: the `ALARM_ACTION` of a
+        // process that was killed is delivered to the process that was given
+        // its pid next, which is this one, and an alarm that process set is
+        // not one of this one's.
         if (pid != Process.myPid()) {
             Log.w(TAG, "onReceive id:%d, pid:%d, mypid:%d", id, pid, Process.myPid())
             return
@@ -191,6 +195,10 @@ class Alarm : BroadcastReceiver() {
             }
             val pendingIntent = PendingIntent.getBroadcast(context, id.toInt(), intent, flags)
 
+            // `set` is the one Android batches from KITKAT on, and an alarm it
+            // batches is one it fires inside a window of its own choosing —
+            // which is a task queue that wakes when Android wakes it and not
+            // when STN asked.
             @Suppress("DEPRECATION")
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
                 am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, time, pendingIntent)

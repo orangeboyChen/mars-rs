@@ -3,8 +3,6 @@ package io.github.orangeboychen.marsrs.sdt
 import java.util.Arrays
 
 /**
- * The signal detection result info class
- *
  * What [SdtLogic.ICallBack.reportSignalDetectResults] hands the app is the JSON
  * of one of these; nothing here is read by `marsrs-jni`, so the fields are
  * `@JvmField`s only because that is what a Java consumer of the AAR sees.

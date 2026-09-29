@@ -54,8 +54,8 @@ data class XlogConfig @JvmOverloads constructor(
      */
     val cacheDir: String? = null,
     /**
-     * How many days a cache file is kept before it is dropped: `0`, the
-     * default, is "as long as the C++ keeps it" — ten days.
+     * How many days a cache file of [AppenderMode.ASYNC] is kept before it is
+     * dropped: `0`, the default, keeps every one of them.
      */
     val cacheDays: Int = NO_CACHE_DAYS,
     /**

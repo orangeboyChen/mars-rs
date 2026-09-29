@@ -22,6 +22,8 @@ object NetworkSignalUtil {
 
     /** A level of `WIFI_LEVEL_STEPS` is a full signal, so one step is this much. */
     private const val WIFI_PERCENT_PER_LEVEL = 10
+
+    /** What turns a negative CDMA dBm into the same 31 steps GSM is counted in. */
     private const val CDMA_DBM_OFFSET = 113
     private const val CDMA_DBM_DIVISOR = 2
 
@@ -54,6 +56,11 @@ object NetworkSignalUtil {
         )
     }
 
+    /**
+     * `0`, and always: what [PlatformComm] reads is the Wifi one or the GSM one,
+     * which it asks for by the network it is on, so this is the one of the four
+     * statics the port has nothing to call it for.
+     */
     @JvmStatic
     fun getNetworkSignalStrength(isWifi: Boolean): Long = 0
 
@@ -67,7 +74,9 @@ object NetworkSignalUtil {
         @Suppress("DEPRECATION")
         val info = wifiManager?.connectionInfo
         if (info != null && info.bssid != null) {
-            // calculateSignalLevel param 2 must < 46, otherwise divide by 0 exception will happen
+            // `calculateSignalLevel` divides by the number of steps it is
+            // given, so the ten are ten and not a hundred: 46 or more of them
+            // is a divide by zero inside Android.
             var sig = WifiManager.calculateSignalLevel(info.rssi, WIFI_LEVEL_STEPS)
             sig = if (sig > WIFI_LEVEL_STEPS) WIFI_LEVEL_STEPS else sig
             sig = if (sig < 0) 0 else sig

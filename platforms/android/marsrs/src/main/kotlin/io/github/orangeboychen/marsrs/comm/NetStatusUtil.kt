@@ -43,6 +43,7 @@ object NetStatusUtil {
     /** The scale `getNetType` gives a subtype it does not name. */
     private const val SUBTYPE_SCALE = 1000
 
+    /** The eleven network types of the C++ project's class, numbered as it numbers them. */
     const val NON_NETWORK: Int = -1
     const val WIFI: Int = 0
     const val UNINET: Int = 1
@@ -62,6 +63,7 @@ object NetStatusUtil {
     /** Reject network usage on metered networks when application in background. */
     const val POLICY_REJECT_METERED_BACKGROUND: Int = 0x1
 
+    /** What [getBackgroundLimitType] answers, and what [startSettingItent] opens a screen for. */
     const val TBACKGROUND_NOT_LIMITED: Int = 0x0
     const val TBACKGROUND_PROCESS_LIMITED: Int = 0x1
     const val TBACKGROUND_DATA_LIMITED: Int = 0x2
@@ -169,15 +171,14 @@ object NetStatusUtil {
         }
 
         val simOperator = tel.simOperator
-        if (simOperator == null || simOperator.length < IMSI_MIN_LENGTH) { // IMSI
+        if (simOperator == null || simOperator.length < IMSI_MIN_LENGTH) {
             return NO_SIM_OPERATOR
         }
-        /*
-         * http://developer.android.com/reference/android/telephony/TelephonyManager.html#getSimOperator()
-         * public String getSimOperator ()
-         * Returns the MCC+MNC (mobile country code + mobile network code) of the provider of the SIM. 5 or 6
-decimal digits.
-         */
+        // `getSimOperator` is documented as an MCC+MNC of five or six digits,
+        // and is not one on every SIM: an operator puts its name in front of
+        // the code, or letters after it. So the digits are taken as they come,
+        // up to six of them, and a string with none in it is a code no caller
+        // can read.
         val mccMnc = StringBuilder()
         return try {
             var len = simOperator.length
@@ -186,7 +187,10 @@ decimal digits.
             }
             for (i in 0 until len) {
                 if (!Character.isDigit(simOperator[i])) {
-                    if (mccMnc.isEmpty()) { // not begin append
+                    // A letter in front of the code is the operator's own and
+                    // is skipped; one after it ends the number, because a code
+                    // is a run of digits and not the front of something longer.
+                    if (mccMnc.isEmpty()) {
                         continue
                     } else {
                         break
@@ -410,7 +414,8 @@ decimal digits.
     fun startSettingItent(context: Context, type: Int) {
         when (type) {
             TBACKGROUND_NOT_LIMITED -> {
-                // may not be happen
+                // Nothing to open: this is the answer that says the app is not
+                // limited, so there is no screen that would unlimit it.
             }
 
             TBACKGROUND_DATA_LIMITED -> {
@@ -576,27 +581,11 @@ decimal digits.
 
     private var nowStrength = 0
 
-    /*
-     *
-     *  all * 1000
-     *
-     * networktype:TelephonyManager.NETWORK_TYPE_GPRS =  * 1
-     * networktype:TelephonyManager.NETWORK_TYPE_EDGE = 2
-     * networktype:TelephonyManager.NETWORK_TYPE_CDMA = 4
-     * networktype:TelephonyManager.NETWORK_TYPE_EVDO_0 = 5
-     * networktype:TelephonyManager.NETWORK_TYPE_EVDO_A = 6
-     * networktype:TelephonyManager.NETWORK_TYPE_EVDO_B = 12
-     * networktype:TelephonyManager.NETWORK_TYPE_HSDPA = 8
-     * networktype:TelephonyManager.NETWORK_TYPE_UMTS = 3
-     * networktype:TelephonyManager.NETWORK_TYPE_LTE = 13
-     * networktype:TelephonyManager.NETWORK_TYPE_IDEN = 11
-     * networktype:TelephonyManager.NETWORK_TYPE_HSUPA = 9
-     * networktype:TelephonyManager.NETWORK_TYPE_1xRTT = 7
-     * networktype:TelephonyManager.NETWORK_TYPE_HSPA = 10
-     * networktype:TelephonyManager.NETWORK_TYPE_EHRPD = 14
-     * networktype:TelephonyManager.NETWORK_TYPE_HSPAP = 15
-     * networktype:TelephonyManager.NETWORK_TYPE_UNKNOWN = 0  --> 999
-     */
+    // What `getNetTypeForStat` answers, and the one number STN is given for a
+    // network: `NETTYPE_WIFI` for a Wifi, `UNKNOW_TYPE` for one it cannot place,
+    // and the subtype times `SUBTYPE_SCALE` for the rest — a scale that leaves
+    // the two of them outside the range a subtype can answer. `UNKNOWN` is 999
+    // and not 0, because 0 is `NETTYPE_NOT_WIFI` and 1 is `NETTYPE_WIFI`.
 
     class StrengthListener : PhoneStateListener() {
         @Suppress("DEPRECATION")
@@ -636,7 +625,7 @@ decimal digits.
             if (subType == TelephonyManager.NETWORK_TYPE_UNKNOWN) {
                 return UNKNOW_TYPE
             }
-            subType * SUBTYPE_SCALE // NOTE HERE ~~~
+            subType * SUBTYPE_SCALE
         } catch (e: Exception) {
             e.printStackTrace()
             UNKNOW_TYPE
@@ -654,6 +643,10 @@ decimal digits.
                 @Suppress("DEPRECATION")
                 Math.abs(wifiManager?.connectionInfo?.rssi ?: 0)
             } else {
+                // The listener answers in a call of its own and not in the one
+                // it is handed to `listen` in, so what is read is the strength
+                // of the last callback — `0` until the first one lands, which
+                // is what a caller gets for the first seconds of a process.
                 (context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager)?.listen(
                     StrengthListener(),
                     PhoneStateListener.LISTEN_SIGNAL_STRENGTHS
