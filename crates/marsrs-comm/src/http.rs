@@ -838,9 +838,7 @@ impl Parser {
     /// an end.
     pub fn recv(&mut self, bytes: &[u8]) -> RecvStatus {
         if bytes.is_empty() {
-            if self.fields.is_connection_close() && self.status == RecvStatus::Body {
-                self.status = RecvStatus::End;
-            }
+            self.peer_hung_up();
             return self.status;
         }
         self.buffer.extend_from_slice(bytes);
@@ -849,12 +847,28 @@ impl Parser {
 
     /// `Recv(buffer, length, nullptr, true)` — the same, stopping as soon
     /// as the head is whole.
+    ///
+    /// A read of nothing ends it too: `only_parse_header` decides how much
+    /// of an answer is parsed and not whether the peer hanging up is one,
+    /// which is why the C++ answers `kEnd` out of the same branch whatever
+    /// it was asked for (`http.cc:714`).
     pub fn recv_header_only(&mut self, bytes: &[u8]) -> RecvStatus {
         if bytes.is_empty() {
+            self.peer_hung_up();
             return self.status;
         }
         self.buffer.extend_from_slice(bytes);
         self.run(true)
+    }
+
+    /// A read of nothing on a `Connection: close` whose body is being read
+    /// is the end of the answer: the body is however many bytes came in
+    /// before the peer hung up, and there is no `Content-Length` to say
+    /// when it stops otherwise.
+    fn peer_hung_up(&mut self) {
+        if self.fields.is_connection_close() && self.status == RecvStatus::Body {
+            self.status = RecvStatus::End;
+        }
     }
 
     /// `RecvStatus()`.
@@ -1664,6 +1678,16 @@ mod tests {
         // a body with no `Content-Length` is however much came before
         // the close
         assert_eq!(parser.recv(b""), RecvStatus::End);
+    }
+
+    #[test]
+    fn a_link_the_peer_hung_up_on_ends_a_head_read_without_its_body() {
+        let mut parser = Parser::new();
+        assert_eq!(
+            parser.recv_header_only(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nhello"),
+            RecvStatus::Body
+        );
+        assert_eq!(parser.recv_header_only(b""), RecvStatus::End);
     }
 
     #[test]
