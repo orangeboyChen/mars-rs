@@ -284,14 +284,28 @@ static napi_value Open(napi_env env, napi_callback_info info) {
     int level = NamedInt(env, argv[0], "level", MarsLevelInfo);
 
     long long handle = mars_xlog_get_instance(namePrefix);
+    int opened = 0;
     if (handle == 0) {
+        // A config the C ABI refuses is a negative `MARS_XLOG_ERR_*` code and
+        // never `0`, which is the process-wide appender: an `open` that read `0`
+        // as "opened" would register a logger this module never opened, and every
+        // call after this one would write through it.
         handle = mars_xlog_new_instance(&config, level);
+        opened = handle > 0;
     }
-    if (handle != 0 && !Remember(namePrefix, handle)) {
+    if (handle > 0 && !Remember(namePrefix, handle)) {
         // The table is what every call after this one goes through, so an
         // appender it cannot remember is an appender it cannot reach: closed
         // again, rather than opened and left for the process to leak.
-        mars_xlog_release_instance(namePrefix);
+        //
+        // Only the instance this call opened is the one closed here. A handle
+        // `get_instance` answered with is an appender someone else registered
+        // under this prefix — a release by name is the release of theirs, and
+        // it would close a live logger, and flush its cache, out from under
+        // whoever opened it.
+        if (opened) {
+            mars_xlog_release_instance(namePrefix);
+        }
         handle = 0;
     }
 
@@ -299,7 +313,7 @@ static napi_value Open(napi_env env, napi_callback_info info) {
     free(namePrefix);
     free(pubKey);
     free(cacheDir);
-    return Boolean(env, handle != 0);
+    return Boolean(env, handle > 0);
 }
 
 // --- level ----------------------------------------------------------------
@@ -389,7 +403,10 @@ static napi_value SetMaxFileSize(napi_env env, napi_callback_info info) {
     napi_value self = NULL;
     if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) == napi_ok && argc >= 2) {
         double bytes = 0;
-        if (napi_get_value_double(env, argv[1], &bytes) == napi_ok && bytes > 0) {
+        // `0` is a size and not a missing one: `mars_xlog.h` reads it as "do
+        // not split", so what is refused here is a negative — and a NaN, which
+        // is a `number` ArkTS computed and gave no size with.
+        if (napi_get_value_double(env, argv[1], &bytes) == napi_ok && bytes >= 0) {
             mars_xlog_set_max_file_size_instance(handle, (unsigned long long)bytes);
         }
     }
