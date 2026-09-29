@@ -77,7 +77,21 @@ const MISSING_SEQ_MARKER: &str = "[F]decode_log_file.py log seq:";
 /// record, and which `xlog decode` is handed by whoever pulled the file off a
 /// device. `decode_log_file.c` grows its output by doubling and stops when the
 /// decompressor stops, which is to say it never stops.
+///
+/// Per record, and not per file — which is why [`MAX_PLAIN_LEN`] is there: a
+/// cap on one record is no cap on the sum of them, and a file of records that
+/// each inflate to just under this is a bomb that walks straight through it.
 const MAX_INFLATED_LEN: usize = 64 * 1024 * 1024;
+
+/// The most one file's text may come to, however many records it holds.
+///
+/// Four times [`MAX_INFLATED_LEN`], which is not a number an appender's log
+/// comes near: a block is 150 KiB, so this is the text of some 1 700 of them,
+/// and a file that decodes to more is not a log one wrote. What it stops is a
+/// file built to make the decoder work — a bomb per record is a bomb per file
+/// too — and what the walk does about it is stop and say so, keeping the text
+/// it read before the line was crossed: see [`DecodeError::recovered`].
+const MAX_PLAIN_LEN: usize = 4 * MAX_INFLATED_LEN;
 
 /// `MAGIC_CRYPT_START` — the oldest record start `decode_log_file.c` reads, and
 /// one no appender writes: its body is the log text, XORed and nothing more.
@@ -176,10 +190,6 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
     // `decode_log_file.c`'s file-static `int lastseq`, reset per file: a hole
     // is a hole in one file's own numbering, and not in the one read before it.
     let mut lastseq: u16 = 0;
-    // How far into the file the resync after damage has already looked: a byte
-    // one scan rejected is a byte no later scan looks at again, so the whole
-    // walk is one pass over the file and not one pass per span of damage.
-    let mut resync_from = 0;
 
     let stopped = loop {
         if !whole_record_fits(data, offset) {
@@ -188,6 +198,14 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
         match record_text(data, offset, privkey) {
             Ok((text, next)) => {
                 mark_missing_seq(&mut plain, data, offset, &mut lastseq);
+                // [`MAX_PLAIN_LEN`]: a record's own text is bounded, and the
+                // file's is too, or a file of records that each stop just
+                // short of that bound would be one the decoder grows into
+                // without end. The record that crossed the line is not
+                // written, and the reason is what ends the walk.
+                if plain.len().saturating_add(text.len()) > MAX_PLAIN_LEN {
+                    break Some(format!("more than {MAX_PLAIN_LEN} bytes of text decoded"));
+                }
                 plain.extend_from_slice(&text);
                 offset = next;
                 blocks += 1;
@@ -195,25 +213,21 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
             // `getLogStartPos(buffer + offset, …, 1)`, and the marker
             // `decodeBuffer` leaves for the span it skipped.
             //
-            // The scan starts where the last one stopped when that is the
-            // further of the two, and not at the damage every time: what
-            // stands between them was looked at and rejected by that scan, so a
-            // second look at it is work repeated once per span of damage.
-            // Bounded this way a byte of the file is examined once however much
-            // damage it holds — one pass over it, and not one pass per span.
-            Err(Failure::Damaged(reason)) => match next_record_start(data, resync_from.max(offset))
-            {
+            // The scan goes on from the damage and not from the top of the
+            // file, so a byte of it is examined once however much damage it
+            // holds: each scan starts where the record before it ended and
+            // stops at the start it found, and the one that finds none is the
+            // one that ends the walk — one pass over the file, and not one
+            // pass per span of damage.
+            Err(Failure::Damaged(reason)) => match next_record_start(data, offset) {
                 Some(next) => {
                     let skipped = next - offset;
                     plain.extend_from_slice(format!("{DAMAGE_MARKER}{skipped}\n").as_bytes());
                     offset = next;
-                    resync_from = next;
                 }
-                // Nothing behind the damage is a record either — or nothing
-                // behind where the last scan stopped is, and going on from
-                // there would be scanning those same bytes again. The walk ends
-                // here, which is the one case the C's `parseFile` cannot go on
-                // from either, and the reason is what the caller is told.
+                // Nothing behind the damage is a record either, so the walk
+                // ends here — which is the one case the C's `parseFile` cannot
+                // go on from either, and the reason is what the caller is told.
                 None => break Some(reason),
             },
             // The record is whole, so the walk goes on at the one behind it —
