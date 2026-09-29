@@ -345,7 +345,7 @@ impl Address {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ipv6_address::{in6_set_addr_nat64, set_nat64_prefix, NAT64_PREFIX};
+    use crate::ipv6_address::{in6_set_addr_nat64, set_nat64_prefix, Nat64Prefix, NAT64_PREFIX};
 
     /// The NAT64 prefix is process-wide, so the tests that set it take the
     /// crate's turn: [`crate::test_lock`], which is the one `ipv6_address`'s
@@ -475,7 +475,7 @@ mod tests {
     #[test]
     fn a_nat64_address_is_fixed_to_the_prefix_of_the_network() {
         let guard = prefixes();
-        set_nat64_prefix(NAT64_PREFIX);
+        set_nat64_prefix(Nat64Prefix::well_known());
 
         // on a network that is not ipv6-only nothing is converted, so the
         // well-known prefix is what stays
@@ -488,7 +488,10 @@ mod tests {
         let mut learned = NAT64_PREFIX;
         learned[0] = 0x20;
         learned[1] = 0x01;
-        set_nat64_prefix(learned);
+        set_nat64_prefix(Nat64Prefix {
+            bytes: learned,
+            len: 96,
+        });
         let mut addr = SocketAddress::new("8.8.8.8", 53);
         addr.v4_to_v6_address(LocalIpStack::IPv6);
         assert_eq!(addr.ip(), "2001:ff9b::808:808", "no prefix to strip");
@@ -500,7 +503,7 @@ mod tests {
         assert!(!mapped.fix_current_nat64_addr(LocalIpStack::IPv6));
         assert_eq!(mapped.ip(), "8.8.8.8");
 
-        set_nat64_prefix(NAT64_PREFIX);
+        set_nat64_prefix(Nat64Prefix::well_known());
         drop(guard);
     }
 

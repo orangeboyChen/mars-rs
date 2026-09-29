@@ -15,8 +15,9 @@
 //!   `WakeUpLock`) is a platform feature of the C++ and has no
 //!   counterpart here.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::message_queue::{
     broadcast_message, cancel_message, install_message_handler, uninstall_message_handler, Message,
@@ -48,6 +49,34 @@ const INVAILD_SEQ: u64 = 0;
 /// One id per started alarm: the message that comes back carries it, and
 /// the handler only reacts to its own.
 static NEXT_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// The queue of every alarm that is still waiting, by the id it was started
+/// with.
+///
+/// The C++ broadcasts `Alarm::Start`'s message on `GetDefMessageQueue()`
+/// whatever queue the alarm was built with (`alarm.cc:53`), and installs the
+/// handler there too — `InstallMessageHandler`'s queue defaults to it
+/// (`alarm.h:70`) — so a system alarm reaches every alarm of the process
+/// (`alarm.cc:258`). An alarm here is a message on the queue it was given,
+/// which is what makes its target run on the thread that drains that one, so
+/// [`on_system_alarm`] has to ask where the id belongs.
+fn queues() -> &'static Mutex<BTreeMap<u64, MessageQueueId>> {
+    static QUEUES: OnceLock<Mutex<BTreeMap<u64, MessageQueueId>>> = OnceLock::new();
+    QUEUES.get_or_init(Mutex::default)
+}
+
+/// Which queue the alarm of `seq` is waiting on, if it still is.
+fn queue_of_seq(seq: u64) -> Option<MessageQueueId> {
+    queues().lock().unwrap().get(&seq).copied()
+}
+
+fn remember_seq(seq: u64, queue: MessageQueueId) {
+    queues().lock().unwrap().insert(seq, queue);
+}
+
+fn forget_seq(seq: u64) {
+    queues().lock().unwrap().remove(&seq);
+}
 
 /// What the alarm and the handler it installed both have to move on.
 ///
@@ -83,17 +112,24 @@ impl Default for AlarmState {
 /// `BroadcastReceiver`, which calls back with the id the alarm was started
 /// with; the C++ (`comm/alarm.cc`, `#ifdef ANDROID`) puts that id on the
 /// default queue as a `KALARM_SYSTEMTITLE` message, with the queue in
-/// `body2`. Nothing else has to be told: the message is a broadcast, so
-/// every alarm of the queue is handed it, and the one whose
-/// [`Alarm::seq`] is that id stops waiting and runs its target.
+/// `body2` — its alarms are all on the default queue anyway. Nothing else
+/// has to be told: the message is a broadcast, so every alarm of the queue
+/// is handed it, and the one whose [`Alarm::seq`] is that id stops waiting
+/// and runs its target.
 ///
 /// `false` when the message could not be posted.
+///
+/// The message goes to the queue the alarm was started on, and not to the
+/// default one: an alarm that lives on a queue of its own is one whose target
+/// runs on the thread that drains it, and a system alarm posted anywhere else
+/// would never be dispatched.
 pub fn on_system_alarm(id: i64) -> bool {
-    let queue = crate::message_queue::DEFAULT_QUEUE_ID;
+    let seq = id as u64;
+    let queue = queue_of_seq(seq).unwrap_or(crate::message_queue::DEFAULT_QUEUE_ID);
     let post = broadcast_message(
         queue,
         Message::new(ALARM_SYSTEM_TITLE, "Alarm.onAlarm")
-            .with_body1(id as u64)
+            .with_body1(seq)
             .with_body2(queue),
         MessageTiming::Immediate,
     );
@@ -149,6 +185,7 @@ impl Alarm {
                     alarm.seq = INVAILD_SEQ;
                     alarm.post = None;
                 }
+                forget_seq(*seq);
                 (runner.lock().unwrap())();
             },
             true,
@@ -190,6 +227,8 @@ impl Alarm {
         alarm.after = after_ms;
         alarm.start_time = start_time;
         alarm.end_time = 0;
+        // so that [`on_system_alarm`] finds this alarm on this queue
+        remember_seq(seq, queue);
         true
     }
 
@@ -204,6 +243,7 @@ impl Alarm {
         if alarm.seq == INVAILD_SEQ {
             return true;
         }
+        forget_seq(alarm.seq);
         alarm.status = Status::Cancel;
         alarm.end_time = gettickcount();
         alarm.seq = INVAILD_SEQ;
@@ -260,6 +300,7 @@ impl Alarm {
     /// has to say so explicitly.
     pub fn mark_fired(&mut self) {
         let mut alarm = self.state.lock().unwrap();
+        forget_seq(alarm.seq);
         alarm.status = Status::OnAlarm;
         alarm.end_time = gettickcount();
         alarm.seq = INVAILD_SEQ;
@@ -426,6 +467,32 @@ mod tests {
 
         assert!(first.cancel());
         assert!(later.cancel());
+    }
+
+    #[test]
+    fn a_system_alarm_wakes_an_alarm_on_a_queue_of_its_own() {
+        // The C++ broadcasts on `GetDefMessageQueue()` whatever queue the
+        // alarm was built with (`alarm.cc:53`) and installs its handler there
+        // too, so an Android alarm wakes every alarm of the process. Here the
+        // alarm waits on the queue it was given, so the id has to be carried
+        // to that queue and not to the default one.
+        let queue = create_message_queue();
+        let ran = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&ran);
+        let mut alarm = Alarm::new(queue, move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        assert!(alarm.start(60_000));
+
+        assert!(on_system_alarm(alarm.seq() as i64));
+        assert!(RunLoop::dispatch_timeout(
+            queue,
+            Duration::from_millis(2_000)
+        ));
+
+        assert_eq!(ran.load(Ordering::SeqCst), 1, "the system alarm missed it");
+        assert_eq!(alarm.status(), Status::OnAlarm);
+        destroy_message_queue(queue);
     }
 
     #[test]
