@@ -484,10 +484,10 @@ jobs:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
       # The archive is 2.1 GB on a mirror whose fast day and slow day are a
-      # minute and ten apart, so it is downloaded once and then cached — under
-      # the same key lint-harmony.yml uses, which is what lets a branch cut
-      # from a main that has run that workflow pay nothing at all.
-      # Its own key, and not the one lint-harmony.yml writes: that job asks for
+      # minute and ten apart, so it is downloaded once and then cached — the
+      # way lint-harmony.yml caches the pruned tools, which is what lets a
+      # branch cut from a main that has run that workflow pay nothing at all.
+      # Not under the key lint-harmony.yml writes, though: that job asks for
       # the pruned tools, and this one cannot. A HAP is an app and not a
       # module, so hvigor's resource pass loads the previewer's image
       # transcoder out of the SDK — and `DEVECO_CLI_PRUNE=0` is the switch
@@ -497,12 +497,15 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .deveco-cli
-          # The version and the workflow file, and not the version alone: the
-          # archive's URL and the prune flag both live in this file, and a key
-          # that already exists is a key `actions/cache` never saves under
-          # again — so a URL edited under one version would download 2.1 GB on
-          # every run from then on, and never get to keep what it fetched.
-          key: deveco-cli-full-${{ env.DEVECO_CLI_VERSION }}-${{ hashFiles('.github/workflows/demo.yml') }}
+          # The version, the checksum of the archive and the script that
+          # unpacks it, and not this file: those three are what the directory
+          # holds, and a key of a file an edit to a comment changes is a key
+          # that downloads 2.1 GB again for nothing. What the key has to cover
+          # is what scripts/fetch_deveco_cli.sh writes beside `hvigorw` — the
+          # version, the URL and the prune flag — and it re-downloads when the
+          # copy in the cache does not carry them, so a cache that is not what
+          # was asked for costs one download and answers nothing wrong.
+          key: deveco-cli-full-${{ env.DEVECO_CLI_VERSION }}-${{ env.DEVECO_CLI_SHA256 }}-${{ hashFiles('scripts/fetch_deveco_cli.sh') }}
       - name: Fetch the DevEco Command Line Tools ${{ env.DEVECO_CLI_VERSION }}
         env:
           DEVECO_CLI_PRUNE: '0'
