@@ -17,6 +17,7 @@
 | Flutter | `marsrs_xlog`，或 `marsrs` | `package:marsrs_xlog/marsrs_xlog.dart` |
 | React Native | `marsrs-react-native-xlog`，或 `marsrs-react-native` | `marsrs-react-native-xlog` |
 | 有 C FFI 的任何东西 | `include/mars_xlog.h` | `mars_xlog_*` |
+| C++ | `include/mars_xlog.hpp` | `marsrs::xlog::Xlog` |
 | HarmonyOS | `marsrs-harmonyos-xlog` | HAR 里的 `Xlog` |
 
 **`xlog` 是只有日志，`marsrs` 是整个移植** —— 日志加上[任务链路](/zh/stn/getting-started)和
@@ -304,6 +305,7 @@ xlog.close();
 marsrs-<version>-<host>.tar.gz   （Linux、macOS）
 marsrs-<version>-<host>.zip      （Windows）
     include/mars_xlog.h     日志
+    include/mars_xlog.hpp   日志的 C++ 写法
     include/mars_sdt.h      网络诊断
     include/mars_stn.h      任务链路
     libmars_ffi.a / libmars_ffi.so（.dylib、.dll）
@@ -342,6 +344,48 @@ cc -I include -o app app.c -L. -lmars_ffi                  # 动态
 
 每个返回 `int` 的调用回答 `MARS_XLOG_OK`（0）或一个负的 `MARS_XLOG_ERR_*`，C ABI
 里没有任何东西会把栈展开到 C 里。
+
+## C++
+
+```cpp
+#include <mars_xlog.hpp>
+
+marsrs::xlog::XlogConfig config;
+config.logDir = "/tmp/mars-log";
+config.namePrefix = "marsrs";
+
+auto log = marsrs::xlog::Xlog::open(config);   // 抛出 marsrs::xlog::XlogError
+log.setConsoleLogEnabled(true);
+
+log.i("startup", "hello from mars");
+
+log.flushNow();     // 返回时记录已经在磁盘上
+log.close();
+```
+
+`mars_xlog.hpp` 是 C ABI 的 C++ 写法：一个头文件，架在同一个库上，所以 App 要链
+的东西和上面 C 那一节是同一个。`Xlog::open(config)` 就是 Kotlin、Dart 和
+TypeScript 的 `Xlog.open(config)`，成员也是同一批成员 —— `v`、`d`、`i`、`w`、
+`e`、`f` 收一个 tag 和一条消息，`level`、`mode`、`consoleLogEnabled`、
+`maxFileSizeBytes` 和 `maxAliveTimeSeconds` 既能设也能读回来，`isLoggable` 是那
+句在拼一条很贵的消息之前该问的问题，而落盘还是那三个调用：`signalFlush()` 通知
+写线程然后立刻返回，`flushNow()` 在这个线程上做，`flush()` 回答一个
+`std::future<void>`，把同一次落盘交给别的线程。
+
+有两样是 C++ 自己的。`Xlog` 只能移动不能复制 —— 一个 prefix 就是一个 appender，
+一个 handle 的两份副本会是同一次关闭的两个主人 —— 而它的析构函数会关掉这个
+appender，所以一个自动存储期的 `Xlog` 在作用域末尾不需要 `close()`。还有：记录
+里的文件、函数和行号是空的，除非那个长的 `log` 把它们写出来，Kotlin 写的也是这
+样 —— C++ 没有 `#file` 可以填进去，所以调用点的 `__FILE__`、
+`__PRETTY_FUNCTION__` 和 `__LINE__` 交给
+`log(level, tag, message, file, function, line)`。
+
+这个头文件要 C++17：`Xlog::setConsoleSink` 的控制台 sink 收到的是
+`std::string_view`，`flush()` 回答的是 `std::future`。
+
+```bash
+c++ -std=c++17 -I include -o app app.cpp libmars_ffi.a -lpthread -ldl
+```
 
 ## HarmonyOS
 

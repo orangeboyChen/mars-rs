@@ -35,7 +35,7 @@ package carries the last two — [use it](#use-it) says which do.
 | Kotlin Multiplatform | `xlog-kmp` / `marsrs-kmp` | GitHub Packages, or the release's `marsrs-kmp-maven.zip` |
 | Flutter | `marsrs_xlog` / `marsrs` | [pub.dev](https://pub.dev), or the release's `marsrs-flutter-xlog-<version>.tar.gz` |
 | React Native 0.74+ | `marsrs-react-native-xlog` / `marsrs-react-native` | [npm](https://www.npmjs.com), or the release's `marsrs-react-native-xlog-<version>.tgz` |
-| anything with a C FFI | the `marsrs-<version>-<host>` archive | the release: Linux, macOS and Windows hosts |
+| anything with a C or C++ FFI | the `marsrs-<version>-<host>` archive | the release: Linux, macOS and Windows hosts |
 | HarmonyOS | `marsrs-harmonyos-xlog`, or the three `.so` of `marsrs-harmony-<version>.tar.gz` | the release — ohpm is not switched on yet |
 
 The Kotlin Multiplatform package is the widest of them: the same calls in shared

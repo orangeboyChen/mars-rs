@@ -19,6 +19,7 @@ without holding one.
 | Flutter | `marsrs_xlog`, or `marsrs` | `package:marsrs_xlog/marsrs_xlog.dart` |
 | React Native | `marsrs-react-native-xlog`, or `marsrs-react-native` | `marsrs-react-native-xlog` |
 | anything with a C FFI | `include/mars_xlog.h` | `mars_xlog_*` |
+| C++ | `include/mars_xlog.hpp` | `marsrs::xlog::Xlog` |
 | HarmonyOS | `marsrs-harmonyos-xlog` | the `Xlog` of the HAR |
 
 **`xlog` is the logger alone and `marsrs` is the whole port** — the logger plus
@@ -328,6 +329,7 @@ thread of the module's own and answers when it is over. Neither
 marsrs-<version>-<host>.tar.gz   (Linux, macOS)
 marsrs-<version>-<host>.zip      (Windows)
     include/mars_xlog.h     the logger
+    include/mars_xlog.hpp   the logger in C++
     include/mars_sdt.h      the network diagnosis
     include/mars_stn.h      the task pipeline
     libmars_ffi.a / libmars_ffi.so (.dylib, .dll)
@@ -366,6 +368,51 @@ cc -I include -o app app.c -L. -lmars_ffi                  # shared
 
 Every call that returns an `int` answers `MARS_XLOG_OK` (0) or a negative
 `MARS_XLOG_ERR_*`, and nothing in the C ABI unwinds into C.
+
+## C++
+
+```cpp
+#include <mars_xlog.hpp>
+
+marsrs::xlog::XlogConfig config;
+config.logDir = "/tmp/mars-log";
+config.namePrefix = "marsrs";
+
+auto log = marsrs::xlog::Xlog::open(config);   // throws marsrs::xlog::XlogError
+log.setConsoleLogEnabled(true);
+
+log.i("startup", "hello from mars");
+
+log.flushNow();     // the records are on disk when this returns
+log.close();
+```
+
+`mars_xlog.hpp` is the C ABI in C++: one header over the same library, so what
+an app links is what the C section above links. `Xlog::open(config)` is the
+`Xlog.open(config)` of Kotlin, of Dart and of TypeScript, and the members are
+the same members — `v`, `d`, `i`, `w`, `e` and `f` take a tag and a message,
+`level`, `mode`, `consoleLogEnabled`, `maxFileSizeBytes` and
+`maxAliveTimeSeconds` are set and read back, `isLoggable` is the question to ask
+before building a message that is expensive to build, and the drain is the same
+three calls: `signalFlush()` asks the writer thread for it and returns at once,
+`flushNow()` does it on this thread, and `flush()` answers a
+`std::future<void>` for the same drain off it.
+
+Two things are C++'s own. An `Xlog` is move-only — a prefix is one appender, and
+two copies of one handle would be two owners of one close — and its destructor
+closes the appender, so an `Xlog` of automatic storage needs no `close()` at the
+end of the scope. And a record carries an empty file, an empty function and the
+line 0 unless the long `log` names them, which is what Kotlin writes too: C++
+has no `#file` to fill one in with, so `__FILE__`, `__PRETTY_FUNCTION__` and
+`__LINE__` of the call site go to
+`log(level, tag, message, file, function, line)`.
+
+The header is C++17: `std::string_view` is what the console sink of
+`Xlog::setConsoleSink` is handed, and `std::future` is what `flush()` answers.
+
+```bash
+c++ -std=c++17 -I include -o app app.cpp libmars_ffi.a -lpthread -ldl
+```
 
 ## HarmonyOS
 

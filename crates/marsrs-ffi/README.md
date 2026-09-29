@@ -33,6 +33,10 @@ the two that reach every appender of the process.
 
 The header is checked in at **`include/mars_xlog.h`** (hand written, no cbindgen
 step); `tests/header_sync.rs` fails if it drifts from `src/abi.rs`.
+**`include/mars_xlog.hpp`** is the same seam in C++ — `marsrs::xlog::Xlog`, the
+`Xlog` every platform of the port has, over these very symbols — and
+`tests/cpp_surface.rs` compiles it and reads the symbols back out of the object
+file.
 
 ## Build
 
@@ -103,6 +107,32 @@ clang log_bridge.c -I rust/crates/marsrs-ffi/include \
 For an iOS app, link `libmars_ffi.a` (a `lipo` fat archive for all target
 slices) in *Link Binary With Libraries* together with `CoreFoundation`,
 `Security` and `libSystem`.
+
+## Linking from C++
+
+`include/mars_xlog.hpp` is the C ABI in C++ — one header, and nothing to link
+but the library above. `Xlog::open(config)` is the `Xlog.open(config)` of
+Kotlin, of Dart and of TypeScript, and the appender it answers is closed by the
+destructor when it goes out of scope:
+
+```cpp
+#include "mars_xlog.hpp"
+
+marsrs::xlog::XlogConfig config;
+config.logDir = "/tmp/marslog";
+config.namePrefix = "marsrs";
+config.level = marsrs::xlog::LogLevel::Info;
+
+auto log = marsrs::xlog::Xlog::open(config);   // throws marsrs::xlog::XlogError
+log.i("startup", "hello");
+log.flushNow();                                // on disk when it returns
+log.flush().get();                             // the same drain, off this thread
+```
+
+C++17: `std::string_view` is what the console sink of `Xlog::setConsoleSink` is
+handed, and `std::future<void>` is what `flush()` answers. `Xlog` is move-only —
+a prefix is one appender, and two copies of one handle are two owners of one
+close.
 
 ## Replacing a JNI call site
 

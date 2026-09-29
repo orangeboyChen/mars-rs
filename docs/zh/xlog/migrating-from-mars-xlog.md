@@ -64,6 +64,14 @@ config 在三种写法里都是一个 struct，八个字段还是那八个：C++
 [配置项](/zh/xlog/configuration)那页，按每个平台的写法列着。`TAppenderMode` 是
 `AppenderMode`，`TCompressMode` 是 `CompressMode`，`TLogLevel` 是 `LogLevel`。
 
+用 C++ 写的 App 可以走 `include/mars_xlog.hpp`，也就是 C ABI 的 C++ 写法：
+`marsrs::xlog::Xlog::open(config)` 就是 Kotlin、Dart 和 TypeScript 的
+`Xlog.open(config)`，它回答的那个 `Xlog` 的每个成员都是上面某个调用，只是没有那
+些 C 字符串。它不带的是 C++ 那一列的名字 —— `mars::xlog::appender_open` 和它旁边
+那批自由函数是“一个进程级 appender，后面没有对象”，而这个移植在每个平台上的形状
+都是一个 App 拿着的 appender，所以调用点搬一次，之后读起来就像下面
+[从 C++ 项目的 Java 来](#从-c-项目的-java-来)那一节。
+
 另一半要搬走的是宏。`XLOGGER_TAG` 和 `xverbose2` / `xdebug2` / `xinfo2` / `xwarn2` /
 `xerror2` / `xfatal2` 那一族，把级别、tag 和调用点塞在一行 C++ 里；取代它们的是每个
 级别一个方法 —— Kotlin 的 `xlog.i(tag, message)`、Swift 的 `log.info(message:tag:)`、
