@@ -1,10 +1,12 @@
 //! CLI front-end for the comm cross-read tests: the Rust of
-//! `mars/comm/basepacker.cc`, of `mars/comm/adler32.c` and of
-//! `mars/comm/strutil.cc`, driven the way `scripts/compat/upstream_comm.cpp`
-//! drives the C++.
+//! `mars/comm/basepacker.cc`, of `mars/comm/adler32.c`, of
+//! `mars/comm/strutil.cc`, of `mars/comm/socket/socket_address.cc` and of
+//! `mars/comm/http.cc`, driven the way
+//! `scripts/compat/upstream_comm.cpp` drives the C++.
 //!
 //! ```text
 //! comm-compat adler32 --data=HEX [--seed=N]
+//! comm-compat http ACTION [--data=HEX] [--set=N:V|N:V] [--in=PATH]
 //! comm-compat packer pack --url=U --seq=N --data=HEX [--hash=no] --out=PATH
 //! comm-compat packer unpack --in=PATH
 //! comm-compat simple pack --kind=short|int --data=HEX --out=PATH
@@ -12,6 +14,13 @@
 //! comm-compat socket --ip=TEXT|--v4=HEX|--v6=HEX --port=N [--map=yes]
 //! comm-compat strutil FN --data=HEX [--arg=HEX] [--pos=N]
 //! ```
+//!
+//! `http` is the request or the answer a caller writes and reads:
+//! `request-line`/`status-line` print `ToString()` as hex, or, given
+//! `--data`, what `FromString()` read; `fields` prints a head and how many
+//! fields it holds; `reads` the numbers a caller reads out of one; `looks`
+//! the one field `--name` asks for; `build` the bytes of a request or of an
+//! answer, written to `--out`; `parse` what reading those bytes gives.
 //!
 //! `socket` is one line of what a caller reads off a [`SocketAddress`]: the
 //! family, the bytes of the address, the port, the four `valid_*`, the three
@@ -42,6 +51,8 @@ use marsrs_comm::basepacker::{
     packer_pack, packer_unpack, simple_int_pack, simple_int_unpack, simple_short_pack,
     simple_short_unpack, PackerUnpacked, SimpleUnpacked,
 };
+use marsrs_comm::http::{Body, Builder, CsMode, HeaderFields, Method, Parser, RecvStatus};
+use marsrs_comm::http::{RequestLine, StatusLine, Version};
 use marsrs_comm::socket_address::SocketAddress;
 use marsrs_comm::strutil;
 
@@ -51,10 +62,10 @@ fn main() -> ExitCode {
         usage();
         return ExitCode::FAILURE;
     };
-    // `packer`, `simple` and `strutil` are the three subcommands with an
+    // `packer`, `simple`, `strutil` and `http` are the subcommands with an
     // action of their own, and it sits where every option sits: before them,
     // and not among them.
-    let action = matches!(command.as_str(), "packer" | "simple" | "strutil")
+    let action = matches!(command.as_str(), "packer" | "simple" | "strutil" | "http")
         .then(|| args.next())
         .flatten();
 
@@ -67,6 +78,7 @@ fn main() -> ExitCode {
         ("simple", Some("unpack")) => unpack_simple(&opts),
         ("socket", _) => socket(&opts),
         ("strutil", Some(name)) => strutil(name, &opts),
+        ("http", Some(name)) => http(name, &opts),
         _ => {
             usage();
             return ExitCode::FAILURE;
@@ -85,6 +97,7 @@ fn main() -> ExitCode {
 fn usage() {
     eprintln!(
         "usage: comm-compat adler32 --data=HEX [--seed=N]\n       \
+         comm-compat http ACTION [--data=HEX] [--set=N:V|N:V] [--in=PATH]\n       \
          comm-compat packer pack --url=U --seq=N --data=HEX [--hash=no] \
          --out=PATH\n       \
          comm-compat packer unpack --in=PATH\n       \
@@ -253,6 +266,247 @@ fn array<const N: usize>(bytes: Vec<u8>) -> Result<[u8; N], String> {
         .try_into()
         .map_err(|_| format!("--v{N} is not {N} bytes"))
 }
+/// `mars/comm/http.cc` — the first line, the head and the body of a request
+/// or of an answer, the way `scripts/compat/comm.sh` drives them.
+///
+/// * `request-line` and `status-line` print `ToString()` as hex, or, given
+///   `--data=HEX`, what `FromString()` read out of that line;
+/// * `fields` prints how many fields a head holds and the head itself;
+/// * `reads` prints the numbers a caller reads out of a head;
+/// * `looks` prints the one field `--name` asks for;
+/// * `build` prints the bytes of a request or of an answer, and writes them
+///   to `--out`;
+/// * `parse` prints what reading those bytes gives.
+fn http(name: &str, opts: &Opts) -> Result<(), String> {
+    match name {
+        "request-line" => first_line(opts, true),
+        "status-line" => first_line(opts, false),
+        "fields" => fields(opts),
+        "reads" => reads(opts),
+        "looks" => looks(opts),
+        "build" => build(opts),
+        "parse" => parse_http(opts),
+        _ => Err(format!("http {name} is not an action this CLI drives")),
+    }
+}
+
+/// `RequestLine::ToString` / `FromString`, and the two of `StatusLine`.
+///
+/// `FromString` wants a line that is `CRLF`-terminated, and a line it cannot
+/// read is `refused` — the `false` the C++ answers with.
+fn first_line(opts: &Opts, is_request: bool) -> Result<(), String> {
+    let version = Version::parse(opts.value("version").unwrap_or("HTTP/1.1"));
+    if let Some(data) = opts.value("data") {
+        let line = String::from_utf8(unhex(data)?).map_err(|_| "--data is not UTF-8".to_owned())?;
+        let answer = if is_request {
+            RequestLine::parse(&line).map(|line| {
+                format!(
+                    "{} {} {}",
+                    line.method.as_str(),
+                    line.url,
+                    line.version.as_str()
+                )
+            })
+        } else {
+            StatusLine::parse(&line).map(|line| {
+                format!(
+                    "{} {} {}",
+                    line.version.as_str(),
+                    line.status_code,
+                    dash(&line.reason_phrase)
+                )
+            })
+        };
+        println!("{}", answer.unwrap_or_else(|| "refused".to_owned()));
+        return Ok(());
+    }
+
+    let answer = if is_request {
+        let method = Method::parse(opts.value("method").unwrap_or("GET"));
+        RequestLine::new(method, opts.value("url").unwrap_or(""), version).to_string()
+    } else {
+        let code = number(opts, "code")? as i32;
+        StatusLine::new(version, code, opts.value("reason").unwrap_or("")).to_string()
+    };
+    println!("{}", hex(answer.as_bytes()));
+    Ok(())
+}
+
+/// `HeaderFields::ToString` — how many fields a head holds, and the head.
+fn fields(opts: &Opts) -> Result<(), String> {
+    let fields = head(opts)?;
+    println!(
+        "{} {}",
+        fields.len(),
+        dash(&hex(fields.to_string().as_bytes()))
+    );
+    Ok(())
+}
+
+/// What a caller reads out of a head: `ContentLength()`, `KeepAliveTimeout()`,
+/// the three `Is*`, and the two ranges.
+fn reads(opts: &Opts) -> Result<(), String> {
+    let fields = head(opts)?;
+    let range = fields.range().map(|(from, to)| format!("{from},{to}"));
+    let content_range = fields
+        .content_range()
+        .map(|it| format!("{},{},{}", it.start, it.end, it.total));
+    println!(
+        "{} {} {} {} {} {} {}",
+        fields.content_length(),
+        fields.keep_alive_timeout(),
+        bit(fields.is_chunked()),
+        bit(fields.is_connection_close()),
+        bit(fields.is_connection_keep_alive()),
+        range.as_deref().unwrap_or("-"),
+        content_range.as_deref().unwrap_or("-"),
+    );
+    Ok(())
+}
+
+/// `HeaderField(key)` — one field, whichever way its name was written.
+fn looks(opts: &Opts) -> Result<(), String> {
+    let name = opts.value("name").ok_or("http looks needs --name=NAME")?;
+    println!("{}", dash(head(opts)?.get(name).unwrap_or("-")));
+    Ok(())
+}
+
+/// `Builder::HttpToBuffer` — the bytes of a request or of an answer, which is
+/// the artifact `parse` reads back.
+fn build(opts: &Opts) -> Result<(), String> {
+    let version = Version::parse(opts.value("version").unwrap_or("HTTP/1.1"));
+    let mode = match opts.value("mode") {
+        Some("respond") => CsMode::Respond,
+        _ => CsMode::Request,
+    };
+    let mut builder = Builder::new(mode);
+    match mode {
+        CsMode::Request => {
+            let method = Method::parse(opts.value("method").unwrap_or("GET"));
+            *builder.request_mut() =
+                RequestLine::new(method, opts.value("url").unwrap_or(""), version);
+        }
+        CsMode::Respond => {
+            *builder.status_mut() = StatusLine::new(
+                version,
+                number(opts, "code")? as i32,
+                opts.value("reason").unwrap_or(""),
+            );
+        }
+    }
+    *builder.fields_mut() = head(opts)?;
+    if let Some(body) = opts.value("body") {
+        builder.set_body(Body::Block(unhex(body)?));
+    }
+    if let Some(chunks) = opts.value("chunks") {
+        builder.set_body(Body::Chunks(unhex(chunks)?));
+    }
+
+    let buffer = builder.to_buffer();
+    if let Some(path) = opts.value("out") {
+        std::fs::write(path, buffer.as_deref().unwrap_or(&[]))
+            .map_err(|err| format!("write {path}: {err}"))?;
+    }
+    // A head that is not there at all is `none`, which is the C++'s `false`,
+    // and a block body of no bytes is a buffer of no bytes, which is not the
+    // same answer.
+    match buffer {
+        Some(bytes) => println!("ok {}", dash(&hex(&bytes))),
+        None => println!("none -"),
+    }
+    Ok(())
+}
+
+/// `Parser::Recv` — how far the parser got, the two lengths, the body, the
+/// mode the first line decided, and the first line and the head it read.
+fn parse_http(opts: &Opts) -> Result<(), String> {
+    let bytes = match opts.value("in") {
+        Some(path) => std::fs::read(path).map_err(|err| format!("read {path}: {err}"))?,
+        None => unhex(opts.value("data").unwrap_or(""))?,
+    };
+    let mut parser = Parser::new();
+    let status = if opts.value("header-only") == Some("yes") {
+        parser.recv_header_only(&bytes)
+    } else {
+        parser.recv(&bytes)
+    };
+    // The first line whether it was read or not: what a caller asking for it
+    // before the answer is whole gets is the one the parser started with.
+    let first = match parser.mode() {
+        CsMode::Request => parser.request().to_string(),
+        CsMode::Respond => parser.status().to_string(),
+    };
+    println!(
+        "{} {} {} {} {} {} {} {}",
+        status_name(status),
+        parser.first_line_len(),
+        parser.header_len(),
+        parser.body_len(),
+        mode_name(parser.mode()),
+        dash(&hex(first.as_bytes())),
+        dash(&hex(parser.fields().to_string().as_bytes())),
+        dash(&hex(parser.body())),
+    );
+    Ok(())
+}
+
+/// `Parser::TRecvStatus`, named the way the C++ names it.
+fn status_name(status: RecvStatus) -> &'static str {
+    match status {
+        RecvStatus::Start => "start",
+        RecvStatus::FirstLine => "first-line",
+        RecvStatus::FirstLineError => "first-line-error",
+        RecvStatus::HeaderFields => "header-fields",
+        RecvStatus::HeaderFieldsError => "header-fields-error",
+        RecvStatus::Body => "body",
+        RecvStatus::BodyError => "body-error",
+        RecvStatus::End => "end",
+    }
+}
+
+/// `TCsMode` — whether what came in is a request or an answer.
+fn mode_name(mode: CsMode) -> &'static str {
+    match mode {
+        CsMode::Request => "request",
+        CsMode::Respond => "respond",
+    }
+}
+
+/// The head of a case: `--set`, then `--manipulate`, then `--update`, each a
+/// `|`-separated list of `name:value`.
+fn head(opts: &Opts) -> Result<HeaderFields, String> {
+    let mut fields = HeaderFields::new();
+    for pair in list(opts.value("set")) {
+        let (name, value) = pair_of(pair)?;
+        fields.set(name, value);
+    }
+    for pair in list(opts.value("manipulate")) {
+        let (name, value) = pair_of(pair)?;
+        fields.manipulate(name, value);
+    }
+    for pair in list(opts.value("update")) {
+        let (name, value) = pair_of(pair)?;
+        fields.set(name, value);
+    }
+    Ok(fields)
+}
+
+/// One `|`-separated list, which is how a case names a head: a value with a
+/// space in it would not survive the shell's splitting of a row.
+fn list(value: Option<&str>) -> impl Iterator<Item = &str> {
+    value
+        .unwrap_or("")
+        .split('|')
+        .filter(|pair| !pair.is_empty())
+}
+
+/// One `name:value` — the first colon is the one that parts them, and a value
+/// may hold another.
+fn pair_of(pair: &str) -> Result<(&str, &str), String> {
+    pair.split_once(':')
+        .ok_or_else(|| format!("{pair} is not a name:value"))
+}
+
 /// One `strutil` call, named by its action. `--data` is the bytes of the
 /// string and `--arg` the second string, both hex; `--pos` is where
 /// `ci_find_substr` starts looking.
