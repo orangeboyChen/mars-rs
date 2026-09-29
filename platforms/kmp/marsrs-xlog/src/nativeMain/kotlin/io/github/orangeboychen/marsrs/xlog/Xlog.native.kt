@@ -2,6 +2,7 @@ package io.github.orangeboychen.marsrs.xlog
 
 import io.github.orangeboychen.marsrs.xlog.ffi.MarsXLogConfig
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_flush_now_instance
+import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_get_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_get_level
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_is_enabled_for
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_new_instance
@@ -35,8 +36,9 @@ import kotlinx.coroutines.withContext
  * The appender is the prefix's, though, and not the wrapper's: a second [Xlog]
  * of one [namePrefix] is answered with the handle of the first, so [close]
  * through either closes what both write through — which is why [isOpen] is
- * asked against the handle this process has for the prefix and not against the
- * handle this [Xlog] was opened with.
+ * asked of the C ABI's own registry, `mars_xlog_get_instance`, and not of a
+ * record this process keeps: no map of handles is a map every thread reads the
+ * same way, and the registry already answers for all of them.
  *
  * The strings of the C ABI are Kotlin strings at a call: cinterop maps the
  * `const char*` parameter of `mars_xlog.h` to `String?`, which is what lets the
@@ -72,12 +74,12 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
     private var currentMode: AppenderMode = config.mode
 
-    init {
-        openHandles[namePrefix] = handle
-    }
-
     public actual val isOpen: Boolean
-        get() = handle != NO_HANDLE && handle == openHandles[namePrefix]
+        // Asked of the C ABI and not of a map of this process's own: a prefix is
+        // one appender for the whole process, so the question "is it open, and is
+        // it this one" is one the registry the appender lives in already answers
+        // — for a thread that did not open it as much as for the one that did.
+        get() = handle != NO_HANDLE && handle == mars_xlog_get_instance(namePrefix)
 
     public actual var level: LogLevel
         get() = LogLevel.of(mars_xlog_get_level(requireOpen()))
@@ -138,11 +140,9 @@ public actual class Xlog actual constructor(config: XlogConfig) {
         mars_xlog_release_instance(namePrefix)
         // The appender is the prefix's and not this wrapper's: the C ABI answers
         // an [Xlog] of the same prefix with the same handle, so every one of
-        // them is closed with this one — and it is the record below, and not
-        // this [Xlog]'s own handle, that tells the others so.
-        if (openHandles[namePrefix] == handle) {
-            openHandles.remove(namePrefix)
-        }
+        // them is closed with this one. What tells the others so is the registry
+        // the handle came from, and not a record of this process's own: the
+        // prefix answers no handle at all now, and [isOpen] asks it.
         handle = NO_HANDLE
     }
 
@@ -172,15 +172,6 @@ public actual class Xlog actual constructor(config: XlogConfig) {
          * refuses is a negative `MARS_XLOG_ERR_*` code.
          */
         const val NO_HANDLE = 0L
-
-        /**
-         * The handle of every appender this process has open, by the prefix it
-         * was opened with: what tells an [Xlog] that the appender it shares with
-         * another [Xlog] of the same [namePrefix] has been closed, which the
-         * handle alone cannot — `mars_xlog_new_instance` answers both with the
-         * same one, so a [close] through either is a [close] of both.
-         */
-        private val openHandles: MutableMap<String, Long> = mutableMapOf()
 
         /** `mars_xlog_set_console_log_instance` reads a non-zero `open` as on. */
         const val CONSOLE_LOG_OPEN = 1
