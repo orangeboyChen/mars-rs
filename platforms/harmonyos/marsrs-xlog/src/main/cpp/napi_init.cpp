@@ -52,6 +52,13 @@
 // unspelled lands on the same appender either way.
 static const char* const kDefaultNamePrefix = "xlog";
 
+// The buffer the path symbols write into, and the one the two that answer a list
+// write into for one index at a time. A path never fills it: what a symbol
+// answers is how many bytes it wrote, so a path longer than this is an error
+// rather than a string cut off — which is the same bet the C ABI asks a C caller
+// to make when it hands it a buffer of its own.
+static const unsigned int kPathBufferSize = 1024;
+
 // One appender this module has opened, by name prefix.
 typedef struct {
     char* prefix;
@@ -488,6 +495,86 @@ static napi_value FlushNow(napi_env env, napi_callback_info info) {
     return Undefined(env);
 }
 
+// --- the files this appender writes ----------------------------------------
+
+// One of the two symbols that answer a list of paths one index at a time —
+// `mars_xlog_getfilepath_from_timespan_instance` and
+// `mars_xlog_make_logfile_name_instance`, which the C++ fills a `std::vector`
+// with and a C caller walks. The two take the same five arguments, so one walk
+// is the walk of both.
+typedef int (*PathAt)(long long, int, unsigned int, char*, unsigned int);
+
+// What `pathAt` answers for index after index, as an ArkTS array of strings,
+// starting at `0` and stopping at the first index it answers nothing for. The
+// walk is this module's and not the app's: what an app wants is the day's
+// files, and what the C ABI answers is one of them.
+static napi_value Paths(napi_env env, napi_callback_info info, PathAt pathAt) {
+    size_t argc = 2;
+    napi_value argv[2] = {NULL, NULL};
+    napi_value self = NULL;
+    napi_value list = NULL;
+    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || argc < 2 ||
+        napi_create_array(env, &list) != napi_ok) {
+        return Undefined(env);
+    }
+    char* namePrefix = CopyString(env, argv[0]);
+    long long handle = HandleOf(namePrefix);
+    free(namePrefix);
+    if (handle == 0) {
+        return list;
+    }
+    int32_t daysAgo = 0;
+    if (napi_get_value_int32(env, argv[1], &daysAgo) != napi_ok) {
+        return list;
+    }
+    char buffer[kPathBufferSize] = {0};
+    for (unsigned int index = 0;; ++index) {
+        int written = pathAt(handle, daysAgo, index, buffer, kPathBufferSize);
+        if (written <= 0) {
+            break;
+        }
+        napi_value path = NULL;
+        if (napi_create_string_utf8(env, buffer, (size_t)written, &path) == napi_ok) {
+            napi_set_element(env, list, index, path);
+        }
+    }
+    return list;
+}
+
+// `mars_xlog_getfilepath_from_timespan_instance`: the log files of `daysAgo`
+// days ago that are *there* — what an app that uploads yesterday's opens.
+static napi_value LogFiles(napi_env env, napi_callback_info info) {
+    return Paths(env, info, mars_xlog_getfilepath_from_timespan_instance);
+}
+
+// `mars_xlog_make_logfile_name_instance`: the paths of the log files of
+// `daysAgo` days ago whether or not they are there yet.
+static napi_value LogFileNames(napi_env env, napi_callback_info info) {
+    return Paths(env, info, mars_xlog_make_logfile_name_instance);
+}
+
+// `mars_xlog_current_log_path_instance`: the file this appender is writing to,
+// or `undefined` when it has none open — the first record of the day is what
+// opens one.
+static napi_value CurrentLogPath(napi_env env, napi_callback_info info) {
+    char* namePrefix = ArgString(env, info, 0);
+    long long handle = HandleOf(namePrefix);
+    free(namePrefix);
+    if (handle == 0) {
+        return Undefined(env);
+    }
+    char buffer[kPathBufferSize] = {0};
+    int written = mars_xlog_current_log_path_instance(handle, buffer, kPathBufferSize);
+    if (written <= 0) {
+        return Undefined(env);
+    }
+    napi_value path = NULL;
+    if (napi_create_string_utf8(env, buffer, (size_t)written, &path) != napi_ok) {
+        return Undefined(env);
+    }
+    return path;
+}
+
 static napi_value Close(napi_env env, napi_callback_info info) {
     char* namePrefix = ArgString(env, info, 0);
     if (namePrefix == NULL) {
@@ -514,6 +601,9 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"log", NULL, Log, NULL, NULL, NULL, napi_default, NULL},
         {"requestFlush", NULL, RequestFlush, NULL, NULL, NULL, napi_default, NULL},
         {"flushNow", NULL, FlushNow, NULL, NULL, NULL, napi_default, NULL},
+        {"currentLogPath", NULL, CurrentLogPath, NULL, NULL, NULL, napi_default, NULL},
+        {"logFiles", NULL, LogFiles, NULL, NULL, NULL, napi_default, NULL},
+        {"logFileNames", NULL, LogFileNames, NULL, NULL, NULL, napi_default, NULL},
         {"close", NULL, Close, NULL, NULL, NULL, napi_default, NULL},
     };
     napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties);

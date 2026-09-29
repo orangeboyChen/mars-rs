@@ -178,6 +178,20 @@ export class Xlog {
     this.currentMaxAliveTime = seconds;
   }
 
+  /** `mars_xlog_current_log_path_instance`: the file this appender is writing
+   * to, or `undefined` when it has none open — the first record of the day is
+   * what opens one.
+   *
+   * A day is one file, so this is the path an app hands to something that reads
+   * the log while it is being written. What an app that uploads a whole day
+   * asks for is `logFiles`. */
+  get currentLogPath(): string | undefined {
+    if (!this.opened) {
+      return undefined;
+    }
+    return xlogNapi.currentLogPath(this.namePrefix);
+  }
+
   /** Whether a record at `level` is written: the appender's own answer, and the
    * one the Swift's `isLoggable` and the Kotlin's give. An app asks it before it
    * builds a message that is expensive to build. */
@@ -262,6 +276,37 @@ export class Xlog {
       return;
     }
     xlogNapi.flushNow(this.namePrefix);
+  }
+
+  /**
+   * `mars_xlog_getfilepath_from_timespan_instance`: the log files of `daysAgo`
+   * days ago that are *there* — what an app that uploads yesterday's opens.
+   * `[]` when the directory holds none of that day's. `0` is today, `1` is
+   * yesterday, and so on.
+   *
+   * This is a day of files and not the file being written: what
+   * `currentLogPath` answers is one, and this is *this* appender's own prefix
+   * and directory.
+   */
+  logFiles(daysAgo: number): string[] {
+    if (!this.opened) {
+      return [];
+    }
+    return xlogNapi.logFiles(this.namePrefix, daysAgo);
+  }
+
+  /**
+   * `mars_xlog_make_logfile_name_instance`: the paths of the log files of
+   * `daysAgo` days ago whether or not they are *there yet* — the name an app
+   * that is about to write, or that is naming a file to someone else, asks
+   * for. A day's answer can be two where `logFiles` answers one, when a cache
+   * dir is given and the file is there.
+   */
+  logFileNames(daysAgo: number): string[] {
+    if (!this.opened) {
+      return [];
+    }
+    return xlogNapi.logFileNames(this.namePrefix, daysAgo);
   }
 
   /** `mars_xlog_release_instance`: closes the appender `Xlog.open` made.
