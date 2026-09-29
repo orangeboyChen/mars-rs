@@ -59,17 +59,9 @@ this port does not: upstream raises `SIGTRAP` on Android and calls
 process stopped on an assert stops it itself — `std::process::abort()`, or a
 platform trap — after the write.
 
-::: code-group
-
-```rust [Rust]
-marsrs::xlog::xlogger_assert(None, "fd >= 0", "the socket was already closed");
-```
-
-```c [C]
-mars_xlog_assert("net", __FILE__, __func__, __LINE__, "fd >= 0", "the socket was already closed");
-```
-
-:::
+There is no `xlogger_Assert` spelling in the port any more: `mars_xlog_assert`
+was the process-wide appender's, and an app that wants one writes the record
+itself — `xlog.f(tag, message)` — and stops the process after it.
 
 A message that is expensive to build is worth asking about first, because a
 record the level drops still costs the caller the string:
@@ -150,8 +142,8 @@ every one of them takes effect from the next record:
 | mirror records to the console | `xlog.set_console_log_enabled` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log_instance(0, on)` | `log.setConsoleLogEnabled` | `xlog.consoleLogEnabled` |
 | close a file after N bytes | `xlog.set_max_file_size_bytes` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size_instance(0, bytes)` | `log.setMaxFileSizeBytes` | `xlog.maxFileSizeBytes` |
 | drop a file older than N seconds | `xlog.set_max_alive_time_seconds` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration_instance(0, secs)` | `log.setMaxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` |
-| where the current file is | `xlog.current_log_path` | `xlog.currentLogPath` | — | — | — | — | `mars_xlog_current_log_path` | — | — |
-| a day of files | `appender_getfilepath_from_timespan` | `xlog.logFiles(daysAgo:)` | — | — | — | — | `mars_xlog_getfilepath_from_timespan` | — | — |
+| where the current file is | `xlog.current_log_path()` | `xlog.currentLogPath` | — | — | — | — | `mars_xlog_current_log_path_instance` | — | — |
+| a day of files | `xlog.log_files(days_ago)` | `xlog.logFiles(daysAgo:)` | — | — | — | — | `mars_xlog_getfilepath_from_timespan_instance` | — | — |
 
 `0` is "no limit" for both sizes and ages: a file is never split and never
 dropped — the C++ keeps its own ten days.
@@ -189,13 +181,9 @@ Xlog.setConsoleSink(nil)   // the console has it again
 ```
 
 ```c [C]
-static void to_my_console(int level, const char* tag, const char* filename,
-                          const char* func_name, int line, const char* log) {
-    my_console_write(level, log);
-}
-
-mars_xlog_set_console_fun(to_my_console);
-mars_xlog_set_console_fun(NULL);   /* the console has it again */
+/* There is no sink to set any more: the console copy of a record is the
+   built-in stderr line. `mars_xlog_set_console_fun` was the process-wide
+   appender's, and the sink it installed had no instance spelling. */
 ```
 
 :::

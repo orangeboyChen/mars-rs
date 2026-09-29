@@ -51,7 +51,7 @@ The appender is one struct of options and a handful of free calls in
 | `appender_set_console_log(bool)` | `xlog.set_console_log_enabled(on)` | `mars_xlog_set_console_log_instance(0, on)` |
 | `appender_set_max_file_size(bytes)` | `xlog.set_max_file_size_bytes(bytes)` | `mars_xlog_set_max_file_size_instance(0, bytes)` |
 | `appender_set_max_alive_duration(secs)` | `xlog.set_max_alive_time_seconds(secs)` | `mars_xlog_set_max_alive_duration_instance(0, secs)` |
-| `appender_get_current_log_path(out, len)` | `xlog.current_log_path()` | `mars_xlog_current_log_path(out, len)` |
+| `appender_get_current_log_path(out, len)` | `xlog.current_log_path()` | `mars_xlog_current_log_path_instance(instance, out, len)` |
 
 The Rust column is the object an app holds — the `Xlog.open(config)` of Kotlin,
 of Dart and of TypeScript — and not the free function the C++ has: a second

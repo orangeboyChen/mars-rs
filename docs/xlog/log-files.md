@@ -20,7 +20,6 @@ Where the file that is being written right now is:
 
 ```rust [Rust]
 xlog.current_log_path()                  // Option<PathBuf>
-appender_get_current_log_path()          // the process-wide appender's
 ```
 
 ```swift [Swift]
@@ -29,13 +28,13 @@ log.currentLogPath
 
 ```c [C]
 char path[512];
-mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK, or a negative code
+mars_xlog_current_log_path_instance(handle, path, sizeof path);   // bytes, or a negative code
 ```
 
 :::
 
-Those three are the ones that answer it — and the Swift one is the `Xlog`'s
-own, the way it is in Rust and in the Kotlin Multiplatform module. The rest leave
+Those three are the ones that answer it, and all three are the `Xlog`'s own.
+The rest leave
 the app to name the file itself, which is the two things it gave the config: the
 directory and the prefix, with the day in between.
 
@@ -46,8 +45,8 @@ written under whether or not they are there yet.
 ::: code-group
 
 ```rust [Rust]
-appender_getfilepath_from_timespan(1, "marsrs", Path::new(log_dir))  // yesterday's, that are there
-appender_make_logfile_name(1, "marsrs", Path::new(log_dir))          // the names, whether or not
+xlog.log_files(1)      // yesterday's, that are there
+xlog.log_file_names(1) // the names, whether or not
 ```
 
 ```swift [Swift]
@@ -58,8 +57,8 @@ log.logFileNames(daysAgo: 1)
 ```c [C]
 char path[512];
 // index 0, 1, 2 …; a negative code — MARS_XLOG_ERR_NO_PATH — is the end of the list
-mars_xlog_getfilepath_from_timespan(1, "marsrs", log_dir, 0, path, sizeof path);
-mars_xlog_make_logfile_name(1, "marsrs", log_dir, 0, path, sizeof path);
+mars_xlog_getfilepath_from_timespan_instance(handle, 1, 0, path, sizeof path);
+mars_xlog_make_logfile_name_instance(handle, 1, 0, path, sizeof path);
 ```
 
 :::

@@ -43,7 +43,7 @@ appender 在 `mars/xlog/appender.h` 里是一组选项构成的一个 struct 加
 | `appender_set_console_log(bool)` | `xlog.set_console_log_enabled(on)` | `mars_xlog_set_console_log_instance(0, on)` |
 | `appender_set_max_file_size(bytes)` | `xlog.set_max_file_size_bytes(bytes)` | `mars_xlog_set_max_file_size_instance(0, bytes)` |
 | `appender_set_max_alive_duration(secs)` | `xlog.set_max_alive_time_seconds(secs)` | `mars_xlog_set_max_alive_duration_instance(0, secs)` |
-| `appender_get_current_log_path(out, len)` | `xlog.current_log_path()` | `mars_xlog_current_log_path(out, len)` |
+| `appender_get_current_log_path(out, len)` | `xlog.current_log_path()` | `mars_xlog_current_log_path_instance(instance, out, len)` |
 
 Rust 那一列是 App 拿着的那个对象 —— Kotlin、Dart 和 TypeScript 的
 `Xlog.open(config)` —— 而不是 C++ 的那个自由函数：第二个 appender 是另一个前缀的

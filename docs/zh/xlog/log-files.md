@@ -19,7 +19,6 @@ appender 用了同一个前缀就写同一个文件，关掉其中一个，另�
 
 ```rust [Rust]
 xlog.current_log_path()                  // Option<PathBuf>
-appender_get_current_log_path()          // 进程级那个 appender 的
 ```
 
 ```swift [Swift]
@@ -28,14 +27,13 @@ log.currentLogPath
 
 ```c [C]
 char path[512];
-mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK，或负的错误码
+mars_xlog_current_log_path_instance(handle, path, sizeof path);   // 字节数，或负的错误码
 ```
 
 :::
 
-能给出这个路径的就是这三个包 —— 而且 Swift 那个是这个 `Xlog` 自己的，跟 Rust 和
-Kotlin Multiplatform 模块里一样。其余平台要 App 自己拼出文件名，拼的时候用的还是交给
-配置的那两样：目录和前缀，中间夹着当天日期。
+能给出这个路径的就是这三个包，而且三个都是这个 `Xlog` 自己的。其余平台要 App 自己拼
+出文件名，拼的时候用的还是交给配置的那两样：目录和前缀，中间夹着当天日期。
 
 一整**天**的文件是另一件事，要上传昨天日志的 App 问的就是它。这里有两个调用：一个是
 确实存在的那些文件，一个是这一天会写进哪几个名字 —— 不管文件在不在：
@@ -43,8 +41,8 @@ Kotlin Multiplatform 模块里一样。其余平台要 App 自己拼出文件名
 ::: code-group
 
 ```rust [Rust]
-appender_getfilepath_from_timespan(1, "marsrs", Path::new(log_dir))  // 昨天的、确实存在的
-appender_make_logfile_name(1, "marsrs", Path::new(log_dir))          // 名字，不管在不在
+xlog.log_files(1)      // 昨天的、确实存在的
+xlog.log_file_names(1) // 名字，不管在不在
 ```
 
 ```swift [Swift]
@@ -55,8 +53,8 @@ log.logFileNames(daysAgo: 1)
 ```c [C]
 char path[512];
 // 下标 0、1、2 ……；负的错误码 —— MARS_XLOG_ERR_NO_PATH —— 表示后面没有了
-mars_xlog_getfilepath_from_timespan(1, "marsrs", log_dir, 0, path, sizeof path);
-mars_xlog_make_logfile_name(1, "marsrs", log_dir, 0, path, sizeof path);
+mars_xlog_getfilepath_from_timespan_instance(handle, 1, 0, path, sizeof path);
+mars_xlog_make_logfile_name_instance(handle, 1, 0, path, sizeof path);
 ```
 
 :::

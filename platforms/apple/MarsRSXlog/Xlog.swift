@@ -366,12 +366,8 @@ public final class Xlog: NSObject {
     /// — its own prefix, and the directory it writes into.
     @objc
     public func logFiles(daysAgo: Int) -> [String] {
-        namePrefix.withCString { name in
-            logDirectory.withCString { directory in
-                paths { index, out, len in
-                    mars_xlog_getfilepath_from_timespan(Int32(daysAgo), name, directory, index, out, len)
-                }
-            }
+        paths { index, out, len in
+            mars_xlog_getfilepath_from_timespan_instance(handle, Int32(daysAgo), index, out, len)
         }
     }
 
@@ -384,12 +380,8 @@ public final class Xlog: NSObject {
     /// [`logFiles(daysAgo:)`] answers one.
     @objc
     public func logFileNames(daysAgo: Int) -> [String] {
-        namePrefix.withCString { name in
-            logDirectory.withCString { directory in
-                paths { index, out, len in
-                    mars_xlog_make_logfile_name(Int32(daysAgo), name, directory, index, out, len)
-                }
-            }
+        paths { index, out, len in
+            mars_xlog_make_logfile_name_instance(handle, Int32(daysAgo), index, out, len)
         }
     }
 
@@ -456,7 +448,6 @@ public final class Xlog: NSObject {
         }
 
         self.namePrefix = config.namePrefix
-        self.logDirectory = config.logDirectory
         self.handle = opened
         self.currentMode = config.mode
         super.init()
@@ -469,11 +460,6 @@ public final class Xlog: NSObject {
 
     /// The handle `mars_xlog_new_instance` answered with; `0` once [close()] ran.
     private var handle: Int64
-
-    /// The directory this appender writes into: what [`logFiles(daysAgo:)`] and
-    /// [`logFileNames(daysAgo:)`] name a day out of, which is the prefix's other
-    /// half and not something an app should have to hand them twice.
-    private let logDirectory: String
 
     /// What [mode] answers while this side is the only one that knows it.
     private var currentMode: AppenderMode

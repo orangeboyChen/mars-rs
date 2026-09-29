@@ -51,17 +51,9 @@ assert 是唯一不受级别管的一条记录：不管 appender 开在哪一级
 记录之后会在 Android 上 `raise(SIGTRAP)`、在 Apple 上调 `__assert_rtn`。想让进程停在
 assert 上的 App 得自己停 —— `std::process::abort()`，或者平台自己的陷阱 —— 写完再停。
 
-::: code-group
-
-```rust [Rust]
-marsrs::xlog::xlogger_assert(None, "fd >= 0", "socket 已经关掉了");
-```
-
-```c [C]
-mars_xlog_assert("net", __FILE__, __func__, __LINE__, "fd >= 0", "socket 已经关掉了");
-```
-
-:::
+移植里没有 `xlogger_Assert` 这个写法了：`mars_xlog_assert` 是进程级 appender
+的，跟着它一起没了。想要的 App 自己写那条记录 —— `xlog.f(tag, message)` ——
+写完再停进程。
 
 构造起来很贵的消息值得先问一句：被级别挡掉的记录也是一样 —— 那串字符串你已经拼好了。
 
@@ -135,8 +127,8 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 | 同时打到控制台 | `xlog.set_console_log_enabled` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log_instance(0, on)` | `log.setConsoleLogEnabled` | `xlog.consoleLogEnabled` |
 | 到 N 字节就换文件 | `xlog.set_max_file_size_bytes` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size_instance(0, bytes)` | `log.setMaxFileSizeBytes` | `xlog.maxFileSizeBytes` |
 | 超过 N 秒就删文件 | `xlog.set_max_alive_time_seconds` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration_instance(0, secs)` | `log.setMaxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` |
-| 当前文件在哪 | `xlog.current_log_path` | `xlog.currentLogPath` | — | — | — | — | `mars_xlog_current_log_path` | — | — |
-| 一天的文件在哪 | `appender_getfilepath_from_timespan` | `xlog.logFiles(daysAgo:)` | — | — | — | — | `mars_xlog_getfilepath_from_timespan` | — | — |
+| 当前文件在哪 | `xlog.current_log_path()` | `xlog.currentLogPath` | — | — | — | — | `mars_xlog_current_log_path_instance` | — | — |
+| 一天的文件在哪 | `xlog.log_files(days_ago)` | `xlog.logFiles(daysAgo:)` | — | — | — | — | `mars_xlog_getfilepath_from_timespan_instance` | — | — |
 
 大小和时间的 `0` 都表示“不限制”：文件永不切分、永不删除 —— C++ 那边自己保留十天。
 
@@ -170,13 +162,8 @@ Xlog.setConsoleSink(nil)   // 又回到控制台
 ```
 
 ```c [C]
-static void to_my_console(int level, const char* tag, const char* filename,
-                          const char* func_name, int line, const char* log) {
-    my_console_write(level, log);
-}
-
-mars_xlog_set_console_fun(to_my_console);
-mars_xlog_set_console_fun(NULL);   /* 又回到控制台 */
+/* 没有 sink 可设了：控制台那份记录就是内置的 stderr 那行。
+   `mars_xlog_set_console_fun` 是进程级 appender 的，它装的 sink 没有实例写法。 */
 ```
 
 :::
