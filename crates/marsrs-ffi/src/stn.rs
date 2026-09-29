@@ -1940,6 +1940,7 @@ mod tests {
     use marsrs_stn::PrepareProfile;
     use std::ffi::CString;
     use std::sync::Mutex;
+    use std::sync::MutexGuard;
 
     /// What a question said, in the terms a test reads. The strings and buffers
     /// of a question are only good while it is being answered, so what is
@@ -2443,11 +2444,23 @@ mod tests {
         assert_eq!(mars_stn_noop_task_id(), Task::NOOP_TASK_ID);
     }
 
+    /// The foreground is one state for the whole process, so a test that moves
+    /// it holds this for the length of the test and not for the length of one
+    /// read: the two tests below move the same state, and `end_inactive_grace`
+    /// — which `mars_stn_run_pending` calls — reads what the other one wrote.
+    fn foreground_for_a_test() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// The foreground is the process-wide state the two hooks hand to the net
-    /// core, so this one moves it under no lock of its own and leaves it as it
-    /// found it: nothing else in the crate reads it.
+    /// core, so this one moves it under the test's lock of it and leaves it as
+    /// it found it.
     #[test]
     fn the_foreground_the_host_names_is_what_the_core_is_asked() {
+        let _guard = foreground_for_a_test();
         let before = with_foreground(|state| {
             state.is_foreground = false;
             state.is_active = true;
@@ -2479,6 +2492,7 @@ mod tests {
 
     #[test]
     fn ten_minutes_in_the_background_end_the_grace_the_cpp_counts_on_an_alarm() {
+        let _guard = foreground_for_a_test();
         // `ActiveLogic::__OnInActive`: the C++'s is `alarm_`; this ABI has no
         // queue but the host's loop, so [`mars_stn_run_pending`] is what counts
         // the ten minutes.
