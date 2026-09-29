@@ -205,6 +205,12 @@ impl ZombieTaskManager {
         self.tasks.iter().any(|zombie| zombie.task.taskid == taskid)
     }
 
+    /// The ids of every task in the queue, which is what a caller that empties
+    /// it has to know: a task no queue holds is one no pass is going to end.
+    pub fn task_ids(&self) -> Vec<u32> {
+        self.tasks.iter().map(|zombie| zombie.task.taskid).collect()
+    }
+
     /// `ClearTasks()`.
     pub fn clear_tasks(&mut self) {
         self.tasks.clear();

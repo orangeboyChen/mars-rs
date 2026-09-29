@@ -485,11 +485,17 @@ impl StnLogic {
 
     /// `ClearTasks` — every task is thrown away, which is what the app asks for
     /// when it has moved to another account.
+    ///
+    /// What is cancelled is what the queues actually let go of, and not every
+    /// await there is: a core that was told not to use a long link keeps the
+    /// tasks it is still holding and still ends them, so an await answered as
+    /// cancelled here would be answered a second time when that end came.
     pub fn clear_tasks(&mut self) {
-        if let Some(core) = self.core.as_mut() {
-            core.clear_tasks();
-            // the queues are empty, and none of what they held is coming back
-            self.cancel_all();
+        let Some(core) = self.core.as_mut() else {
+            return;
+        };
+        for taskid in core.clear_tasks() {
+            self.cancel(taskid);
         }
     }
 
@@ -884,8 +890,11 @@ mod tests {
     use crate::longlink_identify_checker::IdentifyBuffer;
     use crate::task_profile::{ConnectProfile, TaskFailHandleType, TaskProfile};
     use crate::{CgiProfile, ErrCmdType, RespHandle, RunId, DEFAULT_LONGLINK_NAME};
+    use std::future::Future;
+    use std::pin::Pin;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
+    use std::task::{Context, Poll, Waker};
 
     /// An app that writes down what it was asked and answers the way a sample
     /// wants.
@@ -992,6 +1001,13 @@ mod tests {
                 .unwrap()
                 .push(format!("profile {}", profile.task.taskid));
         }
+    }
+
+    /// One poll of an await, with a waker that wakes nobody: what a [`Sent`]
+    /// parks is collected by the ends and made after the pass.
+    fn poll(sent: &mut Sent) -> Poll<Result<sent::Answer, Failure>> {
+        let mut context = Context::from_waker(Waker::noop());
+        Future::poll(Pin::new(sent), &mut context)
     }
 
     /// A logic with a core in it and an app that answers.
@@ -1286,6 +1302,46 @@ mod tests {
         assert!(!logic.has_task(7));
         assert!(!logic.stop_task(7));
         assert_eq!(asked_of(&asked), Vec::<String>::new());
+    }
+
+    /// What a core that was told not to use a long link clears: not the queue
+    /// it stopped using, and so not the await of a task that queue still
+    /// holds. The task is still going to end of its own accord, and one task
+    /// answered twice — cancelled here, ended when the queue runs it out —
+    /// is one task too many.
+    #[test]
+    fn what_a_core_that_keeps_its_queue_clears_is_not_awaited_as_cancelled() {
+        let (mut logic, _asked) = logic();
+        let link = logic.default_long_link().expect("a default long link");
+        locked(&link).set_status(LongLinkStatus::Connected);
+
+        let mut task = Task::new(7, 12);
+        task.cgi = "/cgi-bin/7".to_string();
+        task.channel_select = Task::CHANNEL_ALL;
+        task.shortlink_host_list = vec!["short.host".to_string()];
+        let mut sent = logic.send_at(1_000, task, b"ask".to_vec());
+        assert!(poll(&mut sent).is_pending(), "the task is on the long link");
+        assert!(logic.net_core().expect("a core").longlink().has_task(7));
+
+        logic.disable_long_link();
+        logic.clear_tasks();
+        assert!(
+            logic.net_core().expect("a core").longlink().has_task(7),
+            "a queue the core is not using is not emptied"
+        );
+        assert!(
+            poll(&mut sent).is_pending(),
+            "the task is still going to end"
+        );
+
+        // what does answer it is the destroy, which takes every queue with it
+        assert!(logic.destroy());
+        match poll(&mut sent) {
+            Poll::Ready(Err(Failure::Ended { err_type, .. })) => {
+                assert_eq!(err_type, ErrCmdType::Canceld)
+            }
+            other => panic!("the await is answered when the core goes: {other:?}"),
+        }
     }
 
     /// A tick is only a delay to a caller that can read the clock it is measured

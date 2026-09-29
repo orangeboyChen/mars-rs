@@ -1137,13 +1137,20 @@ impl NetCore {
 
     /// `ClearTasks()` — the long link's and the zombies' only while the core
     /// uses one, which is the C++'s `if (need_use_longlink_)`; the short
-    /// link's are always cleared.
-    pub fn clear_tasks(&mut self) {
+    /// link's are always cleared. The ids of what that threw away are handed
+    /// back, because a task a queue still holds is one a pass is still going
+    /// to end: an await answered "cancelled" here would be answered again
+    /// when that end comes, and one task would be two answers.
+    pub fn clear_tasks(&mut self) -> Vec<u32> {
+        let mut cleared = self.shortlink.task_ids();
+        self.shortlink.clear_tasks();
         if self.use_long_link {
+            cleared.extend(self.longlink.task_ids());
             self.longlink.clear_tasks();
+            cleared.extend(self.zombie().task_ids());
             self.zombie().clear_tasks();
         }
-        self.shortlink.clear_tasks();
+        cleared
     }
 
     /// `RedoTasks()` — every task that was out is cancelled and tried again.

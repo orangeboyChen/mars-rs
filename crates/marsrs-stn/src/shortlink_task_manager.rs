@@ -391,6 +391,12 @@ impl ShortLinkTaskManager {
         self.tasks.iter().any(|p| p.task.taskid == taskid)
     }
 
+    /// The ids of every task in the queue, which is what a caller that empties
+    /// it has to know: a task no queue holds is one no pass is going to end.
+    pub fn task_ids(&self) -> Vec<u32> {
+        self.tasks.iter().map(|p| p.task.taskid).collect()
+    }
+
     /// `ClearTasks()`.
     pub fn clear_tasks(&mut self) {
         for at in 0..self.tasks.len() {
