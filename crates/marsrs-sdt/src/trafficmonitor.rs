@@ -90,7 +90,9 @@ impl NetCheckTrafficMonitor {
     /// `send_data_size` more would pass a threshold. Nothing is counted then:
     /// the data the check refused is data that never went out.
     ///
-    /// `mobile` is the `kMobile != getNetInfo()` of the C++.
+    /// `mobile` is whether the bytes went over mobile data: `true` is the
+    /// C++'s `else`, i.e. `kMobile == getNetInfo()`, and `false` is what moves
+    /// the wifi counters.
     ///
     /// The C++ compares the size against **both** thresholds whatever network
     /// the bytes are going over, and so does this: on wifi, a size that would
@@ -112,6 +114,9 @@ impl NetCheckTrafficMonitor {
     /// The received bytes are counted **before** the check, and they are counted
     /// whether the monitor looks at them or not: a monitor that ignores them for
     /// the limit still remembers them.
+    ///
+    /// `mobile` is the same answer as
+    /// [`NetCheckTrafficMonitor::send_limit_check`]'s.
     pub fn recv_limit_check(&mut self, recv_data_size: u64, mobile: bool) -> bool {
         self.data(0, recv_data_size, mobile);
         if self.is_ignore_recv_data {
