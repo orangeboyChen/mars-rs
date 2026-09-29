@@ -119,9 +119,13 @@ public final class Xlog: NSObject {
         }
     }
 
-    /// How many seconds a log file is written to before the next one is opened;
-    /// `0` is the C++'s own ten days. What keeps a file on disk is `cacheDays`
-    /// of the config, which is a different clock.
+    /// How many seconds a log file of this appender is kept: when an appender
+    /// opens, the `.xlog` files of this prefix that nothing has touched for
+    /// longer are deleted. `0` is the C++'s own ten days, and so is anything
+    /// under a day, which is the least it will ask for. What opens a new file
+    /// while this one is still being written is `maxFileSizeBytes`, and the
+    /// `cacheDays` of the config is when files of the cache directory are
+    /// moved into the log one.
     @objc public var maxAliveTimeSeconds: Int64 = 0 {
         didSet {
             withHandle { mars_xlog_set_max_alive_duration_instance($0, maxAliveTimeSeconds) }

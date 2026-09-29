@@ -225,10 +225,13 @@ class Xlog : Log.LogImp {
         }
 
     /**
-     * How many seconds a log file of this appender is written to before the
-     * next one is opened; `0`, the start, is the C++'s own ten days. Anything
-     * under a day asks for the same ten. What keeps a file on disk is the
-     * `cacheDays` of the config, which is a different clock.
+     * How many seconds a log file of this appender is kept: when an appender
+     * opens, the `.xlog` files of this prefix that nothing has touched for
+     * longer are deleted. `0`, the start, is the C++'s own ten days, and so is
+     * anything under a day, which is the least it will ask for. What opens a
+     * new file while this one is still being written is [maxFileSizeBytes],
+     * and the `cacheDays` of the config is when files of the cache directory
+     * are moved into the log one.
      */
     var maxAliveTimeSeconds: Long = NO_ALIVE_TIME_LIMIT
         set(value) {
