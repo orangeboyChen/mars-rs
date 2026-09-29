@@ -1,7 +1,8 @@
-// The constants below carry the name the C++ project's Java gives them, spelled
-// the way Kotlin spells a constant: `K_PING_CHECK` there is `K_PING_CHECK` here.
-// The JNI reaches a constant by the number it carries and not by its name, so
-// nothing on the Rust side had to change with them. They are what the older
+// The constants below carry the name the C++ project's Java gives them, which
+// is the name Kotlin spells a constant in: an app migrating from that API
+// writes what it always wrote. The JNI reaches a constant by the number it
+// carries and not by its name, so nothing on the Rust side had to change with
+// them. They are what the older
 // calls — `Xlog.open(...)` of seven arguments, and `Log` — still hand over;
 // what new code writes is [LogLevel], [AppenderMode] and [CompressMode], which
 // carry the same numbers.
@@ -224,8 +225,13 @@ class Xlog : Log.LogImp {
         }
 
     /**
-     * How many seconds a log file of this appender is kept; `0`, the start, is
-     * the C++'s own ten days. Anything under a day asks for the same ten.
+     * How many seconds a log file of this appender is kept: when an appender
+     * opens, the `.xlog` files of this prefix that nothing has touched for
+     * longer are deleted. `0`, the start, is the C++'s own ten days, and so is
+     * anything under a day, which is the least it will ask for. What opens a
+     * new file while this one is still being written is [maxFileSizeBytes],
+     * and the `cacheDays` of the config is when files of the cache directory
+     * are moved into the log one.
      */
     var maxAliveTimeSeconds: Long = NO_ALIVE_TIME_LIMIT
         set(value) {
@@ -248,22 +254,16 @@ class Xlog : Log.LogImp {
         }
     }
 
-    /** [LogLevel.VERBOSE]. */
     fun v(tag: String, message: String) = log(LogLevel.VERBOSE, tag, message)
 
-    /** [LogLevel.DEBUG]. */
     fun d(tag: String, message: String) = log(LogLevel.DEBUG, tag, message)
 
-    /** [LogLevel.INFO]. */
     fun i(tag: String, message: String) = log(LogLevel.INFO, tag, message)
 
-    /** [LogLevel.WARNING]. */
     fun w(tag: String, message: String) = log(LogLevel.WARNING, tag, message)
 
-    /** [LogLevel.ERROR]. */
     fun e(tag: String, message: String) = log(LogLevel.ERROR, tag, message)
 
-    /** [LogLevel.FATAL]. */
     fun f(tag: String, message: String) = log(LogLevel.FATAL, tag, message)
 
     /**

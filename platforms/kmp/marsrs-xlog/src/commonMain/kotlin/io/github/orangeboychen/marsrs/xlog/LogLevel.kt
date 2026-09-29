@@ -9,9 +9,9 @@ package io.github.orangeboychen.marsrs.xlog
  * `NONE` is the level that drops every record: `kLevelNone` in the C++,
  * `MARS_LEVEL_NONE` in the header, and one past `FATAL`.
  *
- * The entries are the ones the Android AAR publishes — `LogLevel.INFO` here is
- * `LogLevel.INFO` there — because a shared module that moves between `xlog-kmp`
- * and `xlog` has nothing to rename when it does.
+ * The entries are the ones the Android AAR publishes, under the same names,
+ * because a shared module that moves between `xlog-kmp` and `xlog` has nothing
+ * to rename when it does.
  */
 public enum class LogLevel {
     VERBOSE,

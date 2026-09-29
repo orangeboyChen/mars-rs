@@ -6,7 +6,8 @@ import Foundation
 
 /// What the app answered, which `MarsStn` names `MarsStn.Answer`.
 public enum StnAnswer {
-    /// Nobody answered — the app's own for every question.
+    /// Nothing was answered, so STN takes the answer its own default app
+    /// gives for the question.
     case nothing
     /// `makesureAuthed`, `identifyResponse`.
     case yes(Bool)

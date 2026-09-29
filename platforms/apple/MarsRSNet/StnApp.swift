@@ -21,14 +21,12 @@ import Foundation
 /// the box holds the closure the app handed over and the memory of one answer,
 /// and nothing of either is touched from two questions at once.
 internal final class AppBox: @unchecked Sendable {
-    /// The app.
     private let ask: (StnQuestion) -> StnAnswer
 
     /// What the answers of this app are made of, thrown away when the next
     /// question is asked: the pipeline has read this one by then.
     private var held = Held()
 
-    /// Wraps the app of one process.
     internal init(_ ask: @escaping (StnQuestion) -> StnAnswer) {
         self.ask = ask
     }

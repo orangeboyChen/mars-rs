@@ -34,7 +34,9 @@ public enum MarsSdt {
         /// The port, which is the one a check dials on that host.
         public var port: UInt16
 
-        /// The only way in: neither field has a default of its own.
+        /// The only public initializer: the memberwise one a struct gets is
+        /// internal, so without this one the type is one an app can read and
+        /// never write.
         public init(host: String, port: UInt16) {
             self.host = host
             self.port = port
@@ -50,7 +52,9 @@ public enum MarsSdt {
         /// The hosts of that link, in the order a check tries them.
         public var ports: [HostPort]
 
-        /// The only way in: neither field has a default of its own.
+        /// The only public initializer: the memberwise one a struct gets is
+        /// internal, so without this one the type is one an app can read and
+        /// never write.
         public init(name: String, ports: [HostPort]) {
             self.name = name
             self.ports = ports

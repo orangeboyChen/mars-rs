@@ -57,7 +57,6 @@ export class Xlog {
 
   private currentMaxAliveTime: number = 0;
 
-  /** Whether `close` has been called on this instance. */
   private opened: boolean = true;
 
   private constructor(config: XlogConfig) {
@@ -194,32 +193,26 @@ export class Xlog {
     xlogNapi.log(this.namePrefix, level, tag, message);
   }
 
-  /** `log` at `LogLevel.Verbose`. */
   v(tag: string, message: string): void {
     this.log(LogLevel.Verbose, tag, message);
   }
 
-  /** `log` at `LogLevel.Debug`. */
   d(tag: string, message: string): void {
     this.log(LogLevel.Debug, tag, message);
   }
 
-  /** `log` at `LogLevel.Info`. */
   i(tag: string, message: string): void {
     this.log(LogLevel.Info, tag, message);
   }
 
-  /** `log` at `LogLevel.Warning`. */
   w(tag: string, message: string): void {
     this.log(LogLevel.Warning, tag, message);
   }
 
-  /** `log` at `LogLevel.Error`. */
   e(tag: string, message: string): void {
     this.log(LogLevel.Error, tag, message);
   }
 
-  /** `log` at `LogLevel.Fatal`. */
   f(tag: string, message: string): void {
     this.log(LogLevel.Fatal, tag, message);
   }

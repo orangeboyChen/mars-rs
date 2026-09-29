@@ -30,8 +30,8 @@ import Foundation
 
 /// The iOS half of `Xlog`.
 ///
-/// `Xlog` and no suffix: the name `src/index.ts` reads the module out of
-/// `TurboModuleRegistry` by is the class's.
+/// `Xlog` and no suffix: `src/index.ts` reads the module out of
+/// `TurboModuleRegistry` by the class's own name.
 @objc(Xlog)
 internal final class Xlog: NSObject {
     /// The handle of the appender of every prefix `open` has opened, by the

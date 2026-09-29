@@ -9,8 +9,8 @@
 // strings.
 //
 // `platforms/apple/MarsRSNet/CStrings.swift` is the same seam for the net
-// half, and is
-// separate because the two are modules that do not import each other.
+// half, and is separate because the two are modules that do not import each
+// other.
 
 import Foundation
 

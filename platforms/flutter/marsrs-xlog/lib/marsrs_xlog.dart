@@ -18,7 +18,7 @@
 // them. What one of them answers is what this side last wrote, and not what the
 // appender holds: a getter answers in the call it is read in, and what the
 // platform side holds is a channel call away. [Xlog.isLoggable] asks the
-// appender itself, which is why it is the one of the six an app awaits.
+// appender itself, which is why it is the only one of the six an app awaits.
 
 import 'package:flutter/services.dart';
 
@@ -214,7 +214,13 @@ class Xlog {
     _send('setMaxFileSize', <String, Object?>{'bytes': bytes});
   }
 
-  /// How many seconds a log file is kept; `0` is the C++'s own ten days.
+  /// How many seconds a log file of this appender is kept: when an appender
+  /// opens, the `.xlog` files of this prefix that nothing has touched for
+  /// longer are deleted. `0` is the C++'s own ten days, and so is anything
+  /// under a day, which is the least it will ask for. What opens a new file
+  /// while this one is still being written is [maxFileSizeBytes], and the
+  /// `cacheDays` of the config is when files of the cache directory are moved
+  /// into the log one.
   int get maxAliveTimeSeconds => _maxAliveTimeSeconds;
 
   set maxAliveTimeSeconds(int seconds) {
@@ -278,13 +284,12 @@ class Xlog {
     await _invoke<void>('flush', <String, Object?>{'sync': sync});
   }
 
-  /// Drains what is left and closes this appender. Writing through it afterwards
-  /// writes nothing, and calling it twice closes nothing twice: what the second
-  /// call answers is the drain the first one started, so an app that awaits
-  /// either one has awaited the one drain, and not a future that was already
-  /// done while the files were still being written — the answer an app waiting
-  /// to read or upload them would have been given by a second call that
-  /// returned at once.
+  /// Drains what is left and closes this appender: writing through it
+  /// afterwards writes nothing.
+  ///
+  /// A second call answers the drain the first one started, so an app that
+  /// awaits either call has awaited the one drain, and not a future that was
+  /// already done while the files were still being written.
   Future<void> close() async {
     final closing = _closing;
     if (closing != null) {

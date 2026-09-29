@@ -12,23 +12,16 @@ object AppLogic {
 
     const val TAG: String = "mars.AppLogic"
 
-    /**
-     * The account info class
-     */
     class AccountInfo(
-        /** The account number */
+        /** The account number — what `uin` is in the C++ project's Java. */
         @JvmField var uin: Long = 0,
-        /** The user name */
         @JvmField var userName: String = ""
     )
 
-    /**
-     * The terminal device info class
-     */
     class DeviceInfo(
-        /** The device name */
+        /** The device's own name. */
         @JvmField var devicename: String,
-        /** The device type */
+        /** The device's own type. */
         @JvmField var devicetype: String
     )
 
