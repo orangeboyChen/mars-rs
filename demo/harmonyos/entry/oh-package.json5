@@ -4,14 +4,23 @@
 // module, with `libmarsrs_xlog.so` and the Rust core inside it.
 //
 // It is taken from `libs/` and not from ohpm's central repository, because
-// publishing to ohpm is not switched on yet — `docs/platforms/harmonyos.md` says
-// so, and `scripts/package_harmony.sh` writes the same archive a release carries.
-// So the HAR is downloaded once, out of the release, and `file:` is what points
-// ohpm at a package on disk:
+// publishing to ohpm is not switched on yet — the HarmonyOS section of
+// `docs/xlog/getting-started.md` says so, and `scripts/package_harmony.sh`
+// writes the same archive a release carries. So the HAR is downloaded once, out
+// of the release, and `file:` is what points ohpm at a package on disk:
 //
 //   gh release download v0.1.0-alpha.3 --pattern 'marsrs-harmonyos-xlog-*.har' \
 //       --dir demo/harmonyos/libs
+//   mv demo/harmonyos/libs/marsrs-harmonyos-xlog-*.har \
+//       demo/harmonyos/libs/marsrs-harmonyos-xlog.har
 //   ohpm install
+//
+// The rename is the point of the second line: a release asset carries the
+// version of the release — the download above is a
+// `marsrs-harmonyos-xlog-0.1.0-alpha.3.har` today — and a `file:` dependency
+// that named one version is a dependency that names no file at all after the
+// next release. `libs/` is one HAR that is whatever version was downloaded, so
+// the name here has no version in it.
 //
 // The line an app writes once the package *is* on ohpm is
 // `"marsrs-harmonyos-xlog": "^1.0.0"`, and nothing else in the module changes.
@@ -23,6 +32,6 @@
   "author": "orangeboyChen",
   "license": "MIT",
   "dependencies": {
-    "marsrs-harmonyos-xlog": "file:../libs/marsrs-harmonyos-xlog-1.0.0.har"
+    "marsrs-harmonyos-xlog": "file:../libs/marsrs-harmonyos-xlog.har"
   }
 }

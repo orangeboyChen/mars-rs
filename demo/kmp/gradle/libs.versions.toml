@@ -13,8 +13,8 @@
 kotlin = "2.4.20"
 # The release of the port this demo is written against, and the only line in
 # this build that has to move when a new one is out. The newest tag the Kotlin
-# Multiplatform packages were published from is `v0.1.0-alpha.3`; `0.1.0` is
-# what the documentation quotes and is not out yet.
+# Multiplatform packages were published from is `v0.1.0-alpha.3`, which is what
+# the documentation quotes; `0.1.0` is not out yet.
 marsrs = "0.1.0-alpha.3"
 
 [libraries]
