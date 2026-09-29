@@ -208,7 +208,10 @@ fn unpack_simple(opts: &Opts) -> Result<(), String> {
 /// here: they look the NAT64 prefix up over DNS, and a harness has to answer
 /// the same line on every run.
 fn socket(opts: &Opts) -> Result<(), String> {
-    let port = number(opts, "port")? as u16;
+    // A port is a `u16` and not a `u32` with its top half cut off: `--port
+    // 65536` used to come back as `0`, and a socket at port 0 is one the
+    // harness below reports as unspec.
+    let port = port(opts)?;
     let mut addr = match (opts.value("ip"), opts.value("v4"), opts.value("v6")) {
         (Some(ip), _, _) => SocketAddress::new(ip, port),
         (_, Some(v4), _) => SocketAddress::from_v4(array(unhex(v4)?)?, port),
@@ -644,7 +647,20 @@ fn number(opts: &Opts, key: &str) -> Result<u32, String> {
         .map_err(|_| format!("--{key}={value} is not a u32"))
 }
 
+fn port(opts: &Opts) -> Result<u16, String> {
+    let value = opts.value("port").unwrap_or("0");
+    value
+        .parse()
+        .map_err(|_| format!("--port={value} is not a u16"))
+}
+
 fn unhex(text: &str) -> Result<Vec<u8>, String> {
+    // ASCII first: the digits below are taken two *bytes* at a time, and an
+    // even byte count is no promise that a byte index is a char boundary —
+    // one two-byte character is even, and slicing it panics.
+    if !text.is_ascii() {
+        return Err("--data is not ASCII".to_owned());
+    }
     if !text.len().is_multiple_of(2) {
         return Err("--data has an odd number of digits".to_owned());
     }
@@ -662,4 +678,50 @@ fn hex(bytes: &[u8]) -> String {
         out.push_str(&format!("{byte:02x}"));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts(pairs: &[(&str, &str)]) -> Opts {
+        Opts {
+            values: pairs
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect(),
+        }
+    }
+
+    /// A two-byte character is an *even* byte count, and slicing it at a byte
+    /// index that is not a char boundary panics — which is what `--data=é`
+    /// used to do on the way to a perfectly good error message.
+    #[test]
+    fn unhex_refuses_a_digit_that_is_not_a_char_boundary() {
+        assert!(unhex("é").is_err(), "one two-byte character is even");
+        assert!(unhex("éé").is_err());
+        assert!(unhex("ffé").is_err());
+        // and an odd count is still reported as one, not as a panic
+        assert!(unhex("abc").is_err());
+    }
+
+    #[test]
+    fn unhex_reads_hex_in_pairs() {
+        assert_eq!(unhex("").unwrap(), Vec::<u8>::new());
+        assert_eq!(unhex("00ff10").unwrap(), vec![0x00, 0xff, 0x10]);
+        assert!(unhex("zz").is_err(), "not a digit");
+    }
+
+    /// A port is 16 bits, and a bigger number is an argument that is wrong —
+    /// not one whose top half can be thrown away, which is what turned
+    /// `--port 65536` into a socket at port 0.
+    #[test]
+    fn a_port_outside_u16_is_reported_and_not_truncated() {
+        assert_eq!(port(&opts(&[("port", "80")])).unwrap(), 80);
+        assert_eq!(port(&opts(&[("port", "65535")])).unwrap(), 65535);
+        assert!(port(&opts(&[("port", "65536")])).is_err());
+        assert!(port(&opts(&[("port", "-1")])).is_err());
+        // no `--port` at all is port 0, which is what the CLI has always done
+        assert_eq!(port(&opts(&[])).unwrap(), 0);
+    }
 }
