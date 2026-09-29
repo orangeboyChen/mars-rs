@@ -435,6 +435,12 @@ public:
     /// A day is one file, so this is the path handed to something that reads
     /// the log while it is being written. [`logFiles`] is the day's.
     std::optional<std::string> currentLogPath() const {
+        // A closed `Xlog` answers nothing, as every member of it does: the
+        // handle `0` a closed one carries is the process-wide appender to the
+        // C ABI, and that is not this appender's question to answer.
+        if (!isOpen()) {
+            return std::nullopt;
+        }
         return path([this](char* out, std::uint32_t len) {
             return mars_xlog_current_log_path_instance(handle_, out, len);
         });
@@ -487,6 +493,9 @@ private:
         int daysAgo,
         int (*symbol)(long long, int, unsigned int, char*, unsigned int)) const {
         std::vector<std::string> walked;
+        if (!isOpen()) {
+            return walked;
+        }
         for (unsigned int index = 0;; ++index) {
             auto found = path([&](char* out, std::uint32_t len) {
                 return symbol(handle_, daysAgo, index, out, len);
