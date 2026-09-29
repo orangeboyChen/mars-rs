@@ -520,6 +520,16 @@ static napi_value Close(napi_env env, napi_callback_info info) {
     if (namePrefix == NULL) {
         return Undefined(env);
     }
+    // A prefix this table never opened is not one this module releases: a
+    // release by name is the release of whatever appender the C ABI holds under
+    // that name — an appender another caller opened, or the process-wide one an
+    // empty prefix names — and `close` of one is a close of theirs. Every other
+    // method answers an unknown prefix by dropping the call, and so does this
+    // one.
+    if (HandleOf(namePrefix) == 0) {
+        free(namePrefix);
+        return Undefined(env);
+    }
     Forget(namePrefix);
     mars_xlog_release_instance(namePrefix);
     free(namePrefix);
