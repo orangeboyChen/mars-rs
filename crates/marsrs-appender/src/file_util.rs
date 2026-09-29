@@ -115,9 +115,47 @@ pub(crate) fn make_log_file_name_prefix(tv_sec: i64, prefix: &str) -> String {
     format!("{prefix}_{year:04}{month:02}{day:02}")
 }
 
-/// `XloggerAppender::__GetFileNamesByPrefix` — the *names* (not paths) of the
-/// regular files in `_logdir` that start with `_fileprefix` and end with
-/// `._fileext`.
+/// Whether `name` is a log file this appender wrote:
+/// `<nameprefix>_<YYYYMMDD>.xlog`, or the same with a `_<index>` for a day
+/// that was split for size — and nothing else.
+///
+/// The C++ matches `starts_with(prefix) && ends_with(ext)`, which is the
+/// right question for [`get_file_names_by_prefix`] and too wide a one for a
+/// caller holding the bare prefix of a configuration: `Mars` is a prefix of
+/// `Mars_push_20240101.xlog`, and `Mars_push` is a prefix another `Xlog` is
+/// every bit as entitled to open in the same `logdir` — so the sweep deleted
+/// another appender's logs on an expiry that was not theirs, which is the
+/// data loss the prefix match was added to prevent. `ends_with(LOG_EXT)` is
+/// the wider half of the same mistake: it takes any name ending in those four
+/// letters, dot or no dot. What is matched is the shape
+/// [`make_log_file_name`] writes, and a file of some other shape is left
+/// alone even when a prefix of it is ours.
+fn is_log_file_of(name: &str, nameprefix: &str) -> bool {
+    let Some(rest) = name
+        .strip_prefix(nameprefix)
+        .and_then(|rest| rest.strip_prefix('_'))
+    else {
+        return false;
+    };
+    let Some(stem) = rest.strip_suffix(&format!(".{LOG_EXT}")) else {
+        return false;
+    };
+    let (date, index) = match stem.split_once('_') {
+        Some((date, index)) => (date, index),
+        None => (stem, ""),
+    };
+    let is_date = date.len() == 8 && date.chars().all(|c| c.is_ascii_digit());
+    let is_index = index.chars().all(|c| c.is_ascii_digit());
+    is_date && is_index
+}
+
+/// `__GetFileNamesByPrefix` — the *names* (not paths) of the regular files in
+/// `_logdir` that start with `_fileprefix` and end with `._fileext`.
+///
+/// The prefix it is handed is `<prefix>_<YYYYMMDD>` (see
+/// [`get_file_paths_from_timeval`]), so `starts_with` is already as narrow as
+/// one day of one appender's files; [`is_log_file_of`] is the same question
+/// for a caller holding the bare prefix of a configuration.
 pub(crate) fn get_file_names_by_prefix(dir: &Path, fileprefix: &str, fileext: &str) -> Vec<String> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
@@ -271,15 +309,16 @@ pub(crate) fn build_stamp() -> (String, String) {
 
 /// `__DelTimeoutFile`.
 ///
-/// Removes `<nameprefix>*.xlog` files and the `YYYYMMDD` dump directories that
-/// have not been touched for `_max_alive_time` seconds.
+/// `<nameprefix>_<YYYYMMDD>[_<index>].xlog` files and the `YYYYMMDD` dump
+/// directories that have not been touched for `_max_alive_time` seconds.
 ///
-/// The `.xlog` files are matched by prefix, the way [`move_old_files`] does:
-/// one `logdir` is what two `Xlog`s with two prefixes share — an app and a
-/// module it links, say — and a sweep over every `.xlog` in it deletes the
-/// other one's logs, on a schedule that is not its own. The C++ has one prefix
-/// per process, so it never had the question. The dump directories carry no
-/// prefix in their name, so they go whatever wrote them.
+/// The `.xlog` files are matched by the whole name [`make_log_file_name`]
+/// writes, the way [`move_old_files`] does — and not by `starts_with` of the
+/// prefix alone: one `logdir` is what two `Xlog`s with two prefixes share — an
+/// app and a module it links, say — and a sweep over every `.xlog` in it
+/// deletes the other one's logs, on a schedule that is not its own. The C++
+/// has one prefix per process, so it never had the question. The dump
+/// directories carry no prefix in their name, so they go whatever wrote them.
 pub(crate) fn del_timeout_file(dir: &Path, max_alive_time: i64, nameprefix: &str) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -303,7 +342,7 @@ pub(crate) fn del_timeout_file(dir: &Path, max_alive_time: i64, nameprefix: &str
 
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        if meta.is_file() && name.starts_with(nameprefix) && name.ends_with(LOG_EXT) {
+        if meta.is_file() && is_log_file_of(&name, nameprefix) {
             let _ = fs::remove_file(&path);
         }
         if meta.is_dir() && name.len() == 8 && name.chars().all(|c| c.is_ascii_digit()) {
@@ -364,6 +403,11 @@ pub(crate) fn append_file(src_file: &Path, dst_file: &Path) -> bool {
 
 /// `XloggerAppender::__MoveOldFiles` — drains `_src_path` (the cache dir) into
 /// `_dest_path` (the log dir).
+///
+/// Matched the way [`del_timeout_file`] matches, and not by `starts_with` of
+/// the prefix: a cache dir is what one `logdir`'s two `Xlog`s share as well,
+/// and appending another prefix's cache file into a log of this one is
+/// records filed under a name they were never written under.
 pub(crate) fn move_old_files(src_path: &Path, dest_path: &Path, nameprefix: &str, cache_days: u32) {
     if src_path == dest_path {
         return;
@@ -374,7 +418,7 @@ pub(crate) fn move_old_files(src_path: &Path, dest_path: &Path, nameprefix: &str
 
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.starts_with(nameprefix) || !name.ends_with(LOG_EXT) {
+        if !is_log_file_of(&name, nameprefix) {
             continue;
         }
 
@@ -511,16 +555,18 @@ mod tests {
     fn del_timeout_file_only_removes_stale_xlog_files() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        let fresh = dir.join("Mars_fresh.xlog");
-        let stale = dir.join("Mars_stale.xlog");
-        let keep = dir.join("Mars_stale.txt");
+        let fresh = dir.join("Mars_20240101.xlog");
+        let stale = dir.join("Mars_20240102.xlog");
+        let keep = dir.join("Mars_20240102.txt");
+        let no_dot = dir.join("Mars_20240102xlog");
         touch(&fresh, b"a");
         touch(&stale, b"a");
         touch(&keep, b"a");
+        touch(&no_dot, b"a");
 
         // Pretend `stale` was modified 2 days ago (and `keep` too).
         let old = SystemTime::now() - std::time::Duration::from_secs(2 * 24 * 3600);
-        for p in [&stale, &keep] {
+        for p in [&stale, &keep, &no_dot] {
             let f = File::options().write(true).open(p).unwrap();
             f.set_modified(old).unwrap();
         }
@@ -529,6 +575,31 @@ mod tests {
         assert!(fresh.exists());
         assert!(!stale.exists());
         assert!(keep.exists());
+        // `ends_with("xlog")` would have taken this one: a name that ends in
+        // the extension's four letters without the dot is not a log file.
+        assert!(no_dot.exists());
+    }
+
+    /// The prefix the sweep is given is a prefix of another prefix, and the
+    /// two `Xlog`s share one `logdir`: `Mars` is a prefix of `Mars_push`, and
+    /// `Mars_push_20240101.xlog` is a log of another appender on another
+    /// schedule. Matching `starts_with(prefix)` deleted it here.
+    #[test]
+    fn the_expiry_sweep_leaves_the_logs_of_a_prefix_this_one_is_a_prefix_of_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let mine = dir.join("Mars_20240101.xlog");
+        let theirs = dir.join("Mars_push_20240101.xlog");
+        touch(&mine, b"a");
+        touch(&theirs, b"a");
+
+        del_timeout_file(dir, -1, "Mars");
+
+        assert!(!mine.exists());
+        assert!(
+            theirs.exists(),
+            "the logs of a prefix this one is a prefix of are not this sweep's to delete"
+        );
     }
 
     /// One `logdir` is what two `Xlog`s with two prefixes share, and a sweep
@@ -564,6 +635,7 @@ mod tests {
         fs::create_dir_all(&log).unwrap();
         touch(&cache.join("Mars_20240101.xlog"), b"cached");
         touch(&cache.join("Other_20240101.xlog"), b"nope");
+        touch(&cache.join("Mars_push_20240101.xlog"), b"nope");
 
         move_old_files(&cache, &log, "Mars", 0);
 
@@ -575,5 +647,10 @@ mod tests {
         assert_eq!(out, b"cached");
         assert!(!cache.join("Mars_20240101.xlog").exists());
         assert!(cache.join("Other_20240101.xlog").exists());
+        // A prefix of which this one is a prefix: another appender's cached
+        // records, and not one to file under a name they were not written
+        // under.
+        assert!(cache.join("Mars_push_20240101.xlog").exists());
+        assert!(!log.join("Mars_push_20240101.xlog").exists());
     }
 }
