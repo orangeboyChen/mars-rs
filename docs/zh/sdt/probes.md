@@ -19,7 +19,7 @@ App 要网络，App 回答什么，报告就记下什么：
 | 你的 App 是 | 探测交给谁 |
 |---|---|
 | Rust | `sdt.run_checks(&mut ask, net)` 的那个 `Ask` |
-| iOS / watchOS，Swift | `MarsSdt.runChecks(networkType:) { … }` 的那个闭包 |
+| iOS / watchOS，Swift 或 Objective-C | `MarsSdt.runChecks(networkType:) { … }` 的那个闭包，或者说它变成的那个 block |
 | Android | `SdtLogic.runChecks(net, probe)` 的那个 `SdtLogic.IProbe` |
 | Kotlin Multiplatform | 同一个 `IProbe`，交给 `SdtLogic.runChecks(1, probe)` |
 | 有 C FFI 的任何东西 | `mars_sdt_run_checks(ctx, probe, net)` 的那个函数指针 |

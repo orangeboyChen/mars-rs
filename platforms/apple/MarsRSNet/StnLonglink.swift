@@ -19,24 +19,29 @@ import MarsRSNetFFI
 /// long-link group and a `linkType` of `0` is the long link — the two defaults
 /// the C ABI fills a zeroed struct with, and so the ones a config the app left
 /// alone is made with.
-public struct StnLonglinkConfig {
+///
+/// A class and not a struct, because an app that writes Objective-C makes a link
+/// of its own too — the reason `XlogConfig` is a class and not a struct.
+@objc
+public final class StnLonglinkConfig: NSObject {
     /// The name every other call that takes one asks with.
-    public var name: String
+    @objc public var name: String = ""
     /// The hosts the link goes out on; empty is "the hosts the app set".
-    public var hostList: [String]
+    @objc public var hostList: [String] = []
     /// `false` leaves the reconnecting to a task.
-    public var isKeepAlive: Bool
+    @objc public var isKeepAlive: Bool = false
     /// Which links share a reconnect; empty is the long-link group.
-    public var group: String
+    @objc public var group: String = ""
     /// Whether this is the link whose status the app is told about.
-    public var isMain: Bool
+    @objc public var isMain: Bool = false
     /// One of the `Task::CHANNEL_*`; `0` is the long link.
-    public var linkType: Int32
+    @objc public var linkType: Int32 = 0
     /// Whether the link is a TLS one.
-    public var needTLS: Bool
+    @objc public var needTLS: Bool = true
 
     /// A long link of that name, and the rest at the defaults a zeroed C struct
     /// is filled with.
+    @objc
     public init(
         name: String,
         hostList: [String] = [],
@@ -53,6 +58,13 @@ public struct StnLonglinkConfig {
         self.isMain = isMain
         self.linkType = linkType
         self.needTLS = needTLS
+        super.init()
+    }
+
+    deinit {
+        // Nothing to release: the name, the group and the hosts are all this
+        // object holds, and they go with it. The declaration is what
+        // `required_deinit` asks a class for.
     }
 }
 

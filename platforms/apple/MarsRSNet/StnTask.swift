@@ -30,94 +30,113 @@ private struct LentTask {
 
 /// One unit of work: `Task` of `mars/stn/stn.h`, which `MarsStn` names
 /// `MarsStn.Task`.
-public struct StnTask {
+///
+/// A class and not a struct, because an app that writes Objective-C fills one in
+/// too — the reason `XlogConfig` is a class and not a struct. What Swift gives up
+/// is the copy a struct would make: a task is read once, when it is started.
+@objc
+public final class StnTask: NSObject {
     /// The id STN identifies the task by; `MarsStn.generateTaskID()` hands one
     /// out.
-    public var taskID: UInt32 = 0
+    @objc public var taskID: UInt32 = 0
     /// The command, for a task that goes out on a long link.
-    public var cmdid: UInt32 = 0
+    @objc public var cmdid: UInt32 = 0
     /// The channel, for a task the app keeps one per channel.
-    public var channelID: UInt64 = 0
+    @objc public var channelID: UInt64 = 0
     /// The links the task may go out on; no channel at all is a task the queues
     /// refuse.
-    public var channelSelect: MarsStn.Channel = []
+    @objc public var channelSelect: MarsStn.Channel = .none
     /// How the task goes out.
-    public var transportProtocol: MarsStn.TransportProtocol = .default
+    @objc public var transportProtocol: MarsStn.TransportProtocol = .default
     /// The cgi, for a task that goes out on a short link.
-    public var cgi: String = ""
+    @objc public var cgi: String = ""
     /// Whether the task is a send with no answer to wait for.
-    public var isSendOnly: Bool = false
+    @objc public var isSendOnly: Bool = false
     /// Whether the task waits for the app to be logged in; `Task::new`'s
     /// answer, which the app turns off for the one task that goes out before it
     /// has logged in.
-    public var needsAuthed: Bool = true
+    @objc public var needsAuthed: Bool = true
     /// Whether the task is weighed against the flow limit; `Task::new`'s
     /// answer, and the Kotlin `Task` constructor's.
-    public var limitsFlow: Bool = true
+    @objc public var limitsFlow: Bool = true
     /// Whether it is weighed against the frequency limit; likewise.
-    public var limitsFrequency: Bool = true
+    @objc public var limitsFrequency: Bool = true
     /// Whether a task with no network to go out on is ended instead of waiting.
-    public var isNetworkStatusSensitive: Bool = false
+    @objc public var isNetworkStatusSensitive: Bool = false
     /// One of the `Task::CHANNEL_*_STRATEGY` integers.
-    public var channelStrategy: Int32 = 0
+    @objc public var channelStrategy: Int32 = 0
     /// One of the `Task::TASK_PRIORITY_*` integers; `3` — the normal one, and
     /// the one `Task::new` gives — not `0`, which is the highest.
-    public var priority: Int32 = 3
+    @objc public var priority: Int32 = 3
     /// How many tries the task has: `-1` is the net core's own count, which is
     /// what `Task::new` gives, and `0` is a task with no try back at all.
-    public var retryCount: Int32 = -1
+    @objc public var retryCount: Int32 = -1
     /// How long the server is expected to take, which is added to the timeout.
-    public var serverProcessCost: Int32 = 0
+    @objc public var serverProcessCost: Int32 = 0
     /// How long the whole task may take, retries and all.
-    public var totalTimeout: Int32 = 0
+    @objc public var totalTimeout: Int32 = 0
     /// Whether the answer may come late.
-    public var allowsLongPolling: Bool = false
+    @objc public var allowsLongPolling: Bool = false
     /// How long a late answer may take.
-    public var longPollingTimeout: Int32 = 0
+    @objc public var longPollingTimeout: Int32 = 0
     /// What the app's own report is keyed by.
-    public var reportArgument: String = ""
+    @objc public var reportArgument: String = ""
     /// The long link the task goes out on; empty is the default one.
-    public var channelName: String = ""
+    @objc public var channelName: String = ""
     /// The group the task belongs to.
-    public var groupName: String = ""
+    @objc public var groupName: String = ""
     /// The user the task is sent for.
-    public var userID: String = ""
+    @objc public var userID: String = ""
     /// The protocol the app speaks.
-    public var appProtocol: Int32 = 0
+    @objc public var appProtocol: Int32 = 0
     /// The headers of the request.
-    public var headers: [MarsStn.Header] = []
+    @objc public var headers: [MarsStn.Header] = []
     /// The short link's hosts.
-    public var shortLinkHosts: [String] = []
+    @objc public var shortLinkHosts: [String] = []
     /// The hosts a short-link host falls back to.
-    public var shortLinkFallbackHosts: [String] = []
+    @objc public var shortLinkFallbackHosts: [String] = []
     /// The long link's hosts.
-    public var longLinkHosts: [String] = []
+    @objc public var longLinkHosts: [String] = []
     /// The hosts of the minor long links.
-    public var minorLongHosts: [String] = []
+    @objc public var minorLongHosts: [String] = []
     /// The hosts a quic connection may be made to.
-    public var quicHosts: [String] = []
+    @objc public var quicHosts: [String] = []
     /// How many minor long links the task may use.
-    public var maxMinorLinks: Int32 = 0
+    @objc public var maxMinorLinks: Int32 = 0
     /// What the task is, for the app's own report.
-    public var function: String = ""
+    @objc public var function: String = ""
     /// What the cgi is prefixed with.
-    public var cgiPrefix: String = ""
+    @objc public var cgiPrefix: String = ""
     /// One of `HostRedirectType`'s: `0` none, `1` bare to https, `2` http to
     /// https, `3` new host.
-    public var redirectType: Int32 = 0
+    @objc public var redirectType: Int32 = 0
     /// The sequence the app numbers the task with.
-    public var clientSequenceID: UInt16 = 0
+    @objc public var clientSequenceID: UInt16 = 0
 
-    /// The only way in: every field has the default the C++ gives it, and
-    /// `channelSelect` is the one an app fills in first, because a task with no
-    /// channel to go out on is one the queues refuse.
-    public init(channelSelect: MarsStn.Channel = []) {
+    /// A task with every field at the default the C++ gives it, which is a task
+    /// with no channel to go out on.
+    override public init() {
+        super.init()
+    }
+
+    /// The only way an app makes one: every field has the default the C++ gives
+    /// it, and `channelSelect` is the one an app fills in first, because a task
+    /// with no channel to go out on is one the queues refuse.
+    @objc
+    public convenience init(channelSelect: MarsStn.Channel) {
+        self.init()
         self.channelSelect = channelSelect
     }
 
+    deinit {
+        // Nothing to release: the strings and the lists are all this object
+        // holds, and they go with it. The declaration is what `required_deinit`
+        // asks a class for.
+    }
+
     /// The task a question carries, as the Swift reads it.
-    internal init(_ task: MarsStnTask) {
-        self.init(channelSelect: MarsStn.Channel(rawValue: task.channel_select))
+    internal convenience init(_ task: MarsStnTask) {
+        self.init(channelSelect: MarsStn.Channel(rawValue: task.channel_select) ?? .none)
         taskID = task.taskid
         cmdid = task.cmdid
         channelID = task.channel_id

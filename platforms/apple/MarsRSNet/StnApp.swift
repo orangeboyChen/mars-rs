@@ -45,49 +45,49 @@ internal final class AppBox: @unchecked Sendable {
         // `MarsStnAnswer` is read for the `kind` in it and left alone for the
         // others, which is what the header promises the pipeline does.
         var value = MarsStnAnswer()
-        switch answer {
+        switch answer.kind {
         case .nothing:
             value.kind = MarsStnAnswerNothing
 
-        case let .yes(yes):
+        case .yes:
             value.kind = MarsStnAnswerYes
-            value.yes = yes ? 1 : 0
+            value.yes = answer.isYes ? 1 : 0
 
-        case let .addresses(addresses):
+        case .addresses:
             value.kind = MarsStnAnswerIps
-            value.ips = held.strings(addresses)
-            value.ip_count = UInt32(addresses.count)
+            value.ips = held.strings(answer.addresses)
+            value.ip_count = UInt32(answer.addresses.count)
 
-        case let .encoded(bytes):
+        case .encoded:
             value.kind = MarsStnAnswerEncoded
-            value.bytes = held.bytes(bytes)
-            value.byte_count = UInt32(bytes.count)
+            value.bytes = held.bytes(answer.body)
+            value.byte_count = UInt32(answer.body.count)
 
-        case let .failed(errorCode):
+        case .failed:
             value.kind = MarsStnAnswerFailed
-            value.error_code = errorCode
+            value.error_code = answer.errorCode
 
-        case let .decoded(errorCode, handle):
+        case .decoded:
             value.kind = MarsStnAnswerDecoded
-            value.error_code = errorCode
-            value.handle = handle.rawValue
+            value.error_code = answer.errorCode
+            value.handle = answer.failHandle.rawValue
 
-        case let .ended(errorCode):
+        case .ended:
             value.kind = MarsStnAnswerEnded
-            value.error_code = errorCode
+            value.error_code = answer.errorCode
 
-        case let .identified(mode, bytes, hash, cmdid):
+        case .identified:
             value.kind = MarsStnAnswerIdentified
-            value.mode = mode.rawValue
-            value.bytes = held.bytes(bytes)
-            value.byte_count = UInt32(bytes.count)
-            value.hash = held.bytes(hash)
-            value.hash_count = UInt32(hash.count)
-            value.cmdid = cmdid
+            value.mode = answer.identifyMode.rawValue
+            value.bytes = held.bytes(answer.body)
+            value.byte_count = UInt32(answer.body.count)
+            value.hash = held.bytes(answer.hashBytes)
+            value.hash_count = UInt32(answer.hashBytes.count)
+            value.cmdid = answer.cmdid
 
-        case let .limit(limit):
+        case .limit:
             value.kind = MarsStnAnswerLimit
-            value.limit = limit
+            value.limit = answer.limit
         }
         return value
     }

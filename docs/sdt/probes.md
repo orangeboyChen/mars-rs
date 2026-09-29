@@ -21,7 +21,7 @@ test, or from a machine with no radio.
 | your app is | what the probes are asked of |
 |---|---|
 | Rust | the `Ask` of `sdt.run_checks(&mut ask, net)` |
-| iOS / watchOS, Swift | the closure of `MarsSdt.runChecks(networkType:) { … }` |
+| iOS / watchOS, Swift or Objective-C | the closure of `MarsSdt.runChecks(networkType:) { … }`, or the block it becomes |
 | Android | the `SdtLogic.IProbe` of `SdtLogic.runChecks(net, probe)` |
 | Kotlin Multiplatform | the same `IProbe`, of `SdtLogic.runChecks(1, probe)` |
 | anything with a C FFI | the function pointer of `mars_sdt_run_checks(ctx, probe, net)` |
