@@ -395,7 +395,9 @@ public final class Xlog: NSObject {
     /// with and names the ones that are there.
     ///
     /// - Parameters:
-    ///   - daysAgo: `0` is today, `1` yesterday, and so on.
+    ///   - daysAgo: `0` is today, `1` yesterday, and so on. A value `Int32`
+    ///     cannot hold is clamped, and not trapped on: the C ABI takes an
+    ///     `int`, and a day that far off is a day with no files either way.
     ///   - prefix: what every file of that appender's starts with.
     ///   - logDirectory: the directory those files are in.
     @objc
@@ -403,7 +405,7 @@ public final class Xlog: NSObject {
         paths { index, out, len in
             prefix.withCString { name in
                 logDirectory.withCString { directory in
-                    mars_xlog_getfilepath_from_timespan(Int32(daysAgo), name, directory, index, out, len)
+                    mars_xlog_getfilepath_from_timespan(Int32(clamping: daysAgo), name, directory, index, out, len)
                 }
             }
         }
@@ -420,7 +422,9 @@ public final class Xlog: NSObject {
     /// appender this target makes is the instance [`Xlog.open(_:)`] answers.
     ///
     /// - Parameters:
-    ///   - daysAgo: `0` is today, `1` yesterday, and so on.
+    ///   - daysAgo: `0` is today, `1` yesterday, and so on. A value `Int32`
+    ///     cannot hold is clamped, and not trapped on: the C ABI takes an
+    ///     `int`, and a day that far off is a day with no file either way.
     ///   - prefix: what every file of that appender's starts with.
     ///   - logDirectory: the directory those files are written into.
     @objc
@@ -428,7 +432,7 @@ public final class Xlog: NSObject {
         paths { index, out, len in
             prefix.withCString { name in
                 logDirectory.withCString { directory in
-                    mars_xlog_make_logfile_name(Int32(daysAgo), name, directory, index, out, len)
+                    mars_xlog_make_logfile_name(Int32(clamping: daysAgo), name, directory, index, out, len)
                 }
             }
         }
