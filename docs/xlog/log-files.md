@@ -82,13 +82,13 @@ mars_xlog_make_logfile_name_instance(handle, 1, 0, path, sizeof path);
 ```
 
 ```kotlin [Android]
-xlog.logFiles(1)
-xlog.logFileNames(1)
+xlog.logFiles(1L)
+xlog.logFileNames(1L)
 ```
 
 ```kotlin [Kotlin Multiplatform]
-xlog.logFiles(1)
-xlog.logFileNames(1)
+xlog.logFiles(1L)
+xlog.logFileNames(1L)
 ```
 
 ```typescript [HarmonyOS]

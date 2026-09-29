@@ -67,7 +67,7 @@ package out of it.
 `marsrs_xlog` is this plugin with the logging half only, and the two
 are the pair the AARs of `platforms/android/` are — `mars-rs` and `marsrs-xlog`
 — and the pair `MarsRS` and `MarsRSXlog` of `Package.swift` are. Today they are
-the same package under two names: the C ABI is 28 `mars_xlog_*` symbols and
+the same package under two names: the C ABI is 16 `mars_xlog_*` symbols and
 nothing else, and `scripts/build_xcframework.sh` fails the day it is not, so
 taking this one costs exactly what `marsrs_xlog` costs and the
 difference between the two is the promise, not the bytes. STN and SDT land here

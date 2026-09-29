@@ -127,8 +127,10 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 | 同时打到控制台 | `xlog.set_console_log_enabled` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log_instance(0, on)` | `log.setConsoleLogEnabled` | `xlog.consoleLogEnabled` |
 | 到 N 字节就换文件 | `xlog.set_max_file_size_bytes` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size_instance(0, bytes)` | `log.setMaxFileSizeBytes` | `xlog.maxFileSizeBytes` |
 | 超过 N 秒就删文件 | `xlog.set_max_alive_time_seconds` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration_instance(0, secs)` | `log.setMaxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` |
-| 当前文件在哪 | `xlog.current_log_path()` | `log.currentLogPath` | `xlog.currentLogPath` | `xlog.currentLogPath` | `await xlog.currentLogPath()` / `xlog.currentLogPath` | `mars_xlog_current_log_path_instance` | `log.currentLogPath()` | `xlog.currentLogPath` | — |
-| 一天的文件在哪 | `xlog.log_files(days_ago)` | `log.logFiles(daysAgo:)` | `xlog.logFiles(daysAgo)` | `xlog.logFiles(daysAgo)` | `await xlog.logFiles(daysAgo)` / `xlog.logFiles(daysAgo)` | `mars_xlog_getfilepath_from_timespan_instance` | `log.logFiles(daysAgo)` | `xlog.logFiles(daysAgo)` | — |
+| 写到哪 | `xlog.current_log_path()` | `log.currentLogPath` | `xlog.currentLogPath` | `xlog.currentLogPath` | `await xlog.currentLogPath()` | `xlog.currentLogPath` | `mars_xlog_current_log_path_instance` | `log.currentLogPath()` | `xlog.currentLogPath` |
+| 一天的文件在哪 | `xlog.log_files(1)` | `log.logFiles(daysAgo: 1)` | `xlog.logFiles(1L)` | `xlog.logFiles(1L)` | `await xlog.logFiles(1)` | `xlog.logFiles(1)` | `mars_xlog_getfilepath_from_timespan_instance` | `log.logFiles(1)` | `xlog.logFiles(1)` |
+
+它给出的是**目录**而不是文件，也就是 C++ 的 `GetCurrentLogPath` 交回来的那个；当天的文件在下面一行。
 
 大小和时间的 `0` 都表示“不限制”：文件永不切分、永不删除 —— C++ 那边自己保留十天。
 
@@ -140,25 +142,8 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 整条记录，而不只是那句话。
 
 内置的出口是标准错误，每个平台、每个包都是 —— 这里没有任何一处写进 `os_log` 或
-logcat，也没有 sink 可设了：原来那个坐在进程级 appender 上，控制台那份记录就是内置的
-那一行，没有别的。
+logcat，也没有 sink 可设了：原来那个坐在进程级 appender 上，而那个 appender 已经没了。
+在 Apple 上系统日志是 App 自己调的那一次调用 —— `os_log` 是个宏，库碰不到它。
 
-::: code-group
-
-```rust [Rust]
-use marsrs::xlog::set_console_fun;
-
-set_console_fun(Some(|info, log| println!("{:?}: {log}", info.level)));
-set_console_fun(None);   // 又回到控制台
-```
-
-```c [C]
-/* 没有 sink 可设了：控制台那份记录就是内置的 stderr 那行。
-   `mars_xlog_set_console_fun` 是进程级 appender 的，它装的 sink 没有实例写法。 */
-```
-
-:::
-
-出口只有一个，挂在 appender 上而不是写在配置里：再设一次就是换掉。交给它的是没排过版
-的那条记录 —— 级别、tag、调用点在哪、还有消息本身 —— 这正是要它的原因：在 Apple 上
-`os_log` 就在那里，而只有 App 自己的代码调得到它。
+想把记录送到别处的 App 要么写两遍，要么从文件里读回来：控制台那份归标准错误，移植不把
+它交到别处去。

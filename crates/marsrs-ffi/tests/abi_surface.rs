@@ -11,11 +11,10 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_ffi::abi::{
     mars_xlog_current_log_path_instance, mars_xlog_flush_now_instance, mars_xlog_get_instance,
-    mars_xlog_get_level, mars_xlog_getfilepath_from_timespan_instance,
-    mars_xlog_is_enabled_for, mars_xlog_make_logfile_name_instance, mars_xlog_new_instance,
-    mars_xlog_release_instance, mars_xlog_set_level_instance, mars_xlog_set_mode_instance,
-    mars_xlog_write_instance, MarsXLogConfig, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE,
-    MARS_XLOG_ERR_NULL_OUT,
+    mars_xlog_get_level, mars_xlog_getfilepath_from_timespan_instance, mars_xlog_is_enabled_for,
+    mars_xlog_make_logfile_name_instance, mars_xlog_new_instance, mars_xlog_release_instance,
+    mars_xlog_set_level_instance, mars_xlog_set_mode_instance, mars_xlog_write_instance,
+    MarsXLogConfig, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_OUT,
 };
 
 fn serial() -> MutexGuard<'static, ()> {
@@ -193,7 +192,7 @@ fn is_enabled_for_compares_the_raw_level() {
 fn the_file_questions_are_answered_by_the_instance() {
     let _guard = serial();
     let dir = tempdir("files");
-    let config = make_config(&dir, 1, 1);   // sync, zstd: a record lands at once
+    let config = make_config(&dir, 1, 1); // sync, zstd: a record lands at once
     let handle = unsafe { mars_xlog_new_instance(&config.raw, 2) };
     assert!(handle > 0);
 
@@ -226,7 +225,11 @@ fn the_file_questions_are_answered_by_the_instance() {
     let files = day_paths(handle, |instance, timespan, index, out, len| unsafe {
         mars_xlog_getfilepath_from_timespan_instance(instance, timespan, index, out, len)
     });
-    assert_eq!(files.len(), 1, "one record in one day is one file: {files:?}");
+    assert_eq!(
+        files.len(),
+        1,
+        "one record in one day is one file: {files:?}"
+    );
     assert!(files[0].starts_with(&dir), "{files:?} is not in {dir:?}");
 
     let names = day_paths(handle, |instance, timespan, index, out, len| unsafe {
@@ -246,7 +249,9 @@ fn the_file_questions_are_answered_by_the_instance() {
 
     // A released appender answers nothing at all.
     let mut after = [0u8; 1024];
-    unsafe { mars_xlog_release_instance(config.raw.name_prefix) };
+    unsafe {
+        mars_xlog_release_instance(config.raw.name_prefix);
+    }
     let closed = unsafe {
         mars_xlog_current_log_path_instance(handle, after.as_mut_ptr().cast(), after.len() as u32)
     };
@@ -262,7 +267,15 @@ fn day_paths(
     let mut walked = Vec::new();
     let mut buffer = [0u8; 1024];
     for index in 0..64u32 {
-        let written = unsafe { symbol(handle, 0, index, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
+        let written = unsafe {
+            symbol(
+                handle,
+                0,
+                index,
+                buffer.as_mut_ptr().cast(),
+                buffer.len() as u32,
+            )
+        };
         if written == MARS_XLOG_ERR_NO_PATH {
             break;
         }

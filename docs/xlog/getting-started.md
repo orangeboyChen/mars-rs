@@ -68,11 +68,11 @@ xlog.flush_now();   // the records are on disk when this returns
 `Xlog::open` answers the appender, which is the `Xlog.open(config)` of Kotlin, of
 Dart and of TypeScript and the `Xlog(config:)` of Swift: one object, held, and
 written through — a second logger is a second `Xlog` of a prefix of its own.
-Every option is on [the configuration page](/xlog/configuration). A record can
-carry more than a message — `xlog.log_with_info(Some(&info), message)` takes an
-`XLoggerInfo` with the level, the tag and the file, function and line of the call
-site, and `xlog.log(level, tag, message)` is the short form that writes the empty
-ones, as Kotlin's does. Rust has no `#file` to fill them in with.
+Every option is on [the configuration page](/xlog/configuration). A record is a
+level, a tag and a message — `xlog.log(level, tag, message)`, or `xlog.i(tag,
+message)` at a level of its own — and nothing of the call site: Rust has no
+`#file` to fill the file, the function and the line in with, so a record written
+here carries the empty ones, as Kotlin's does.
 
 `Xlog::open` for a prefix that is already open answers the appender that is open
 and not a second one, and the config that second call hands in is ignored —
@@ -420,8 +420,8 @@ has no `#file` to fill one in with, so `__FILE__`, `__PRETTY_FUNCTION__` and
 `__LINE__` of the call site go to
 `log(level, tag, message, file, function, line)`.
 
-The header is C++17: `std::string_view` is what the console sink of
-`Xlog::log` is handed, and `std::future` is what `flush()` answers.
+The header is C++17: it refuses to compile below that, and `std::future` is what
+`flush()` answers.
 
 ```bash
 c++ -std=c++17 -I include -o app app.cpp libmars_ffi.a -lpthread -ldl

@@ -13,12 +13,12 @@
 appender 用了同一个前缀就写同一个文件，关掉其中一个，另一个也就写不了了。
 哪一块日志要单独读，就给它一个自己的前缀。
 
-当前正在写的那个文件在哪：
+appender 写到哪：
 
 ::: code-group
 
 ```rust [Rust]
-xlog.current_log_path()                  // Option<PathBuf>
+xlog.current_log_path()                  // Option<PathBuf>，是目录
 ```
 
 ```swift [Swift]
@@ -52,8 +52,9 @@ xlog.currentLogPath
 
 :::
 
-这里的每个包都能给出这个路径，而且都是关于这个 `Xlog` 自己的。其余平台要 App 自己拼
-出文件名，拼的时候用的还是交给配置的那两样：目录和前缀，中间夹着当天日期。
+这里的每个包都能给出这个路径，给出的都是这个 `Xlog` 写进的那个 **目录** —— 是目录而
+不是文件，C++ 的 `GetCurrentLogPath` 交回来的就是它。当天的**文件**是下面那个问题；两
+个问题合起来，App 就不需要自己拼一天的名字了。
 
 一整**天**的文件是另一件事，要上传昨天日志的 App 问的就是它。这里有两个调用：一个是
 确实存在的那些文件，一个是这一天会写进哪几个名字 —— 不管文件在不在：
@@ -78,13 +79,13 @@ mars_xlog_make_logfile_name_instance(handle, 1, 0, path, sizeof path);
 ```
 
 ```kotlin [Android]
-xlog.logFiles(1)
-xlog.logFileNames(1)
+xlog.logFiles(1L)
+xlog.logFileNames(1L)
 ```
 
 ```kotlin [Kotlin Multiplatform]
-xlog.logFiles(1)
-xlog.logFileNames(1)
+xlog.logFiles(1L)
+xlog.logFileNames(1L)
 ```
 
 ```typescript [HarmonyOS]
@@ -105,7 +106,7 @@ xlog.logFileNames(1)
 :::
 
 `0` 是今天，`1` 是昨天。Rust 和 Swift 一次给出这一天的全部；C ABI 一次只给一个下标，
-Swift 那两个调用做的就是一趟走完它的事。配了缓存目录、而且文件确实存在时，“名字”
+C 那两个调用做的就是一趟走完它的事。配了缓存目录、而且文件确实存在时，“名字”
 会比“文件”多出一个：日志目录里那个，和它在缓存目录里的孪生文件。
 
 ## 异步：记录可能还在缓存里

@@ -31,8 +31,8 @@
  * instance lifecycle mutate shared state (exactly like the C++ globals) and
  * should be called from one place during start-up / shut-down. What no symbol
  * here does is install the process-wide appender: an app opens an instance
- * with `mars_xlog_new_instance`, and the process-wide one is the plumbing the
- * JNI bridge sets up from Rust.
+ * with `mars_xlog_new_instance`, and handle `0` — the process-wide one — is a
+ * handle no installer in this ABI ever hands out.
  *
  * Panics: no Rust panic ever crosses this boundary. Every entry point is
  * wrapped in `catch_unwind`; a panic is reported as `MARS_XLOG_ERR_PANIC` (or
@@ -124,8 +124,7 @@ typedef struct {
  *
  * Each instance owns an appender: its own log directory, prefix, key, mode and
  * cache file. Handle 0 means "the process-wide appender", which no symbol here
- * installs: it is the one the JNI bridge sets up from Rust, and a C caller
- * that wants a logger of its own opens an instance with
+ * installs: a C caller that wants a logger of its own opens an instance with
  * mars_xlog_new_instance.
  *
  * Every call that can be asked of an instance exists only in this spelling: the
@@ -204,8 +203,9 @@ void mars_xlog_set_max_alive_duration_instance(long long instance, long long sec
  * the day `timespan` days ago (0 = today), whether or not it exists yet.
  *
  * The C++ fills a `std::vector`; a C caller walks the same list with `index`,
- * starting at 0 and stopping at MARS_XLOG_ERR_NO_PATH. `prefix` and `log_dir`
- * may be NULL (an empty `log_dir` yields no name at all).
+ * starting at 0 and stopping at MARS_XLOG_ERR_NO_PATH. `instance` is a handle
+ * from `mars_xlog_new_instance`; a handle no appender is open for answers
+ * MARS_XLOG_ERR_NO_PATH from the first index.
  *
  * @return the number of bytes written excluding the terminating NUL, or a
  *         negative MARS_XLOG_ERR_* code.
@@ -219,7 +219,7 @@ int mars_xlog_make_logfile_name_instance(long long instance,
 /**
  * Replaces `mars::xlog::appender_getfilepath_from_timespan()`: the log files
  * that *exist* for the day `timespan` days ago. Same `index` protocol as
- * mars_xlog_make_logfile_name.
+ * mars_xlog_make_logfile_name_instance.
  */
 int mars_xlog_getfilepath_from_timespan_instance(long long instance,
                                                  int timespan,
@@ -227,15 +227,12 @@ int mars_xlog_getfilepath_from_timespan_instance(long long instance,
                                                  char* out,
                                                  unsigned int len);
 
-/* The directory an instance is writing its files to, or a negative
- * MARS_XLOG_ERR_* code. It is the same question mars_xlog_current_log_path
- * asks of the process-wide appender, and the only spelling an app that opened
- * its logger with mars_xlog_new_instance has: no symbol of this ABI installs
- * the process-wide one — the JNI bridge does, from Rust — so the process-wide
- * question answers MARS_XLOG_ERR_NO_PATH for it. */
+/* The directory the appender of `instance` is writing its files to, or a negative
+ * MARS_XLOG_ERR_* code. A directory and not a file, which is what the C++'s
+ * `XloggerAppender::GetCurrentLogPath` answers — `sg_logdir`. Handle `0` is the
+ * process-wide appender, and no symbol of this ABI installs one, so it answers
+ * MARS_XLOG_ERR_NO_PATH. */
 int mars_xlog_current_log_path_instance(long long instance, char* out, unsigned int len);
-
-/* The cache directory, or a negative MARS_XLOG_ERR_* code. */
 
 #ifdef __cplusplus
 } /* extern "C" */

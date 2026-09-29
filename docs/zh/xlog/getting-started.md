@@ -61,10 +61,9 @@ xlog.flush_now();   // 返回时记录已经在磁盘上
 `Xlog::open` 回答的那个 appender，就是 Kotlin、Dart 和 TypeScript 的
 `Xlog.open(config)`，也是 Swift 的 `Xlog(config:)` —— 一个对象，拿着它，对着它写；
 第二个 logger 就是第二个 `Xlog`，给它自己的 prefix。每个选项都在
-[配置项](/zh/xlog/configuration)那页。一条记录可以不止带一句话 ——
-`xlog.log_with_info(Some(&info), message)` 收一个 `XLoggerInfo`，里面有级别、tag
-和调用处的文件、函数、行号，而 `xlog.log(level, tag, message)` 是写空的那三个的
-短写法，Kotlin 写的也是这样 —— Rust 没有 `#file` 可以填进去。
+[配置项](/zh/xlog/configuration)那页。一条记录就是级别、tag 和消息 ——
+`xlog.log(level, tag, message)`，或者某个级别自己的 `xlog.i(tag, message)` ——
+不带调用点的任何东西：Rust 没有 `#file` 可以填进文件、函数和行号。
 
 已经开着的 prefix 再 `Xlog::open` 一次，回答的是那个已经开着的 appender 而不是第
 二个，而且第二次传进去的 config 会被忽略 —— 级别、目录都在内 —— 因为那个 appender
@@ -388,8 +387,7 @@ appender，所以一个自动存储期的 `Xlog` 在作用域末尾不需要 `cl
 `__PRETTY_FUNCTION__` 和 `__LINE__` 交给
 `log(level, tag, message, file, function, line)`。
 
-这个头文件要 C++17：`Xlog::log` 的记录收到的是 `std::string_view`，`flush()` 回答的是
-`std::future`。
+这个头文件要 C++17：低于那个标准它拒绝编译，而 `flush()` 回答的是 `std::future`。
 
 ```bash
 c++ -std=c++17 -I include -o app app.cpp libmars_ffi.a -lpthread -ldl

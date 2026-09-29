@@ -62,8 +62,13 @@ Native packages carry, member for member:
 | `xlog.flushNow()` | takes the cache to the file on the calling thread; the records are on disk when it returns |
 | `xlog.close()` | closes the appender |
 | `xlog.isOpen` | whether it is still open |
+| `xlog.currentLogPath` | the directory this appender writes into; `undefined` once it is closed |
+| `xlog.logFiles(daysAgo)` | that day's files that are *there* — `0` is today, `1` is yesterday |
+| `xlog.logFileNames(daysAgo)` | that day's names, whether or not the files are there yet |
 
-`Xlog.open` of a `namePrefix` that is already open answers the appender that is
+A day is asked about out of this appender's own prefix and directory, so an app
+never has to name one itself: `currentLogPath` answers the directory the C++
+`GetCurrentLogPath` hands back, and `logFiles` names the file inside it.
 open and not a second one: the native side is one appender per prefix, so two
 `Xlog`s of one prefix are one appender, and `close` on either closes both.
 

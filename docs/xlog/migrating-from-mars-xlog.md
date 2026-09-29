@@ -110,34 +110,19 @@ and `#line`, so a record written through `log.info(message:tag:)` says where
 it was written. Kotlin's write takes a handle, a level, a tag and a message and
 nothing else, so a record written through `xlog.i(tag, message)` carries an
 empty file and the line 0 — what the C++ project's own `Log` always passed. An
-app that needs them in the record has two ways: the `XLoggerInfo` the old
-`logWrite` takes, or, in Rust, the one `Xlog::log_with_info` is handed:
-
-```rust
-xlog.log_with_info(
-    Some(&XLoggerInfo {
-        level: LogLevel::Info,
-        tag: Some("startup".into()),
-        filename: Some(file!().into()),
-        func_name: Some("main".into()),
-        line: line!() as i32,
-        ..Default::default()
-    }),
-    "cold start in 412 ms",
-);
-```
+app that needs them in the record writes them into the message, or reads the
+record back out of the file: no platform of the port fills them in for it, and
+Rust has no `#file` to fill one in with either.
 
 A second appender is where the shapes differ most. The C++ project's Java opened
 one with `Log.openLogInstance(level, mode, cacheDir, logDir, nameprefix,
 cacheDays)` and threaded the handle it answered through every call after it;
 here an appender you hold *is* the instance, so a second one is a second `Xlog`
 of a prefix of its own — `Xlog::open(config, level)` again, with the prefix the
-second one is known by — and `Xlog::open_unregistered(config, level)` for the
-one shape a prefix of its own cannot express: two appenders of one prefix in one
-process, which is what two copies of the library linked side by side are. That
-one is *not* registered under the prefix, so it is a second writer where
-`Xlog::open` would hand back the first, and it keeps a level of its own, because
-it has no category to share one with.
+second one is known by. Two appenders of one prefix in one process is the one
+shape a second prefix cannot express, and the port has no spelling of it: a
+prefix is one appender, and `Xlog::open` of a prefix that is open answers the
+appender that is open.
 
 ### From the C++ project's Java
 

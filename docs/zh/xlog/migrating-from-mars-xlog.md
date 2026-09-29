@@ -88,31 +88,16 @@ Rust 的 `xlog.log(LogLevel::Info, tag, message)`。
 知道自己是哪儿写的。
 Kotlin 的 write 只接 handle、级别、tag 和消息，没有别的，所以从 `xlog.i(tag, message)`
 写出的记录里文件是空的、行号是 0 —— 也就是 C++ 项目自己的 `Log` 一直传的那两个值。要
-把调用点写进记录的应用有两条路：旧的 `logWrite` 接的那个 `XLoggerInfo`，或者在 Rust
-里给 `Xlog::log_with_info` 传一个：
-
-```rust
-xlog.log_with_info(
-    Some(&XLoggerInfo {
-        level: LogLevel::Info,
-        tag: Some("startup".into()),
-        filename: Some(file!().into()),
-        func_name: Some("main".into()),
-        line: line!() as i32,
-        ..Default::default()
-    }),
-    "cold start in 412 ms",
-);
-```
+把调用点写进记录的应用只能自己把它写进消息，或者把记录从文件里读回来：移植的每个平台都
+不替它填，Rust 也没有 `#file` 可以填进去。
 
 第二个 appender 是形状差别最大的地方。C++ 项目的 Java 是用
 `Log.openLogInstance(level, mode, cacheDir, logDir, nameprefix, cacheDays)` 开第二个，
 然后把它返回的 handle 一路传下去；这里你拿着一个 appender 就*是*拿到一个实例，所以第
 二个就是自己的另一个前缀的第二个 `Xlog` —— 再 `Xlog::open(config, level)` 一次，用
-第二个的前缀；而对象表达不了的那一种形状 —— 一个进程里同一个前缀的两个 appender，也就
-是两份库并排链进来时那样 —— 用 `Xlog::open_unregistered(config, level)`。它不登记在那个
-前缀名下，所以在 `Xlog::open` 会还给你第一个的地方，它是第二个 writer；它自己拿着一份级
-别，因为没有 category 可以跟别人共用。
+第二个的前缀。一个进程里同一个前缀的两个 appender，也就是两份库并排链进来时那样，是第二
+个前缀表达不了的那一种形状，移植里也没有它的写法：一个前缀就是一个 appender，已经开着的
+前缀再 `Xlog::open` 一次，回答的是那个已经开着的。
 
 ### 从 C++ 项目的 Java 来
 

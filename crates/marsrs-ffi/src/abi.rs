@@ -534,14 +534,14 @@ pub extern "C" fn mars_xlog_set_max_alive_duration_instance(
 /// same list with `index`, starting at `0` and stopping at
 /// [`MARS_XLOG_ERR_NO_PATH`].
 ///
-/// `prefix` and `log_dir` may be null (an empty `log_dir` yields no name at
-/// all). See `mars_xlog_current_log_path_instance` for the `out` contract.
+/// `instance` is a handle from [`mars_xlog_new_instance`]; a handle no appender
+/// is open for answers [`MARS_XLOG_ERR_NO_PATH`] from the first `index` on. See
+/// [`mars_xlog_current_log_path_instance`] for the `out` contract.
 ///
 /// # Safety
 ///
-/// `prefix` and `log_dir` must each be null or a NUL-terminated C string, and `out` must be null
-/// or point to at least `len` writable bytes; all of them stay alive for the duration of the
-/// call.
+/// `out` must be null or point to at least `len` writable bytes; both are
+/// checked.
 #[no_mangle]
 pub unsafe extern "C" fn mars_xlog_make_logfile_name_instance(
     instance: c_longlong,
@@ -566,9 +566,8 @@ pub unsafe extern "C" fn mars_xlog_make_logfile_name_instance(
 ///
 /// # Safety
 ///
-/// `prefix` and `log_dir` must each be null or a NUL-terminated C string, and `out` must be null
-/// or point to at least `len` writable bytes; all of them stay alive for the duration of the
-/// call.
+/// `out` must be null or point to at least `len` writable bytes; both are
+/// checked.
 #[no_mangle]
 pub unsafe extern "C" fn mars_xlog_getfilepath_from_timespan_instance(
     instance: c_longlong,
