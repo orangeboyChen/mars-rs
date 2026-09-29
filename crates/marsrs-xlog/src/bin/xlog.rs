@@ -95,7 +95,8 @@ options:
                          nor encrypted, which is what the C++ writes
   -l, --level=N          encode: the zstd level, 6 by default
   -r, --region=N         encode: the size of the buffer a record is written
-                         through, 153600 by default
+                         through, 153600 by default; a record that needs a
+                         bigger one is given it
 
 INPUT of `-`, or none at all, is standard input; so is `--out=-`. A short
 option takes its value attached — `-oFILE`, `-o=FILE` — or as the next
