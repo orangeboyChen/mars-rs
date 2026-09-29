@@ -1,0 +1,28 @@
+# The one place in this build the versions are written down.
+#
+# A version catalog is what a Gradle build written today starts from: the
+# coordinates are named here and the modules ask for them by name, so `marsrs`
+# below is bumped in one line and not in every `build.gradle.kts` that takes
+# it.
+
+[versions]
+# The newest stable Kotlin. It is the only plugin this build applies, and it is
+# the one that decides which targets exist, which is why there is no Android
+# Gradle Plugin beside it: this demo runs as a Kotlin/Native executable and
+# builds no Android artifact.
+kotlin = "2.4.20"
+# The release of the port this demo is written against, and the only line in
+# this build that has to move when a new one is out. The newest tag the Kotlin
+# Multiplatform packages were published from is `v0.1.0-alpha.3`; `0.1.0` is
+# what the documentation quotes and is not out yet.
+marsrs = "0.1.0-alpha.3"
+
+[libraries]
+# The logging half — the package an app that only logs takes. `marsrs-kmp` is
+# the whole port (xlog, STN and SDT) and is the other line an app writes; an
+# app takes one of the two and never both, because both carry the same native
+# library and an app with two opens one appender twice over the same files.
+marsrs-xlog = { module = "io.github.orangeboychen.marsrs:xlog-kmp", version.ref = "marsrs" }
+
+[plugins]
+kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

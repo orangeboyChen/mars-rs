@@ -1,0 +1,28 @@
+// What ohpm resolves for this module, and the one dependency it has.
+//
+// `marsrs-harmonyos-xlog` is the HAR of the port: the ArkTS `Xlog` over the NAPI
+// module, with `libmarsrs_xlog.so` and the Rust core inside it.
+//
+// It is taken from `libs/` and not from ohpm's central repository, because
+// publishing to ohpm is not switched on yet — `docs/platforms/harmonyos.md` says
+// so, and `scripts/package_harmony.sh` writes the same archive a release carries.
+// So the HAR is downloaded once, out of the release, and `file:` is what points
+// ohpm at a package on disk:
+//
+//   gh release download v0.1.0-alpha.3 --pattern 'marsrs-harmonyos-xlog-*.har' \
+//       --dir demo/harmonyos/libs
+//   ohpm install
+//
+// The line an app writes once the package *is* on ohpm is
+// `"marsrs-harmonyos-xlog": "^1.0.0"`, and nothing else in the module changes.
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "The HarmonyOS demo of mars-rs: one button that writes six records into a .xlog file.",
+  "main": "",
+  "author": "orangeboyChen",
+  "license": "MIT",
+  "dependencies": {
+    "marsrs-harmonyos-xlog": "file:../libs/marsrs-harmonyos-xlog-1.0.0.har"
+  }
+}

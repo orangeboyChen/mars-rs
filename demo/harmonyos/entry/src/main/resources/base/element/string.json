@@ -1,0 +1,24 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "The HarmonyOS demo of mars-rs"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "The one ability of the demo"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "MarsRS Demo"
+    },
+    {
+      "name": "write_records",
+      "value": "Write six records"
+    },
+    {
+      "name": "records_written",
+      "value": "six records written and flushed"
+    }
+  ]
+}

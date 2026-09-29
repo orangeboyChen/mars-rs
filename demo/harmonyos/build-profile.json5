@@ -1,0 +1,42 @@
+// The project hvigor reads first: what the app is called, and which of the
+// modules below is the one that launches.
+//
+// `compatibleSdkVersion` and `modelVersion` are the two numbers a HarmonyOS
+// project cannot do without, and both are the SDK's and not the app's:
+// `compatibleSdkVersion` is `<platformVersion>(<apiVersion>)` of the SDK the
+// build runs against, and `modelVersion` — the same string again in
+// `hvigor/hvigor-config.json5` — is its platform version. Both have to agree
+// with the DevEco SDK installed on the machine, and that is the one thing to
+// change here if a newer one is: DevEco says so in the build log, and the fix
+// is to put the number it names in both files.
+{
+  "app": {
+    "signingConfigs": [],
+    "products": [
+      {
+        "name": "default",
+        // HarmonyOS and not OpenHarmony: `getContext().filesDir` and the rest
+        // of the stage model below are APIs of the system's.
+        "runtimeOS": "HarmonyOS",
+        // The SDK this demo was opened with: HarmonyOS 5.1.0 Release, API 18 —
+        // the one `scripts/fetch_deveco_cli.sh` pins for the repo's own builds.
+        "compatibleSdkVersion": "5.1.0(18)",
+        "buildOption": {}
+      }
+    ],
+    "buildModeSet": [
+      { "name": "debug" },
+      { "name": "release" }
+    ]
+  },
+  "modules": [
+    {
+      // The module below, and the only one: a demo is one HAP.
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        { "name": "default", "applyToProducts": ["default"] }
+      ]
+    }
+  ]
+}

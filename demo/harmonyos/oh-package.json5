@@ -1,0 +1,14 @@
+// The project's own package file: the model version hvigor checks before it
+// reads anything else, and nothing an app of it needs.
+//
+// It is a smaller thing than a module's `oh-package.json5` — no name, no
+// version, no `main` — because the app is the module below and this is the
+// project around it. `modelVersion` has to be the same string as the one in
+// `hvigor/hvigor-config.json5`: hvigor reads both and refuses a project whose
+// two answers disagree.
+{
+  "modelVersion": "5.1.0",
+  "description": "The HarmonyOS demo of mars-rs: one button that writes six records into a .xlog file.",
+  "dependencies": {},
+  "devDependencies": {}
+}

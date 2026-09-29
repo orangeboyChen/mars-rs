@@ -44,3 +44,41 @@ platforms/flutter/*/LICENSE
 platforms/react-native/*/ios/Frameworks/
 platforms/react-native/*/ios/include/
 platforms/react-native/*/LICENSE
+
+# demo: what a demo run leaves behind, and what a demo's own toolchain writes.
+# None of it is a source — every directory below is one a command recreates.
+demo/rust/target/
+# A lock file of a demo says nothing an app does not work out again: the
+# dependencies are the crates of this repository, taken by path, so theirs is
+# the lock that matters and this one only ever follows it.
+demo/rust/Cargo.lock
+demo/rust/log/
+demo/c/demo
+demo/c/log/
+demo/android/.gradle/
+demo/android/build/
+demo/android/*/build/
+demo/android/local.properties
+demo/kmp/.gradle/
+demo/kmp/build/
+demo/kmp/log/
+# what DevEco and ohpm write, and the HAR of the port `demo/harmonyos/README.md`
+# says to download into `libs/`
+demo/harmonyos/.hvigor/
+demo/harmonyos/build/
+demo/harmonyos/oh_modules/
+demo/harmonyos/node_modules/
+demo/harmonyos/*/oh_modules/
+demo/harmonyos/*/build/
+demo/harmonyos/*/.preview/
+demo/harmonyos/libs/
+# what `flutter create` and `flutter pub get` write in a demo's own directory,
+# once `demo/flutter/README.md` says to run them there
+demo/flutter/.dart_tool/
+demo/flutter/build/
+demo/flutter/.idea/
+demo/flutter/.flutter-plugins
+demo/flutter/.flutter-plugins-dependencies
+demo/flutter/.packages
+demo/flutter/pubspec.lock
+demo/react-native/node_modules/
