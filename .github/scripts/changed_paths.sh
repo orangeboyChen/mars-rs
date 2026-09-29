@@ -14,7 +14,12 @@
 #
 # Environment:
 #   BASE_SHA, HEAD_SHA  the two ends of the diff, taken from the event
-#   GITHUB_OUTPUT       where `needed=true|false` is written
+#   GITHUB_OUTPUT       where `<key>=true|false` is written
+#   OUTPUT_KEY          the name it is written under; `needed` when it is not
+#                       set, which is the one every caller already reads. A
+#                       caller asking more than one question of one diff —
+#                       demo.yml, of eight demos with eight different upstreams
+#                       — sets it per call and reads one output per question.
 #
 # The one way this must never fail is by concluding "nothing changed": an
 # answer it cannot derive, an event that is not a diff, a first push to a
@@ -23,7 +28,7 @@
 set -euo pipefail
 
 needed() {
-  printf 'needed=%s\n' "${1:-true}" >> "${GITHUB_OUTPUT:-/dev/stdout}"
+  printf '%s=%s\n' "${OUTPUT_KEY:-needed}" "${1:-true}" >> "${GITHUB_OUTPUT:-/dev/stdout}"
   exit 0
 }
 

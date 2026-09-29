@@ -75,14 +75,37 @@ env:
   DEVECO_CLI_VERSION: '5.1.0.840'
 
 jobs:
-  # Which of the files the jobs below read this commit touched, and so whether
-  # they have work to do. A skipped job answers the ruleset; a run that never
-  # started does not, which is the difference rust.yml writes out at length.
+  # Which of the files each demo below reads this commit touched, and so which
+  # of them have work to do.
+  #
+  # One answer per demo and not one for all eight, because a demo's upstream is
+  # not the whole tree: it is the platform package it is written over. A commit
+  # that moves the Kotlin of `platforms/android` is one the Android demo has to
+  # answer for and not one the HarmonyOS demo — whose DevEco job is the most
+  # expensive one here — has to pay for. Which is the whole point of the split:
+  # a demo breaks when the API above it moves, so the two have to move in the
+  # same run, and a filter that watched only `demo/**` would run nothing on the
+  # commit that moved the API out from under six of them.
+  #
+  # What *is* shared is `crates/**`: every platform is a face of the same Rust,
+  # and the C headers the Apple demo is compiled over live in one of them. So
+  # does `scripts/**` for the three that build a native library before they can
+  # build anything else.
+  #
+  # A skipped job answers the ruleset; a run that never started does not, which
+  # is the difference rust.yml writes out at length.
   changes:
     name: What changed (Demos)
     runs-on: ubuntu-latest
     outputs:
-      needed: ${{ steps.paths.outputs.needed }}
+      rust: ${{ steps.paths.outputs.rust }}
+      c: ${{ steps.paths.outputs.c }}
+      android: ${{ steps.paths.outputs.android }}
+      kmp: ${{ steps.paths.outputs.kmp }}
+      apple: ${{ steps.paths.outputs.apple }}
+      flutter: ${{ steps.paths.outputs.flutter }}
+      rn: ${{ steps.paths.outputs.rn }}
+      harmonyos: ${{ steps.paths.outputs.harmonyos }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -94,16 +117,29 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.after || github.sha }}
         run: |
-          .github/scripts/changed_paths.sh \
-            'demo/**' \
-            'crates/**' 'platforms/**' \
-            'Cargo.toml' '**/Cargo.toml' 'Cargo.lock' '.cargo/**' \
-            '.github/scripts/**' '.github/workflows/demo.yml'
+          set -euo pipefail
+          # Quoted and not one string, because an unquoted `crates/**` is a
+          # glob the shell expands before the script ever sees it.
+          shared=('crates/**' 'Cargo.toml' '**/Cargo.toml' 'Cargo.lock' \
+                  '.cargo/**' '.github/scripts/**' '.github/workflows/demo.yml')
+          # `OUTPUT_KEY`: the name the answer is written under, which is what
+          # lets one diff be asked eight questions.
+          ask() {
+            OUTPUT_KEY="$1" .github/scripts/changed_paths.sh "${shared[@]}" "${@:2}"
+          }
+          ask rust      'demo/rust/**'
+          ask c         'demo/c/**'
+          ask android   'demo/android/**' 'platforms/android/**' 'scripts/**'
+          ask kmp       'demo/kmp/**' 'platforms/kmp/**' 'scripts/**'
+          ask apple     'demo/apple/**' 'platforms/apple/**' 'Package.swift'
+          ask flutter   'demo/flutter/**' 'platforms/flutter/**'
+          ask rn        'demo/react-native/**' 'platforms/react-native/**'
+          ask harmonyos 'demo/harmonyos/**' 'platforms/harmonyos/**' 'scripts/**'
 
   rust:
     name: demo (rust)
     needs: changes
-    if: needs.changes.outputs.needed == 'true'
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -125,7 +161,7 @@ jobs:
   c:
     name: demo (c)
     needs: changes
-    if: needs.changes.outputs.needed == 'true'
+    if: needs.changes.outputs.c == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -143,7 +179,7 @@ jobs:
   android:
     name: demo (android)
     needs: changes
-    if: needs.changes.outputs.needed == 'true'
+    if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-latest
     env:
       # `demo/android/gradle.properties` says why there is no `sdk.dir` in it:
@@ -199,7 +235,7 @@ jobs:
   kmp:
     name: demo (kmp)
     needs: changes
-    if: needs.changes.outputs.needed == 'true'
+    if: needs.changes.outputs.kmp == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -235,7 +271,7 @@ jobs:
   apple:
     name: demo (apple)
     needs: changes
-    if: needs.changes.outputs.needed == 'true'
+    if: needs.changes.outputs.apple == 'true'
     # The iOS SDK is in the Xcode the image carries; a Linux runner cannot ask
     # the question at all.
     runs-on: macos-latest
@@ -246,7 +282,7 @@ jobs:
   flutter:
     name: demo (flutter)
     needs: changes
-    if: needs.changes.outputs.needed == 'true'
+    if: needs.changes.outputs.flutter == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -267,7 +303,7 @@ jobs:
   react-native:
     name: demo (react-native)
     needs: changes
-    if: needs.changes.outputs.needed == 'true'
+    if: needs.changes.outputs.rn == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -295,7 +331,7 @@ jobs:
   harmonyos:
     name: demo (harmonyos)
     needs: changes
-    if: needs.changes.outputs.needed == 'true'
+    if: needs.changes.outputs.harmonyos == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
