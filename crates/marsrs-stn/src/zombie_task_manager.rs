@@ -294,6 +294,12 @@ impl ZombieTaskManager {
                 Some(_) => kept.push(zombie),
             }
         }
+        // What the pass left, and behind it what a task the callbacks saved
+        // while it ran added: `self.tasks` was taken out for the iteration,
+        // so a `save` from inside `start` put its zombie into a list this
+        // assignment would otherwise overwrite — and a zombie saved from the
+        // loop is one nobody ever fails or starts again.
+        kept.append(&mut self.tasks);
         self.tasks = kept;
 
         // `CancelMessage` once the last zombie is gone
