@@ -12,9 +12,14 @@
 //! channels, run the loops, hand the answers back, and drain what the queues
 //! asked for ([`StnLogic::run_pending`] is the C++'s message queue thread).
 
+use std::future::Future;
+use std::pin::pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 
+use marsrs_stn::sent::{self, Answer, Failure};
 use marsrs_stn::task_profile::TaskFailHandleType;
+use marsrs_stn::task_profile::LOCAL_CHANNEL_SELECT;
 use marsrs_stn::{
     App, CgiProfile as Cgi, ConnectProfile, ErrCmdType, LongLinkStatus, LonglinkConfig, NetStatus,
     RespHandle, RunId, StnLogic, Task, DEFAULT_LONGLINK_NAME, NET_TYPE_WIFI,
@@ -644,4 +649,128 @@ fn a_task_that_may_use_anything_is_reported_with_no_connect() {
         host.said().ended,
         vec![(7, ErrCmdType::Ok, 0, String::new())]
     );
+}
+
+/// The end of a task an app awaited, which a sample drives itself: the port
+/// carries no executor, and what wakes a [`sent::Sent`] is the pass the host
+/// makes.
+fn settle(host: &mut Host, awaited: sent::Sent) -> Result<Answer, Failure> {
+    let mut awaited = pin!(awaited);
+    let mut context = Context::from_waker(Waker::noop());
+    for _ in 0..8 {
+        if let Poll::Ready(outcome) = awaited.as_mut().poll(&mut context) {
+            return outcome;
+        }
+        // a pass is what ends the task, and what wakes whoever awaited it
+        host.run_pending();
+    }
+    panic!("a task nothing drained is one that never ended");
+}
+
+/// The end of a task an app awaited, when there is nothing to wait for: one
+/// poll, which is all a [`sent::Sent`] that is already over needs.
+fn settled(awaited: sent::Sent) -> Result<Answer, Failure> {
+    let mut awaited = pin!(awaited);
+    let mut context = Context::from_waker(Waker::noop());
+    match awaited.as_mut().poll(&mut context) {
+        Poll::Ready(outcome) => outcome,
+        // a task no queue took is not one an app is left waiting on
+        Poll::Pending => panic!("a task that never started ended without a pass"),
+    }
+}
+
+/// A task an app awaits, on the long link, with the body the app handed.
+fn awaited(host: &mut Host, taskid: u32) -> sent::Sent {
+    let mut task = Task::new(taskid, 12);
+    task.cgi = format!("/cgi-bin/{taskid}");
+    task.channel_select = Task::CHANNEL_LONG;
+    task.longlink_host_list = vec![LONG_HOST.to_string()];
+    task.user_id = "user".to_string();
+    task.retry_count = 1;
+    task.total_timeout = 10 * 60 * 1000;
+    host.logic
+        .send_at(START, task, format!("/cgi-bin/{taskid}").into_bytes())
+}
+
+#[test]
+fn an_awaited_task_ends_with_the_body_the_server_answered_with() {
+    let mut host = Host::new();
+    host.bring_up(MAIN, LongLinkStatus::Connected);
+
+    let awaited = awaited(&mut host, 7);
+    // the body the app handed is the one that went out, and neither of the two
+    // questions a request and an answer are asked was asked of the app
+    assert_eq!(
+        host.sent(),
+        vec![(MAIN.to_string(), 7, b"/cgi-bin/7".to_vec())]
+    );
+    let said = host.said();
+    assert_eq!(said.encoded, Vec::new(), "no `Req2Buf` was asked of it");
+    assert!(
+        said.ended.is_empty(),
+        "a task that is out is not one that ended"
+    );
+
+    let _ended = host.answered(7);
+    let answer = settle(&mut host, awaited).expect("the task came back with one");
+    assert_eq!(answer.body, b"hello".to_vec());
+    assert_eq!(answer.profile.nettype, "wifi");
+
+    let said = host.said();
+    assert_eq!(said.decoded, Vec::new(), "no `Buf2Resp` was asked of it");
+    // and the app still hears the end: what an app awaits is a value, and not
+    // a question the app stops being asked
+    assert_eq!(said.ended, vec![(7, ErrCmdType::Ok, 0, "wifi".to_string())]);
+}
+
+#[test]
+fn an_awaited_task_that_failed_ends_with_where_it_failed() {
+    let mut host = Host::new();
+    host.bring_up(MAIN, LongLinkStatus::Connected);
+    let awaited = awaited(&mut host, 7);
+    // the link goes down, which fails every task that was out on it
+    assert!(host.logic.destroy_long_link_at(START + 100, MAIN));
+
+    match settle(&mut host, awaited).expect_err("the task came back with none") {
+        Failure::Ended {
+            err_type, err_code, ..
+        } => {
+            assert_eq!(err_type, ErrCmdType::Local);
+            assert!(err_code < 0, "a task that failed says how: {err_code}");
+        }
+        other => panic!("the task failed, and not like this: {other:?}"),
+    }
+}
+
+#[test]
+fn a_task_no_queue_took_ends_before_the_app_awaits_it() {
+    // no net core, so nothing to start it on
+    let mut logic = StnLogic::new();
+    let mut task = Task::new(7, 12);
+    task.channel_select = Task::CHANNEL_LONG;
+    assert_eq!(
+        settled(logic.send_at(START, task, Vec::new())),
+        Err(Failure::NotCreated)
+    );
+
+    // a net core, and a task with no channel to go out on: the core refuses it
+    // and reports the end itself, so there is nothing to wait for
+    let mut host = Host::new();
+    let mut task = Task::new(8, 12);
+    task.channel_select = 0;
+    match settled(host.logic.send_at(START, task, Vec::new())) {
+        Err(Failure::Ended {
+            err_type, err_code, ..
+        }) => {
+            assert_eq!(err_type, ErrCmdType::Local);
+            assert_eq!(err_code, LOCAL_CHANNEL_SELECT);
+        }
+        other => panic!("the core refused it, and not like this: {other:?}"),
+    }
+
+    // and a core that was released: no task goes out, and no end is reported
+    let mut host = Host::new();
+    host.logic.net_core().expect("no net core").release();
+    let awaited = host.logic.send_at(START, Task::new(9, 12), Vec::new());
+    assert_eq!(settled(awaited), Err(Failure::Refused));
 }

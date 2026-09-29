@@ -218,6 +218,7 @@ pub mod net_source;
 pub mod netsource_timercheck;
 pub mod proxy_test;
 pub mod report;
+pub mod sent;
 pub mod short_link;
 pub mod shortlink;
 pub mod shortlink_task_manager;
@@ -283,6 +284,9 @@ pub use net_source::{
 pub use netsource_timercheck::{NetSourceTimerCheck, INTERVAL_TIME, MAX_SPEED_TEST_COUNT, TIMEOUT};
 pub use proxy_test::{ProxyTest, Verdict, BUFFER_SIZE, READ_TIMEOUT_MS, TEST_PORT};
 pub use report::task_profile_json;
+// `Answer` is not here: [`long_link`] already has one of that name, so the
+// value a sent task ends with is [`sent::Answer`].
+pub use sent::{Driver, Failure, Sent};
 // `ConnectFail` is not here: [`long_link`] already has one of that name, so the
 // short link's is [`short_link::ConnectFail`].
 pub use short_link::{
