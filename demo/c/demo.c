@@ -66,16 +66,16 @@ int main(void) {
      *
      * Not handle `0`: that one names the *process-wide* appender, which is
      * the plumbing the JNI bridge installs from Rust and which no symbol of
-     * this ABI opens, and not the thing an app holds. It is also the number
-     * `mars_xlog_new_instance` answers when it fails — one number for "the
-     * process-wide one" and for "no instance at all". An app that holds the
-     * handle never has to say which it means.
+     * this ABI opens, and not the thing an app holds. What this call answers
+     * when it refuses a config is a negative `MARS_XLOG_ERR_*` code, one per
+     * cause, so `0` is not the number that means "no instance" — anything
+     * that is not a positive handle is.
      *
      * No Rust panic crosses this boundary either: every entry point is
      * wrapped in `catch_unwind`, and a panic becomes `MARS_XLOG_ERR_PANIC`
      * here and a no-op there. */
     long long xlog = mars_xlog_new_instance(&config, MarsLevelVerbose);
-    if (xlog == 0) {
+    if (xlog <= 0) {
         fprintf(stderr, "mars_xlog_new_instance failed for '%s' in %s\n", PREFIX, LOGDIR);
         return 1;
     }
