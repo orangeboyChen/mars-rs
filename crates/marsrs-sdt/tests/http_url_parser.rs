@@ -147,6 +147,12 @@ fn a_port_that_does_not_fit_in_sixteen_bits_is_truncated() {
     // `(uint16_t)atoi(...)`, which wraps: 65536 is 0, and 0 is the default
     assert_eq!(HttpUrlParser::new("http://1.2.3.4:65536/x").port(), 80);
     assert_eq!(HttpUrlParser::new("http://1.2.3.4:65537/x").port(), 1);
+    // and one too long even for the C's `long` is `strtol`'s `LONG_MAX` —
+    // `65535` once it is cast, and not the `0` that becomes the default
+    assert_eq!(
+        HttpUrlParser::new("http://1.2.3.4:99999999999999999999/x").port(),
+        65535
+    );
 }
 
 #[test]

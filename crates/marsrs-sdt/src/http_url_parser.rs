@@ -38,7 +38,9 @@ fn trim(s: &str) -> &str {
 /// turns into [`DEFAULT_PORT`].
 ///
 /// The sign counts, because the C++'s is a cast and not a check: a port of `-1`
-/// is `65535` there, and here, and not a port that did not read.
+/// is `65535` there, and here, and not a port that did not read. So does a
+/// number `strtol` cannot hold: it answers `LONG_MAX` for one, which the cast
+/// makes `65535` and not the `0` that would have become [`DEFAULT_PORT`].
 fn atoi(text: &str) -> u16 {
     let text = text.trim_start_matches(|char: char| char.is_ascii_whitespace());
     let (negative, digits) = match text.strip_prefix('-') {
@@ -49,7 +51,11 @@ fn atoi(text: &str) -> u16 {
         .chars()
         .take_while(|char| char.is_ascii_digit())
         .collect();
-    let value = digits.parse::<i64>().unwrap_or(0);
+    let value = if digits.is_empty() {
+        0
+    } else {
+        digits.parse::<i64>().unwrap_or(i64::MAX)
+    };
     (if negative { -value } else { value }) as u16
 }
 
