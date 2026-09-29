@@ -114,7 +114,7 @@ unsafe fn to_xlog_config(cfg: &MarsXLogConfig) -> Result<XLogConfig, c_int> {
     let (log_dir, name_prefix, pub_key, cache_dir) = unsafe {
         (
             cstr::ptr_to_path_buf(cfg.log_dir),
-            cstr::ptr_to_str_or_empty(cfg.name_prefix),
+            cstr::ptr_to_string_lossy(cfg.name_prefix),
             cstr::ptr_to_str_or_empty(cfg.pub_key),
             cstr::ptr_to_path_buf(cfg.cache_dir),
         )
@@ -130,12 +130,14 @@ unsafe fn to_xlog_config(cfg: &MarsXLogConfig) -> Result<XLogConfig, c_int> {
     // prefix-based — substituting "Mars" would stop the Rust port from draining
     // (or being drained by) a C++ process's cache file. The prefix does go
     // through UTF-8, `XLogConfig` storing a `String`, so a non-UTF-8 one is
-    // converted lossily; the directories above are byte-exact.
+    // converted lossily and not to the empty prefix, which is the name of
+    // another appender and not of a prefix that failed; the directories above
+    // are byte-exact.
     let defaults = XLogConfig::default();
     Ok(XLogConfig {
         mode,
         logdir: log_dir,
-        nameprefix: name_prefix.to_string(),
+        nameprefix: name_prefix,
         pub_key: pub_key.to_string(),
         compress_mode,
         compress_level: if cfg.compress_level > 0 {
@@ -981,6 +983,28 @@ mod tests {
         assert_eq!(cfg.mode, MarsAppenderMode::Sync as c_int);
         assert_eq!(cfg.compress_mode, MarsCompressMode::Zlib as c_int);
         assert_eq!(cfg.cache_days, 3);
+    }
+
+    #[test]
+    fn a_prefix_that_is_not_utf8_stays_a_prefix() {
+        let log_dir = c"/tmp/xlog";
+        let name_prefix = c"app\xffname";
+        let cfg = MarsXLogConfig {
+            mode: MarsAppenderMode::Async as c_int,
+            log_dir: log_dir.as_ptr(),
+            name_prefix: name_prefix.as_ptr(),
+            pub_key: std::ptr::null(),
+            compress_mode: MarsCompressMode::Zlib as c_int,
+            compress_level: 0,
+            cache_dir: std::ptr::null(),
+            cache_days: 0,
+        };
+        // SAFETY: every pointer of `cfg` is null or a NUL-terminated string
+        // that outlives this call.
+        let config = unsafe { to_xlog_config(&cfg) }.unwrap();
+        // Not `""`: the empty prefix is the process-wide appender's, which
+        // would make this one share its cache file and its log files.
+        assert_eq!(config.nameprefix, "app\u{fffd}name");
     }
 
     #[test]
