@@ -230,7 +230,7 @@ export class Xlog {
     this.log(LogLevel.Fatal, tag, message);
   }
 
-  /** `mars_xlog_flush_instance`, signalled: tells the writer thread it may take
+  /** `mars_xlog_signal_flush_instance`: tells the writer thread it may take
    * what is in the cache to the log file, and returns at once.
    *
    * It guarantees nothing. The drain is the writer thread's, it has not
@@ -247,7 +247,7 @@ export class Xlog {
     xlogNapi.signalFlush(this.namePrefix);
   }
 
-  /** `mars_xlog_flush_instance`, waited for: takes what is in the cache to the
+  /** `mars_xlog_flush_now_instance`: takes what is in the cache to the
    * log file on the calling thread, and hands the file's own buffer to the OS
    * — the last few KiB of a log file sit in a `FILE*` until this runs, so a
    * reader in another process cannot see them yet.

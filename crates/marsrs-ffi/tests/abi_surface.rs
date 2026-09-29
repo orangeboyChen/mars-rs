@@ -10,18 +10,19 @@ use std::os::raw::{c_char, c_int, c_uint};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_ffi::abi::{
-    mars_xlog_close, mars_xlog_current_log_cache_path, mars_xlog_current_log_path, mars_xlog_flush,
-    mars_xlog_flush_all, mars_xlog_flush_instance, mars_xlog_flush_sync, mars_xlog_get_instance,
-    mars_xlog_get_level, mars_xlog_getfilepath_from_timespan, mars_xlog_is_enabled_for,
-    mars_xlog_make_logfile_name, mars_xlog_new_instance, mars_xlog_oneshot_flush, mars_xlog_open,
-    mars_xlog_release_instance, mars_xlog_set_console_log, mars_xlog_set_console_log_instance,
-    mars_xlog_set_level, mars_xlog_set_level_instance, mars_xlog_set_max_alive_duration,
-    mars_xlog_set_max_alive_duration_instance, mars_xlog_set_max_file_size,
-    mars_xlog_set_max_file_size_instance, mars_xlog_set_mode, mars_xlog_set_mode_instance,
-    mars_xlog_write, mars_xlog_write_instance, MarsXLogConfig, MARS_XLOG_ERR_APPENDER,
-    MARS_XLOG_ERR_BAD_COMPRESS, MARS_XLOG_ERR_BAD_MODE, MARS_XLOG_ERR_EMPTY_LOG_DIR,
-    MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_CONFIG,
-    MARS_XLOG_ERR_NULL_OUT, MARS_XLOG_OK,
+    mars_xlog_close, mars_xlog_current_log_cache_path, mars_xlog_current_log_path,
+    mars_xlog_flush_now, mars_xlog_flush_now_all, mars_xlog_flush_now_instance,
+    mars_xlog_get_instance, mars_xlog_get_level, mars_xlog_getfilepath_from_timespan,
+    mars_xlog_is_enabled_for, mars_xlog_make_logfile_name, mars_xlog_new_instance,
+    mars_xlog_oneshot_flush, mars_xlog_open, mars_xlog_release_instance, mars_xlog_set_console_log,
+    mars_xlog_set_console_log_instance, mars_xlog_set_level, mars_xlog_set_level_instance,
+    mars_xlog_set_max_alive_duration, mars_xlog_set_max_alive_duration_instance,
+    mars_xlog_set_max_file_size, mars_xlog_set_max_file_size_instance, mars_xlog_set_mode,
+    mars_xlog_set_mode_instance, mars_xlog_signal_flush, mars_xlog_signal_flush_all,
+    mars_xlog_signal_flush_instance, mars_xlog_write, mars_xlog_write_instance, MarsXLogConfig,
+    MARS_XLOG_ERR_APPENDER, MARS_XLOG_ERR_BAD_COMPRESS, MARS_XLOG_ERR_BAD_MODE,
+    MARS_XLOG_ERR_EMPTY_LOG_DIR, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE,
+    MARS_XLOG_ERR_NULL_CONFIG, MARS_XLOG_ERR_NULL_OUT, MARS_XLOG_OK,
 };
 
 fn serial() -> MutexGuard<'static, ()> {
@@ -207,10 +208,10 @@ fn the_whole_abi_runs_over_one_appender() {
         MARS_XLOG_ERR_NULL_OUT
     );
 
-    mars_xlog_flush();
-    mars_xlog_flush_sync();
-    mars_xlog_flush_instance(0, 0);
-    mars_xlog_flush_instance(0, 1);
+    mars_xlog_signal_flush();
+    mars_xlog_flush_now();
+    mars_xlog_signal_flush_instance(0);
+    mars_xlog_flush_now_instance(0);
     mars_xlog_close();
     // closed: there is no current file any more
     let mut path = vec![0u8; 512];
@@ -252,7 +253,7 @@ fn instances_are_created_addressed_and_released() {
     mars_xlog_set_level_instance(handle, 3);
     assert_eq!(mars_xlog_get_level(handle), 3);
     mars_xlog_set_mode_instance(handle, 0);
-    mars_xlog_flush_instance(handle, 1);
+    mars_xlog_flush_now_instance(handle);
     unsafe {
         mars_xlog_release_instance(prefix.as_ptr());
     }
@@ -296,9 +297,9 @@ fn the_void_symbols_survive_a_closed_appender() {
             std::ptr::null(),
         );
     }
-    mars_xlog_flush();
-    mars_xlog_flush_sync();
-    mars_xlog_flush_instance(0, 1);
+    mars_xlog_signal_flush();
+    mars_xlog_flush_now();
+    mars_xlog_flush_now_instance(0);
     mars_xlog_close();
     mars_xlog_set_level(2);
     mars_xlog_set_level_instance(0, 2);
@@ -311,10 +312,29 @@ fn the_void_symbols_survive_a_closed_appender() {
         mars_xlog_release_instance(std::ptr::null());
     }
     // the void symbols added for the rest of the C++ surface
-    mars_xlog_flush_all(1);
+    mars_xlog_signal_flush_all();
+    mars_xlog_flush_now_all();
     mars_xlog_set_console_log_instance(0, 0);
     mars_xlog_set_max_file_size_instance(0, 0);
     mars_xlog_set_max_alive_duration_instance(0, 0);
+}
+
+/// The names these calls had before the flag was split: a host built against
+/// the older header still links, and its `sync` still picks the drain.
+#[test]
+#[allow(deprecated)]
+fn the_flagged_flush_names_still_dispatch() {
+    use mars_ffi::abi::{
+        mars_xlog_flush, mars_xlog_flush_all, mars_xlog_flush_instance, mars_xlog_flush_sync,
+    };
+
+    let _guard = serial();
+    mars_xlog_flush();
+    mars_xlog_flush_sync();
+    mars_xlog_flush_instance(0, 0);
+    mars_xlog_flush_instance(0, 1);
+    mars_xlog_flush_all(0);
+    mars_xlog_flush_all(1);
 }
 
 /// `XloggerCategory::IsEnabledFor` is `level_ <= _level` on the **raw**
@@ -358,7 +378,7 @@ fn an_instance_can_be_opened_at_the_level_that_logs_nothing() {
     mars_xlog_set_console_log_instance(handle, 0);
     mars_xlog_set_max_file_size_instance(handle, 0);
     mars_xlog_set_max_alive_duration_instance(handle, 0);
-    mars_xlog_flush_all(1);
+    mars_xlog_flush_now_all();
 
     let prefix = CString::new("Mars").unwrap();
     unsafe {

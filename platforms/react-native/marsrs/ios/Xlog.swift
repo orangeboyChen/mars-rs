@@ -132,7 +132,7 @@ internal final class Xlog: NSObject {
         return Double(mars_xlog_get_level(handle))
     }
 
-    /// `mars_xlog_flush_instance`: tells the writer thread it may take what is
+    /// `mars_xlog_signal_flush_instance`: tells the writer thread it may take what is
     /// in the cache to the log file, and returns at once — nothing waits, and
     /// nothing is in the file because this returned. A record still in the cache
     /// is in a file the kernel holds, so one whose process dies keeps it; what
@@ -143,10 +143,10 @@ internal final class Xlog: NSObject {
         guard let handle = handles[namePrefix] else {
             return
         }
-        mars_xlog_flush_instance(handle, Self.writerThreadDrains)
+        mars_xlog_signal_flush_instance(handle)
     }
 
-    /// `mars_xlog_flush_instance` with the drain on this thread: the records are
+    /// `mars_xlog_flush_now_instance`: the drain is this thread's, so the records are
     /// in the log file — handed to the OS, and not left in the file's own
     /// `FILE*` — when it returns, and what it costs is the time the drain takes,
     /// on the JS thread and nowhere else.
@@ -155,7 +155,7 @@ internal final class Xlog: NSObject {
         guard let handle = handles[namePrefix] else {
             return
         }
-        mars_xlog_flush_instance(handle, Self.callingThreadDrains)
+        mars_xlog_flush_now_instance(handle)
     }
 
     /// `flushNow` off the JS thread: the same drain, on a queue of this
@@ -179,7 +179,7 @@ internal final class Xlog: NSObject {
             return
         }
         Self.flushQueue.async {
-            mars_xlog_flush_instance(handle, Self.callingThreadDrains)
+            mars_xlog_flush_now_instance(handle)
             resolve(nil)
         }
     }
@@ -256,15 +256,6 @@ internal final class Xlog: NSObject {
 
     /// What the C++ passes on, which is the appender's own 6.
     private static let defaultCompressLevel: Int32 = 0
-
-    /// `mars_xlog_flush_instance`'s `sync` when the writer thread is only told
-    /// it may drain: nothing waits, and nothing is in the file when the call
-    /// returns.
-    private static let writerThreadDrains: Int32 = 0
-
-    /// `mars_xlog_flush_instance`'s `sync` when the drain is the calling
-    /// thread's: the records are on disk when the call returns.
-    private static let callingThreadDrains: Int32 = 1
 
     /// The queue `flush` drains on, and why it is one queue and not the JS
     /// thread: a drain blocks the thread it runs on, and serial is what keeps

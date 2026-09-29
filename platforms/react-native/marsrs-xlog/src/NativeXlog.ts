@@ -37,12 +37,12 @@ export interface Spec extends TurboModule {
    * holds. */
   getLevel(namePrefix: string): number;
 
-  /** `mars_xlog_flush_instance`: tells the writer thread it may take what is in
+  /** `mars_xlog_signal_flush_instance`: tells the writer thread it may take what is in
    * the cache to the file, and returns at once — nothing waits, and nothing is
    * in the file because this returned. */
   signalFlush(namePrefix: string): void;
 
-  /** `mars_xlog_flush_instance` with the drain on the calling thread: the cache
+  /** `mars_xlog_flush_now_instance`: the drain is the calling thread's, so the cache
    * is in the log file, and the file's buffer is the OS's, when this returns. */
   flushNow(namePrefix: string): void;
 

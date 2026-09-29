@@ -8,14 +8,24 @@ layers of Mars talk to `marsrs-appender` **without** a big-bang rewrite.
 | -------------------------------- | -------------------------------------------------------------- |
 | `mars_xlog_open`                 | `mars::xlog::appender_open(const XLogConfig&)`                 |
 | `mars_xlog_write`                | `mars::xlog::XloggerWrite(...)` + `xlogger_IsEnabledFor`        |
-| `mars_xlog_flush`                | `mars::xlog::appender_flush()`                                 |
-| `mars_xlog_flush_sync`           | `mars::xlog::appender_flush_sync()`                            |
+| `mars_xlog_signal_flush`         | `mars::xlog::appender_flush()`                                 |
+| `mars_xlog_flush_now`            | `mars::xlog::appender_flush_sync()`                            |
 | `mars_xlog_close`                | `mars::xlog::appender_close()`                                 |
 | `mars_xlog_set_level`            | `xlogger_SetLevel()`                                           |
 | `mars_xlog_set_console_log`      | `mars::xlog::appender_set_console_log(bool)`                   |
 | `mars_xlog_set_max_file_size`    | `mars::xlog::appender_set_max_file_size(uint64_t)`             |
 | `mars_xlog_set_max_alive_duration` | `mars::xlog::appender_set_max_alive_duration(long)`          |
 | `mars_xlog_current_log_path`     | `mars::xlog::appender_get_current_log_path(char*, unsigned)`   |
+
+Every drain is two calls and not one carrying a flag: `mars_xlog_signal_flush`
+tells the writer thread it may drain and returns at once, and
+`mars_xlog_flush_now` drains on the calling thread, so the records are on the
+disk when it returns. The two names in the table above are the C++'s own and are
+still exported as deprecated spellings of them, and the flag the instance pair
+used to take is gone the same way — `mars_xlog_flush_instance(h, sync)` is
+`mars_xlog_signal_flush_instance(h)` or `mars_xlog_flush_now_instance(h)`, and
+`mars_xlog_flush_all(sync)` is `mars_xlog_signal_flush_all()` or
+`mars_xlog_flush_now_all()`.
 
 The header is checked in at **`include/mars_xlog.h`** (hand written, no cbindgen
 step); `tests/header_sync.rs` fails if it drifts from `src/abi.rs`.
@@ -59,7 +69,7 @@ MarsXLogConfig cfg = {
 if (mars_xlog_open(&cfg) != MARS_XLOG_OK) { /* handle */ }
 mars_xlog_set_level(MarsLevelInfo);
 mars_xlog_write(MarsLevelInfo, "tag", __FILE__, __func__, __LINE__, "hello");
-mars_xlog_flush_sync();
+mars_xlog_flush_now();
 
 char path[512];
 int n = mars_xlog_current_log_path(path, sizeof(path));   /* bytes, excl. NUL */

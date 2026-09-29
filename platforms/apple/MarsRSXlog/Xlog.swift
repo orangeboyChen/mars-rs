@@ -279,7 +279,7 @@ public final class Xlog: NSObject {
     /// kernel holds, so nothing is lost by a drain that has not happened yet.
     @objc
     public func signalFlush() {
-        withHandle { mars_xlog_flush_instance($0, 0) }
+        withHandle { mars_xlog_signal_flush_instance($0) }
     }
 
     /// Takes what is in the cache to the log file on the calling thread, and
@@ -290,7 +290,7 @@ public final class Xlog: NSObject {
     /// same thing off this thread.
     @objc
     public func flushNow() {
-        withHandle { mars_xlog_flush_instance($0, 1) }
+        withHandle { mars_xlog_flush_now_instance($0) }
     }
 
     /// [flushNow()] for a caller that can wait without holding a thread: the
@@ -310,7 +310,7 @@ public final class Xlog: NSObject {
         }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             Self.flushQueue.async {
-                mars_xlog_flush_instance(opened, 1)
+                mars_xlog_flush_now_instance(opened)
                 continuation.resume()
             }
         }

@@ -315,19 +315,37 @@ pub unsafe extern "C" fn mars_xlog_assert(
     });
 }
 
-/// `mars::xlog::appender_flush()` — asks the async writer thread to drain.
+/// The process-wide appender's drain, signalled: the writer thread is told it
+/// may take what is in the cache to the file, and this returns at once.
 ///
-/// Named for the C++ it replaces; what it does is what the port calls
-/// `appender_signal_flush`.
+/// This is `mars::xlog::appender_flush()`, under the name the port gives this
+/// call everywhere else: a caller that needs the records on the disk when it
+/// returns wants [`mars_xlog_flush_now`].
+#[no_mangle]
+pub extern "C" fn mars_xlog_signal_flush() {
+    guard((), appender_signal_flush);
+}
+
+/// The process-wide appender's drain, on the calling thread: what was in the
+/// cache is on the disk when this returns.
+///
+/// This is `mars::xlog::appender_flush_sync()` — a name that belongs to the
+/// C++, where "sync" said which mode the appender was opened in and not what
+/// the call does with the thread it was called on.
+#[no_mangle]
+pub extern "C" fn mars_xlog_flush_now() {
+    guard((), appender_flush_now);
+}
+
+/// `mars::xlog::appender_flush()` — the name [`mars_xlog_signal_flush`] had.
+#[deprecated(note = "renamed `mars_xlog_signal_flush`")]
 #[no_mangle]
 pub extern "C" fn mars_xlog_flush() {
     guard((), appender_signal_flush);
 }
 
-/// `mars::xlog::appender_flush_sync()` — flushes and waits for the drain.
-///
-/// Named for the C++ it replaces; what it does is what the port calls
-/// `appender_flush_now`.
+/// `mars::xlog::appender_flush_sync()` — the name [`mars_xlog_flush_now`] had.
+#[deprecated(note = "renamed `mars_xlog_flush_now`")]
 #[no_mangle]
 pub extern "C" fn mars_xlog_flush_sync() {
     guard((), appender_flush_now);
@@ -801,7 +819,49 @@ pub extern "C" fn mars_xlog_set_mode_instance(instance: c_longlong, mode: c_int)
     });
 }
 
-/// Drains an instance (`sync` non-zero waits for the write to complete).
+/// Drains one instance, signalled: the writer thread is told it may take what
+/// is in the cache to the file, and this returns at once.
+///
+/// The instances matter: each of them owns an appender of its own, so a caller
+/// that asks the process-wide appender alone misses their records. `0` is the
+/// process-wide appender, and a handle that is not one drains nothing.
+#[no_mangle]
+pub extern "C" fn mars_xlog_signal_flush_instance(instance: c_longlong) {
+    let _ = guard(0, || {
+        signal_flush(instance as u64);
+        0
+    });
+}
+
+/// Drains one instance on the calling thread: that instance's records are on
+/// the disk when this returns, which [`mars_xlog_signal_flush_instance`] does
+/// not promise. `0` is the process-wide appender.
+#[no_mangle]
+pub extern "C" fn mars_xlog_flush_now_instance(instance: c_longlong) {
+    let _ = guard(0, || {
+        flush_now(instance as u64);
+        0
+    });
+}
+
+/// `mars::xlog::FlushAll`, signalled: the process-wide appender *and* every
+/// instance is told its writer thread may drain, and this returns at once.
+#[no_mangle]
+pub extern "C" fn mars_xlog_signal_flush_all() {
+    guard((), signal_flush_all);
+}
+
+/// `mars::xlog::FlushAll` on the calling thread: every appender of this process
+/// has its records on the disk when this returns.
+#[no_mangle]
+pub extern "C" fn mars_xlog_flush_now_all() {
+    guard((), flush_now_all);
+}
+
+/// The name [`mars_xlog_signal_flush_instance`] (a `sync` of `0`) and
+/// [`mars_xlog_flush_now_instance`] (a `sync` that is not `0`) had, and the one
+/// place a C caller still has to say which of the two it means with a flag.
+#[deprecated(note = "renamed `mars_xlog_signal_flush_instance` / `mars_xlog_flush_now_instance`")]
 #[no_mangle]
 pub extern "C" fn mars_xlog_flush_instance(instance: c_longlong, sync: c_int) {
     let _ = guard(0, || {
@@ -814,12 +874,9 @@ pub extern "C" fn mars_xlog_flush_instance(instance: c_longlong, sync: c_int) {
     });
 }
 
-/// `mars::xlog::FlushAll` — drains the process-wide appender *and* every
-/// instance (`sync` non-zero waits for the write to complete).
-///
-/// The instances matter: each of them owns an appender of its own, so a caller
-/// that flushes before collecting logs or suspending misses their records
-/// otherwise.
+/// The name [`mars_xlog_signal_flush_all`] (a `sync` of `0`) and
+/// [`mars_xlog_flush_now_all`] (a `sync` that is not `0`) had.
+#[deprecated(note = "renamed `mars_xlog_signal_flush_all` / `mars_xlog_flush_now_all`")]
 #[no_mangle]
 pub extern "C" fn mars_xlog_flush_all(sync: c_int) {
     guard((), || {

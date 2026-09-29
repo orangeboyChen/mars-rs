@@ -293,7 +293,7 @@ export class Xlog {
     this.log(LogLevel.fatal, tag, message);
   }
 
-  /** `mars_xlog_flush_instance`: tells the writer thread it may take what is in
+  /** `mars_xlog_signal_flush_instance`: tells the writer thread it may take what is in
    * the cache to the file, and returns at once. Nothing waits, and nothing is
    * in the file because this returned — a record still in the cache is in a file
    * the kernel holds, so one whose process dies keeps it. What it is for is a
@@ -307,7 +307,7 @@ export class Xlog {
     NativeXlog.signalFlush(this.namePrefix);
   }
 
-  /** `mars_xlog_flush_instance` with the drain on the calling thread: the
+  /** `mars_xlog_flush_now_instance`: the drain is the calling thread's, so the
    * records are in the log file — handed to the OS, and not left in the file's
    * own `FILE*` — when it returns, and what that costs is the time the drain
    * takes, on the thread that asked for it. It answers no `Promise` and takes

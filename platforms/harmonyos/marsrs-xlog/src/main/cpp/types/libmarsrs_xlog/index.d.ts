@@ -56,14 +56,14 @@ export const isLoggable: (namePrefix: string, level: number) => boolean;
 /** `mars_xlog_write_instance`: writes `message` at `level`, tagged `tag`. */
 export const log: (namePrefix: string, level: number, tag: string, message: string) => void;
 
-/** `mars_xlog_flush_instance`, signalled: tells the writer thread it may take
- * what is in the cache to the file, and returns at once. Nothing is guaranteed
- * to have been written when it does. */
+/** `mars_xlog_signal_flush_instance`: tells the writer thread it may take what
+ * is in the cache to the file, and returns at once. Nothing is guaranteed to
+ * have been written when it does. */
 export const signalFlush: (namePrefix: string) => void;
 
-/** `mars_xlog_flush_instance`, waited for: takes what is in the cache to the
- * file on the calling thread, so the records are on disk when it returns. It
- * answers no promise — the wait is the call. */
+/** `mars_xlog_flush_now_instance`: takes what is in the cache to the file on
+ * the calling thread, so the records are on disk when it returns. It answers
+ * no promise — the wait is the call. */
 export const flushNow: (namePrefix: string) => void;
 
 /** `mars_xlog_release_instance`: closes the appender `open` made. */

@@ -189,9 +189,9 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   result(@(mars_xlog_is_enabled_for(instance, level) != 0));
 }
 
-/// `mars_xlog_flush_instance` with the drain on the calling thread: what the
-/// Dart caller awaiting `flush()` is waiting for, and what the writer thread
-/// that `signalFlush:` only wakes is not.
+/// `mars_xlog_flush_now_instance`: the drain is on the thread this is called
+/// on, which is what the Dart caller awaiting `flush()` is waiting for, and
+/// what the writer thread that `signalFlush:` only wakes is not.
 - (void)flush:(FlutterMethodCall *)call result:(FlutterResult)result {
   long long instance = [self instanceForCall:call result:result];
   if (instance == 0) {
@@ -201,20 +201,20 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   // platform channel is answered on the app's main thread, and a drain blocks
   // the thread it runs on.
   dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-    mars_xlog_flush_instance(instance, 1);
+    mars_xlog_flush_now_instance(instance);
     dispatch_async(dispatch_get_main_queue(), ^{
       result(nil);
     });
   });
 }
 
-/// `mars_xlog_flush_instance` with the drain left to the writer thread.
+/// `mars_xlog_signal_flush_instance`: the drain is the writer thread's.
 - (void)signalFlush:(FlutterMethodCall *)call result:(FlutterResult)result {
   long long instance = [self instanceForCall:call result:result];
   if (instance == 0) {
     return;
   }
-  mars_xlog_flush_instance(instance, 0);
+  mars_xlog_signal_flush_instance(instance);
   result(nil);
 }
 
