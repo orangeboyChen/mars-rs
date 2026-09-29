@@ -74,6 +74,15 @@ public actual class Xlog actual constructor(config: XlogConfig) {
             currentMode = value
         }
 
+    public actual val currentLogPath: String?
+        get() = if (isOpen) getCurrentLogPath(handle) else null
+
+    public actual fun logFiles(daysAgo: Long): List<String> =
+        if (isOpen) logFiles(handle, daysAgo).toList() else emptyList()
+
+    public actual fun logFileNames(daysAgo: Long): List<String> =
+        if (isOpen) logFileNames(handle, daysAgo).toList() else emptyList()
+
     public actual fun isLoggable(level: LogLevel): Boolean =
         isOpen && LogLevel.of(getLogLevel(handle)).isEnabledFor(level)
 
@@ -153,6 +162,12 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     private external fun appenderFlushNow(handle: Long)
 
     private external fun getLogLevel(handle: Long): Int
+
+    private external fun getCurrentLogPath(handle: Long): String?
+
+    private external fun logFiles(handle: Long, timespan: Long): Array<String>
+
+    private external fun logFileNames(handle: Long, timespan: Long): Array<String>
 
     private external fun setLogLevel(handle: Long, level: Int)
 

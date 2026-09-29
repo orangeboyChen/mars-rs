@@ -2,7 +2,10 @@ package io.github.orangeboychen.marsrs.xlog
 
 import io.github.orangeboychen.marsrs.xlog.ffi.MarsXLogConfig
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_flush_now_instance
+import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_current_log_path_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_get_level
+import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_getfilepath_from_timespan_instance
+import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_make_logfile_name_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_is_enabled_for
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_new_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_release_instance
@@ -13,11 +16,15 @@ import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_max_alive_duration_
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_max_file_size_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_mode_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_write_instance
+import kotlinx.cinterop.ByteVar
+import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.alloc
+import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.cstr
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
+import kotlinx.cinterop.toKString
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -80,6 +87,46 @@ public actual class Xlog actual constructor(config: XlogConfig) {
             currentMode = value
         }
 
+    /**
+     * What `read` writes into the buffer it is handed; `null` when it wrote
+     * nothing, which is a negative code or a path of no length.
+     */
+    private fun pathAt(read: (CPointer<ByteVar>, UInt) -> Int): String? = memScoped {
+        val buffer = allocArray<ByteVar>(PATH_BUFFER_SIZE)
+        if (read(buffer, PATH_BUFFER_SIZE.toUInt()) > 0) buffer.toKString() else null
+    }
+
+    /**
+     * The paths of one day, walked index by index until the symbol answers that
+     * there is nothing at that index: the list the C++ fills a `std::vector`
+     * with, asked one at a time.
+     */
+    private fun dayPaths(daysAgo: Long, read: (UInt, CPointer<ByteVar>, UInt) -> Int): List<String> {
+        val walked = mutableListOf<String>()
+        var index = 0u
+        while (true) {
+            val found = pathAt { out, len -> read(index, out, len) } ?: break
+            walked.add(found)
+            index++
+        }
+        return walked
+    }
+
+    public actual val currentLogPath: String?
+        get() = if (isOpen) pathAt { out, len ->
+            mars_xlog_current_log_path_instance(handle, out, len)
+        } else null
+
+    public actual fun logFiles(daysAgo: Long): List<String> =
+        if (isOpen) dayPaths(daysAgo) { index, out, len ->
+            mars_xlog_getfilepath_from_timespan_instance(handle, daysAgo.toInt(), index, out, len)
+        } else emptyList()
+
+    public actual fun logFileNames(daysAgo: Long): List<String> =
+        if (isOpen) dayPaths(daysAgo) { index, out, len ->
+            mars_xlog_make_logfile_name_instance(handle, daysAgo.toInt(), index, out, len)
+        } else emptyList()
+
     public actual fun isLoggable(level: LogLevel): Boolean =
         isOpen && mars_xlog_is_enabled_for(handle, level.ordinal) != DISABLED
 
@@ -139,6 +186,11 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     }
 
     public actual companion object {
+        /** What a path symbol writes into: a path never fills it, and a symbol
+         * that answers a length rather than a pointer is the C ABI's way of
+         * saying the caller decides how much it can hold. */
+        const val PATH_BUFFER_SIZE = 1024
+
         /**
          * Opens an appender of its own: the constructor of this actual, under the
          * one name every platform of the port opens one with.
