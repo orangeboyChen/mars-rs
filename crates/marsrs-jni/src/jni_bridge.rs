@@ -314,6 +314,7 @@ fn config_from_java(env: &mut Env<'_>, config: &JObject<'_>) -> Option<(XLogConf
         return None;
     }
     let cachedir = string_field(env, config, jni_str!("cachedir"));
+    let compress_level = int_field(env, config, jni_str!("compresslevel"));
 
     Some((
         XLogConfig {
@@ -322,7 +323,17 @@ fn config_from_java(env: &mut Env<'_>, config: &JObject<'_>) -> Option<(XLogConf
             nameprefix: string_field(env, config, jni_str!("nameprefix")),
             pub_key: string_field(env, config, jni_str!("pubkey")),
             compress_mode,
-            compress_level: int_field(env, config, jni_str!("compresslevel")),
+            // `<= 0` is "keep the appender's own", the way `mars_xlog.h` reads
+            // the field and the way `marsrs-ffi` reads it: `0` is what a
+            // Kotlin `XlogConfig` no app has touched carries, and handing that
+            // `0` to the buffer is not the same thing — zstd reads it as its
+            // own default of 3, so an Android log in zstd came out at 3 while
+            // the same config through the C ABI came out at 6.
+            compress_level: if compress_level > 0 {
+                compress_level
+            } else {
+                XLogConfig::default().compress_level
+            },
             cachedir: if cachedir.is_empty() {
                 None
             } else {
