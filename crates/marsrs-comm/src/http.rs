@@ -521,6 +521,12 @@ impl HeaderFields {
     /// The timeout is read from `Keep-Alive`, and only when there is a
     /// `Connection` field at all. The C++ skips `sizeof(const char*)` — 8 —
     /// characters to get past `timeout=`, which is how long `timeout=` is.
+    ///
+    /// It skips them from the start of the token and not from where it
+    /// found `timeout=` in it, so upstream only reads a timeout that starts
+    /// a token: `max=100, timeout=15` is the default there and `15` here.
+    /// Reading it wherever it sits is the reading kept, since a peer that
+    /// wrote one there meant one.
     pub fn keep_alive_timeout(&self) -> u32 {
         if self.get(CONNECTION).is_none() {
             return DEFAULT_KEEP_ALIVE_TIMEOUT;
@@ -838,9 +844,7 @@ impl Parser {
     /// an end.
     pub fn recv(&mut self, bytes: &[u8]) -> RecvStatus {
         if bytes.is_empty() {
-            if self.fields.is_connection_close() && self.status == RecvStatus::Body {
-                self.status = RecvStatus::End;
-            }
+            self.peer_hung_up();
             return self.status;
         }
         self.buffer.extend_from_slice(bytes);
@@ -849,12 +853,28 @@ impl Parser {
 
     /// `Recv(buffer, length, nullptr, true)` — the same, stopping as soon
     /// as the head is whole.
+    ///
+    /// A read of nothing ends it too: `only_parse_header` decides how much
+    /// of an answer is parsed and not whether the peer hanging up is one,
+    /// which is why the C++ answers `kEnd` out of the same branch whatever
+    /// it was asked for (`http.cc:714`).
     pub fn recv_header_only(&mut self, bytes: &[u8]) -> RecvStatus {
         if bytes.is_empty() {
+            self.peer_hung_up();
             return self.status;
         }
         self.buffer.extend_from_slice(bytes);
         self.run(true)
+    }
+
+    /// A read of nothing on a `Connection: close` whose body is being read
+    /// is the end of the answer: the body is however many bytes came in
+    /// before the peer hung up, and there is no `Content-Length` to say
+    /// when it stops otherwise.
+    fn peer_hung_up(&mut self) {
+        if self.fields.is_connection_close() && self.status == RecvStatus::Body {
+            self.status = RecvStatus::End;
+        }
     }
 
     /// `RecvStatus()`.
@@ -1142,15 +1162,40 @@ fn to_status_code(text: &str) -> i32 {
 
 /// What `strtol` reads out of a token: the number at the front of it, and
 /// `0` when there is none.
+///
+/// Two things the C++ gets from `strtol` and a plain parse does not, and
+/// both are reachable from a `Range` field — the whitespace `strtol` skips
+/// before the number (`bytes=0- 1024`) and the top of the `long` it answers
+/// when the number does not fit in one, which is `0` in a parse that fails.
 fn to_i64(text: &str) -> i64 {
+    let text = text.trim_start_matches([' ', '\t', '\n', '\x0b', '\x0c', '\r']);
     let (sign, rest) = match text.as_bytes().first() {
         Some(b'-') => (-1, &text[1..]),
         Some(b'+') => (1, &text[1..]),
         _ => (1, text),
     };
     let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    let value = digits.parse::<i64>().unwrap_or(0);
-    sign * value
+    if digits.is_empty() {
+        return 0;
+    }
+    match digits.parse::<i64>() {
+        Ok(value) => {
+            if sign < 0 {
+                -value
+            } else {
+                value
+            }
+        }
+        // `LONG_MAX` and `LONG_MIN`, and not `0`: a range the peer wrote
+        // past the end of a `long` is one it meant to reach the end with
+        Err(_) => {
+            if sign < 0 {
+                i64::MIN
+            } else {
+                i64::MAX
+            }
+        }
+    }
 }
 
 /// What `strtoull` reads out of a token: the digits at the front of it.
@@ -1415,6 +1460,11 @@ mod tests {
         assert_eq!(fields.keep_alive_timeout(), DEFAULT_KEEP_ALIVE_TIMEOUT);
         fields.set(KEEP_ALIVE, "");
         assert_eq!(fields.keep_alive_timeout(), DEFAULT_KEEP_ALIVE_TIMEOUT);
+
+        // a timeout that does not start its token: the C++ reads the
+        // default here, and the port reads the timeout
+        fields.set(KEEP_ALIVE, "max=100, timeout=15");
+        assert_eq!(fields.keep_alive_timeout(), 15);
     }
 
     #[test]
@@ -1428,6 +1478,14 @@ mod tests {
         assert_eq!(fields.range(), Some((0, 100)));
         fields.set(RANGE, "0-1024");
         assert_eq!(fields.range(), None, "not `bytes=`");
+
+        // what `strtol` reads, and a plain parse does not
+        fields.set(RANGE, "bytes=0- 1024");
+        assert_eq!(fields.range(), Some((0, 1024)));
+        fields.set(RANGE, "bytes=0-99999999999999999999");
+        assert_eq!(fields.range(), Some((0, i64::MAX)));
+        fields.set(RANGE, "bytes=0--99999999999999999999");
+        assert_eq!(fields.range(), Some((0, i64::MIN)));
 
         let content_range = ContentRange {
             start: 0,
@@ -1664,6 +1722,16 @@ mod tests {
         // a body with no `Content-Length` is however much came before
         // the close
         assert_eq!(parser.recv(b""), RecvStatus::End);
+    }
+
+    #[test]
+    fn a_link_the_peer_hung_up_on_ends_a_head_read_without_its_body() {
+        let mut parser = Parser::new();
+        assert_eq!(
+            parser.recv_header_only(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nhello"),
+            RecvStatus::Body
+        );
+        assert_eq!(parser.recv_header_only(b""), RecvStatus::End);
     }
 
     #[test]
