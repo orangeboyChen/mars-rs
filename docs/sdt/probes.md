@@ -42,9 +42,15 @@ so it is left out of the report and the run goes on behind it.
 | the check | Rust | Swift | shared Kotlin | Android | C |
 |---|---|---|---|---|---|
 | ping | `Answer::Ping { error_code, rtt, status }` | `.ping(errorCode:rtt:lossRate:averageRTT:)` | `ProbeAnswer.Ping` | `SdtLogic.Answer.ping(…)` | `MarsSdtPing` |
-| dns | `Answer::Dns { error_code, rtt, ips }` | `.dns(errorCode:rtt:addresses:)` | `ProbeAnswer.Dns` | `SdtLogic.Answer.dns(…)` | `MarsSdtDns` |
-| tcp | `Answer::Tcp { sent, received, is_noop_resp, rtt }` | `.tcp(errorCode:rtt:noop:)` | `ProbeAnswer.Tcp` | `SdtLogic.Answer.tcp(…)` | `MarsSdtTcp` |
+| dns | `Answer::Dns { error_code, rtt, local_dns, ips }` | `.dns(errorCode:rtt:addresses:)` | `ProbeAnswer.Dns` | `SdtLogic.Answer.dns(…)` | `MarsSdtDns` |
+| tcp | `Answer::Tcp { sent, received, is_noop_resp, conntime, rtt }` | `.tcp(errorCode:rtt:noop:)` | `ProbeAnswer.Tcp` | `SdtLogic.Answer.tcp(…)` | `MarsSdtTcp` |
 | http | `Answer::Http { error_code, status_code, rtt }` | `.http(errorCode:rtt:statusCode:)` | `ProbeAnswer.Http` | `SdtLogic.Answer.http(…)` | `MarsSdtHttp` |
+
+The four are one struct in C — `MarsSdtAnswer` — and the `kind` in it is which
+one it is: the names of the last column are the four `MarsSdtKind` values and
+not four types. Two of the Rust's fields are the Rust's alone — `local_dns` and
+`conntime`, which no other seam carries a field for — so a probe that answers on
+one of them leaves the report's `localDns` empty and its `conntime` at `0`.
 
 An answer of a probe that is not the one asked is not the answer to it: what the
 report records is what came back for the check that was run.

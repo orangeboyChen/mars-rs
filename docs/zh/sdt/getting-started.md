@@ -54,8 +54,11 @@ let shortlink = CheckIPPorts::new();
 let mut ask = Ask::new(|query| match query {
     Query::Dns { domain, .. } => Answer::Dns {
         error_code: 0, rtt: 12, ips: vec!["1.2.3.4".to_owned()],
+        local_dns: String::new(),
     },
-    Query::Tcp { .. } => Answer::Tcp { sent: 0, received: 0, is_noop_resp: true, rtt: 30 },
+    Query::Tcp { .. } => Answer::Tcp {
+        sent: 0, received: 0, is_noop_resp: true, conntime: 0, rtt: 30,
+    },
     Query::Http { .. } => Answer::Http { error_code: 0, status_code: 200, rtt: 40 },
     Query::Ping { .. } => Answer::Ping { error_code: 0, rtt: 20, status: None },
 });

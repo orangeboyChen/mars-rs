@@ -37,9 +37,14 @@ App 要网络，App 回答什么，报告就记下什么：
 | 检查项 | Rust | Swift | 共享 Kotlin | Android | C |
 |---|---|---|---|---|---|
 | ping | `Answer::Ping { error_code, rtt, status }` | `.ping(errorCode:rtt:lossRate:averageRTT:)` | `ProbeAnswer.Ping` | `SdtLogic.Answer.ping(…)` | `MarsSdtPing` |
-| dns | `Answer::Dns { error_code, rtt, ips }` | `.dns(errorCode:rtt:addresses:)` | `ProbeAnswer.Dns` | `SdtLogic.Answer.dns(…)` | `MarsSdtDns` |
-| tcp | `Answer::Tcp { sent, received, is_noop_resp, rtt }` | `.tcp(errorCode:rtt:noop:)` | `ProbeAnswer.Tcp` | `SdtLogic.Answer.tcp(…)` | `MarsSdtTcp` |
+| dns | `Answer::Dns { error_code, rtt, local_dns, ips }` | `.dns(errorCode:rtt:addresses:)` | `ProbeAnswer.Dns` | `SdtLogic.Answer.dns(…)` | `MarsSdtDns` |
+| tcp | `Answer::Tcp { sent, received, is_noop_resp, conntime, rtt }` | `.tcp(errorCode:rtt:noop:)` | `ProbeAnswer.Tcp` | `SdtLogic.Answer.tcp(…)` | `MarsSdtTcp` |
 | http | `Answer::Http { error_code, status_code, rtt }` | `.http(errorCode:rtt:statusCode:)` | `ProbeAnswer.Http` | `SdtLogic.Answer.http(…)` | `MarsSdtHttp` |
+
+在 C 里这四个是一个 struct —— `MarsSdtAnswer` —— 里面的 `kind` 说明它是哪一个：
+最后一列那几个名字是 `MarsSdtKind` 的四个值，不是四个类型。Rust 那两个字段又是
+Rust 独有的 —— `local_dns` 和 `conntime`，别的 seam 都没有对应的字段 —— 所以在那些
+seam 上回答的探测，报告里的 `localDns` 是空的，`conntime` 是 `0`。
 
 一个探测如果不是这一趟问的那个，它的回答就不算：报告记下的是跑起来的那一项检查
 带回来的东西。
