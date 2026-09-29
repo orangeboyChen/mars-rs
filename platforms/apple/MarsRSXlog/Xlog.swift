@@ -293,6 +293,52 @@ public final class Xlog: NSObject {
         path(of: mars_xlog_current_log_cache_path)
     }
 
+    /// `mars_xlog_getfilepath_from_timespan`: the log files of `daysAgo` days
+    /// ago that are *there* — what an app that uploads yesterday's opens. `[]`
+    /// when the directory holds none of that day's.
+    ///
+    /// This is a day of files and not the file being written: what `currentLogPath`
+    /// answers is one, and it is the process-wide appender's, while this takes
+    /// the prefix and the directory of the files it is asked about.
+    ///
+    /// - Parameters:
+    ///   - daysAgo: `0` is today, `1` yesterday, and so on.
+    ///   - prefix: what every file of that appender's starts with.
+    ///   - logDirectory: the directory those files are in.
+    @objc
+    public static func logFiles(daysAgo: Int, prefix: String, logDirectory: String) -> [String] {
+        paths { index, out, len in
+            prefix.withCString { name in
+                logDirectory.withCString { directory in
+                    mars_xlog_getfilepath_from_timespan(Int32(daysAgo), name, directory, index, out, len)
+                }
+            }
+        }
+    }
+
+    /// `mars_xlog_make_logfile_name`: the paths of the log files of `daysAgo`
+    /// days ago whether or not they are *there yet* — the name an app that is
+    /// about to write, or that is naming a file to someone else, asks for.
+    ///
+    /// A day's answer is the log-dir file and, when a cache dir is configured
+    /// and the file exists, its cache-dir twin, so this can answer two where
+    /// [`logFiles(daysAgo:prefix:logDirectory:)`] answers one.
+    ///
+    /// - Parameters:
+    ///   - daysAgo: `0` is today, `1` yesterday, and so on.
+    ///   - prefix: what every file of that appender's starts with.
+    ///   - logDirectory: the directory those files are written into.
+    @objc
+    public static func logFileNames(daysAgo: Int, prefix: String, logDirectory: String) -> [String] {
+        paths { index, out, len in
+            prefix.withCString { name in
+                logDirectory.withCString { directory in
+                    mars_xlog_make_logfile_name(Int32(daysAgo), name, directory, index, out, len)
+                }
+            }
+        }
+    }
+
     /// Opens an appender of its own: its own log directory, file name prefix,
     /// key, mode and cache file, all of them `config`'s — the one call every
     /// platform of the port opens one with, under the one name:

@@ -38,6 +38,36 @@ Those three are the ones that answer it. The rest leave the app to name the
 file itself, which is the two things it gave the config: the directory and the
 prefix, with the day in between.
 
+A whole *day* of files is what an app that uploads yesterday's asks for, and
+there are two calls for it: the files that are there, and the names the day is
+written under whether or not they are there yet.
+
+::: code-group
+
+```rust [Rust]
+appender_getfilepath_from_timespan(1, "marsrs", Path::new(log_dir))  // yesterday's, that are there
+appender_make_logfile_name(1, "marsrs", Path::new(log_dir))          // the names, whether or not
+```
+
+```swift [Swift]
+Xlog.logFiles(daysAgo: 1, prefix: "marsrs", logDirectory: logDir)
+Xlog.logFileNames(daysAgo: 1, prefix: "marsrs", logDirectory: logDir)
+```
+
+```c [C]
+char path[512];
+// index 0, 1, 2 …; a negative code — MARS_XLOG_ERR_NO_PATH — is the end of the list
+mars_xlog_getfilepath_from_timespan(1, "marsrs", log_dir, 0, path, sizeof path);
+mars_xlog_make_logfile_name(1, "marsrs", log_dir, 0, path, sizeof path);
+```
+
+:::
+
+`0` is today and `1` is yesterday. Rust and Swift answer the day's list in one
+call; the C ABI answers one index of it at a time, and the two Swift calls are
+that walk. Names answer two where files answer one when a cache dir is given and
+the file is there: the log-dir file and its twin in the cache dir.
+
 ## Async: the record may still be in the cache
 
 The default mode hands a record to a writer thread through a memory-mapped cache
