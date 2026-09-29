@@ -269,3 +269,95 @@ pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn logdir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("marsrs-jni-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn config(dir: &std::path::Path) -> XLogConfig {
+        XLogConfig {
+            logdir: dir.to_path_buf(),
+            nameprefix: "Mars".to_owned(),
+            ..XLogConfig::default()
+        }
+    }
+
+    /// Every body of an entry point is reachable without a JVM: the JNI
+    /// plumbing is the only thing a unit test cannot make, and the logic
+    /// behind it lives here.
+    #[test]
+    fn every_jni_body_is_reachable_without_a_jvm() {
+        let _guard = crate::test_lock();
+        let dir = logdir("bodies");
+
+        // open + write + flush + close, the whole lifecycle of an instance
+        let instance = new_instance_impl(config(&dir), LogLevel::Debug);
+        assert_ne!(instance, 0, "the appender took the configuration");
+        assert_eq!(
+            get_level_impl(instance as u64),
+            level_to_java(LogLevel::Debug)
+        );
+        assert!(write_impl(
+            instance as u64,
+            LogLevel::Info,
+            "Net".into(),
+            "one call"
+        ));
+
+        // the appender's own file, and the day it belongs to — asked after a
+        // drain, because a record an async appender is still holding is not in
+        // the file yet
+        flush_now_impl(instance as u64);
+        assert_eq!(
+            current_log_path_impl(instance as u64).as_deref(),
+            Some(dir.as_path()),
+            "the C++ names this question after the directory and not the file"
+        );
+        assert!(!log_files_impl(instance as u64, 0).is_empty());
+        assert!(!log_file_names_impl(instance as u64, 0).is_empty());
+
+        request_flush_impl(instance as u64);
+        flush_now_impl(instance as u64);
+        flush_impl(instance as u64, false);
+        flush_impl(instance as u64, true);
+
+        // a closed appender answers nothing, and closing twice is harmless
+        release_instance_impl("Mars");
+        release_instance_impl("Mars");
+        assert_eq!(get_level_impl(instance as u64), -1);
+        assert!(current_log_path_impl(instance as u64).is_none());
+        assert!(log_files_impl(instance as u64, 0).is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The two conversions a Java caller's numbers go through, both ways.
+    #[test]
+    fn levels_and_modes_round_trip() {
+        for level in [LogLevel::Verbose, LogLevel::Info, LogLevel::Fatal] {
+            assert_eq!(level, level_from_java(level_to_java(level)));
+        }
+        assert_eq!(
+            appender_mode_from_java(AppenderMode::Sync as jint),
+            Some(AppenderMode::Sync)
+        );
+        assert_eq!(appender_mode_from_java(99), None);
+    }
+
+    /// A panic inside a body is the default value of its answer, and not an
+    /// unwind into the JVM.
+    #[test]
+    fn a_panic_inside_a_body_is_the_default_value() {
+        let panicked: u64 = guard(|| panic!("no JVM to unwind into"));
+        assert_eq!(panicked, 0);
+        let panicked: () = guard(|| panic!("no JVM to unwind into"));
+        assert_eq!(panicked, ());
+    }
+}
