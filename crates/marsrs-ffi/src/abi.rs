@@ -8,15 +8,22 @@
 //! [`crate::cstr`].
 
 use std::borrow::Cow;
-use std::ffi::{c_char, c_int, c_longlong, c_uchar, c_uint, c_ulonglong, CString};
+use std::ffi::{c_char, c_int, c_longlong, c_uchar, c_uint, c_ulonglong};
 use std::path::Path;
-use std::sync::{Mutex, RwLock};
 
 use marsrs_appender::{
-    appender_get_current_log_path, category_set_max_alive_duration as set_max_alive_duration,
-    category_set_max_file_size as set_max_file_size, current_log_path, flush_now, flush_now_all,
-    request_flush, request_flush_all, set_console_fun, set_console_log_open, set_level,
-    xlogger_assert, AppenderMode, ConsoleFun, LogLevel, XLogConfig, XLoggerInfo,
+    XloggerHandle,
+    category_set_max_alive_duration as set_max_alive_duration,
+    category_set_max_file_size as set_max_file_size,
+    current_log_path,
+    flush_now,
+    request_flush,
+    set_console_log_open,
+    set_level,
+    AppenderMode,
+    LogLevel,
+    XLogConfig,
+    XLoggerInfo,
 };
 use marsrs_buffer::CompressMode;
 
@@ -149,189 +156,6 @@ unsafe fn to_xlog_config(cfg: &MarsXLogConfig) -> Result<XLogConfig, c_int> {
             Some(cache_dir)
         },
         cache_days: cfg.cache_days.max(0) as u32,
-    })
-}
-
-/// `xlogger_Assert` of `mars/comm/xlogger/xloggerbase.h` — the record an
-/// assert writes, with the flattened fields [`mars_xlog_write_instance`] takes
-/// instead of an `XLoggerInfo`.
-///
-/// The record is `kLevelFatal` and its body is `[ASSERT(<expression>)]`
-/// followed by `message`. No level is asked: `xloggerbase.h` writes "no level
-/// filter" over `xlogger_Assert`, and the gate the C++ has is the one in its
-/// own `xassert2` macro, not in the function — a caller that wants it has
-/// [`mars_xlog_is_enabled_for`].
-///
-/// `tag`, `filename`, `func_name`, `expression` and `message` may be null;
-/// null and invalid UTF-8 become an empty string.
-///
-/// # Safety
-///
-/// `tag`, `filename`, `func_name`, `expression` and `message` must each be
-/// null, or a NUL-terminated C string that stays alive for the duration of the
-/// call.
-#[no_mangle]
-pub unsafe extern "C" fn mars_xlog_assert(
-    tag: *const c_char,
-    filename: *const c_char,
-    func_name: *const c_char,
-    line: c_int,
-    expression: *const c_char,
-    message: *const c_char,
-) {
-    guard((), || {
-        // SAFETY: each pointer is null-checked inside the helper and otherwise
-        // points to a caller-owned NUL-terminated string.
-        let (tag, filename, func_name, expression, message) = unsafe {
-            (
-                cstr::ptr_to_str_or_empty(tag),
-                cstr::ptr_to_str_or_empty(filename),
-                cstr::ptr_to_str_or_empty(func_name),
-                cstr::ptr_to_str_or_empty(expression),
-                cstr::ptr_to_str_or_empty(message),
-            )
-        };
-
-        let info = XLoggerInfo {
-            level: LogLevel::Fatal,
-            tag: opt_string(tag),
-            filename: opt_string(filename),
-            func_name: opt_string(func_name),
-            line,
-            pid: state::pid(),
-            tid: state::tid(),
-            maintid: state::main_tid(),
-            timeval: state::now_timeval(),
-            trace_log: 0,
-        };
-
-        let _written = xlogger_assert(Some(&info), expression, message);
-    });
-}
-
-/// `mars::xlog::TConsoleFun` as a C callback — where a console record goes
-/// instead of the built-in sink, which is stderr on every platform here.
-///
-/// The fields are the ones [`mars_xlog_write_instance`] takes, because that is all a C
-/// caller has ever been handed: the C++ keeps an `XLoggerInfo` and the header
-/// keeps the same fields one by one. The record is handed over unformatted,
-/// so what a console record looks like on the platform is the callback's
-/// decision.
-///
-/// A callback must not unwind. `extern "C"` is not an unwind boundary, so a
-/// Rust one that panics ends the process at the shim of its own definition
-/// before there is anything to catch on this side, and a C++ one that throws
-/// is undefined behaviour for the same reason. What the port can promise is
-/// narrower: the record is already on its way to the log file, so what a
-/// callback that panicked loses is the console copy of that one record.
-pub type MarsXLogConsoleFun =
-    unsafe extern "C" fn(c_int, *const c_char, *const c_char, *const c_char, c_int, *const c_char);
-
-/// `sg_console_fun` of `mars/xlog/objc/objc_console.mm`: the sink an app set
-/// through [`mars_xlog_set_console_fun`], `None` until it does.
-static CONSOLE_FUN: RwLock<Option<MarsXLogConsoleFun>> = RwLock::new(None);
-
-/// The lock [`mars_xlog_set_console_fun`] takes. It writes the callback here
-/// and the trampoline that reads it in `marsrs-appender`, and one thread
-/// writing between another thread's two writes leaves the pair crossed: a
-/// trampoline with no callback behind it takes the record and drops it
-/// instead of leaving it to stderr, and a callback with no trampoline is
-/// never called at all.
-static CONSOLE_FUN_LOCK: Mutex<()> = Mutex::new(());
-
-/// The Rust sink that stands in for the C callback: it is what
-/// `marsrs-appender` calls, and it is what hands the record over the boundary.
-///
-/// The strings are copied, because the C++ `ConsoleLog` hands its callback
-/// pointers that live at least as long as the call and a Rust `&str` borrowed
-/// from a `CString` on this stack is exactly that.
-fn console_fun(info: &XLoggerInfo, log: &str) {
-    let Some(fun) = *CONSOLE_FUN
-        .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-    else {
-        return;
-    };
-
-    let field = |value: Option<&str>| CString::new(value.unwrap_or("")).unwrap_or_default();
-    let (tag, filename, func_name) = (
-        field(info.tag.as_deref()),
-        field(info.filename.as_deref()),
-        field(info.func_name.as_deref()),
-    );
-    let log = CString::new(log).unwrap_or_default();
-
-    // SAFETY: `fun` is the callback the caller handed to
-    // `mars_xlog_set_console_fun`, and every pointer below is that of a
-    // `CString` that outlives the call.
-    unsafe {
-        fun(
-            info.level as c_int,
-            tag.as_ptr(),
-            filename.as_ptr(),
-            func_name.as_ptr(),
-            info.line,
-            log.as_ptr(),
-        );
-    }
-}
-
-/// `appender_set_console_fun` — takes the sink every console record is handed
-/// to instead of the built-in one, or takes it away again with `NULL`.
-///
-/// The C++ declares it under `#ifdef __APPLE__`, because that is where its own
-/// default sink is one an app wants to replace; the port's default sink is
-/// stderr on every platform, so there is no platform on which an app has more
-/// reason to replace it than on another.
-#[no_mangle]
-pub extern "C" fn mars_xlog_set_console_fun(fun: Option<MarsXLogConsoleFun>) {
-    guard((), || {
-        // One thread at a time, and in this order: the trampoline comes off
-        // before the callback it reads is changed, so no record can be handed
-        // to a pair that is half of one and half of the other. A record
-        // written in that window takes the built-in stderr line, which is
-        // what it would have taken with no sink set at all.
-        let _setting = CONSOLE_FUN_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        set_console_fun(None);
-        *CONSOLE_FUN
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = fun;
-        set_console_fun(fun.map(|_| console_fun as ConsoleFun));
-    });
-}
-
-/// `mars::xlog::appender_get_current_log_path(char*, unsigned int)`.
-///
-/// Copies the NUL-terminated path of the log file currently being appended to
-/// into `out`, which must have room for `len` bytes.
-///
-/// @return the number of bytes written excluding the terminating NUL, or
-/// [`MARS_XLOG_ERR_NULL_OUT`], [`MARS_XLOG_ERR_NO_SPACE`] (including `len == 0`)
-/// or [`MARS_XLOG_ERR_NO_PATH`].
-///
-/// # Safety
-///
-/// `out` must be null, or point to at least `len` writable bytes that stay alive for the duration
-/// of the call.
-#[no_mangle]
-pub unsafe extern "C" fn mars_xlog_current_log_path(out: *mut c_char, len: c_uint) -> c_int {
-    guard(MARS_XLOG_ERR_PANIC, || {
-        if out.is_null() {
-            return MARS_XLOG_ERR_NULL_OUT;
-        }
-        if len == 0 {
-            return MARS_XLOG_ERR_NO_SPACE;
-        }
-
-        let Some(path) = appender_get_current_log_path() else {
-            return MARS_XLOG_ERR_NO_PATH;
-        };
-
-        // SAFETY: `out` is non-null (checked above) and the caller promises
-        // `len` writable bytes.
-        unsafe { write_path_into(path_to_bytes(&path), out as *mut c_uchar, len) }
     })
 }
 
@@ -687,20 +511,6 @@ pub extern "C" fn mars_xlog_flush_now_instance(instance: c_longlong) {
     });
 }
 
-/// `mars::xlog::FlushAll`, signalled: the process-wide appender *and* every
-/// instance is told its writer thread may drain, and this returns at once.
-#[no_mangle]
-pub extern "C" fn mars_xlog_request_flush_all() {
-    guard((), request_flush_all);
-}
-
-/// `mars::xlog::FlushAll` on the calling thread: every appender of this process
-/// has its records on the disk when this returns.
-#[no_mangle]
-pub extern "C" fn mars_xlog_flush_now_all() {
-    guard((), flush_now_all);
-}
-
 /// `mars::xlog::SetConsoleLogOpen` for an instance (`0` = the default logger).
 #[no_mangle]
 pub extern "C" fn mars_xlog_set_console_log_instance(instance: c_longlong, open: c_int) {
@@ -724,61 +534,6 @@ pub extern "C" fn mars_xlog_set_max_alive_duration_instance(
     });
 }
 
-/// The cache directory of an instance; see [`mars_xlog_current_log_path`] for
-/// the buffer contract (`0` when there is none).
-///
-/// # Safety
-///
-/// `out` must be null, or point to at least `len` writable bytes that stay alive for the duration
-/// of the call.
-#[no_mangle]
-pub unsafe extern "C" fn mars_xlog_current_log_cache_path(out: *mut c_uchar, len: c_uint) -> c_int {
-    guard(MARS_XLOG_ERR_PANIC, || {
-        if out.is_null() {
-            return MARS_XLOG_ERR_NULL_OUT;
-        }
-        let Some(path) = marsrs_appender::appender_get_current_log_cache_path() else {
-            return MARS_XLOG_ERR_NO_PATH;
-        };
-        // SAFETY: the caller's buffer contract is the same as for
-        // `mars_xlog_current_log_path`.
-        unsafe { write_path_into(path.as_os_str().as_encoded_bytes().to_vec(), out, len) }
-    })
-}
-
-/// `mars::xlog::appender_oneshot_flush` — drains the cache files another
-/// process left behind, without opening an appender.
-///
-/// This is the "another process died with a full cache" recovery path. It
-/// walks `<prefix>.mmap3` and the `<prefix>_<n>.mmap3` slots next to it and
-/// leaves the ones a live writer still holds alone: reading a cache file
-/// mid-write and unlinking it loses every record that writer buffers
-/// afterwards.
-///
-/// @return the `TFileIOAction` the recovery ended in — one of
-/// `kActionNone` (0) … `kActionRemoveFailed` (7) — or a negative
-/// `MARS_XLOG_ERR_*` code when `config` is unusable.
-///
-/// # Safety
-///
-/// `config` must be null, or point to an initialised `MarsXLogConfig` that stays alive for the
-/// duration of the call; every `char*` in it must be null or a NUL-terminated string.
-#[no_mangle]
-pub unsafe extern "C" fn mars_xlog_oneshot_flush(config: *const MarsXLogConfig) -> c_int {
-    guard(MARS_XLOG_ERR_PANIC, || {
-        // SAFETY: null-checked inside `ptr_to_ref`.
-        let Some(cfg) = (unsafe { cstr::ptr_to_ref(config) }) else {
-            return MARS_XLOG_ERR_NULL_CONFIG;
-        };
-        // SAFETY: `cfg` is the caller's valid config, as above.
-        let rust_config = match unsafe { to_xlog_config(cfg) } {
-            Ok(config) => config,
-            Err(code) => return code,
-        };
-        marsrs_appender::appender_oneshot_flush(&rust_config) as c_int
-    })
-}
-
 /// `mars::xlog::appender_make_logfile_name` — the log file *name* for the day
 /// `timespan` days ago (0 = today), whether or not it exists yet.
 ///
@@ -796,24 +551,15 @@ pub unsafe extern "C" fn mars_xlog_oneshot_flush(config: *const MarsXLogConfig) 
 /// or point to at least `len` writable bytes; all of them stay alive for the duration of the
 /// call.
 #[no_mangle]
-pub unsafe extern "C" fn mars_xlog_make_logfile_name(
+pub unsafe extern "C" fn mars_xlog_make_logfile_name_instance(
+    instance: c_longlong,
     timespan: c_int,
-    prefix: *const c_char,
-    log_dir: *const c_char,
     index: c_uint,
     out: *mut c_char,
     len: c_uint,
 ) -> c_int {
     guard(MARS_XLOG_ERR_PANIC, || {
-        // SAFETY: both pointers are null-checked inside the helpers.
-        let (prefix, log_dir) = unsafe {
-            (
-                cstr::ptr_to_str_or_empty(prefix),
-                cstr::ptr_to_path_buf(log_dir),
-            )
-        };
-        let paths =
-            marsrs_appender::appender_make_logfile_name(i64::from(timespan), prefix, &log_dir);
+        let paths = marsrs_appender::current_log_file_names(instance as XloggerHandle, i64::from(timespan));
         // SAFETY: `out`/`len` are checked inside `path_at`.
         unsafe { path_at(&paths, index, out, len) }
     })
@@ -831,27 +577,15 @@ pub unsafe extern "C" fn mars_xlog_make_logfile_name(
 /// or point to at least `len` writable bytes; all of them stay alive for the duration of the
 /// call.
 #[no_mangle]
-pub unsafe extern "C" fn mars_xlog_getfilepath_from_timespan(
+pub unsafe extern "C" fn mars_xlog_getfilepath_from_timespan_instance(
+    instance: c_longlong,
     timespan: c_int,
-    prefix: *const c_char,
-    log_dir: *const c_char,
     index: c_uint,
     out: *mut c_char,
     len: c_uint,
 ) -> c_int {
     guard(MARS_XLOG_ERR_PANIC, || {
-        // SAFETY: both pointers are null-checked inside the helpers.
-        let (prefix, log_dir) = unsafe {
-            (
-                cstr::ptr_to_str_or_empty(prefix),
-                cstr::ptr_to_path_buf(log_dir),
-            )
-        };
-        let paths = marsrs_appender::appender_getfilepath_from_timespan(
-            i64::from(timespan),
-            prefix,
-            &log_dir,
-        );
+        let paths = marsrs_appender::current_log_files(instance as XloggerHandle, i64::from(timespan));
         // SAFETY: `out`/`len` are checked inside `path_at`.
         unsafe { path_at(&paths, index, out, len) }
     })

@@ -94,11 +94,15 @@ pub mod stn;
 // Rust — not a thing a C caller is offered a handle for.
 #[cfg(feature = "xlog")]
 pub use abi::{
-    mars_xlog_assert, mars_xlog_current_log_path, mars_xlog_flush_now_all,
-    mars_xlog_flush_now_instance, mars_xlog_request_flush_all, mars_xlog_request_flush_instance,
-    mars_xlog_set_console_fun, mars_xlog_set_console_log_instance, mars_xlog_set_level_instance,
-    mars_xlog_set_max_alive_duration_instance, mars_xlog_set_max_file_size_instance,
-    mars_xlog_set_mode_instance, mars_xlog_write_instance, MarsXLogConfig, MarsXLogConsoleFun,
+    mars_xlog_flush_now_instance,
+    mars_xlog_request_flush_instance,
+    mars_xlog_set_console_log_instance,
+    mars_xlog_set_level_instance,
+    mars_xlog_set_max_alive_duration_instance,
+    mars_xlog_set_max_file_size_instance,
+    mars_xlog_set_mode_instance,
+    mars_xlog_write_instance,
+    MarsXLogConfig,
 };
 #[cfg(feature = "xlog")]
 pub use error::{

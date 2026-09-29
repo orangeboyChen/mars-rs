@@ -6,20 +6,20 @@
 //! serialise on [`LOCK`].
 
 use std::ffi::CString;
-use std::os::raw::{c_char, c_int, c_uint};
+use std::os::raw::c_int;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_ffi::abi::{
-    mars_xlog_current_log_cache_path, mars_xlog_current_log_path,
-    mars_xlog_current_log_path_instance, mars_xlog_flush_now_all, mars_xlog_flush_now_instance,
-    mars_xlog_get_instance, mars_xlog_get_level, mars_xlog_getfilepath_from_timespan,
-    mars_xlog_is_enabled_for, mars_xlog_make_logfile_name, mars_xlog_new_instance,
-    mars_xlog_oneshot_flush, mars_xlog_release_instance, mars_xlog_request_flush_all,
-    mars_xlog_request_flush_instance, mars_xlog_set_console_log_instance,
-    mars_xlog_set_level_instance, mars_xlog_set_max_alive_duration_instance,
-    mars_xlog_set_max_file_size_instance, mars_xlog_set_mode_instance, mars_xlog_write_instance,
-    MarsXLogConfig, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_CONFIG,
-    MARS_XLOG_ERR_NULL_OUT,
+    mars_xlog_flush_now_instance,
+    mars_xlog_get_instance,
+    mars_xlog_get_level,
+    mars_xlog_is_enabled_for,
+    mars_xlog_new_instance,
+    mars_xlog_release_instance,
+    mars_xlog_set_level_instance,
+    mars_xlog_set_mode_instance,
+    mars_xlog_write_instance,
+    MarsXLogConfig,
 };
 
 fn serial() -> MutexGuard<'static, ()> {
@@ -118,114 +118,6 @@ fn the_level_is_one_store_whatever_the_question_is() {
 }
 
 #[test]
-fn the_whole_abi_runs_over_one_appender() {
-    let _guard = serial();
-    let dir = tempdir("surface");
-    let config = make_config(&dir, 0, 0);
-    let handle = unsafe { mars_xlog_new_instance(&config.raw, 0) };
-    assert_ne!(handle, 0);
-    // a prefix is one appender, so a second open answers that one's handle
-    assert_eq!(unsafe { mars_xlog_new_instance(&config.raw, 0) }, handle);
-
-    let tag = CString::new("Net").unwrap();
-    let message = CString::new("hello").unwrap();
-    // null pieces are allowed
-    unsafe {
-        mars_xlog_write_instance(
-            handle,
-            2,
-            tag.as_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            message.as_ptr(),
-        );
-    }
-    unsafe {
-        mars_xlog_write_instance(
-            handle,
-            2,
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            message.as_ptr(),
-        );
-    }
-
-    // the exact level is asserted in the (single-threaded) JNI tests: another
-    // test file can close the singleton appender under this one
-    mars_xlog_set_level_instance(0, 1);
-    let level = mars_xlog_get_level(0);
-    assert!((-1..=6).contains(&level), "unexpected level {level}");
-    let _ = mars_xlog_is_enabled_for(0, 2);
-    let _ = mars_xlog_is_enabled_for(0, 0);
-    // an unknown instance has no level
-    assert_eq!(mars_xlog_get_level(0xdead_beef), -1);
-    assert_eq!(mars_xlog_is_enabled_for(0xdead_beef, 5), 0);
-
-    mars_xlog_set_console_log_instance(0, 1);
-    mars_xlog_set_console_log_instance(0, 0);
-    mars_xlog_set_max_file_size_instance(0, 0);
-    mars_xlog_set_max_file_size_instance(0, 1 << 20);
-    mars_xlog_set_max_alive_duration_instance(0, -1);
-    mars_xlog_set_max_alive_duration_instance(0, 3600);
-    mars_xlog_set_mode_instance(0, 1);
-    mars_xlog_set_mode_instance(0, 0);
-    // an unknown mode is ignored
-    mars_xlog_set_mode_instance(0, 9);
-
-    let mut path = vec![0u8; 512];
-    // The instance's own path: there is no process-wide appender for the
-    // handle-less spelling to answer for any more.
-    let written = unsafe {
-        mars_xlog_current_log_path_instance(
-            handle,
-            path.as_mut_ptr() as *mut c_char,
-            path.len() as c_uint,
-        )
-    };
-    assert!(written > 0, "no current log path: {written}");
-    assert!(std::str::from_utf8(&path[..written as usize]).is_ok());
-    // too small a buffer, and a null buffer
-    assert_eq!(
-        unsafe { mars_xlog_current_log_path_instance(handle, path.as_mut_ptr() as *mut c_char, 0) },
-        MARS_XLOG_ERR_NO_SPACE
-    );
-    assert_eq!(
-        unsafe { mars_xlog_current_log_path_instance(handle, std::ptr::null_mut(), 64) },
-        MARS_XLOG_ERR_NULL_OUT
-    );
-
-    let mut cache = vec![0u8; 512];
-    let written =
-        unsafe { mars_xlog_current_log_cache_path(cache.as_mut_ptr(), cache.len() as c_uint) };
-    assert!(written != MARS_XLOG_ERR_NULL_OUT);
-    assert_eq!(
-        unsafe { mars_xlog_current_log_cache_path(std::ptr::null_mut(), 64) },
-        MARS_XLOG_ERR_NULL_OUT
-    );
-
-    mars_xlog_request_flush_instance(0);
-    mars_xlog_flush_now_instance(0);
-    mars_xlog_request_flush_instance(0);
-    mars_xlog_flush_now_instance(0);
-    let prefix = CString::new("surface").unwrap();
-    unsafe {
-        mars_xlog_release_instance(prefix.as_ptr());
-    }
-    // closed: there is no current file any more
-    let mut path = vec![0u8; 512];
-    assert_eq!(
-        unsafe {
-            mars_xlog_current_log_path(path.as_mut_ptr() as *mut c_char, path.len() as c_uint)
-        },
-        MARS_XLOG_ERR_NO_PATH
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
 fn instances_are_created_addressed_and_released() {
     let _guard = serial();
     let dir = tempdir("instances");
@@ -273,57 +165,6 @@ fn instances_are_created_addressed_and_released() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[test]
-fn the_void_symbols_survive_a_closed_appender() {
-    let _guard = serial();
-    // nothing is open: every void symbol has to be a no-op instead of a crash
-    unsafe {
-        mars_xlog_write_instance(
-            0,
-            2,
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-        );
-    }
-    unsafe {
-        mars_xlog_write_instance(
-            0,
-            2,
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-        );
-    }
-    mars_xlog_request_flush_instance(0);
-    mars_xlog_flush_now_instance(0);
-    mars_xlog_flush_now_instance(0);
-    let prefix = CString::new("surface").unwrap();
-    unsafe {
-        mars_xlog_release_instance(prefix.as_ptr());
-    }
-    mars_xlog_set_level_instance(0, 2);
-    mars_xlog_set_level_instance(0, 2);
-    mars_xlog_set_console_log_instance(0, 0);
-    mars_xlog_set_max_file_size_instance(0, 0);
-    mars_xlog_set_max_alive_duration_instance(0, 0);
-    mars_xlog_set_mode_instance(0, 0);
-    mars_xlog_set_mode_instance(0, 0);
-    unsafe {
-        mars_xlog_release_instance(std::ptr::null());
-    }
-    // the void symbols added for the rest of the C++ surface
-    mars_xlog_request_flush_all();
-    mars_xlog_flush_now_all();
-    mars_xlog_set_console_log_instance(0, 0);
-    mars_xlog_set_max_file_size_instance(0, 0);
-    mars_xlog_set_max_alive_duration_instance(0, 0);
-}
-
 /// `XloggerCategory::IsEnabledFor` is `level_ <= _level` on the **raw**
 /// `TLogLevel`, and the C++ casts whatever the caller passes
 /// (`(TLogLevel)_level`), so `MARS_LEVEL_NONE` (6) is a level a caller may ask
@@ -344,139 +185,4 @@ fn is_enabled_for_compares_the_raw_level() {
     assert_eq!(mars_xlog_is_enabled_for(0xdead_beef, 6), 0);
 
     mars_xlog_set_level_instance(0, 0);
-}
-
-/// `NewXloggerInstance(_config, (TLogLevel)_level)` casts the level: 6
-/// (`Xlog.LEVEL_NONE`) is how a caller asks for an instance that logs nothing,
-/// and it used to be refused — the caller got handle `0` back, which is the
-/// default logger, not an instance.
-#[test]
-fn an_instance_can_be_opened_at_the_level_that_logs_nothing() {
-    let _guard = serial();
-    let dir = tempdir("level-none");
-    let config = make_config(&dir, 1, 0);
-    let handle = unsafe { mars_xlog_new_instance(&config.raw, 6) };
-    assert_ne!(handle, 0, "LEVEL_NONE collapsed onto the default logger");
-    assert_eq!(mars_xlog_get_level(handle), 6);
-    assert_eq!(mars_xlog_is_enabled_for(handle, 5), 0);
-
-    // The instance setters of the C++ surface: `SetConsoleLogOpen`,
-    // `SetMaxFileSize`, `SetMaxAliveTime` and `FlushAll`.
-    mars_xlog_set_console_log_instance(handle, 0);
-    mars_xlog_set_max_file_size_instance(handle, 0);
-    mars_xlog_set_max_alive_duration_instance(handle, 0);
-    mars_xlog_flush_now_all();
-
-    let prefix = CString::new("Mars").unwrap();
-    unsafe {
-        mars_xlog_release_instance(prefix.as_ptr());
-    }
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// `appender_oneshot_flush`, `appender_make_logfile_name` and
-/// `appender_getfilepath_from_timespan`: the recovery path and the two
-/// discovery helpers, which had no C symbol at all.
-#[test]
-fn the_recovery_and_discovery_symbols_answer() {
-    let _guard = serial();
-    let dir = tempdir("discovery");
-    let config = make_config(&dir, 0, 0);
-    let prefix = CString::new("Mars").unwrap();
-    let log_dir = CString::new(dir.to_str().unwrap()).unwrap();
-    let mut out = vec![0u8; 512];
-
-    // A null config is an error, not a crash.
-    assert_eq!(
-        unsafe { mars_xlog_oneshot_flush(std::ptr::null()) },
-        MARS_XLOG_ERR_NULL_CONFIG
-    );
-
-    // The name of today's log file, whether or not it exists.
-    let written = unsafe {
-        mars_xlog_make_logfile_name(
-            0,
-            prefix.as_ptr(),
-            log_dir.as_ptr(),
-            0,
-            out.as_mut_ptr() as *mut c_char,
-            out.len() as c_uint,
-        )
-    };
-    assert!(written > 0, "no log file name: {written}");
-    let name = std::str::from_utf8(&out[..written as usize])
-        .unwrap()
-        .to_owned();
-    assert!(name.ends_with(".xlog"), "{name}");
-    assert!(name.contains("Mars_"), "{name}");
-    // One name today, so index 1 is past the end of the list.
-    assert_eq!(
-        unsafe {
-            mars_xlog_make_logfile_name(
-                0,
-                prefix.as_ptr(),
-                log_dir.as_ptr(),
-                1,
-                out.as_mut_ptr() as *mut c_char,
-                out.len() as c_uint,
-            )
-        },
-        MARS_XLOG_ERR_NO_PATH
-    );
-
-    // The file does not exist yet, so the timespan lookup finds nothing…
-    assert_eq!(
-        unsafe {
-            mars_xlog_getfilepath_from_timespan(
-                0,
-                prefix.as_ptr(),
-                log_dir.as_ptr(),
-                0,
-                out.as_mut_ptr() as *mut c_char,
-                out.len() as c_uint,
-            )
-        },
-        MARS_XLOG_ERR_NO_PATH
-    );
-    // …and once it does, it is listed.
-    std::fs::write(std::path::Path::new(&name), b"x").unwrap();
-    let found = unsafe {
-        mars_xlog_getfilepath_from_timespan(
-            0,
-            prefix.as_ptr(),
-            log_dir.as_ptr(),
-            0,
-            out.as_mut_ptr() as *mut c_char,
-            out.len() as c_uint,
-        )
-    };
-    assert_eq!(
-        std::str::from_utf8(&out[..found as usize]).unwrap(),
-        name,
-        "the timespan lookup reported another file"
-    );
-
-    // A too-small buffer is an error, not a truncation.
-    assert_eq!(
-        unsafe {
-            mars_xlog_make_logfile_name(
-                0,
-                prefix.as_ptr(),
-                log_dir.as_ptr(),
-                0,
-                out.as_mut_ptr() as *mut c_char,
-                4,
-            )
-        },
-        MARS_XLOG_ERR_NO_SPACE
-    );
-
-    // Recovery over a directory no appender owns: an action, never an error.
-    let action = unsafe { mars_xlog_oneshot_flush(&config.raw) };
-    assert!(
-        (0..=7).contains(&action),
-        "unexpected TFileIOAction {action}"
-    );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }

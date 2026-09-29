@@ -73,17 +73,3 @@ void surface(const std::string& logDirectory) {
     moved.close();
     moved.close();   // safe twice, as on every platform
 }
-
-// The console sink: where the console copy of a record goes instead of stderr.
-void sink() {
-    marsrs::xlog::Xlog::setConsoleSink(
-        [](marsrs::xlog::LogLevel level,
-           std::string_view tag,
-           std::string_view file,
-           std::string_view function,
-           int line,
-           std::string_view message) {
-            std::cout << static_cast<int>(level) << tag << file << function << line << message << "\n";
-        });
-    marsrs::xlog::Xlog::setConsoleSink(nullptr);
-}

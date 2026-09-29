@@ -1887,6 +1887,11 @@ impl Appender {
         self.shared.flags.log_close.load(Ordering::Acquire)
     }
 
+    /// The prefix every file of this appender starts with.
+    pub(crate) fn nameprefix(&self) -> String {
+        self.lock().config.nameprefix.clone()
+    }
+
     /// `XloggerAppender::GetCurrentLogPath`.
     pub(crate) fn current_log_path(&self) -> Option<PathBuf> {
         let logdir = self.lock().config.logdir.clone();
@@ -2015,11 +2020,11 @@ fn async_log_thread(shared: Arc<Shared>, rx: Receiver<Msg>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AppenderMode, FileIoAction, XLogConfig};
+    use crate::config::{AppenderMode, XLogConfig};
     use marsrs_buffer::CompressMode;
     use marsrs_crypt::{magic, LogCrypt, HEADER_LEN, TAILER_LEN};
     use std::collections::HashSet;
-    use std::sync::atomic::{AtomicU64, AtomicUsize};
+    
 
     /// A trace record — one an app marked with
     /// `XLogger::ForwardToSysTrace` — is echoed only where the C++ echoes

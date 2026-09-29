@@ -19,7 +19,6 @@
 //! to upstream's own decoder.
 
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use marsrs_appender::{AppenderMode, CompressMode, LogLevel, XLogConfig, Xlog};
 

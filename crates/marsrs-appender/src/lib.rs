@@ -360,6 +360,38 @@ pub(crate) fn appender_get_current_log_path_instance(id: AppenderId) -> Option<P
     instance(id).and_then(|appender| appender.current_log_path())
 }
 
+/// The prefix and the log directory of the appender of `handle`, which is
+/// what names a day of its files. `None` for a handle nothing was opened
+/// for.
+fn prefix_and_logdir(handle: XloggerHandle) -> Option<(String, PathBuf)> {
+    use crate::category::target;
+    match target(handle) {
+        crate::category::Target::Instance(id) => {
+            let appender = instance(id)?;
+            Some((appender.nameprefix(), appender.current_log_path()?))
+        }
+        crate::category::Target::Default | crate::category::Target::Gone => None,
+    }
+}
+
+/// The log files of the day `timespan` days ago that are *there* — of the
+/// appender of `handle`, and out of its own prefix and directory.
+pub fn current_log_files(handle: XloggerHandle, timespan: i64) -> Vec<PathBuf> {
+    let Some((prefix, logdir)) = prefix_and_logdir(handle) else {
+        return Vec::new();
+    };
+    appender_getfilepath_from_timespan(timespan, &prefix, &logdir)
+}
+
+/// The names of the log files of the day `timespan` days ago, whether or not
+/// they are there yet — of the appender of `handle`.
+pub fn current_log_file_names(handle: XloggerHandle, timespan: i64) -> Vec<PathBuf> {
+    let Some((prefix, logdir)) = prefix_and_logdir(handle) else {
+        return Vec::new();
+    };
+    appender_make_logfile_name(timespan, &prefix, &logdir)
+}
+
 /// Asks the writer thread to drain the cache, and returns at once.
 ///
 /// The drain is the writer thread's, and nothing here says when it is over:

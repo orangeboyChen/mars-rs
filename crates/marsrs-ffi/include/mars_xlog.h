@@ -87,17 +87,6 @@ typedef enum {
 #define MARS_XLOG_ERR_NO_PATH (-8)       /* no current log file is open           */
 #define MARS_XLOG_ERR_PANIC (-99)        /* a Rust panic was caught at the boundary */
 
-/* --- `mars_xlog_oneshot_flush` result: mars::xlog::TFileIOAction --------- */
-
-#define MARS_XLOG_ACTION_NONE 0
-#define MARS_XLOG_ACTION_SUCCESS 1
-#define MARS_XLOG_ACTION_UNNECESSARY 2  /* there was nothing to flush        */
-#define MARS_XLOG_ACTION_OPEN_FAILED 3
-#define MARS_XLOG_ACTION_READ_FAILED 4
-#define MARS_XLOG_ACTION_WRITE_FAILED 5
-#define MARS_XLOG_ACTION_CLOSE_FAILED 6
-#define MARS_XLOG_ACTION_REMOVE_FAILED 7
-
 /* --- config ------------------------------------------------------------- */
 
 /**
@@ -120,57 +109,6 @@ typedef struct {
 /* --- writing ------------------------------------------------------------- */
 
 /**
- * Replaces `xlogger_Assert(...)` of `mars/comm/xlogger/xloggerbase.h` — the
- * record an assert writes, with the same flattened fields
- * `mars_xlog_write_instance` takes plus the expression that failed.
- *
- * The record is written at `MarsLevelFatal` and its body is
- * `[ASSERT(<expression>)]` followed by `message`. `xloggerbase.h` annotates
- * `xlogger_Assert` "no level filter", so no level an app set is asked here:
- * the gate the C++ has lives in its own `xassert2` macro, and a caller that
- * wants it has `mars_xlog_is_enabled_for`.
- *
- * `tag`, `filename`, `func_name`, `expression` and `message` may be NULL;
- * NULL and invalid UTF-8 are treated as an empty string.
- */
-void mars_xlog_assert(const char* tag,
-                      const char* filename,
-                      const char* func_name,
-                      int line,
-                      const char* expression,
-                      const char* message);
-
-/**
- * Replaces `appender_set_console_fun(TConsoleFun)` of `mars/xlog/appender.h`
- * — where a console record goes instead of the built-in sink, which is stderr
- * on every platform here.
- *
- * The C++ `TConsoleFun` is an Apple-only enum of three sinks of its own
- * (`kConsolePrintf` / `kConsoleNSLog` / `kConsoleOSLog`), and
- * `os_log_with_type` is a macro with no symbol to link against, so the port
- * takes the sink instead: a callback handed the same fields
- * `mars_xlog_write_instance` takes, unformatted, so what a console record looks like is the caller's
- * decision and not the port's.
- *
- * Pass NULL to take the callback away again. The callback may be called from
- * any thread, the writer thread of an async appender included, and it must not
- * unwind: one written in Rust that panics aborts at the `extern "C"`
- * boundary, before the `catch_unwind` every entry point of the port is wrapped
- * in can see the panic at all, so what it ends is the process and not the
- * record. A NULL string is never handed to it.
- */
-typedef void (*MarsXLogConsoleFun)(int level,
-                                   const char* tag,
-                                   const char* filename,
-                                   const char* func_name,
-                                   int line,
-                                   const char* log);
-
-/* The sink is process-wide, as it is in the C++ (`sg_console_fun`): there is no
- * per-instance one to set it on. */
-void mars_xlog_set_console_fun(MarsXLogConsoleFun fun);
-
-/**
  * Replaces `appender_get_current_log_path(char*, unsigned int)` — the file the
  * process-wide appender is appending to.
  *
@@ -181,7 +119,6 @@ void mars_xlog_set_console_fun(MarsXLogConsoleFun fun);
  *         negative MARS_XLOG_ERR_* code (`MARS_XLOG_ERR_NULL_OUT`,
  *         `MARS_XLOG_ERR_NO_SPACE`, `MARS_XLOG_ERR_NO_PATH`).
  */
-int mars_xlog_current_log_path(char* out, unsigned int len);
 
 /* ---- logger instances (mars::xlog::NewXloggerInstance and friends) ----
  *
@@ -248,12 +185,10 @@ void mars_xlog_request_flush_instance(long long instance);
 void mars_xlog_flush_now_instance(long long instance);
 
 /* FlushAll, requested: every appender is told its writer thread may drain. */
-void mars_xlog_request_flush_all(void);
 
 /* FlushAll on the calling thread: drains the process-wide appender *and* every
  * instance — each of which owns an appender of its own, so a caller that leaves
  * them out misses their records. */
-void mars_xlog_flush_now_all(void);
 
 /* SetConsoleLogOpen for an instance (0 = the default logger). */
 void mars_xlog_set_console_log_instance(long long instance, int open);
@@ -263,19 +198,6 @@ void mars_xlog_set_max_file_size_instance(long long instance, unsigned long long
 
 /* SetMaxAliveTime for an instance; negative clamps to 0. */
 void mars_xlog_set_max_alive_duration_instance(long long instance, long long seconds);
-
-/**
- * Replaces `mars::xlog::appender_oneshot_flush()`: drains the
- * `<prefix>[_<n>].mmap3` cache files another process left behind, without
- * opening an appender. The ones a live writer of this process — or of any
- * other — still holds are left alone, so it answers
- * MARS_XLOG_ACTION_UNNECESSARY when there is nothing of a dead process's to
- * recover.
- *
- * @return one of the MARS_XLOG_ACTION_* values (0..7), or a negative
- *         MARS_XLOG_ERR_* code when `config` is unusable.
- */
-int mars_xlog_oneshot_flush(const MarsXLogConfig* config);
 
 /**
  * Replaces `mars::xlog::appender_make_logfile_name()`: the log file *name* for
@@ -288,24 +210,22 @@ int mars_xlog_oneshot_flush(const MarsXLogConfig* config);
  * @return the number of bytes written excluding the terminating NUL, or a
  *         negative MARS_XLOG_ERR_* code.
  */
-int mars_xlog_make_logfile_name(int timespan,
-                                const char* prefix,
-                                const char* log_dir,
-                                unsigned int index,
-                                char* out,
-                                unsigned int len);
+int mars_xlog_make_logfile_name_instance(long long instance,
+                                         int timespan,
+                                         unsigned int index,
+                                         char* out,
+                                         unsigned int len);
 
 /**
  * Replaces `mars::xlog::appender_getfilepath_from_timespan()`: the log files
  * that *exist* for the day `timespan` days ago. Same `index` protocol as
  * mars_xlog_make_logfile_name.
  */
-int mars_xlog_getfilepath_from_timespan(int timespan,
-                                        const char* prefix,
-                                        const char* log_dir,
-                                        unsigned int index,
-                                        char* out,
-                                        unsigned int len);
+int mars_xlog_getfilepath_from_timespan_instance(long long instance,
+                                                 int timespan,
+                                                 unsigned int index,
+                                                 char* out,
+                                                 unsigned int len);
 
 /* The directory an instance is writing its files to, or a negative
  * MARS_XLOG_ERR_* code. It is the same question mars_xlog_current_log_path
@@ -316,7 +236,6 @@ int mars_xlog_getfilepath_from_timespan(int timespan,
 int mars_xlog_current_log_path_instance(long long instance, char* out, unsigned int len);
 
 /* The cache directory, or a negative MARS_XLOG_ERR_* code. */
-int mars_xlog_current_log_cache_path(char* out, unsigned int len);
 
 #ifdef __cplusplus
 } /* extern "C" */

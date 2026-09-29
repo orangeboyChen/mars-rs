@@ -284,7 +284,7 @@ impl Drop for Opening {
 }
 
 /// Which appender a handle names.
-enum Target {
+pub(crate) enum Target {
     /// The instance's own appender.
     Instance(AppenderId),
     /// The process-wide default — what handle `0` means in the C++.
@@ -295,7 +295,7 @@ enum Target {
     Gone,
 }
 
-fn target(handle: XloggerHandle) -> Target {
+pub(crate) fn target(handle: XloggerHandle) -> Target {
     if handle == DEFAULT_HANDLE {
         return Target::Default;
     }

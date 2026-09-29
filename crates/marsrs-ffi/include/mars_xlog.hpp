@@ -159,15 +159,6 @@ private:
  * through. */
 class Xlog {
 public:
-    /** Where the console copy of a record goes, in the shape a C++ caller
-     * writes: the record unformatted, and never a null string. */
-    using ConsoleSink = std::function<void(LogLevel level,
-                                           std::string_view tag,
-                                           std::string_view file,
-                                           std::string_view function,
-                                           int line,
-                                           std::string_view message)>;
-
     /** Opens an appender of its own: its own log directory, prefix, key, mode
      * and cache file, all of them `config`'s.
      *
@@ -436,41 +427,33 @@ public:
         handle_ = 0;
     }
 
-    /** `mars_xlog_set_console_fun`: where the console copy of a record goes
-     * instead of the built-in sink, which is standard error on every platform
-     * of the port.
-     *
-     * ```cpp
-     * Xlog::setConsoleSink([](LogLevel level, std::string_view tag,
-     *                         std::string_view file, std::string_view function,
-     *                         int line, std::string_view message) {
-     *     std::cerr << message << '\n';
-     * });
-     * ```
-     *
-     * `nullptr` takes the sink away, and the console copy is standard error's
-     * again. One sink for the process and not one for an `Xlog`: the C ABI has
-     * no instance of it, and a sink is called on the thread that wrote the
-     * record — the writer thread of an async appender included. Replacing one
-     * while records are being written is a race this seam has no answer to, so
-     * it belongs in start-up. */
-    static void setConsoleSink(ConsoleSink sink) {
-        // One sink for the process, and one the trampoline below reaches
-        // without a capture of its own: a function pointer carries no state.
-        static ConsoleSink installed;
-        installed = std::move(sink);
-        if (!installed) {
-            mars_xlog_set_console_fun(nullptr);
-            return;
-        }
-        mars_xlog_set_console_fun(+[](int level,
-                                      const char* tag,
-                                      const char* file,
-                                      const char* function,
-                                      int line,
-                                      const char* message) {
-            installed(static_cast<LogLevel>(level), tag, file, function, line, message);
+    /// The file this appender is writing to, or `std::nullopt` when it has
+    /// none open yet — the first record of a day is what opens one.
+    ///
+    /// A day is one file, so this is the path handed to something that reads
+    /// the log while it is being written. [`logFiles`] is the day's.
+    std::optional<std::string> currentLogPath() const {
+        return path([this](char* out, std::uint32_t len) {
+            return mars_xlog_current_log_path_instance(handle_, out, len);
         });
+    }
+
+    /// The log files of the day `daysAgo` days ago that are *there* — `0` is
+    /// today, `1` is yesterday. `{}` when the directory holds none of that
+    /// day's.
+    ///
+    /// This is a day of files and not the file being written: what
+    /// [`currentLogPath`] answers is one, and this is this appender's own
+    /// prefix and directory.
+    std::vector<std::string> logFiles(int daysAgo) const {
+        return dayPaths(daysAgo, mars_xlog_getfilepath_from_timespan_instance);
+    }
+
+    /// The paths of the log files of the day `daysAgo` days ago, whether or
+    /// not they are *there yet* — the name an app that is about to write, or
+    /// that is naming a file to someone else, asks for.
+    std::vector<std::string> logFileNames(int daysAgo) const {
+        return dayPaths(daysAgo, mars_xlog_make_logfile_name_instance);
     }
 
 private:
@@ -481,6 +464,37 @@ private:
           consoleLogEnabled_(false),
           maxFileSizeBytes_(0),
           maxAliveTimeSeconds_(0) {
+    }
+
+    /// What `body` writes into the buffer it is handed, as a string; `nullopt`
+    /// when it wrote nothing.
+    std::optional<std::string> path(
+        const std::function<int(char*, std::uint32_t)>& body) const {
+        std::vector<char> buffer(1024);
+        int written = body(buffer.data(), static_cast<std::uint32_t>(buffer.size()));
+        if (written <= 0) {
+            return std::nullopt;
+        }
+        return std::string(buffer.data(), static_cast<std::size_t>(written));
+    }
+
+    /// The paths of one day, walked index by index until the symbol answers
+    /// that there is nothing at that index: the list the C++ fills a
+    /// `std::vector` with, asked one at a time.
+    std::vector<std::string> dayPaths(
+        int daysAgo,
+        int (*symbol)(long long, int, unsigned int, char*, unsigned int)) const {
+        std::vector<std::string> walked;
+        for (unsigned int index = 0;; ++index) {
+            auto found = path([&](char* out, std::uint32_t len) {
+                return symbol(handle_, daysAgo, index, out, len);
+            });
+            if (!found) {
+                break;
+            }
+            walked.push_back(*found);
+        }
+        return walked;
     }
 
     /** Runs `body` with this appender's handle, and runs nothing at all once

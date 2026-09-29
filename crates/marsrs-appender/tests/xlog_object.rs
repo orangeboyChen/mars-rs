@@ -10,9 +10,7 @@
 use std::path::PathBuf;
 
 use marsrs_appender::{
-    flush_now,
     get_xlogger_instance,
-    xlogger_write,
     AppenderError,
     AppenderMode,
     LogLevel,

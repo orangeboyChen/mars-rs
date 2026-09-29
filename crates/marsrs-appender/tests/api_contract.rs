@@ -14,27 +14,9 @@
 //! test would otherwise pin down twice.
 
 use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use marsrs_appender::{
-    category_set_max_alive_duration,
-    category_set_max_file_size,
-    current_log_path,
-    flush,
-    flush_now,
-    get_filter,
-    get_level,
-    get_xlogger_instance,
-    is_enabled_for,
-    log_formater,
-    new_xlogger_instance,
-    release_xlogger_instance,
-    request_flush,
-    set_appender_mode,
-    set_console_log_open,
-    set_filter,
-    set_level,
-    xlogger_write,
     AppenderError,
     AppenderMode,
     FileIoAction,
@@ -43,12 +25,8 @@ use marsrs_appender::{
     XLogConfig,
     XLoggerInfo,
     Xlog,
-    XloggerFilter,
-    XloggerHandle,
-    DEFAULT_HANDLE,
 };
 use marsrs_buffer::CompressMode;
-use marsrs_core::PtrBuffer;
 
 #[test]
 fn the_object_is_the_api_an_app_takes() {

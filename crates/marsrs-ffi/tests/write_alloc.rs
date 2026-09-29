@@ -18,8 +18,15 @@ use std::os::raw::c_longlong;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use mars_ffi::abi::{mars_xlog_new_instance, mars_xlog_release_instance};
-use mars_ffi::{mars_xlog_set_level_instance, mars_xlog_write_instance, MarsXLogConfig};
+use mars_ffi::abi::{
+    mars_xlog_new_instance,
+    mars_xlog_release_instance,
+};
+use mars_ffi::{
+    mars_xlog_set_level_instance,
+    mars_xlog_write_instance,
+    MarsXLogConfig,
+};
 
 /// Whether [`COUNT`] is open.
 static ARMED: AtomicBool = AtomicBool::new(false);

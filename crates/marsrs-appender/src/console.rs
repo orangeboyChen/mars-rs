@@ -97,7 +97,7 @@ pub(crate) fn console_log(info: Option<&XLoggerInfo>, log: &str) {
 mod tests {
     use super::*;
     use crate::config::LogLevel;
-    use std::sync::Mutex;
+    
 
     #[test]
     fn console_log_does_not_panic() {
