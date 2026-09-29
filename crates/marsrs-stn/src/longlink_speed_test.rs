@@ -435,7 +435,6 @@ impl LongLinkSpeedTest {
             // the C++'s item reads the clock when its socket takes the first
             // write, which is here: after the select, before the round
             let now = clock();
-            let before: Vec<SpeedTestState> = self.items.iter().map(SpeedTestItem::state).collect();
             self.round(&events, now);
 
             if self
@@ -455,15 +454,15 @@ impl LongLinkSpeedTest {
             // `Select(kTimeout)` answering `0` is what ends the race in the
             // C++: nothing was ready inside the timeout. A host that says the
             // same thing with an `Ok` full of `SocketEvent::Nothing` is one
-            // this loop would otherwise sit in for ever, so a round that moved
-            // nobody — nobody answered, nobody failed — is read the way the
-            // C++ reads a `0`.
-            let moved = self
-                .items
-                .iter()
-                .zip(before.iter())
-                .any(|(item, was)| item.state() != *was);
-            if !moved {
+            // this loop would otherwise sit in for ever, so a round nothing
+            // was ready in is read the way the C++ reads a `0`.
+            //
+            // Not a round that changed no state, which is the other way of
+            // asking "was anything ready": an answer that is still arriving
+            // in pieces is moved from `Resp` to `Resp` by a read that did
+            // bring bytes in, and ending there drops a pair that would have
+            // answered on the next one.
+            if events.iter().all(|event| *event == SocketEvent::Nothing) {
                 break;
             }
         }
@@ -609,6 +608,28 @@ mod tests {
                     } else {
                         Vec::new()
                     }
+                },
+            )
+        }
+    }
+
+    /// A host that writes everything it is given, and whose `recv` is one
+    /// `read()` at a time: the answer to the noop goes out in two halves.
+    fn split_host() -> impl FnMut(&str, u16) -> Socket + Send + 'static {
+        let left = Arc::new(Mutex::new((noop_answer(), 0usize)));
+        move |_ip, _port| {
+            let left = Arc::clone(&left);
+            Socket::new(
+                |bytes| bytes.len() as isize,
+                move || {
+                    let (answer, taken) = &mut *left.lock().unwrap_or_else(|p| p.into_inner());
+                    if *taken >= answer.len() {
+                        return Vec::new();
+                    }
+                    let end = (*taken + answer.len().div_ceil(2)).min(answer.len());
+                    let piece = answer[*taken..end].to_vec();
+                    *taken = end;
+                    piece
                 },
             )
         }
@@ -793,6 +814,32 @@ mod tests {
             test.results().map(|(_, state)| state).collect::<Vec<_>>(),
             vec![SpeedTestState::Suc, SpeedTestState::Resp],
             "the pair behind the winner is not read again"
+        );
+    }
+
+    /// An answer that comes in two reads is still an answer: the round the
+    /// second half arrives in moves the pair from `Resp` to `Suc`, and the one
+    /// before it moved it from `Resp` to `Resp` — a round that reads is not a
+    /// round nothing was ready in, and a race that ends on "no state changed"
+    /// loses a pair whose answer was half way through arriving.
+    #[test]
+    fn an_answer_that_arrives_in_two_reads_is_an_answer() {
+        let _guard = crate::test_lock();
+        let mut test = LongLinkSpeedTest::new_at(0, [pair("1.1.1.1", 80)]);
+        test.set_select(select(vec![
+            vec![SocketEvent::Writable],
+            vec![SocketEvent::Readable],
+            vec![SocketEvent::Readable],
+        ]));
+        test.set_open(split_host());
+
+        let fastest = test.fastest_at(0).expect("the pair answers");
+        assert_eq!(fastest.pair.ip, "1.1.1.1");
+        assert_eq!(fastest.socket, 0);
+        assert_eq!(
+            test.open_sockets(),
+            1,
+            "the pair that answered keeps its socket"
         );
     }
 
