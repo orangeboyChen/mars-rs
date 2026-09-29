@@ -1,11 +1,12 @@
 //! CLI front-end for the comm cross-read tests: the Rust of
 //! `mars/comm/basepacker.cc`, of `mars/comm/adler32.c`, of
-//! `mars/comm/strutil.cc`, of `mars/comm/socket/socket_address.cc` and of
-//! `mars/comm/http.cc`, driven the way
-//! `scripts/compat/upstream_comm.cpp` drives the C++.
+//! `mars/comm/crypt/ibase64.cc`, of `mars/comm/strutil.cc`, of
+//! `mars/comm/socket/socket_address.cc` and of `mars/comm/http.cc`, driven the
+//! way `scripts/compat/upstream_comm.cpp` drives the C++.
 //!
 //! ```text
 //! comm-compat adler32 --data=HEX [--seed=N]
+//! comm-compat base64 --data=HEX
 //! comm-compat http ACTION [--data=HEX] [--set=N:V|N:V] [--in=PATH]
 //! comm-compat packer pack --url=U --seq=N --data=HEX [--hash=no] --out=PATH
 //! comm-compat packer unpack --in=PATH
@@ -72,6 +73,7 @@ fn main() -> ExitCode {
     let opts = parse_opts(args);
     let result = match (command.as_str(), action.as_deref()) {
         ("adler32", _) => checksum(&opts),
+        ("base64", _) => base64(&opts),
         ("packer", Some("pack")) => packer(&opts),
         ("packer", Some("unpack")) => unpack_packer(&opts),
         ("simple", Some("pack")) => simple(&opts),
@@ -97,6 +99,7 @@ fn main() -> ExitCode {
 fn usage() {
     eprintln!(
         "usage: comm-compat adler32 --data=HEX [--seed=N]\n       \
+         comm-compat base64 --data=HEX\n       \
          comm-compat http ACTION [--data=HEX] [--set=N:V|N:V] [--in=PATH]\n       \
          comm-compat packer pack --url=U --seq=N --data=HEX [--hash=no] \
          --out=PATH\n       \
@@ -113,6 +116,15 @@ fn checksum(opts: &Opts) -> Result<(), String> {
     let data = unhex(opts.value("data").unwrap_or(""))?;
     let seed = number(opts, "seed")?;
     println!("{}", adler32_seeded(seed, &data));
+    Ok(())
+}
+
+/// `EncodeBase64` — how many characters a caller got, and the characters,
+/// which is the `Basic` of a `Proxy-Authorization`: `username:password`.
+fn base64(opts: &Opts) -> Result<(), String> {
+    let data = unhex(opts.value("data").unwrap_or(""))?;
+    let encoded = marsrs_comm::base64::encode(&data);
+    println!("{} {}", encoded.len(), dash(&encoded));
     Ok(())
 }
 
