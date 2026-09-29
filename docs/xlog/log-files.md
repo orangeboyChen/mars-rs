@@ -19,8 +19,8 @@ Where the file that is being written right now is:
 ::: code-group
 
 ```rust [Rust]
-appender_get_current_log_path()          // Option<PathBuf>
-appender_get_current_log_path_instance(id)
+xlog.current_log_path()                  // Option<PathBuf>
+appender_get_current_log_path()          // the process-wide appender's
 ```
 
 ```swift [Swift]
@@ -80,8 +80,7 @@ reads it while this one is still logging into it:
 ::: code-group
 
 ```rust [Rust]
-appender_flush_now()                     // waits for the file
-appender_flush_now_instance(id)
+xlog.flush_now()                         // waits for the file
 ```
 
 ```swift [Swift]
@@ -118,9 +117,9 @@ The drain is three calls and not one with a flag:
 
 | call | what it does |
 |---|---|
-| `signalFlush()` — `appender_signal_flush()`, `mars_xlog_signal_flush_instance(0)` | tells the writer thread it may drain, and returns at once: nothing is in the file because it returned |
-| `flushNow()` — `appender_flush_now()`, `mars_xlog_flush_now_instance(0)` | drains on the calling thread: the records are on disk when it returns |
-| `await flush()` — `appender_flush()`, `flush(handle)` | the same drain, off the calling thread |
+| `signalFlush()` — `xlog.signal_flush()`, `mars_xlog_signal_flush_instance(0)` | tells the writer thread it may drain, and returns at once: nothing is in the file because it returned |
+| `flushNow()` — `xlog.flush_now()`, `mars_xlog_flush_now_instance(0)` | drains on the calling thread: the records are on disk when it returns |
+| `await flush()` — `xlog.flush().await`, `flush(handle)` | the same drain, off the calling thread |
 
 `signalFlush()` is the one a timer calls. It guarantees nothing about when the
 drain is over, and nothing is lost while it is not: a record still in the cache

@@ -44,29 +44,31 @@ marsrs = { version = "0.1", default-features = false, features = ["xlog"] }
 ```
 
 ```rust
-use marsrs::xlog::{appender_close, appender_flush_now, appender_open, appender_write, XLogConfig};
+use marsrs::xlog::{LogLevel, XLogConfig, Xlog};
 
 let mut config = XLogConfig::default();
 config.logdir = std::path::PathBuf::from("/tmp/mars-log");
 config.nameprefix = "marsrs".to_owned();
-appender_open(config)?;
 
-appender_write(None, "hello from mars");
+let xlog = Xlog::open(config, LogLevel::Info)?;
+xlog.i("startup", "hello from mars");
 
-appender_flush_now();    // 返回时记录已经在磁盘上
-// appender_flush().await 是同一场排空，只是不在本线程上
-appender_close();
+xlog.flush_now();   // 返回时记录已经在磁盘上
+// xlog.flush().await 是同一场排空，只是不在本线程上
 ```
 
-`appender_open` 装上一个进程级的 appender，`appender_write` 往它里面写；每个选项
-都在[配置项](/zh/xlog/configuration)那页。一条记录可以不止带一句话 ——
-`appender_write` 还收一个 `XLoggerInfo`，里面有级别、tag 和调用处的文件、函数、
-行号，`None` 是默认的那个。要把一部分日志分开读的 App，给那部分自己开一个
-appender，用 `*_instance` 这一族 —— `appender_open_instance(config)` 回答一个
-handle，`appender_write_instance`、`appender_flush_instance` 和
-`appender_close_instance` 收下它 —— flush 也是同样的三种形态：
-`appender_signal_flush_instance`、`appender_flush_now_instance`，以及
-`appender_flush_instance(id).await`。
+`Xlog::open` 回答的那个 appender，就是 Kotlin、Dart 和 TypeScript 的
+`Xlog.open(config)`，也是 Swift 的 `Xlog(config:)` —— 一个对象，拿着它，对着它写；
+第二个 logger 就是第二个 `Xlog`，给它自己的 prefix。每个选项都在
+[配置项](/zh/xlog/configuration)那页。一条记录可以不止带一句话 ——
+`xlog.log_with_info(Some(&info), message)` 收一个 `XLoggerInfo`，里面有级别、tag
+和调用处的文件、函数、行号，而 `xlog.log(level, tag, message)` 是写空的那三个的
+短写法，Kotlin 写的也是这样 —— Rust 没有 `#file` 可以填进去。
+
+已经开着的 prefix 再 `Xlog::open` 一次，回答的是那个已经开着的 appender 而不是第
+二个，所以一个 `Xlog` 上 `close()` 会关掉同 prefix 的另一个 `Xlog` 正在写的那个
+—— 这个移植的每个平台都是这样，`mars_xlog.hpp` 里的 C++ 也是。`Xlog` 被 drop 时
+自己会关，所以一个活到进程结束的 `Xlog` 根本不需要 `close()`。
 
 ## SwiftPM
 

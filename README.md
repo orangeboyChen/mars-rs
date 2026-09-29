@@ -96,17 +96,16 @@ Then the same three steps on every platform: open an appender once when the app
 starts, write through it, and flush before you read or upload its files.
 
 ```rust
-use marsrs::xlog::{appender_close, appender_flush_now, appender_open, appender_write, XLogConfig};
+use marsrs::xlog::{LogLevel, XLogConfig, Xlog};
 
 let mut config = XLogConfig::default();
 config.logdir = std::path::PathBuf::from("/tmp/mars-log");
 config.nameprefix = "marsrs".to_owned();
-appender_open(config)?;
 
-appender_write(None, "hello from mars");
+let xlog = Xlog::open(config, LogLevel::Info)?;
+xlog.i("startup", "hello from mars");
 
-appender_flush_sync();   // the records are on disk when this returns
-appender_close();
+xlog.flush_now();   // the records are on disk when this returns
 ```
 
 ```kotlin

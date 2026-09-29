@@ -50,30 +50,33 @@ marsrs = { version = "0.1", default-features = false, features = ["xlog"] }
 ```
 
 ```rust
-use marsrs::xlog::{appender_close, appender_flush_now, appender_open, appender_write, XLogConfig};
+use marsrs::xlog::{LogLevel, XLogConfig, Xlog};
 
 let mut config = XLogConfig::default();
 config.logdir = std::path::PathBuf::from("/tmp/mars-log");
 config.nameprefix = "marsrs".to_owned();
-appender_open(config)?;
 
-appender_write(None, "hello from mars");
+let xlog = Xlog::open(config, LogLevel::Info)?;
+xlog.i("startup", "hello from mars");
 
-appender_flush_now();    // the records are on disk when this returns
-// appender_flush().await is the same drain off this thread
-appender_close();
+xlog.flush_now();   // the records are on disk when this returns
+// xlog.flush().await is the same drain off this thread
 ```
 
-`appender_open` installs one process-wide appender, which `appender_write` writes
-through; every option is on [the configuration page](/xlog/configuration). A
-record can carry more than a message — `appender_write` takes an `XLoggerInfo`
-with the level, the tag and the file, function and line of the call site, and
-`None` is the default one. An app that reads one part of its logs apart from the
-rest gives that part an appender of its own, through the `*_instance` family —
-`appender_open_instance(config)` answers a handle, and `appender_write_instance`,
-`appender_flush_instance` and `appender_close_instance` take it — the flush in
-the same three shapes: `appender_signal_flush_instance`,
-`appender_flush_now_instance` and `appender_flush_instance(id).await`.
+`Xlog::open` answers the appender, which is the `Xlog.open(config)` of Kotlin, of
+Dart and of TypeScript and the `Xlog(config:)` of Swift: one object, held, and
+written through — a second logger is a second `Xlog` of a prefix of its own.
+Every option is on [the configuration page](/xlog/configuration). A record can
+carry more than a message — `xlog.log_with_info(Some(&info), message)` takes an
+`XLoggerInfo` with the level, the tag and the file, function and line of the call
+site, and `xlog.log(level, tag, message)` is the short form that writes the empty
+ones, as Kotlin's does. Rust has no `#file` to fill them in with.
+
+`Xlog::open` for a prefix that is already open answers the appender that is open
+and not a second one, which is why `close()` on one `Xlog` closes what another
+`Xlog` of the same prefix writes through — on every platform of the port, and in
+C++ of `mars_xlog.hpp` too. An `Xlog` closes itself when it is dropped, so one
+held for the life of the process needs no `close()` at all.
 
 ## SwiftPM
 
