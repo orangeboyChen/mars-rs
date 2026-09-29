@@ -414,6 +414,29 @@ pub fn post_message(
     message: Message,
     timing: MessageTiming,
 ) -> MessagePost {
+    post(handler, message, timing, false)
+}
+
+/// `MessageQueue::PostMessageAtFirst` — jumps the queue.
+pub fn post_message_at_first(handler: &MessageHandler, message: Message) -> MessagePost {
+    post(handler, message, MessageTiming::Immediate, true)
+}
+
+/// Both of the above: the insert and the notify are one step under the
+/// queue's lock, which is what the C++'s `ScopedLock` around `push_front`
+/// and `breaker->Notify` is.
+///
+/// Not two steps. `post_message_at_first` used to post and then move its
+/// message to the head afterwards, and the notify of the post is between
+/// the two: a dispatcher woken by it can take the lock in that window and
+/// run the message that was already at the head, which is the one this
+/// call exists to be run before.
+fn post(
+    handler: &MessageHandler,
+    message: Message,
+    timing: MessageTiming,
+    at_front: bool,
+) -> MessagePost {
     let Some(queue) = queue(handler.queue) else {
         return NULL_POST;
     };
@@ -424,31 +447,21 @@ pub fn post_message(
     let mut state = queue.lock();
     let seq = state.next_post_seq;
     state.next_post_seq += 1;
-    state.messages.push_back(PostedMessage {
+    let entry = PostedMessage {
         post: MessagePost { reg: *handler, seq },
         title: message.title,
         due,
         period,
         message: Arc::new(Mutex::new(message)),
-    });
+    };
+    if at_front {
+        state.messages.push_front(entry);
+    } else {
+        state.messages.push_back(entry);
+    }
     drop(state);
     queue.cond.notify_all();
     MessagePost { reg: *handler, seq }
-}
-
-/// `MessageQueue::PostMessageAtFirst` — jumps the queue.
-pub fn post_message_at_first(handler: &MessageHandler, message: Message) -> MessagePost {
-    let post = post_message(handler, message, MessageTiming::Immediate);
-    if let Some(queue) = queue(handler.queue) {
-        let mut state = queue.lock();
-        if let Some(index) = state.messages.iter().position(|m| m.post.seq == post.seq) {
-            if index > 0 {
-                let entry = state.messages.remove(index).unwrap();
-                state.messages.push_front(entry);
-            }
-        }
-    }
-    post
 }
 
 /// `MessageQueue::SingletonMessage(replace, handler, message)` — at most
