@@ -81,8 +81,11 @@
 //! [`category`], and the hex dump of a binary blob in [`xlogger_memory_dump`]
 //! (and its file-writing sibling [`xlogger_dump`]).
 
-// Only `appender::map_region` uses `unsafe` (memmap2 requires it); see the
-// SAFETY comment there. Everything else is safe Rust.
+// `unsafe` is confined to three places, each with the reason it is there
+// beside it: `appender::map_region` (`memmap2` requires it), this crate's
+// `sys` module (raw libc / win32 calls `std` cannot express) and
+// [`test_alloc`], which counts a test's allocations. Everything else is safe Rust, and the crate denies
+// `unsafe_code` so that a fourth one does not appear unnoticed.
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
