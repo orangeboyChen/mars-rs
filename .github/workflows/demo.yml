@@ -243,71 +243,47 @@ jobs:
   # buys: `demo/kmp/settings.gradle.kts` substitutes `platforms/kmp` for the
   # published package, so GitHub Packages is never asked and a pull request
   # from a fork reads this repository's packages no more than a push does.
+  # The one demo that takes the port from the registry and not from the tree,
+  # and why: `platforms/kmp` does not build on a Linux runner. Under its own
+  # Gradle and its own Kotlin it fails to compile its own source —
+  # `Cannot access 'val IO: CoroutineDispatcher': it is internal in
+  # 'kotlinx.coroutines.Dispatchers'` — and `release.yml` publishes it from
+  # `macos-15` for that reason. Building the module here would cost a macOS
+  # runner, the Android SDK and ten Kotlin/Native targets on every pull
+  # request, so the demo is checked against the package an app actually gets.
+  #
+  # Which means it is also the one demo whose drain is spelled the way the
+  # newest tag spells it, and not `flushNow()`: a tag is a release behind the
+  # tree, and the demo is written against the tag.
+  #
+  # It needs the token, and it is the one job here a fork cannot answer:
+  # GitHub Packages answers nothing without one, not even a 404.
   kmp:
     name: demo (kmp)
     needs: changes
-    if: needs.changes.outputs.kmp == 'true'
+    if: >-
+      needs.changes.outputs.kmp == 'true' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     env:
-      # The Android half of the Kotlin Multiplatform module is JNI and not
-      # cinterop, so it wants the same `.so` the AAR does — and configuring
-      # `:kmp:marsrs-xlog` fails on a `native/android/` with no ABI in it.
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      NDK_VERSION: 27.1.12297006
+      # What `demo/kmp/settings.gradle.kts` reads. It takes the credentials
+      # out of the environment and not out of `gradle.properties`, because a
+      # token written into a file is one `git add -A` away from the remote;
+      # the comment there says so. `GITHUB_ACTOR` is already in the
+      # environment of every step, and this is the one that is not.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install the Android NDK
-        run: .github/scripts/install_android_ndk.sh
-      # The three targets the script builds on this host want linkers `apt`
-      # carries and the image does not: linuxArm64 and mingwX64 cross-compile,
-      # and `zstd-sys` compiles C through cc-rs, so it is the C compiler *and
-      # the libc headers* of each triple that have to be there — `gcc-aarch64-
-      # linux-gnu` alone compiles a C file that includes <stdint.h> into a
-      # `bits/libc-header-start.h: No such file or directory`.
-      - name: Install the cross toolchains
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc-aarch64-linux-gnu libc6-dev-arm64-cross mingw-w64
-      # `libmars_ffi.a` per Kotlin/Native target, which cinterop embeds into
-      # the klib. `platforms/kmp` does not compile them — the release builds
-      # them once per host — so without this the composite build below has
-      # nothing to link the demo's executable against. What it builds is what
-      # this host can: Linux, and not the Apple targets.
-      - name: Build the native archives
-        run: scripts/build_kmp_native.sh platforms/kmp/native
-      # `RUSTFLAGS` is empty for the same reason the Android job empties it:
-      # the 16 KiB page size comes from .cargo/config.toml.
-      - name: Build libmarsrsxlog.so for the Android half
-        env:
-          RUSTFLAGS: ''
-        run: scripts/build_android.sh platforms/kmp/native/android
       # The Linux half of the two targets the build declares, and not `build`:
       # `macosArm64` is the other, and Kotlin/Native links a macOS binary on a
       # macOS host and nowhere else, so a `build` on this runner would fail on
       # a target that has nothing to do with this commit. Both targets compile
       # the same `commonMain`, which is the half the demo is.
-      # Last of the three, and not first: configuring `:marsrs-xlog` reads
-      # `native/` and fails on an empty one, so the archives above have to be
-      # there before this runs.
-      # The package of this checkout, published where `mavenLocal()` of
-      # demo/kmp will find it. Not a composite build: an included build is
-      # compiled against the *including* build's resolved dependencies, and
-      # `platforms/kmp` is pinned to Kotlin 2.2.20 — under the demo's 2.4.20
-      # its own source stops compiling. Publishing keeps the two builds on
-      # their own versions.
-      #
-      # `-PpublishedVersion` is the version the demo's catalog asks for; left
-      # alone the build stamps `0.0.0`, which resolves to nothing.
-      - name: Publish the package of this checkout
-        working-directory: platforms/kmp
-        run: ./gradlew publishToMavenLocal -PpublishedVersion=0.1.0-alpha.3
       - name: Link the Linux executable
         working-directory: demo/kmp
         run: ./gradlew linkDebugExecutableLinuxX64

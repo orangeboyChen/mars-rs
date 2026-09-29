@@ -18,17 +18,6 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        // First, because inside a checkout this is where the package of the
-        // tree beside this one is: `.github/workflows/demo.yml` publishes
-        // `platforms/kmp` here before it builds this app, so what the demo
-        // compiles against is the Kotlin in the tree and not a tag.
-        //
-        // Not a composite build, which was the first thing tried and does not
-        // work here: an included build is compiled against the *including*
-        // build's resolved dependencies, and `platforms/kmp` is pinned to
-        // Kotlin 2.2.20 — under this app's 2.4.20 its own source stops
-        // compiling (`Dispatchers.IO` is not the same symbol there).
-        mavenLocal()
         mavenCentral()
         // Where the Kotlin Multiplatform packages of the port are published:
         // `marsrs-kmp` for the whole port and `xlog-kmp` for the logging half.
@@ -54,7 +43,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "marsrs-demo-kmp"
 
-// Where the package comes from inside a checkout is answered by the
-// repository list above and not here. See `mavenLocal()`.
     }
 }
