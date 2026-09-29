@@ -4,12 +4,13 @@
 #   sh scripts/compat/comm.sh
 #
 # `stn.sh` proves the long link's wire format, `shortlink.sh` the short link's
-# and `sdt.sh` the URL of an HTTP check. This one proves the three that sit under
+# and `sdt.sh` the URL of an HTTP check. This one proves the four that sit under
 # all of them: `mars/comm/basepacker.cc` — the package the long link spoke
 # before `longlink_packer.cc` took it over, and the `Simple*` pair of a length
 # and a body — `mars/comm/adler32.c`, the hash the first one puts over its URL
-# and its body, and `mars/comm/strutil.cc`, the string helpers every one of them
-# spells its URL with.
+# and its body, `mars/comm/strutil.cc`, the string helpers every one of them
+# spells its URL with, and `mars/comm/socket/socket_address.cc`, the address a
+# caller connects to.
 #
 # A case asks three things:
 #
@@ -45,6 +46,27 @@
 #   string at all, and the port answers "not found".
 # - `Str2Hex` of more than 1024 characters, which the C++ asserts on.
 #
+# Two more belong to `socket_address`, and they are why its table is in two:
+#
+# - The three strings of a NAT64 address. The C++ writes the well-known prefix
+#   and then `inet_ntop`s the address into `ip_ + 9` — but the address it hands
+#   over is the v6 one and not the IPv4 one it has just taken out of it, so its
+#   `ip_` is `64:ff9b::64:ff9b::c000:201`, its `ip()` is `64:ff9b::c000:201`
+#   and its `url()` is `[64:ff9b::64:ff9b::c000:201]:80`. The port answers
+#   `[64:ff9b::192.0.2.1]:80` and `192.0.2.1`. The address behind them, which
+#   is what the table of the address compares, is the same 16 bytes on both
+#   sides.
+# - The ip text `socket_address(const char*)` will take. `inet_pton` reads a
+#   zero-padded octet as decimal and the port's parse refuses one, so
+#   `010.1.1.1` is a valid `10.1.1.1` in the C++ and `AF_UNSPEC` here. No case
+#   feeds one in; the address table is about the bytes and not the parse.
+#
+# The two `socket_address` calls that ask the platform which network it is on —
+# `v4tonat64_address` and `fix_current_nat64_addr`, which look the NAT64 prefix
+# up over DNS — are not driven either: a harness has to answer the same line on
+# every run, on a machine with no NAT64 in front of it. `upstream_comm.cpp`
+# stands one in for each of them so that the rest of the class links.
+#
 # `adler32` has one case it cannot have, and it is why the seeded ones below
 # start from a real checksum: the C++ reduces a seed whose two halves are not
 # already below 65521 and the port hands it back unchanged. No caller in mars
@@ -70,7 +92,8 @@ CPP=$OUT/upstream_comm
 
 if [ ! -x "$CPP" ]; then
     MARS_SRC="$REPO/scripts/compat/upstream_comm.cpp" \
-    MARS_SRCS="$UP/mars/comm/basepacker.cc \
+    MARS_SRCS="$UP/mars/comm/socket/socket_address.cc \
+               $UP/mars/comm/basepacker.cc \
                $UP/mars/comm/autobuffer.cc \
                $UP/mars/comm/ptrbuffer.cc \
                $UP/mars/comm/strutil.cc \
@@ -145,13 +168,40 @@ compare_readings() {
     done
 }
 
-# The five case tables, and the expectation of every case in them. A row holds
+# One line of two halves: `compare_line NAME FIELDS`, where `FIELDS` is a `cut`
+# range. `CROSS` ends as `ok` when both halves answer those fields the same way,
+# and `EXPECTED` when that is what Python wrote — so a table can be about the
+# end of a line the two sides agree on and not about the whole of it.
+compare_line() {
+    _name=$1
+    _fields=$2
+    cut -d' ' -f"$_fields" "$WORK/exp-$_name.txt" > "$WORK/$_name-expected.txt"
+    CROSS=ok
+    EXPECTED=ok
+    for _side in rust cpp; do
+        cut -d' ' -f"$_fields" "$WORK/$_name-$_side.txt" > "$WORK/$_name-$_side-cut.txt"
+        if [ "$_side" = cpp ] && ! cmp -s "$WORK/$_name-cpp-cut.txt" "$WORK/$_name-rust-cut.txt"; then
+            CROSS=FAILED
+            FAILED=$((FAILED + 1))
+            diff "$WORK/$_name-rust-cut.txt" "$WORK/$_name-cpp-cut.txt" || true
+        fi
+        if ! cmp -s "$WORK/$_name-$_side-cut.txt" "$WORK/$_name-expected.txt"; then
+            EXPECTED=FAILED
+            FAILED=$((FAILED + 1))
+            echo "$_name: $_side read $(cat "$WORK/$_name-$_side-cut.txt")" >&2
+            echo "$_name: want $(cat "$WORK/$_name-expected.txt")" >&2
+        fi
+    done
+}
+
+# The case tables, and the expectation of every case in them. A row holds
 # what the case is made of and nothing else; what has to come out of it is in
 # `exp-<name>.txt` next to it, and the bytes a `raw` case reads are in
 # `in-<name>.bin`.
 python3 - "$WORK" <<'PY'
 import hashlib
 import os
+import socket
 import struct
 import sys
 
@@ -457,6 +507,98 @@ for name, fn, data, arg, pos in [
 
 with open(os.path.join(work, "strutil.txt"), "w") as f:
     f.write("\n".join(rows) + "\n")
+
+# --- socket: an address, and every answer a caller reads off it. -------------
+# A row is `name key value port map text`: `key` is `ip`, `v4` or `v6`, and
+# `value` is the text of the address or its bytes in hex. What comes back is one
+# line of fifteen fields, and the two tables read different ends of it — see
+# `socket_line`.
+V4_MAPPED = bytes.fromhex("00000000000000000000ffff")
+NAT64 = bytes.fromhex("0064ff9b0000000000000000")
+WELL_KNOWN = "64:ff9b::"
+
+
+def socket_line(family, packed, port):
+    if family == "unspec":
+        return "unspec - 0 0 0 0 0 0 0 0 0 0 - - -"
+
+    if family == "v4":
+        host = int.from_bytes(packed, "big")
+        ip = socket.inet_ntop(socket.AF_INET, packed)
+        ipv6 = ip
+        length = 16
+        mapped = False
+    else:
+        mapped = packed[:12] == V4_MAPPED
+        host = int.from_bytes(packed[12:], "big")
+        length = 28
+        ipv6 = socket.inet_ntop(socket.AF_INET6, packed)
+        if mapped or packed[:8] == NAT64[:8]:
+            # a prefix `ip()` strips: a v4-mapped address on both sides, and a
+            # NAT64 one on the port's
+            ip = socket.inet_ntop(socket.AF_INET, packed[12:])
+            if not mapped:
+                ipv6 = WELL_KNOWN + ip
+        else:
+            ip = ipv6
+    url = ("%s:%d" % (ip, port)) if family == "v4" else ("[%s]:%d" % (ipv6, port))
+
+    # `valid_server_address(_allowloopback, _ignore_port)`, both false
+    if family == "v4" or mapped:
+        server = port != 0 and host not in (0, 0xFFFFFFFF, 0x7F000001)
+    else:
+        server = True  # the `// TODO` branch: a real v6 address is taken as it comes
+    one = 1 if server else 0
+    return "%s %s %d %d %d %d %d %d %d %d %d %d %s %s %s" % (
+        family,
+        packed.hex(),
+        port,
+        1,
+        1 if (family == "v4" or mapped) else 0,
+        1 if (family == "v6" and not mapped) else 0,
+        1 if mapped else 0,
+        length,
+        one,
+        1 if (family == "v4" and host == 0x7F000001) else 0,
+        1 if (family == "v4" and host == 0xFFFFFFFF) else 0,
+        1 if (family == "v4" and host == 0xFFFFFFFF and port != 0) else 0,
+        ip,
+        ipv6,
+        url,
+    )
+
+
+def pton(text):
+    return socket.inet_pton(socket.AF_INET6, text)
+
+
+rows = []
+for name, key, value, port, mapped, family, packed, text in [
+    ("a-v4-address", "ip", "8.8.8.8", 53, "no", "v4", bytes([8, 8, 8, 8]), "yes"),
+    ("the-loopback-address", "ip", "127.0.0.1", 80, "no", "v4", bytes([127, 0, 0, 1]), "yes"),
+    ("the-broadcast-address", "ip", "255.255.255.255", 7, "no", "v4", bytes([255] * 4), "yes"),
+    ("the-any-address", "ip", "0.0.0.0", 80, "no", "v4", bytes(4), "yes"),
+    ("a-port-of-nothing", "ip", "1.2.3.4", 0, "no", "v4", bytes([1, 2, 3, 4]), "yes"),
+    ("a-v6-address", "ip", "2001:db8::1", 443, "no", "v6", pton("2001:db8::1"), "yes"),
+    ("the-v6-loopback-address", "ip", "::1", 80, "no", "v6", pton("::1"), "yes"),
+    ("a-v4-address-written-as-a-mapped-one", "ip", "::ffff:1.2.3.4", 80, "no", "v6",
+     V4_MAPPED + bytes([1, 2, 3, 4]), "yes"),
+    ("bytes-of-a-v4-address", "v4", "01020304", 8080, "no", "v4", bytes([1, 2, 3, 4]), "yes"),
+    ("bytes-of-a-mapped-address", "v6", (V4_MAPPED + bytes([1, 2, 3, 4])).hex(), 80, "no", "v6",
+     V4_MAPPED + bytes([1, 2, 3, 4]), "yes"),
+    ("a-v4-address-mapped", "ip", "1.2.3.4", 80, "yes", "v6", V4_MAPPED + bytes([1, 2, 3, 4]),
+     "yes"),
+    # `ip`, `ipv6` and `url` of a NAT64 address are the port's own reading, so
+    # this case is in the table of the address and not in the one of the text
+    ("a-nat64-address", "v6", (NAT64 + bytes([192, 0, 2, 1])).hex(), 80, "no", "v6",
+     NAT64 + bytes([192, 0, 2, 1]), "no"),
+    ("an-ip-that-is-neither", "ip", "300.1.1.1", 80, "no", "unspec", b"", "yes"),
+]:
+    row(name, key, value, port, mapped, text)
+    expect(name, socket_line(family, packed, port))
+
+with open(os.path.join(work, "socket.txt"), "w") as f:
+    f.write("\n".join(rows) + "\n")
 PY
 
 # --- adler32 -----------------------------------------------------------------
@@ -593,6 +735,30 @@ while read -r name fn data arg pos; do
 
     printf '| %s | %s | %s |\n' "$name" "$CROSS" "$EXPECTED"
 done < "$WORK/strutil.txt"
+
+# --- socket ------------------------------------------------------------------
+# One address per case, and the two tables read the two ends of the line it
+# answers with: the address itself — the family, the bytes, the port, the four
+# `valid_*`, the three `is*` and the length — and then the three strings. The
+# second table is the one a NAT64 address is not in, because there the strings
+# are the port's own reading and not the C++'s (see the head of this file).
+printf '\n### socket address\n\n| case | cross-read | expected |\n|---|---|---|\n'
+while read -r name key value port map text; do
+    set -- "--$key=$value" "--port=$port"
+    if [ "$map" = yes ]; then set -- "$@" --map=yes; fi
+
+    "$RUST" socket "$@" > "$WORK/$name-rust.txt"
+    "$CPP" socket "$@" > "$WORK/$name-cpp.txt"
+    compare_line "$name" 1-12
+    printf '| %s | %s | %s |\n' "$name" "$CROSS" "$EXPECTED"
+done < "$WORK/socket.txt"
+
+printf '\n### socket text\n\n| case | cross-read | expected |\n|---|---|---|\n'
+while read -r name key value port map text; do
+    if [ "$text" = no ]; then continue; fi
+    compare_line "$name" 13-15
+    printf '| %s | %s | %s |\n' "$name" "$CROSS" "$EXPECTED"
+done < "$WORK/socket.txt"
 
 if [ "$FAILED" -ne 0 ]; then
     echo "$FAILED check(s) failed" >&2

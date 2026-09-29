@@ -7,6 +7,7 @@
 //   upstream_comm packer unpack --in=PATH
 //   upstream_comm simple pack --kind=short|int --data=HEX --out=PATH
 //   upstream_comm simple unpack --kind=short|int --in=PATH
+//   upstream_comm socket --ip=TEXT|--v4=HEX|--v6=HEX --port=N [--map=yes]
 //   upstream_comm strutil FN --data=HEX [--arg=HEX] [--pos=N]
 //
 // `strutil` is the string helpers: `--data` is the bytes of the string and
@@ -14,6 +15,12 @@
 // needle — both hex so that a byte the shell would eat is still one a case can
 // name. One line comes back, and it is the same line `comm-compat` prints for
 // the same call.
+//
+// `socket` prints one line of what a caller reads off a `socket_address`: the
+// family, the bytes of the address, the port, the four `valid_*`, the three
+// `is*` and the length, and then `ip`, `ipv6` and `url`, an empty one printed
+// as `-` — the same line `comm-compat` prints for the same address, so the two
+// can be diffed.
 //
 // `packer unpack` and `simple unpack` print one line: the `int` the C++ answers,
 // then what it read out of the package — the URL, the sequence and the length
@@ -36,9 +43,30 @@
 #include "mars/comm/adler32.h"
 #include "mars/comm/autobuffer.h"
 #include "mars/comm/basepacker.h"
+#include "mars/comm/socket/socket_address.h"
 #include "mars/comm/strutil.h"
 
+// `socket_address` asks the platform which network it is on in two places —
+// `v4tonat64_address` and `fix_current_nat64_addr`, which look the NAT64 prefix
+// up over DNS — and a harness has to answer the same line on every run, on a
+// machine with no NAT64 in front of it. Neither is a call the harness drives;
+// what is below is a stand-in for them so that the rest of the class links, and
+// it sits outside the anonymous namespace because a link-time symbol is what
+// the two calls need.
+bool ConvertV4toNat64V6(const struct in_addr&, struct in6_addr&) {
+    return false;
+}
+
+bool GetNetworkNat64Prefix(struct in6_addr&) {
+    return false;
+}
+
+TLocalIPStack local_ipstack_detect() {
+    return ELocalIPStack_IPv4;
+}
+
 namespace {
+
 
 // `NULL` for an option the command line did not give, which is not the same
 // thing as one it gave empty: `--data=` is a body of no bytes at all.
@@ -210,6 +238,82 @@ int simple(int argc, char** argv) {
     return 1;
 }
 
+// An empty string, which is what `ip()` answers for an address that never
+// parsed, is not a field a line can hold: it would move every field behind it.
+const char* or_dash(const char* s) {
+    return (NULL == s || '\0' == *s) ? "-" : s;
+}
+
+socket_address make_address(const char* ip_text,
+                            const std::vector<unsigned char>& v4,
+                            const std::vector<unsigned char>& v6,
+                            uint16_t port) {
+    if (ip_text != NULL) return socket_address(ip_text, port);
+
+    if (16 == v6.size()) {
+        sockaddr_in6 addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin6_family = AF_INET6;
+        addr.sin6_port = htons(port);
+        memcpy(&addr.sin6_addr, &v6[0], 16);
+        return socket_address(addr);
+    }
+
+    if (4 == v4.size()) {
+        sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        memcpy(&addr.sin_addr, &v4[0], 4);
+        return socket_address(addr);
+    }
+
+    // Nothing to build one out of, which is what the C++ is left with when the
+    // ip did not parse either.
+    return socket_address("", port);
+}
+
+// `socket_address` — one line of what a caller reads off an address: the
+// family, the bytes of it, the port, the four `valid_*`, the three `is*` and
+// the length, and then the three strings, an empty one printed as `-`. One of
+// `--ip=TEXT`, `--v4=HEX` and `--v6=HEX` says which address, and `--map=yes`
+// puts `v4tov4mapped_address()` behind it.
+int addresses(int argc, char** argv) {
+    const char* port_text = opt(argc, argv, "port");
+    uint16_t port = (uint16_t)(port_text ? strtoul(port_text, NULL, 10) : 0);
+    socket_address addr = make_address(opt(argc, argv, "ip"),
+                                       unhex(opt(argc, argv, "v4")),
+                                       unhex(opt(argc, argv, "v6")),
+                                       port);
+    if (NULL != opt(argc, argv, "map")) addr.v4tov4mapped_address();
+
+    const sockaddr* sa = &addr.address();
+    if (AF_INET == sa->sa_family) {
+        printf("v4 %s ", hex((const unsigned char*)&((const sockaddr_in*)sa)->sin_addr, 4).c_str());
+    } else if (AF_INET6 == sa->sa_family) {
+        printf("v6 %s ",
+               hex((const unsigned char*)&((const sockaddr_in6*)sa)->sin6_addr, 16).c_str());
+    } else {
+        printf("unspec - ");
+    }
+
+    printf("%u %d %d %d %d %u %d %d %d %d %s %s %s\n",
+           addr.port(),
+           addr.valid(),
+           addr.isv4(),
+           addr.isv6(),
+           addr.isv4mapped_address(),
+           (unsigned int)addr.address_length(),
+           addr.valid_server_address(false, false),
+           addr.valid_loopback_ip(),
+           addr.valid_broadcast_ip(),
+           addr.valid_broadcast_address(),
+           or_dash(addr.ip()),
+           or_dash(addr.ipv6()),
+           or_dash(addr.url()));
+    return 0;
+}
+
 int checksum(int argc, char** argv) {
     const char* seed_text = opt(argc, argv, "seed");
     std::vector<unsigned char> data = unhex(opt(argc, argv, "data"));
@@ -290,6 +394,7 @@ int main(int argc, char** argv) {
     if (command == "adler32") return checksum(argc, argv);
     if (command == "packer") return packer(argc, argv);
     if (command == "simple") return simple(argc, argv);
+    if (command == "socket") return addresses(argc, argv);
     if (command == "strutil") return strings(argc, argv);
 
     fprintf(stderr,
@@ -300,6 +405,8 @@ int main(int argc, char** argv) {
             "       upstream_comm simple pack --kind=short|int --data=HEX "
             "--out=PATH\n"
             "       upstream_comm simple unpack --kind=short|int --in=PATH\n"
+            "       upstream_comm socket --ip=TEXT|--v4=HEX|--v6=HEX "
+            "--port=N [--map=yes]\n"
             "       upstream_comm strutil FN --data=HEX [--arg=HEX] "
             "[--pos=N]\n");
     return 1;

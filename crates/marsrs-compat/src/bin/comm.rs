@@ -9,8 +9,14 @@
 //! comm-compat packer unpack --in=PATH
 //! comm-compat simple pack --kind=short|int --data=HEX --out=PATH
 //! comm-compat simple unpack --kind=short|int --in=PATH
+//! comm-compat socket --ip=TEXT|--v4=HEX|--v6=HEX --port=N [--map=yes]
 //! comm-compat strutil FN --data=HEX [--arg=HEX] [--pos=N]
 //! ```
+//!
+//! `socket` is one line of what a caller reads off a [`SocketAddress`]: the
+//! family, the bytes of the address, the port, the four `valid_*`, the three
+//! `is*` and the length, and then `ip`, `ipv6` and `url`, an empty one printed
+//! as `-`. `--map=yes` maps the address to its `::ffff:` form first.
 //!
 //! `strutil` is the string helpers: `--data` is the bytes of the string, hex
 //! so that a byte the shell would eat is still one a case can name, and
@@ -28,6 +34,7 @@
 //! the sign of its code and not on the code itself.
 
 use std::collections::BTreeMap;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::process::ExitCode;
 
 use marsrs_comm::adler32::adler32_seeded;
@@ -35,6 +42,7 @@ use marsrs_comm::basepacker::{
     packer_pack, packer_unpack, simple_int_pack, simple_int_unpack, simple_short_pack,
     simple_short_unpack, PackerUnpacked, SimpleUnpacked,
 };
+use marsrs_comm::socket_address::SocketAddress;
 use marsrs_comm::strutil;
 
 fn main() -> ExitCode {
@@ -57,6 +65,7 @@ fn main() -> ExitCode {
         ("packer", Some("unpack")) => unpack_packer(&opts),
         ("simple", Some("pack")) => simple(&opts),
         ("simple", Some("unpack")) => unpack_simple(&opts),
+        ("socket", _) => socket(&opts),
         ("strutil", Some(name)) => strutil(name, &opts),
         _ => {
             usage();
@@ -81,6 +90,7 @@ fn usage() {
          comm-compat packer unpack --in=PATH\n       \
          comm-compat simple pack --kind=short|int --data=HEX --out=PATH\n       \
          comm-compat simple unpack --kind=short|int --in=PATH\n       \
+         comm-compat socket --ip=TEXT|--v4=HEX|--v6=HEX --port=N [--map=yes]\n       \
          comm-compat strutil FN --data=HEX [--arg=HEX] [--pos=N]"
     );
 }
@@ -165,6 +175,84 @@ fn unpack_simple(opts: &Opts) -> Result<(), String> {
     Ok(())
 }
 
+/// One `socket_address`, and every answer a caller reads off it: the family,
+/// the bytes of the address, the port, the four `valid_*`, the three `is*`,
+/// the length, and `ip`, `ipv6` and `url`.
+///
+/// The two calls that ask the platform which network it is on are not driven
+/// here: they look the NAT64 prefix up over DNS, and a harness has to answer
+/// the same line on every run.
+fn socket(opts: &Opts) -> Result<(), String> {
+    let port = number(opts, "port")? as u16;
+    let mut addr = match (opts.value("ip"), opts.value("v4"), opts.value("v6")) {
+        (Some(ip), _, _) => SocketAddress::new(ip, port),
+        (_, Some(v4), _) => SocketAddress::from_v4(array(unhex(v4)?)?, port),
+        (_, _, Some(v6)) => SocketAddress::from_v6(array(unhex(v6)?)?, port),
+        _ => return Err("socket needs --ip=TEXT, --v4=HEX or --v6=HEX".to_owned()),
+    };
+    if opts.value("map") == Some("yes") {
+        addr.v4_to_v4mapped_address();
+    }
+
+    let family = if !addr.valid() {
+        "unspec"
+    } else if addr.is_v6() || addr.is_v4mapped_address() {
+        "v6"
+    } else {
+        "v4"
+    };
+    // The bytes of the address as it was built: for a v4 one that is the text
+    // in `ip`, and for a v6 one the text in `ipv6`, which keeps the prefix a
+    // mapped or NAT64 address carries.
+    let bytes = match family {
+        "v4" => hex(&addr
+            .ip()
+            .parse::<Ipv4Addr>()
+            .map_err(|_| "ip is not a v4".to_owned())?
+            .octets()),
+        "v6" => hex(&addr
+            .ipv6()
+            .parse::<Ipv6Addr>()
+            .map_err(|_| "ipv6 is not a v6".to_owned())?
+            .octets()),
+        _ => "-".to_owned(),
+    };
+    println!(
+        "{family} {bytes} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+        addr.port(),
+        bit(addr.valid()),
+        bit(addr.is_v4()),
+        bit(addr.is_v6()),
+        bit(addr.is_v4mapped_address()),
+        addr.address_length(),
+        bit(addr.valid_server_address(false, false)),
+        bit(addr.valid_loopback_ip()),
+        bit(addr.valid_broadcast_ip()),
+        bit(addr.valid_broadcast_address()),
+        dash(addr.ip()),
+        dash(addr.ipv6()),
+        dash(addr.url()),
+    );
+    Ok(())
+}
+
+/// An empty string, which is what an address that never parsed answers with, is
+/// not a field a line can hold: it would move every field behind it.
+fn dash(s: &str) -> &str {
+    if s.is_empty() {
+        "-"
+    } else {
+        s
+    }
+}
+
+/// The bytes of `--v4` or `--v6`, which have to be exactly as many as the
+/// address is made of.
+fn array<const N: usize>(bytes: Vec<u8>) -> Result<[u8; N], String> {
+    bytes
+        .try_into()
+        .map_err(|_| format!("--v{N} is not {N} bytes"))
+}
 /// One `strutil` call, named by its action. `--data` is the bytes of the
 /// string and `--arg` the second string, both hex; `--pos` is where
 /// `ci_find_substr` starts looking.
