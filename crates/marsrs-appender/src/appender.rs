@@ -2227,7 +2227,7 @@ mod tests {
     use marsrs_buffer::CompressMode;
     use marsrs_crypt::{magic, LogCrypt, HEADER_LEN, TAILER_LEN};
     use std::collections::HashSet;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicU64, AtomicUsize};
 
     /// A trace record — one an app marked with
     /// `XLogger::ForwardToSysTrace` — is echoed only where the C++ echoes
@@ -3412,31 +3412,55 @@ mod tests {
     fn a_sink_that_logs_from_inside_itself_is_not_asked_again() {
         let _guard = crate::test_lock::serial();
         let tmp = tempfile::tempdir().unwrap();
-        crate::appender_open(config(tmp.path(), AppenderMode::Sync)).unwrap();
-        crate::appender_set_console_log(true);
+        // An appender of this test's own, and not the process-wide one. The
+        // sink is one process-wide static, so what any test of this binary
+        // echoes to a console reaches it: a record another test is writing
+        // through the default appender is counted here as well, and the
+        // count this test asserts is then not the count of its own records.
+        // Only this test knows the id of this instance, so only this test
+        // puts a record in front of the sink.
+        static ID: AtomicU64 = AtomicU64::new(0);
+        let id = crate::appender_open_instance(config(tmp.path(), AppenderMode::Sync)).unwrap();
+        ID.store(id, Ordering::Relaxed);
+        crate::appender_set_console_log_instance(id, true);
 
-        // The sink is one process-wide static, and so is the appender: both
-        // are taken away again on the way out, a panic in between included,
-        // or every later test of this binary writes through them.
         struct NoSink;
         impl Drop for NoSink {
             fn drop(&mut self) {
                 crate::set_console_fun(None);
-                crate::appender_close();
+                crate::appender_close_instance(ID.load(Ordering::Relaxed));
             }
         }
         let _no_sink = NoSink;
 
         static ASKED: AtomicUsize = AtomicUsize::new(0);
         fn log_from_inside(_info: &XLoggerInfo, log: &str) {
+            // The sink is installed process-wide, and not every record that
+            // reaches it was written through an open console switch: a
+            // diagnostic of the appender's own — an `open file error` of a
+            // file another test pointed at a directory — is put to the
+            // console whatever the switch says. Only the two records this
+            // test writes are what it counts.
+            let ours = matches!(log, "from the app" | "from the sink");
+            if !ours {
+                return;
+            }
             ASKED.fetch_add(1, Ordering::Relaxed);
             if log == "from the app" {
-                crate::appender_write(Some(&info(LogLevel::Info)), "from the sink");
+                crate::appender_write_instance(
+                    ID.load(Ordering::Relaxed),
+                    Some(&info(LogLevel::Info)),
+                    "from the sink",
+                );
             }
         }
         crate::set_console_fun(Some(log_from_inside));
 
-        crate::appender_write(Some(&info(LogLevel::Info)), "from the app");
+        crate::appender_write_instance(
+            ID.load(Ordering::Relaxed),
+            Some(&info(LogLevel::Info)),
+            "from the app",
+        );
 
         // Asked once and not twice: the record the sink wrote reached the
         // console on its way through and was not handed back to the sink.

@@ -27,8 +27,9 @@
 //!   [`NetCore::set_is_foreground`] and
 //!   [`NetCore::set_last_foreground_change_time`]: what a task that may go out
 //!   on a long link reads before it wakes one that is down. `IsActive` is
-//!   [`NetCore::set_active`] plus a `NetInfo` hook, which is all the
-//!   anti-avalanche check asks of it.
+//!   [`NetCore::set_active`] plus a `NetInfo` hook: the anti-avalanche check
+//!   asks it, and so does the timing sync, which the C++ connects to the very
+//!   signal the check is on.
 //! * the `MessageQueue` — the C++ `StartTask`, `RetryTasks` and the two
 //!   network-error handlers post themselves to it, which is what lets a queue
 //!   re-enter the net core from inside its own run. A `&mut` that a value
@@ -906,9 +907,21 @@ impl NetCore {
         &mut self.factory
     }
 
-    /// `__OnSignalActive(isactive)`.
+    /// `ActiveLogic::SignalActive` — which the C++ connects twice: once to
+    /// `NetCore::__OnSignalActive`, and once from [`TimingSync`]'s own
+    /// constructor to `TimingSync::OnActiveChanged`. One signal with two
+    /// listeners is one call with two listeners here, so the sync is asked to
+    /// move its alarm as well: without it the wait it re-arms is the
+    /// [`crate::timing_sync::INACTIVE_SYNC_INTERVAL`] of an app that is
+    /// never active, whichever way the app went.
     pub fn set_active(&mut self, is_active: bool) {
+        self.set_active_at(gettickcount(), is_active);
+    }
+
+    /// The same, with the reading handed in.
+    pub fn set_active_at(&mut self, now: u64, is_active: bool) {
         self.anti_avalanche().on_signal_active(is_active);
+        self.timing_sync.on_active_changed_at(now, is_active);
     }
 
     /// `ActiveLogic::Instance()->IsForeground()` — whether the app is in front,
@@ -2171,6 +2184,7 @@ mod tests {
     use crate::longlink_task_manager::Response as LongAnswer;
     use crate::shortlink_task_manager::Response as ShortAnswer;
     use crate::task_profile::LOCAL_LONG_LINK_RELEASED;
+    use crate::timing_sync::{ACTIVE_SYNC_INTERVAL, INACTIVE_SYNC_INTERVAL};
     use crate::{DynamicTimeoutStatus, RespHandle, RunId, TaskFailHandleType, NET_TYPE_WIFI};
 
     const NOW: u64 = 100 * 1000;
@@ -3610,6 +3624,26 @@ mod tests {
         assert_eq!(
             *judged.lock().unwrap_or_else(poisoned),
             vec![(MAIN.to_string(), true), ("second".to_string(), true)]
+        );
+    }
+
+    #[test]
+    fn the_active_signal_moves_the_sync_and_not_only_the_avalanche() {
+        let (mut core, _rec) = wired();
+        core.timing_sync().set_is_active(|| true);
+        core.timing_sync().set_is_logoned(|| true);
+
+        // `ActiveLogic::SignalActive` has two listeners in the C++, and the
+        // anti-avalanche check was the only one that heard it here
+        core.set_active_at(NOW, true);
+        assert_eq!(
+            core.timing_sync().due_time(),
+            Some(NOW + ACTIVE_SYNC_INTERVAL)
+        );
+        core.set_active_at(NOW + 1_000, false);
+        assert_eq!(
+            core.timing_sync().due_time(),
+            Some(NOW + 1_000 + INACTIVE_SYNC_INTERVAL)
         );
     }
 

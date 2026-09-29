@@ -168,8 +168,10 @@ impl TimingSync {
     }
 
     /// `OnLongLinkStatuChanged(_status, _channel_id)` — a link that came up
-    /// cancels the alarm and one that went down arms it. The other three
-    /// states are not looked at.
+    /// cancels the alarm and one that went down arms it, but only one that is
+    /// not armed already: the C++'s `Alarm::Start` answers `false` for an
+    /// alarm that is waiting, and this is the one caller of `Start` that does
+    /// not `Cancel` first. The other three states are not looked at.
     pub fn on_longlink_status_changed(&mut self, status: LongLinkStatus) {
         self.on_longlink_status_changed_at(gettickcount(), status)
     }
@@ -180,7 +182,14 @@ impl TimingSync {
             LongLinkStatus::Connected => {
                 self.due = None;
             }
-            LongLinkStatus::DisConnected => {
+            // `alarm_.Start(...)` with no `Cancel` first, which is what makes
+            // this one unlike [`TimingSync::on_network_change_at`] and
+            // [`TimingSync::on_active_changed_at`]: the C++'s `Alarm::Start`
+            // answers `false` for an alarm that is already waiting, so a
+            // disconnect under a sync that is due keeps the deadline it
+            // already had instead of pushing it out — a link that flaps every
+            // few seconds does not put the sync off for as long as it flaps.
+            LongLinkStatus::DisConnected if self.due.is_none() => {
                 self.start(now);
             }
             _ => {}
@@ -368,6 +377,25 @@ mod tests {
         assert_eq!(sync.due_time(), Some(1_000 + UNLOGIN_SYNC_INTERVAL));
         sync.on_longlink_status_changed_at(2_000, LongLinkStatus::ConnectFailed);
         assert_eq!(sync.due_time(), Some(1_000 + UNLOGIN_SYNC_INTERVAL));
+    }
+
+    #[test]
+    fn a_disconnect_does_not_push_a_sync_that_is_already_due_out() {
+        let mut sync = a_sync(0);
+        sync.set_net_info(|| 1);
+        sync.set_is_active(|| true);
+        let armed = sync.due_time().expect("the alarm the constructor armed");
+
+        // `Alarm::Start` on an alarm that is waiting is a no-op, and this is
+        // the one caller of `Start` that does not `Cancel` first
+        sync.on_longlink_status_changed_at(1_000, LongLinkStatus::DisConnected);
+        assert_eq!(sync.due_time(), Some(armed), "the deadline it already had");
+
+        // ... while one under an alarm that is not waiting arms it, which is
+        // what a link that came up and then went down does
+        sync.cancel();
+        sync.on_longlink_status_changed_at(2_000, LongLinkStatus::DisConnected);
+        assert_eq!(sync.due_time(), Some(2_000 + UNLOGIN_SYNC_INTERVAL));
     }
 
     #[test]
