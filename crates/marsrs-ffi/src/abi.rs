@@ -338,9 +338,9 @@ pub unsafe extern "C" fn mars_xlog_current_log_path(out: *mut c_char, len: c_uin
 /// [`mars_xlog_current_log_path`] of one instance.
 ///
 /// The only spelling an app that holds an instance has: the process-wide
-/// question is about the appender `mars_xlog_open` installed, and an app that
-/// never called it — one that opened its logger with
-/// [`mars_xlog_new_instance`] — has no answer to it at all.
+/// question is about the appender the JNI bridge installs from Rust, and no
+/// symbol of this ABI opens one, so an app that opened its logger with
+/// [`mars_xlog_new_instance`] has no answer to it at all.
 ///
 /// @return the number of bytes written excluding the terminating NUL, or
 /// [`MARS_XLOG_ERR_NULL_OUT`], [`MARS_XLOG_ERR_NO_SPACE`] (including `len == 0`)
@@ -630,9 +630,10 @@ pub extern "C" fn mars_xlog_get_level(instance: c_longlong) -> c_int {
     })
 }
 
-/// `mars::xlog::SetLevel` for an instance: `0` is the process-wide appender
-/// `mars_xlog_open` opened, so this is also how that one's level is set — and
-/// the level [`mars_xlog_get_level`] and [`mars_xlog_is_enabled_for`] answer.
+/// `mars::xlog::SetLevel` for an instance: `0` is the process-wide appender,
+/// which the JNI bridge installs from Rust and no symbol of this ABI opens,
+/// so this is also how that one's level is set — and the level
+/// [`mars_xlog_get_level`] and [`mars_xlog_is_enabled_for`] answer.
 ///
 /// `kLevelNone` (6) and anything above it disables the instance, and a
 /// negative level logs everything: the C++ casts the value straight to
