@@ -421,6 +421,27 @@ public enum MarsStn {
         mars_stn_trig_nooping()
     }
 
+    /// `ActiveLogic::OnForeground` — the app came to the front, or left it,
+    /// which is what a task asks before it wakes a long link that is down, and
+    /// what the anti-avalanche check and the timing sync are told about.
+    ///
+    /// `BaseEvent.onForeground` on Android is this call; a host of the C ABI has
+    /// no `BaseEvent` to make it on, so it makes it here. One that never does
+    /// gets the C++'s `ActiveLogic` as it is made — not in front, so nothing is
+    /// woken for a task — and ten minutes in the background end that, which
+    /// [`runPending`] counts.
+    public static func onForeground(_ isForeground: Bool) {
+        mars_stn_on_foreground(isForeground ? 1 : 0)
+    }
+
+    /// `GetSignalOnNetworkChange` — the network under the app changed.
+    ///
+    /// The C++ clears the net cache before it fires this; the port reads the
+    /// network on every ask, so there is no cache to clear.
+    public static func onNetworkChange() {
+        mars_stn_on_network_change()
+    }
+
     /// The app that is installed, which is the only thing the C ABI does not
     /// give back: `setApp` remembers it so that the next app releases it.
     private static var installed: AppBox?
