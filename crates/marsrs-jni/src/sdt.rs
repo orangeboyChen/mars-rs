@@ -69,10 +69,12 @@ impl Callback for Sink {
 
 /// The JSON reports handed to Java since the last call.
 ///
-/// This lives outside [`SdtState`] on purpose: a report is handed over while
-/// the app's own handler for the one before it may still be on the stack, so
-/// taking the state lock to record one would reach for a lock a caller is
-/// already behind.
+/// Not a field of [`SdtState`]: asking for one must not build a diagnosis to
+/// answer it, and reaching the state does — [`state`] makes the state the
+/// first time anything asks for it, and [`new_state`] is a whole core with a
+/// callback wired into it. A mutex of its own is also one a delivery does not
+/// share with the run it came out of, so a host that asks for what it has
+/// already been given never waits on a run, and a run never waits on it.
 fn delivered() -> &'static Mutex<Vec<String>> {
     static DELIVERED: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
     DELIVERED.get_or_init(|| Mutex::new(Vec::new()))
