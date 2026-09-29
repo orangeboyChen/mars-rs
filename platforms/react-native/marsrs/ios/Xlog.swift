@@ -222,9 +222,11 @@ internal final class Xlog: NSObject {
     /// negative, a NaN — what a `number` a sum with `undefined` in it answered
     /// — and anything above `UInt64.max` are three traps, and a trap in a
     /// method the JS thread called into is the app going down and not a setting
-    /// that was not taken. What the Kotlin half does with the same number is
-    /// cast it, so this is the cast: a size that does not fit is `0`, the one
-    /// `mars_xlog.h` reads as "do not split".
+    /// that was not taken. What does not fit is `0`, the one `mars_xlog.h`
+    /// reads as "do not split". The Kotlin half casts the same number instead
+    /// of narrowing it, so a size that does not fit is a saturated `Long`
+    /// there and `0` here — two answers to a number a JS caller has no use
+    /// for, and neither of them a crash.
     @objc(setMaxFileSize:bytes:)
     internal func setMaxFileSize(_ namePrefix: String, bytes: Double) {
         guard let handle = handles[namePrefix] else {
