@@ -181,7 +181,13 @@ public actual object SdtLogic {
     public actual fun takeReport(): String? {
         // What a run is holding for a caller that asks, and otherwise what the
         // C ABI is: one document either way, and taking it empties it.
-        return takePending() ?: drainReport()
+        //
+        // A document of no results is the C ABI's way of saying it was holding
+        // none — no count of the results comes with a report, so `{"details":[]}`
+        // is all there is to go on — and it is the one `null` this promises,
+        // the way the Android `actual` answers it: an app that asks whether
+        // anything was reported is answered without parsing a document.
+        return (takePending() ?: drainReport())?.takeUnless { it == NO_RESULTS }
     }
 
     /** Puts [report] by for the [takeReport] that comes looking for it. */
@@ -208,7 +214,10 @@ public actual object SdtLogic {
     }
 
     /**
-     * The document the C ABI is holding, or `null` when it is holding none.
+     * The document the C ABI is holding, which is the one of no results when it
+     * is holding none: [takeReport] is what answers `null` for that, and not
+     * this. `null` here is an error the C ABI answered instead of a document —
+     * a buffer that never grew big enough, or a diagnosis that is gone.
      *
      * Not [takeReport], which hands over a report a run put by first: a run that
      * reads this through that one would be handed the report of an *earlier*
@@ -287,6 +296,13 @@ public actual object SdtLogic {
 
     /** Where it stops: a diagnosis that reports more than a megabyte is not one an app parses. */
     private const val REPORT_BUFFER_LIMIT = 1_048_576
+
+    /**
+     * The document `report_json` writes for no results at all, which is what the
+     * C ABI hands over when there was nothing to take: the one [takeReport]
+     * answers `null` for.
+     */
+    private const val NO_RESULTS = "{\"details\":[]}"
 
     /**
      * One string the port reads, as a NUL-terminated copy in this scope: a
