@@ -1,14 +1,25 @@
 // The C++ half of the comm cross-read test: `mars/comm/basepacker.cc`,
-// `mars/comm/adler32.c` and `mars/comm/strutil.cc`, driven the way
+// `mars/comm/adler32.c`, `mars/comm/strutil.cc`, `mars/comm/http.cc` and
+// `mars/comm/socket/socket_address.cc`, driven the way
 // `scripts/compat/comm.sh` drives the Rust of the same files.
 //
 //   upstream_comm adler32 --data=HEX [--seed=N]
+//   upstream_comm http ACTION [--data=HEX] [--set=N:V|N:V] [--in=PATH]
 //   upstream_comm packer pack --url=U --seq=N --data=HEX [--hash=no] --out=PATH
 //   upstream_comm packer unpack --in=PATH
 //   upstream_comm simple pack --kind=short|int --data=HEX --out=PATH
 //   upstream_comm simple unpack --kind=short|int --in=PATH
 //   upstream_comm socket --ip=TEXT|--v4=HEX|--v6=HEX --port=N [--map=yes]
 //   upstream_comm strutil FN --data=HEX [--arg=HEX] [--pos=N]
+//
+// `http` is the request or the answer a caller writes and reads.
+// `request-line` and `status-line` print `ToString()` as hex, or, with
+// `--data`, what `FromString()` read out of that line. `fields` prints a head
+// and how many fields it holds, `reads` the numbers a caller reads out of one
+// and `looks` the one field `--name` asks for. `build` prints the bytes of a
+// request or of an answer and writes them to `--out`, and `parse` prints what
+// reading those bytes gives — the same line `comm-compat` prints for the same
+// call, so the two can be diffed.
 //
 // `strutil` is the string helpers: `--data` is the bytes of the string and
 // `--arg` the second string — the delimiters, the prefix or suffix, the
@@ -43,6 +54,7 @@
 #include "mars/comm/adler32.h"
 #include "mars/comm/autobuffer.h"
 #include "mars/comm/basepacker.h"
+#include "mars/comm/http.h"
 #include "mars/comm/socket/socket_address.h"
 #include "mars/comm/strutil.h"
 
@@ -314,6 +326,312 @@ int addresses(int argc, char** argv) {
     return 0;
 }
 
+// --- `mars/comm/http.cc` ----------------------------------------------------
+
+std::string hexs(const std::string& text) {
+    return hex((const unsigned char*)text.data(), text.size());
+}
+
+// The same as the one the socket half uses, for a string that may be empty.
+std::string or_dash(const std::string& s) {
+    return s.empty() ? std::string("-") : s;
+}
+
+http::THttpVersion http_version(const char* text) {
+    const char* wanted = (text != NULL) ? text : "HTTP/1.1";
+    for (size_t i = 0; i < sizeof(http::kHttpVersionString) / sizeof(http::kHttpVersionString[0]);
+         ++i) {
+        if (0 == strcmp(wanted, http::kHttpVersionString[i])) return (http::THttpVersion)i;
+    }
+    return http::kVersion_Unknow;
+}
+
+http::RequestLine::THttpMethod http_method(const char* text) {
+    const char* wanted = (text != NULL) ? text : "GET";
+    for (size_t i = 0; i < http::RequestLine::kMax; ++i) {
+        if (0 == strcmp(wanted, http::RequestLine::kHttpMethodString[i]))
+            return (http::RequestLine::THttpMethod)i;
+    }
+    return http::RequestLine::kUnknown;
+}
+
+// `--set`, `--manipulate` and `--update` are `|`-separated lists of
+// `name:value`, and the first colon is the one that parts them: a field's
+// value may hold another.
+std::vector<std::pair<std::string, std::string>> field_list(const char* value) {
+    std::vector<std::pair<std::string, std::string>> out;
+    if (value == NULL) return out;
+    std::string text(value);
+    size_t at = 0;
+    while (at <= text.size()) {
+        size_t bar = text.find('|', at);
+        if (bar == std::string::npos) bar = text.size();
+        std::string field = text.substr(at, bar - at);
+        size_t colon = field.find(':');
+        if (colon != std::string::npos)
+            out.push_back(std::make_pair(field.substr(0, colon), field.substr(colon + 1)));
+        at = bar + 1;
+    }
+    return out;
+}
+
+http::HeaderFields make_fields(int argc, char** argv) {
+    http::HeaderFields fields;
+    const std::vector<std::pair<std::string, std::string>> set = field_list(opt(argc, argv, "set"));
+    for (size_t i = 0; i < set.size(); ++i) fields.HeaderFiled(set[i]);
+    const std::vector<std::pair<std::string, std::string>> manipulate =
+        field_list(opt(argc, argv, "manipulate"));
+    for (size_t i = 0; i < manipulate.size(); ++i) fields.Manipulate(manipulate[i]);
+    const std::vector<std::pair<std::string, std::string>> update =
+        field_list(opt(argc, argv, "update"));
+    for (size_t i = 0; i < update.size(); ++i) fields.InsertOrUpdate(update[i]);
+    return fields;
+}
+
+// `IStreamBodyProvider` — the body of an answer that is already framed, which
+// is what `--chunks=HEX` hands over. `HaveData()` is `false` for a body of no
+// bytes, which is what makes `HttpToBuffer` write the head alone for one.
+class ChunkProvider : public http::IStreamBodyProvider {
+ public:
+    void Set(const std::vector<unsigned char>& data) {
+        data_ = data;
+    }
+    bool HaveData() const override {
+        return !data_.empty() && !sent_;
+    }
+    bool Data(AutoBuffer& _body) override {
+        if (data_.empty()) return false;
+        _body.Write(&data_[0], data_.size());
+        sent_ = true;
+        return true;
+    }
+    bool Eof() const override {
+        return sent_;
+    }
+
+ private:
+    std::vector<unsigned char> data_;
+    bool sent_ = false;
+};
+
+// `RequestLine::ToString` / `FromString`, and the two of `StatusLine`. A line
+// `FromString` cannot read is `refused`, which is the `false` it answers.
+int first_line(int argc, char** argv, bool is_request) {
+    const http::THttpVersion version = http_version(opt(argc, argv, "version"));
+    const char* data = opt(argc, argv, "data");
+
+    if (data != NULL) {
+        const std::vector<unsigned char> raw = unhex(data);
+        std::string line((const char*)bytes(raw), raw.size());
+        if (is_request) {
+            http::RequestLine parsed;
+            if (parsed.FromString(line)) {
+                printf("%s %s %s\n",
+                       http::RequestLine::kHttpMethodString[parsed.Method()],
+                       parsed.Url().c_str(),
+                       http::kHttpVersionString[parsed.Version()]);
+            } else {
+                printf("refused\n");
+            }
+        } else {
+            http::StatusLine parsed;
+            if (parsed.FromString(line)) {
+                printf("%s %d %s\n",
+                       http::kHttpVersionString[parsed.Version()],
+                       parsed.StatusCode(),
+                       or_dash(parsed.ReasonPhrase().c_str()));
+            } else {
+                printf("refused\n");
+            }
+        }
+        return 0;
+    }
+
+    if (is_request) {
+        http::RequestLine line(http_method(opt(argc, argv, "method")),
+                               opt(argc, argv, "url") != NULL ? opt(argc, argv, "url") : "",
+                               version);
+        printf("%s\n", or_dash(hexs(line.ToString())).c_str());
+    } else {
+        const char* code_text = opt(argc, argv, "code");
+        http::StatusLine line(version,
+                              (int)(code_text ? strtoul(code_text, NULL, 10) : 0),
+                              opt(argc, argv, "reason") != NULL ? opt(argc, argv, "reason") : "");
+        printf("%s\n", or_dash(hexs(line.ToString())).c_str());
+    }
+    return 0;
+}
+
+// `HeaderFields::ToString` — how many fields a head holds, and the head.
+int head_fields(int argc, char** argv) {
+    http::HeaderFields fields = make_fields(argc, argv);
+    printf("%zu %s\n", fields.GetHeaders().size(), or_dash(hexs(fields.ToString())).c_str());
+    return 0;
+}
+
+// `ContentLength`, `KeepAliveTimeout`, the three `Is*` and the two ranges:
+// what a caller reads out of a head rather than out of a field.
+int head_reads(int argc, char** argv) {
+    const http::HeaderFields fields = make_fields(argc, argv);
+
+    long range_start = 0;
+    long range_end = 0;
+    const bool has_range = fields.Range(range_start, range_end);
+    char range[64];
+    snprintf(range, sizeof(range), "%ld,%ld", range_start, range_end);
+
+    uint64_t start = 0;
+    uint64_t end = 0;
+    uint64_t total = 0;
+    const bool has_content_range = fields.ContentRange(&start, &end, &total);
+    char content_range[96];
+    snprintf(content_range,
+             sizeof(content_range),
+             "%llu,%llu,%llu",
+             (unsigned long long)start,
+             (unsigned long long)end,
+             (unsigned long long)total);
+
+    printf("%llu %u %d %d %d %s %s\n",
+           (unsigned long long)fields.ContentLength(),
+           fields.KeepAliveTimeout(),
+           fields.IsTransferEncodingChunked() ? 1 : 0,
+           fields.IsConnectionClose() ? 1 : 0,
+           fields.IsConnectionKeepAlive() ? 1 : 0,
+           has_range ? range : "-",
+           has_content_range ? content_range : "-");
+    return 0;
+}
+
+// `HeaderField(key)` — one field, whichever way its name was written.
+int head_looks(int argc, char** argv) {
+    const char* name = opt(argc, argv, "name");
+    if (name == NULL) {
+        fprintf(stderr, "http looks needs --name=NAME\n");
+        return 1;
+    }
+    const http::HeaderFields fields = make_fields(argc, argv);
+    const char* found = fields.HeaderField(name);
+    printf("%s\n", (found == NULL || '\0' == *found) ? "-" : found);
+    return 0;
+}
+
+// `Builder::HttpToBuffer` — the bytes of a request or of an answer, which are
+// the artifact `parse` reads back.
+int build_http(int argc, char** argv) {
+    const char* mode_text = opt(argc, argv, "mode");
+    const http::TCsMode mode =
+        (mode_text != NULL && 0 == strcmp(mode_text, "respond")) ? http::kRespond : http::kRequest;
+    const http::THttpVersion version = http_version(opt(argc, argv, "version"));
+
+    http::Builder builder(mode);
+    if (http::kRequest == mode) {
+        builder.Request().Method(http_method(opt(argc, argv, "method")));
+        builder.Request().Url(opt(argc, argv, "url") != NULL ? opt(argc, argv, "url") : "");
+        builder.Request().Version(version);
+    } else {
+        const char* code_text = opt(argc, argv, "code");
+        builder.Status().Version(version);
+        builder.Status().StatusCode((int)(code_text ? strtoul(code_text, NULL, 10) : 0));
+        builder.Status().ReasonPhrase(
+            opt(argc, argv, "reason") != NULL ? opt(argc, argv, "reason") : "");
+    }
+    builder.Fields().CopyFrom(make_fields(argc, argv));
+
+    // A body of no bytes at all is still a body of its kind: a block one makes
+    // `HttpToBuffer` write nothing, and a stream one makes it write the head.
+    http::BufferBodyProvider block;
+    ChunkProvider chunks;
+    const char* body_text = opt(argc, argv, "body");
+    const char* chunks_text = opt(argc, argv, "chunks");
+    if (body_text != NULL) {
+        const std::vector<unsigned char> data = unhex(body_text);
+        if (!data.empty()) block.Buffer().Write(bytes(data), data.size());
+        builder.BlockBody(&block, false);
+    } else if (chunks_text != NULL) {
+        chunks.Set(unhex(chunks_text));
+        builder.StreamBody(&chunks, false);
+    }
+
+    AutoBuffer out;
+    const bool ok = builder.HttpToBuffer(out);
+    const char* out_path = opt(argc, argv, "out");
+    if (out_path != NULL) write_file(out_path, out.Ptr(), out.Length());
+    printf("%s %s\n",
+           ok ? "ok" : "none",
+           or_dash(hex((const unsigned char*)out.Ptr(), out.Length())).c_str());
+    return 0;
+}
+
+// `Parser::TRecvStatus`, named the way the port names it.
+const char* status_name(http::Parser::TRecvStatus status) {
+    switch (status) {
+        case http::Parser::kStart:
+            return "start";
+        case http::Parser::kFirstLine:
+            return "first-line";
+        case http::Parser::kFirstLineError:
+            return "first-line-error";
+        case http::Parser::kHeaderFields:
+            return "header-fields";
+        case http::Parser::kHeaderFieldsError:
+            return "header-fields-error";
+        case http::Parser::kBody:
+            return "body";
+        case http::Parser::kBodyError:
+            return "body-error";
+        case http::Parser::kEnd:
+            return "end";
+    }
+    return "start";
+}
+
+// `Parser::Recv` — how far the parser got, the two lengths, the body, the mode
+// the first line decided, and the first line and the head it read.
+int parse_http(int argc, char** argv) {
+    const char* in_path = opt(argc, argv, "in");
+    const std::vector<unsigned char> raw =
+        (in_path != NULL) ? read_file(in_path) : unhex(opt(argc, argv, "data"));
+    const char* only_header_text = opt(argc, argv, "header-only");
+    const bool only_header = (only_header_text != NULL && 0 == strcmp(only_header_text, "yes"));
+
+    AutoBuffer body;
+    http::MemoryBodyReceiver receiver(body);
+    http::Parser parser(&receiver, false);
+    const http::Parser::TRecvStatus status =
+        parser.Recv(bytes(raw), raw.size(), NULL, only_header);
+
+    const bool is_request = (http::kRequest == parser.CsMode());
+    const std::string first = is_request ? parser.Request().ToString() : parser.Status().ToString();
+    printf("%s %zu %zu %zu %s %s %s %s\n",
+           status_name(status),
+           parser.FirstLineLength(),
+           parser.HeaderLength(),
+           receiver.Length(),
+           is_request ? "request" : "respond",
+           or_dash(hexs(first)).c_str(),
+           or_dash(hexs(parser.Fields().ToString())).c_str(),
+           or_dash(hex((const unsigned char*)body.Ptr(), body.Length())).c_str());
+    return 0;
+}
+
+int http_command(int argc, char** argv) {
+    const char* name = (argc > 2) ? argv[2] : "";
+
+    if (0 == strcmp(name, "request-line")) return first_line(argc, argv, true);
+    if (0 == strcmp(name, "status-line")) return first_line(argc, argv, false);
+    if (0 == strcmp(name, "fields")) return head_fields(argc, argv);
+    if (0 == strcmp(name, "reads")) return head_reads(argc, argv);
+    if (0 == strcmp(name, "looks")) return head_looks(argc, argv);
+    if (0 == strcmp(name, "build")) return build_http(argc, argv);
+    if (0 == strcmp(name, "parse")) return parse_http(argc, argv);
+
+    fprintf(stderr,
+            "usage: upstream_comm http request-line|status-line|fields|reads|looks|build|parse "
+            "...\n");
+    return 1;
+}
+
 int checksum(int argc, char** argv) {
     const char* seed_text = opt(argc, argv, "seed");
     std::vector<unsigned char> data = unhex(opt(argc, argv, "data"));
@@ -392,6 +710,7 @@ int main(int argc, char** argv) {
     std::string command = (argc > 1) ? argv[1] : "";
 
     if (command == "adler32") return checksum(argc, argv);
+    if (command == "http") return http_command(argc, argv);
     if (command == "packer") return packer(argc, argv);
     if (command == "simple") return simple(argc, argv);
     if (command == "socket") return addresses(argc, argv);
@@ -399,6 +718,8 @@ int main(int argc, char** argv) {
 
     fprintf(stderr,
             "usage: upstream_comm adler32 --data=HEX [--seed=N]\n"
+            "       upstream_comm http ACTION [--data=HEX] [--set=N:V|N:V] "
+            "[--in=PATH]\n"
             "       upstream_comm packer pack --url=U --seq=N --data=HEX "
             "[--hash=no] --out=PATH\n"
             "       upstream_comm packer unpack --in=PATH\n"

@@ -4,13 +4,14 @@
 #   sh scripts/compat/comm.sh
 #
 # `stn.sh` proves the long link's wire format, `shortlink.sh` the short link's
-# and `sdt.sh` the URL of an HTTP check. This one proves the four that sit under
+# and `sdt.sh` the URL of an HTTP check. This one proves the five that sit under
 # all of them: `mars/comm/basepacker.cc` — the package the long link spoke
 # before `longlink_packer.cc` took it over, and the `Simple*` pair of a length
 # and a body — `mars/comm/adler32.c`, the hash the first one puts over its URL
 # and its body, `mars/comm/strutil.cc`, the string helpers every one of them
-# spells its URL with, and `mars/comm/socket/socket_address.cc`, the address a
-# caller connects to.
+# spells its URL with, `mars/comm/socket/socket_address.cc`, the address a
+# caller connects to, and `mars/comm/http.cc`, the request and the answer a
+# short link writes on one.
 #
 # A case asks three things:
 #
@@ -61,6 +62,26 @@
 #   `010.1.1.1` is a valid `10.1.1.1` in the C++ and `AF_UNSPEC` here. No case
 #   feeds one in; the address table is about the bytes and not the parse.
 #
+# Three more belong to `http`, and no case asks for any of them:
+#
+# - `KeepAliveTimeout` of a `Keep-Alive` whose `timeout=` is not at the front of
+#   a token. The C++ gets past `timeout=` by skipping `sizeof(const char*)` — 8
+#   — characters, and not the 7 the string is long, so `max=100, timeout=7`
+#   reads `=7`, which is not a timeout, and answers the default of 5. The port
+#   takes what is behind `timeout=` and answers 7. Every `Keep-Alive` in the
+#   tables below has it at the front, where the two agree.
+# - A status code that is not one. The C++ casts the `long` `strtol` read to an
+#   `int`, which is a different number again for anything past `INT_MAX`, and
+#   the port answers `0` for a code it cannot read.
+# - The first line a `Parser` refuses. The C++ keeps what it read out of it
+#   before it gave up — so `HTTP/3 200 OK` leaves a `version_unknown` behind —
+#   and the port keeps none of it. No case feeds one in: what a caller reads
+#   after a refusal is not a line anyone should be reading.
+#
+# A first line of fewer tokens than the C++ asks for aborts it — `xassert2` is
+# on, on every build that is not `NDEBUG` — so a request is always three tokens
+# here and an answer always two, which is what the wire carries anyway.
+#
 # The two `socket_address` calls that ask the platform which network it is on —
 # `v4tonat64_address` and `fix_current_nat64_addr`, which look the NAT64 prefix
 # up over DNS — are not driven either: a harness has to answer the same line on
@@ -96,6 +117,7 @@ if [ ! -x "$CPP" ]; then
                $UP/mars/comm/basepacker.cc \
                $UP/mars/comm/autobuffer.cc \
                $UP/mars/comm/ptrbuffer.cc \
+               $UP/mars/comm/http.cc \
                $UP/mars/comm/strutil.cc \
                $UP/mars/comm/unix/xlogger_threadinfo.cc \
                $UP/mars/comm/xlogger/xlogger.cc \
@@ -194,6 +216,30 @@ compare_line() {
     done
 }
 
+# One line each side answered, against the other's and against the one Python
+# wrote: `compare_answer NAME KIND`, where the two are
+# `<name>-<side>-<kind>.txt` and the expectation is `exp-<kind>-<name>.txt`.
+compare_answer() {
+    _name=$1
+    _kind=$2
+    CROSS=ok
+    EXPECTED=ok
+    for _side in rust cpp; do
+        if [ "$_side" = cpp ] \
+            && ! cmp -s "$WORK/$_name-cpp-$_kind.txt" "$WORK/$_name-rust-$_kind.txt"; then
+            CROSS=FAILED
+            FAILED=$((FAILED + 1))
+            diff "$WORK/$_name-rust-$_kind.txt" "$WORK/$_name-cpp-$_kind.txt" || true
+        fi
+        if ! cmp -s "$WORK/$_name-$_side-$_kind.txt" "$WORK/exp-$_kind-$_name.txt"; then
+            EXPECTED=FAILED
+            FAILED=$((FAILED + 1))
+            echo "$_name: $_side answered $(cat "$WORK/$_name-$_side-$_kind.txt")" >&2
+            echo "$_name: want $(cat "$WORK/exp-$_kind-$_name.txt")" >&2
+        fi
+    done
+}
+
 # The case tables, and the expectation of every case in them. A row holds
 # what the case is made of and nothing else; what has to come out of it is in
 # `exp-<name>.txt` next to it, and the bytes a `raw` case reads are in
@@ -247,6 +293,13 @@ def row(name, *fields):
 
 def expect(name, line):
     with open(os.path.join(work, "exp-%s.txt" % name), "w") as f:
+        f.write(line + "\n")
+
+
+def expect_of(kind, name, line):
+    # the same, for a case that answers more than one line — the line a head
+    # reads as, and the line the answer built out of it reads back as
+    with open(os.path.join(work, "exp-%s-%s.txt" % (kind, name)), "w") as f:
         f.write(line + "\n")
 
 
@@ -599,6 +652,489 @@ for name, key, value, port, mapped, family, packed, text in [
 
 with open(os.path.join(work, "socket.txt"), "w") as f:
     f.write("\n".join(rows) + "\n")
+
+# --- http: the request or the answer a caller writes and reads. ---------------
+# The third implementation of the same head: a head is one entry per name, held
+# in the order the C++'s `std::map` holds its entries — by name, and neither
+# name's case in the way — and a name that is written twice keeps the case of
+# the first time and the value of the last.
+VERSIONS = ["HTTP/0.9", "HTTP/1.0", "HTTP/1.1", "HTTP/2"]
+METHODS = ["GET", "POST", "OPTIONS", "HEAD", "PUT", "DELETE", "TRACE", "CONNECT"]
+DIGITS = "0123456789"
+
+
+def tokens(text):
+    # `strutil::SplitToken` with " ": a run of the delimiter is one, and a
+    # token of no characters does not come out of it.
+    return [token for token in text.split(" ") if token]
+
+
+def merge(fields):
+    # one entry per name, and a name that is written twice keeps the case of
+    # the first time and the value of the last
+    order = []
+    names = {}
+    values = {}
+    for name, value in fields:
+        key = name.lower()
+        if key not in values:
+            order.append(key)
+            names[key] = name
+        values[key] = value
+    return [(names[key], values[key]) for key in order]
+
+
+def head_of(fields):
+    return "".join("%s: %s\r\n" % it for it in sorted(merge(fields), key=lambda it: it[0].lower()))
+
+
+def to_int(text):
+    # what `strtol` reads: the digits at the front of a token
+    sign, rest = (1, text)
+    if rest[:1] in ("+", "-"):
+        sign, rest = (-1 if rest[0] == "-" else 1), rest[1:]
+    digits = ""
+    for char in rest:
+        if char not in DIGITS:
+            break
+        digits += char
+    return sign * int(digits) if digits else 0
+
+
+def to_uint(text):
+    # what `strtoull` reads: the digits at the front of a token, `0` when
+    # there are none, `UINT64_MAX` when they do not fit, and the wrap-around
+    # of a sign in front of them — which is why a `Content-Length` of `-1` is
+    # a body that cannot be read and not one of nothing
+    rest = text.lstrip()
+    negative = rest.startswith("-")
+    rest = rest[1:] if negative else rest.lstrip("+")
+    digits = ""
+    for char in rest:
+        if char not in DIGITS:
+            break
+        digits += char
+    if not digits:
+        return 0
+    value = min(int(digits), 2**64 - 1)
+    return (-value) % 2**64 if negative else value
+
+
+def to_hex(text):
+    # what `strtoull(text, NULL, 16)` reads out of the size line of a chunk:
+    # the digits of base 16 at the front of it, and `0x` in front of them
+    rest = text.strip()
+    if rest[:2].lower() == "0x":
+        rest = rest[2:]
+    digits = ""
+    for char in rest:
+        if char not in "0123456789abcdefABCDEF":
+            break
+        digits += char
+    return int(digits, 16) if digits else 0
+
+
+def version_of(text):
+    return text if text in VERSIONS else "version_unknown"
+
+
+def method_of(text):
+    return text if text in METHODS else "UNKNOWN"
+
+
+def request_line(method, url, version):
+    return "%s %s %s\r\n" % (method_of(method), url, version_of(version))
+
+
+def status_line(version, code, reason):
+    return "%s %d %s\r\n" % (version_of(version), code, reason)
+
+
+def request_from(text):
+    if "\r\n" not in text:
+        return "refused"
+    parts = tokens(text.split("\r\n")[0])
+    # a line of fewer than three tokens is one the C++ asserts on, so no case
+    # asks for one
+    if len(parts) < 3 or parts[0] not in METHODS or parts[2] not in VERSIONS:
+        return "refused"
+    return "%s %s %s" % (parts[0], parts[1], parts[2])
+
+
+def status_from(text):
+    if "\r\n" not in text:
+        return "refused"
+    parts = tokens(text.split("\r\n")[0])
+    if len(parts) < 2 or parts[0] not in VERSIONS:
+        return "refused"
+    reason = parts[2] if len(parts) == 3 else ""
+    return "%s %d %s" % (parts[0], to_int(parts[1]), reason if reason else "-")
+
+
+def fields_of(text):
+    # `--set`, `--manipulate` and `--update`: a `|`-separated list of
+    # `name:value`, and the first colon is the one that parts them.
+    out = []
+    if not text:
+        return out
+    for field in text.split("|"):
+        name, colon, value = field.partition(":")
+        if colon:
+            out.append((name, value))
+    return out
+
+
+def manipulated(fields, text):
+    # `Manipulate`: a value that is nothing but whitespace takes the field away
+    out = list(fields)
+    for name, value in fields_of(text):
+        if value.strip() == "":
+            out = [it for it in out if it[0].lower() != name.lower()]
+        else:
+            out.append((name, value))
+    return out
+
+
+def reads_of(text):
+    values = {name.lower(): value for name, value in fields_of(text)}
+
+    def field(name):
+        return values.get(name)
+
+    timeout = 5
+    if field("connection") is not None:
+        alive = field("keep-alive")
+        if alive and "timeout=" in alive:
+            for token in alive.split(","):
+                if "timeout=" in token:
+                    timeout = to_int(token.split("timeout=")[1])
+                    break
+            timeout = timeout if 0 < timeout < 60 else 5
+
+    range_ = "-"
+    whole = field("range")
+    if whole is not None and whole.startswith("bytes="):
+        rest = whole[6:].strip()
+        if "-" in rest:
+            start, _, end = rest.partition("-")
+            range_ = "%d,%d" % (to_int(start), to_int(end))
+
+    content_range = "-"
+    whole = field("content-range")
+    if whole is not None and whole.startswith("bytes "):
+        rest = whole[6:].strip()
+        if "-" in rest and "/" in rest:
+            start, _, rest = rest.partition("-")
+            end, _, total = rest.partition("/")
+            content_range = "%d,%d,%d" % (to_uint(start), to_uint(end), to_uint(total))
+
+    return "%d %d %d %d %d %s %s" % (to_uint(field("content-length") or ""),
+                                     timeout,
+                                     (field("transfer-encoding") or "").lower() == "chunked",
+                                     (field("connection") or "").lower() == "close",
+                                     (field("connection") or "").lower() == "keep-alive",
+                                     range_,
+                                     content_range)
+
+
+def looks_of(text, name):
+    for field_name, value in fields_of(text):
+        if field_name.lower() == name.lower():
+            return value if value else "-"
+    return "-"
+
+
+def build_of(mode, first, text, kind, body):
+    fields = fields_of(text)
+    if kind == "block":
+        # a block body of no bytes writes nothing at all, not even the head
+        if not body:
+            return "ok", b""
+        fields.append(("Content-Length", str(len(body))))
+    elif kind == "chunks":
+        fields.append(("Transfer-Encoding", "chunked"))
+    if not fields:
+        return "none", b""
+    out = first.encode() + head_of(fields).encode() + b"\r\n" + body
+    return "ok", out
+
+
+def parse_of(raw):
+    # what one `Recv` of a whole answer gives: the head is in it, and so is the
+    # body the head told it how long to expect
+    default = status_line("HTTP/1.0", 0, "").encode().hex()
+    if not raw:
+        return "start 0 0 0 respond %s - -" % default
+
+    crlf = raw.find(b"\r\n")
+    if crlf < 0:
+        # a first line that is not whole yet: nothing has been read out of it,
+        # not even the mode, so what a caller asking for the line gets is the
+        # one an answer starts with
+        return "first-line 0 0 0 respond %s - -" % default
+
+    crlf_crlf = raw.find(b"\r\n\r\n")
+    first = raw[:crlf + 2].decode("latin-1")
+    first_len = crlf + 2
+    parts = tokens(first[:-2])
+    if first.startswith("HTTP/"):
+        mode = "respond"
+        shown = status_line(parts[0], to_int(parts[1]), parts[2] if len(parts) == 3 else "")
+    else:
+        mode = "request"
+        shown = request_line(parts[0], parts[1], parts[2])
+
+    if crlf_crlf < 0:
+        return "header-fields %d 0 0 %s %s - -" % (first_len, mode, shown.encode().hex())
+
+    if crlf_crlf == crlf:
+        # the first line is the whole head, so there is no field block to
+        # measure and the body starts behind the line that ends it
+        fields, header_len, rest = [], 0, raw[crlf + 4:]
+    else:
+        header_len = crlf_crlf + 4 - first_len
+        fields = fields_of_blocks(raw[first_len:crlf_crlf + 4].decode("latin-1"))
+        rest = raw[crlf_crlf + 4:]
+
+    values = {name.lower(): value for name, value in fields}
+    close = (values.get("connection") or "").lower() == "close"
+    length = to_uint(values.get("content-length") or "")
+
+    if (values.get("transfer-encoding") or "").lower() == "chunked":
+        body = b""
+        status = "body"
+        while True:
+            size_end = rest.find(b"\r\n")
+            if size_end < 0:
+                break
+            size = to_hex(rest[:size_end].decode("latin-1"))
+            begin = size_end + 2
+            if size == 0:
+                # the last chunk: a size of nothing, and then the trailer it
+                # takes a `CRLF` of its own to end
+                if len(rest) >= begin + 2 and rest.find(b"\r\n", begin) >= 0:
+                    status = "end"
+                break
+            if len(rest) < begin + size + 2:
+                break
+            if rest[begin + size:begin + size + 2] != b"\r\n":
+                # a chunk that is not the size its own line says it is
+                status = "body-error"
+                break
+            body += rest[begin:begin + size]
+            rest = rest[begin + size + 2:]
+    elif close and length == 0:
+        # a body the peer closes the socket at the end of has no length
+        body, status = rest, ("body" if rest else "end")
+    elif len(rest) <= length:
+        body, status = rest, ("end" if len(rest) == length else "body")
+    else:
+        body, status = rest[:length], "end"
+
+    return "%s %d %d %d %s %s %s %s" % (status,
+                                        first_len,
+                                        header_len,
+                                        len(body),
+                                        mode,
+                                        shown.encode().hex(),
+                                        head_of(fields).encode().hex() or "-",
+                                        body.hex() or "-")
+
+
+def fields_of_blocks(block):
+    # `__ParserHeaders`: a line with no colon in it is a field of itself, a
+    # line of nothing but colons is skipped, and so is the empty line the head
+    # ends with.
+    out = []
+    for line in block.split("\r\n"):
+        if line == "" or all(char == ":" for char in line):
+            continue
+        name, colon, value = line.partition(":")
+        if not colon:
+            out.append((line, line))
+        elif len(line) > len(name) + 1:
+            out.append((name.strip(), value.strip()))
+    return out
+
+
+rows = []
+for name, kind, method, url, version, code, reason, data in [
+    ("a-get-request", "request-to", "GET", "/", "HTTP/1.1", "-", "-", "-"),
+    ("a-post-request", "request-to", "POST", "/cgi-bin/mars", "HTTP/1.1", "-", "-", "-"),
+    ("a-request-of-no-url", "request-to", "GET", "-", "HTTP/1.0", "-", "-", "-"),
+    ("a-request-of-http-2", "request-to", "GET", "/", "HTTP/2", "-", "-", "-"),
+    ("a-version-that-is-not-one", "request-to", "GET", "/", "HTTP/3", "-", "-", "-"),
+    ("a-method-that-is-not-one", "request-to", "FROB", "/", "HTTP/1.1", "-", "-", "-"),
+    ("a-request-read-back", "request-from", "-", "-", "-", "-", "-", "GET /cgi HTTP/1.1\r\n"),
+    ("a-line-with-no-crlf", "request-from", "-", "-", "-", "-", "-", "GET / HTTP/1.1"),
+    ("a-line-of-an-unknown-method", "request-from", "-", "-", "-", "-", "-", "FROB / HTTP/1.1\r\n"),
+    ("a-line-of-an-unknown-version", "request-from", "-", "-", "-", "-", "-", "GET / HTTP/3\r\n"),
+    ("a-line-of-a-fourth-word", "request-from", "-", "-", "-", "-", "-", "GET /a b HTTP/1.1\r\n"),
+    ("a-line-that-starts-blank", "request-from", "-", "-", "-", "-", "-", " GET / HTTP/1.1\r\n"),
+    ("a-status-line", "status-to", "-", "-", "HTTP/1.1", "200", "OK", "-"),
+    ("a-status-line-of-no-reason", "status-to", "-", "-", "HTTP/1.1", "404", "-", "-"),
+    ("a-status-read-back", "status-from", "-", "-", "-", "-", "-", "HTTP/1.1 200 OK\r\n"),
+    ("a-status-of-two-words", "status-from", "-", "-", "-", "-", "-", "HTTP/1.1 404 Not Found\r\n"),
+    ("a-status-of-no-reason", "status-from", "-", "-", "-", "-", "-", "HTTP/1.1 204\r\n"),
+    ("a-status-of-no-code", "status-from", "-", "-", "-", "-", "-", "HTTP/1.1 abc OK\r\n"),
+    ("a-status-that-is-not-one", "status-from", "-", "-", "-", "-", "-", "GET / HTTP/1.1\r\n"),
+]:
+    row(name, kind, method, url, version, code, reason,
+        # a line has a `CRLF` at the end of it, so the row carries it as hex
+        "" if data == "-" else data.encode("latin-1").hex())
+    if kind == "request-to":
+        expect_of("first", name,
+                  request_line(method, "" if url == "-" else url, version).encode().hex())
+    elif kind == "status-to":
+        expect_of("first", name,
+                  status_line(version, int(code),
+                              "" if reason == "-" else reason).encode().hex())
+    elif kind == "request-from":
+        expect_of("first", name, request_from(data))
+    else:
+        expect_of("first", name, status_from(data))
+
+with open(os.path.join(work, "http-first.txt"), "w") as f:
+    f.write("\n".join(rows) + "\n")
+
+rows = []
+for name, set_, manipulate, update in [
+    ("one-field", "Host:mars", "-", "-"),
+    ("two-fields-out-of-order", "Host:mars|Accept:*/*", "-", "-"),
+    ("a-name-of-another-case", "host:mars|Host:other", "-", "-"),
+    ("a-value-that-is-changed", "Host:mars|Host:other", "-", "-"),
+    ("a-value-of-nothing", "Host:", "-", "-"),
+    ("a-manipulated-field", "Host:mars", "Host:other", "-"),
+    ("a-field-manipulated-away", "Host:mars", "Host:", "-"),
+    ("an-updated-field", "Host:mars", "-", "Host:other"),
+    ("a-value-with-a-colon-in-it", "Location:http://mars/x", "-", "-"),
+    ("a-field-of-every-kind", "Content-Length:12|Connection:keep-alive|Host:mars", "-", "-"),
+    ("no-fields-at-all", "-", "-", "-"),
+]:
+    row(name, set_, manipulate, update)
+    # `--set`, then `--manipulate`, then `--update`, and the head that comes
+    # out of the three of them
+    fields = merge(manipulated(fields_of(set_), manipulate) + fields_of(update))
+    expect_of("fields", name,
+              "%d %s" % (len(fields), head_of(fields).encode().hex() or "-"))
+
+with open(os.path.join(work, "http-fields.txt"), "w") as f:
+    f.write("\n".join(rows) + "\n")
+
+# --- http reads ---------------------------------------------------------------
+rows = []
+for name, set_ in [
+    ("no-fields-at-all", "-"),
+    ("a-content-length", "Content-Length:12"),
+    ("a-content-length-that-is-not-one", "Content-Length:abc"),
+    ("a-content-length-that-is-negative", "Content-Length:-1"),
+    ("a-keep-alive-connection", "Connection:keep-alive"),
+    ("a-keep-alive-of-a-timeout", "Connection:keep-alive|Keep-Alive:timeout=7"),
+    ("a-timeout-behind-another", "Connection:keep-alive|Keep-Alive:max=100,timeout=7"),
+    ("a-timeout-of-nothing", "Connection:keep-alive|Keep-Alive:timeout=0"),
+    ("a-timeout-of-a-minute", "Connection:keep-alive|Keep-Alive:timeout=60"),
+    ("a-timeout-that-is-not-one", "Connection:keep-alive|Keep-Alive:timeout=abc"),
+    ("a-closed-connection", "Connection:close"),
+    ("a-chunked-body", "Transfer-Encoding:chunked"),
+    ("a-range", "Range:bytes=0-99"),
+    ("a-range-that-is-not-one", "Range:bytes=0"),
+    ("a-content-range", "Content-Range:bytes 0-99/100"),
+    ("a-head-of-every-kind",
+     "Connection:keep-alive|Content-Length:12|Keep-Alive:timeout=7|Range:bytes=0-99|Transfer-Encoding:chunked"),
+]:
+    row(name, set_)
+    expect_of("reads", name, reads_of(set_))
+
+with open(os.path.join(work, "http-reads.txt"), "w") as f:
+    f.write("\n".join(rows) + "\n")
+
+# --- http looks ---------------------------------------------------------------
+rows = []
+for name, set_, key in [
+    ("the-host", "Host:mars", "Host"),
+    ("the-host-by-another-case", "Host:mars", "host"),
+    ("a-field-that-is-not-there", "Host:mars", "Accept"),
+    ("a-value-of-nothing", "Host:", "Host"),
+    ("a-value-with-a-colon-in-it", "Location:http://mars/x", "Location"),
+    ("the-connection", "Connection:keep-alive|Content-Length:12", "connection"),
+    ("no-fields-at-all", "-", "Host"),
+]:
+    row(name, set_, key)
+    expect_of("looks", name, looks_of(set_, key))
+
+with open(os.path.join(work, "http-looks.txt"), "w") as f:
+    f.write("\n".join(rows) + "\n")
+
+# --- http build: a request or an answer, written by both sides. ---------------
+# `kind` is `none`, `block` or `chunks`, and `body` is the hex of the body — or
+# of the framed chunks — which is `-` for one of no bytes.
+CHUNKS = "340d0a6d6172730d0a300d0a0d0a"  # "4\r\nmars\r\n0\r\n\r\n"
+
+rows = []
+for name, mode, method, url, version, code, reason, set_, kind, body in [
+    ("a-get-request", "request", "GET", "/", "HTTP/1.1", "-", "-", "Host:mars", "none", "-"),
+    ("a-request-of-a-body", "request", "POST", "/cgi", "HTTP/1.1", "-", "-", "Host:mars",
+     "block", "6d617273"),
+    ("a-body-of-nothing", "request", "POST", "/cgi", "HTTP/1.1", "-", "-", "Host:mars",
+     "block", "-"),
+    ("a-request-of-chunks", "request", "POST", "/cgi", "HTTP/1.1", "-", "-", "Host:mars",
+     "chunks", CHUNKS),
+    ("a-request-of-no-fields", "request", "GET", "/", "HTTP/1.1", "-", "-", "-", "none", "-"),
+    ("an-answer", "respond", "-", "-", "HTTP/1.1", "200", "OK", "Host:mars", "none", "-"),
+    ("an-answer-of-a-body", "respond", "-", "-", "HTTP/1.1", "200", "OK", "Host:mars",
+     "block", "6d617273"),
+    ("an-answer-of-chunks", "respond", "-", "-", "HTTP/1.1", "404", "Not-Found", "Host:mars",
+     "chunks", CHUNKS),
+    ("an-answer-of-no-fields", "respond", "-", "-", "HTTP/1.0", "204", "-", "-", "none", "-"),
+]:
+    row(name, mode, method, url, version, code, reason, set_, kind, body)
+    if mode == "request":
+        first = request_line(method, "" if url == "-" else url, version)
+    else:
+        first = status_line(version, int(code), "" if reason == "-" else reason)
+    payload = b"" if body == "-" else bytes.fromhex(body)
+    answer, out = build_of(mode, first, "" if set_ == "-" else set_,
+                           None if kind == "none" else kind, payload)
+    expect_of("build", name, "%s %s" % (answer, out.hex() or "-"))
+    bytes_of(name, out)
+    # and the same bytes, read back by both sides
+    expect(name, parse_of(out))
+
+with open(os.path.join(work, "http-build.txt"), "w") as f:
+    f.write("\n".join(rows) + "\n")
+
+# --- http parse: bytes neither side wrote, read by both. ----------------------
+rows = []
+for name, data in [
+    # a name a case of another table has is not a name this one may have: the
+    # two share one `exp-<name>.txt`
+    ("an-answer-of-no-bytes", b""),
+    ("a-first-line-that-is-not-whole", b"HTTP/1.1 200 O"),
+    ("a-request-line-that-is-not-whole", b"GET / HTTP/1.1"),
+    ("a-head-that-is-not-whole", b"HTTP/1.1 200 OK\r\nHost: mar"),
+    ("a-whole-answer", b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nmars"),
+    ("an-answer-of-a-body-of-nothing", b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"),
+    ("a-body-that-is-short", b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nmars"),
+    ("a-body-that-is-long", b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nmars"),
+    ("a-closed-connection", b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nmars"),
+    ("a-closed-connection-of-nothing", b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n"),
+    ("a-chunked-body",
+     b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nmars\r\n0\r\n\r\n"),
+    ("a-chunk-that-is-not-the-size-it-says",
+     b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nmar\r\n0\r\n\r\n"),
+    ("a-chunked-body-that-is-not-whole",
+     b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nmars"),
+    ("a-request", b"GET / HTTP/1.1\r\nHost: mars\r\n\r\n"),
+    ("a-field-of-no-colon", b"HTTP/1.1 200 OK\r\nmars\r\n\r\n"),
+    ("a-field-of-colons", b"HTTP/1.1 200 OK\r\n:::\r\n\r\n"),
+    ("two-fields-of-one-name", b"HTTP/1.1 200 OK\r\nHost: a\r\nhost: b\r\n\r\n"),
+]:
+    row(name)
+    artifact(name, data)
+    expect(name, parse_of(data))
+
+with open(os.path.join(work, "http-parse.txt"), "w") as f:
+    f.write("\n".join(rows) + "\n")
 PY
 
 # --- adler32 -----------------------------------------------------------------
@@ -759,6 +1295,121 @@ while read -r name key value port map text; do
     compare_line "$name" 13-15
     printf '| %s | %s | %s |\n' "$name" "$CROSS" "$EXPECTED"
 done < "$WORK/socket.txt"
+
+# --- http ---------------------------------------------------------------------
+# The head of a request or of an answer, and then the whole of one: the first
+# line, the fields, what a caller reads out of a head, one field, the bytes a
+# `Builder` writes, and the reading a `Parser` makes of them. The last two
+# tables are the cross-read proper — each side parses the answer the other
+# wrote — and a `### http parse` case is a wire neither side wrote at all.
+printf '\n### http first line\n\n| case | cross-read | expected |\n|---|---|---|\n'
+while read -r name kind method url version code reason data; do
+    if [ "$method" = "-" ]; then method=""; fi
+    if [ "$url" = "-" ]; then url=""; fi
+    if [ "$reason" = "-" ]; then reason=""; fi
+    if [ "$code" = "-" ]; then code=0; fi
+    if [ "$data" = "-" ]; then data=""; fi
+
+    # a case is either a line the two sides write or one they read, and the
+    # action of a case that reads one is `--data`, which no other case passes
+    case $kind in
+        request-to) set -- http request-line --method="$method" --url="$url" --version="$version" ;;
+        status-to) set -- http status-line --version="$version" --code="$code" --reason="$reason" ;;
+        request-from) set -- http request-line --data="$data" ;;
+        *) set -- http status-line --data="$data" ;;
+    esac
+
+    "$RUST" "$@" > "$WORK/$name-rust-first.txt"
+    "$CPP" "$@" > "$WORK/$name-cpp-first.txt"
+    compare_answer "$name" first
+    printf '| %s | %s | %s |\n' "$name" "$CROSS" "$EXPECTED"
+done < "$WORK/http-first.txt"
+
+printf '\n### http fields\n\n| case | cross-read | expected |\n|---|---|---|\n'
+while read -r name set manipulate update; do
+    if [ "$set" = "-" ]; then set=""; fi
+    if [ "$manipulate" = "-" ]; then manipulate=""; fi
+    if [ "$update" = "-" ]; then update=""; fi
+
+    "$RUST" http fields --set="$set" --manipulate="$manipulate" --update="$update" \
+        > "$WORK/$name-rust-fields.txt"
+    "$CPP" http fields --set="$set" --manipulate="$manipulate" --update="$update" \
+        > "$WORK/$name-cpp-fields.txt"
+    compare_answer "$name" fields
+    printf '| %s | %s | %s |\n' "$name" "$CROSS" "$EXPECTED"
+done < "$WORK/http-fields.txt"
+
+printf '\n### http reads\n\n| case | cross-read | expected |\n|---|---|---|\n'
+while read -r name set; do
+    if [ "$set" = "-" ]; then set=""; fi
+
+    "$RUST" http reads --set="$set" > "$WORK/$name-rust-reads.txt"
+    "$CPP" http reads --set="$set" > "$WORK/$name-cpp-reads.txt"
+    compare_answer "$name" reads
+    printf '| %s | %s | %s |\n' "$name" "$CROSS" "$EXPECTED"
+done < "$WORK/http-reads.txt"
+
+printf '\n### http looks\n\n| case | cross-read | expected |\n|---|---|---|\n'
+while read -r name set key; do
+    if [ "$set" = "-" ]; then set=""; fi
+
+    "$RUST" http looks --set="$set" --name="$key" > "$WORK/$name-rust-looks.txt"
+    "$CPP" http looks --set="$set" --name="$key" > "$WORK/$name-cpp-looks.txt"
+    compare_answer "$name" looks
+    printf '| %s | %s | %s |\n' "$name" "$CROSS" "$EXPECTED"
+done < "$WORK/http-looks.txt"
+
+printf '\n### http build\n\n| case | bytes | cross-read | expected |\n|---|---|---|---|\n'
+while read -r name mode method url version code reason set kind body; do
+    if [ "$method" = "-" ]; then method=""; fi
+    if [ "$url" = "-" ]; then url=""; fi
+    if [ "$reason" = "-" ]; then reason=""; fi
+    if [ "$code" = "-" ]; then code=0; fi
+    if [ "$set" = "-" ]; then set=""; fi
+    if [ "$body" = "-" ]; then body=""; fi
+
+    set -- --mode="$mode" --method="$method" --url="$url" --version="$version" \
+        --code="$code" --reason="$reason" --set="$set"
+    # a body of no bytes is still a body of its kind, so `--body` and
+    # `--chunks` are passed empty rather than not at all
+    if [ "$kind" = block ]; then set -- "$@" --body="$body"; fi
+    if [ "$kind" = chunks ]; then set -- "$@" --chunks="$body"; fi
+
+    "$RUST" http build "$@" --out="$WORK/$name-rust.bin" > "$WORK/$name-rust-build.txt"
+    "$CPP" http build "$@" --out="$WORK/$name-cpp.bin" > "$WORK/$name-cpp-build.txt"
+
+    BYTES=ok
+    if ! cmp -s "$WORK/$name-rust.bin" "$WORK/$name-cpp.bin"; then
+        BYTES=FAILED
+        FAILED=$((FAILED + 1))
+        cmp "$WORK/$name-rust.bin" "$WORK/$name-cpp.bin" || true
+    fi
+    for side in rust cpp; do
+        if ! cmp -s "$WORK/$name-$side.bin" "$WORK/exp-$name.bin"; then
+            BYTES="$BYTES/expected"
+            FAILED=$((FAILED + 1))
+            cmp "$WORK/exp-$name.bin" "$WORK/$name-$side.bin" || true
+        fi
+    done
+
+    compare_answer "$name" build
+    printf '| %s | %s | %s | %s |\n' "$name" "$BYTES" "$CROSS" "$EXPECTED"
+done < "$WORK/http-build.txt"
+
+# The same answers, read back: each side parses the bytes the other wrote, and
+# its own.
+printf '\n### http build, read back\n\n| case | cross-read | expected |\n|---|---|---|\n'
+while read -r name rest; do
+    compare_readings "$name" "http parse" \
+        "$WORK/$name-rust.bin" "$WORK/$name-cpp.bin"
+    printf '| %s | %s | %s |\n' "$name" "$CROSS" "$EXPECTED"
+done < "$WORK/http-build.txt"
+
+printf '\n### http parse\n\n| case | cross-read | expected |\n|---|---|---|\n'
+while read -r name; do
+    compare_readings "$name" "http parse" "$WORK/in-$name.bin"
+    printf '| %s | %s | %s |\n' "$name" "$CROSS" "$EXPECTED"
+done < "$WORK/http-parse.txt"
 
 if [ "$FAILED" -ne 0 ]; then
     echo "$FAILED check(s) failed" >&2
