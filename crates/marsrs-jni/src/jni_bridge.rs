@@ -22,6 +22,7 @@ use marsrs_stn::{CgiProfile, LonglinkConfig, Task};
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::sync::OnceLock;
 
 use crate::stn_c2java::{Answer, Question};
@@ -1270,7 +1271,7 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
                 jni_sig!("(Ljava/lang/String;)Z"),
                 &[JValue::Object(&host)],
             );
-            Answer::Yes(bool_of(called))
+            Answer::Yes(bool_of(env, called))
         }
         Question::TrafficData { send, recv } => {
             let _ = env.call_static_method(
@@ -1349,7 +1350,7 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
                     JValue::Int(sequence as jint),
                 ],
             );
-            if !bool_of(called) {
+            if !bool_of(env, called) {
                 return Answer::Encoded(Err(int_at(env, &errcode, 0)));
             }
             Answer::Encoded(Ok(bytes_of(env, &stream)))
@@ -1380,7 +1381,7 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
                 ],
             );
             Answer::Decoded {
-                handle: int_of(called),
+                handle: int_of(env, called),
                 err_code: int_at(env, &errcode, 0),
             }
         }
@@ -1405,7 +1406,7 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
                     JValue::Object(&profile),
                 ],
             );
-            Answer::Ended(int_of(called))
+            Answer::Ended(int_of(env, called))
         }
         Question::ReportConnectStatus { all, longlink } => {
             let _ = env.call_static_method(
@@ -1441,7 +1442,7 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
                 ],
             );
             Answer::Identified {
-                mode: int_of(called),
+                mode: int_of(env, called),
                 buffer: bytes_of(env, buffer_argument),
                 hash: bytes_of(env, hash_argument),
                 cmdid: int_at(env, &cmdids, 0).max(0) as u32,
@@ -1468,7 +1469,7 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
                     JValue::Object(&hash),
                 ],
             );
-            Answer::Yes(bool_of(called))
+            Answer::Yes(bool_of(env, called))
         }
         Question::RequestSync => {
             let _ = env.call_static_method(class, jni_str!("requestDoSync"), jni_sig!("()V"), &[]);
@@ -1499,27 +1500,58 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
     }
 }
 
+/// Clears the exception a Java call left pending, and says so.
+///
+/// JNI forbids every call but `ExceptionOccurred` and `ExceptionClear` while
+/// an exception is pending, and ART with CheckJNI aborts the process for
+/// making any other — so a callback that threw has to be answered where it
+/// threw, and not by the next call, which here is one that reads the
+/// arguments of the call that failed. Nothing else clears it: the Kotlin
+/// forwarders catch `Exception`, and an `Error` — or a `Throwable` of the
+/// app's own — is one they let through, and the thread this runs on was
+/// attached by Rust, so the exception is discarded at detach without
+/// anybody ever seeing it.
+fn clear_pending<T>(env: &Env<'_>, called: jni::errors::Result<T>) -> jni::errors::Result<T> {
+    if matches!(called, Err(jni::errors::Error::JavaException)) {
+        env.exception_clear();
+        let _ = writeln!(
+            std::io::stderr(),
+            "marsrsxlog: a Java call left an exception pending"
+        );
+    }
+    called
+}
+
 /// A `Z` Java answered with — `false` for a call that could not be made.
-fn bool_of(called: jni::errors::Result<JValueOwned>) -> bool {
-    called.and_then(|value| value.z()).unwrap_or(false)
+fn bool_of(env: &Env<'_>, called: jni::errors::Result<JValueOwned>) -> bool {
+    clear_pending(env, called)
+        .and_then(|value| value.z())
+        .unwrap_or(false)
 }
 
 /// An `I` Java answered with — `0` for a call that could not be made.
-fn int_of(called: jni::errors::Result<JValueOwned>) -> i32 {
-    called.and_then(|value| value.i()).unwrap_or(0)
+fn int_of(env: &Env<'_>, called: jni::errors::Result<JValueOwned>) -> i32 {
+    clear_pending(env, called)
+        .and_then(|value| value.i())
+        .unwrap_or(0)
 }
 
 /// An `L` Java answered with — nothing for a call that could not be made, or
 /// for one that answered `null`, which is the C++'s own `NULL` check.
-fn object_of<'a>(called: jni::errors::Result<JValueOwned<'a>>) -> Option<JObject<'a>> {
-    let object = called.and_then(|value| value.l()).ok()?;
+fn object_of<'a>(
+    env: &Env<'_>,
+    called: jni::errors::Result<JValueOwned<'a>>,
+) -> Option<JObject<'a>> {
+    let object = clear_pending(env, called)
+        .and_then(|value| value.l())
+        .ok()?;
     (!object.is_null()).then_some(object)
 }
 
 /// A `String` Java answered with — empty for a call that could not be made, or
 /// for one that answered `null`, which is the C++'s `""` too.
 fn string_of(env: &mut Env<'_>, called: jni::errors::Result<JValueOwned>) -> String {
-    let Some(object) = object_of(called) else {
+    let Some(object) = object_of(env, called) else {
         return String::new();
     };
     let jstring = unsafe { JString::from_raw(env, object.as_raw()) };
@@ -1576,7 +1608,8 @@ fn byte_stream<'a>(env: &mut Env<'a>) -> Option<JObject<'a>> {
 /// `toByteArray()` of one — empty for a stream Java never wrote to, which is
 /// what the C++ ends up with too.
 fn bytes_of(env: &mut Env<'_>, stream: &JObject<'_>) -> Vec<u8> {
-    let Ok(bytes) = env.call_method(stream, jni_str!("toByteArray"), jni_sig!("()[B"), &[]) else {
+    let called = env.call_method(stream, jni_str!("toByteArray"), jni_sig!("()[B"), &[]);
+    let Ok(bytes) = clear_pending(env, called) else {
         return Vec::new();
     };
     let Ok(bytes) = bytes.l() else {
@@ -1702,7 +1735,7 @@ fn ask_app<'a>(env: &mut Env<'a>, class: JClass<'a>, question: AppQuestion) -> A
                 jni_sig!("()Lio/github/orangeboychen/marsrs/app/AppLogic$AccountInfo;"),
                 &[],
             );
-            let Some(account) = object_of(called) else {
+            let Some(account) = object_of(env, called) else {
                 return AppAnswer::Nothing;
             };
             AppAnswer::Account(AccountInfo::new(
@@ -1713,7 +1746,7 @@ fn ask_app<'a>(env: &mut Env<'a>, class: JClass<'a>, question: AppQuestion) -> A
         AppQuestion::ClientVersion => {
             let called =
                 env.call_static_method(class, jni_str!("getClientVersion"), jni_sig!("()I"), &[]);
-            AppAnswer::Version(int_of(called))
+            AppAnswer::Version(int_of(env, called))
         }
         AppQuestion::DeviceInfo => {
             // `AppLogic$DeviceInfo` — `devicename` and `devicetype`.
@@ -1723,7 +1756,7 @@ fn ask_app<'a>(env: &mut Env<'a>, class: JClass<'a>, question: AppQuestion) -> A
                 jni_sig!("()Lio/github/orangeboychen/marsrs/app/AppLogic$DeviceInfo;"),
                 &[],
             );
-            let Some(device) = object_of(called) else {
+            let Some(device) = object_of(env, called) else {
                 return AppAnswer::Nothing;
             };
             AppAnswer::Device(DeviceInfo::new(
@@ -1774,7 +1807,7 @@ fn ask_platform<'a>(
         PlatformQuestion::NetInfo => {
             let called =
                 env.call_static_method(class, jni_str!("getNetInfo"), jni_sig!("()I"), &[]);
-            PlatformAnswer::NetInfo(NetInfo::of(int_of(called)))
+            PlatformAnswer::NetInfo(NetInfo::of(int_of(env, called)))
         }
         PlatformQuestion::StatisticsNetType => {
             let called = env.call_static_method(
@@ -1783,7 +1816,7 @@ fn ask_platform<'a>(
                 jni_sig!("()I"),
                 &[],
             );
-            PlatformAnswer::StatisticsNetType(NetType::of(int_of(called)))
+            PlatformAnswer::StatisticsNetType(NetType::of(int_of(env, called)))
         }
         PlatformQuestion::ProxyInfo => {
             // the host comes back in the buffer Java was handed, the port in
@@ -1798,7 +1831,7 @@ fn ask_platform<'a>(
                 jni_sig!("(Ljava/lang/StringBuffer;)I"),
                 &[argument],
             );
-            let port = int_of(called);
+            let port = int_of(env, called);
             let called = env.call_method(
                 &buffer,
                 jni_str!("toString"),
@@ -1818,7 +1851,7 @@ fn ask_platform<'a>(
                 jni_sig!("()Lio/github/orangeboychen/marsrs/comm/PlatformComm$WifiInfo;"),
                 &[],
             );
-            let Some(wifi) = object_of(called) else {
+            let Some(wifi) = object_of(env, called) else {
                 return PlatformAnswer::Nothing;
             };
             PlatformAnswer::Wifi(Some(WifiInfo {
@@ -1835,7 +1868,7 @@ fn ask_platform<'a>(
                 jni_sig!("()Lio/github/orangeboychen/marsrs/comm/PlatformComm$SIMInfo;"),
                 &[],
             );
-            let Some(sim) = object_of(called) else {
+            let Some(sim) = object_of(env, called) else {
                 return PlatformAnswer::Nothing;
             };
             PlatformAnswer::Sim(Some(SimInfo {
@@ -1851,7 +1884,7 @@ fn ask_platform<'a>(
                 jni_sig!("()Lio/github/orangeboychen/marsrs/comm/PlatformComm$APNInfo;"),
                 &[],
             );
-            let Some(apn) = object_of(called) else {
+            let Some(apn) = object_of(env, called) else {
                 return PlatformAnswer::Nothing;
             };
             PlatformAnswer::Apn(Some(ApnInfo {
@@ -1867,7 +1900,7 @@ fn ask_platform<'a>(
                 jni_sig!("()I"),
                 &[],
             );
-            PlatformAnswer::RadioAccessNetwork(int_of(called))
+            PlatformAnswer::RadioAccessNetwork(int_of(env, called))
         }
         PlatformQuestion::Signal { wifi } => {
             let called = env.call_static_method(
@@ -1881,7 +1914,7 @@ fn ask_platform<'a>(
         PlatformQuestion::NetworkConnected => {
             let called =
                 env.call_static_method(class, jni_str!("isNetworkConnected"), jni_sig!("()Z"), &[]);
-            PlatformAnswer::Connected(bool_of(called))
+            PlatformAnswer::Connected(bool_of(env, called))
         }
     }
 }
@@ -2209,7 +2242,7 @@ fn ask_probe_of<'a>(env: &mut Env<'a>, class: JClass<'a>, query: ProbeQuery) -> 
                 ASK_HOST_SIG,
                 &[JValue::Object(&host), JValue::Int(timeout_ms as jint)],
             );
-            probe_answer(env, object_of(called))
+            probe_answer(env, object_of(env, called))
         }
         ProbeQuery::Tcp {
             ip,
@@ -2230,7 +2263,7 @@ fn ask_probe_of<'a>(env: &mut Env<'a>, class: JClass<'a>, query: ProbeQuery) -> 
                     JValue::Int(timeout_ms as jint),
                 ],
             );
-            probe_answer(env, object_of(called))
+            probe_answer(env, object_of(env, called))
         }
         ProbeQuery::Http { url, timeout_ms } => {
             let Ok(url) = env.new_string(&url) else {
@@ -2243,7 +2276,7 @@ fn ask_probe_of<'a>(env: &mut Env<'a>, class: JClass<'a>, query: ProbeQuery) -> 
                 ASK_HOST_SIG,
                 &[JValue::Object(&url), JValue::Int(timeout_ms as jint)],
             );
-            probe_answer(env, object_of(called))
+            probe_answer(env, object_of(env, called))
         }
         ProbeQuery::Ping { host, timeout_s } => {
             let Ok(host) = env.new_string(&host) else {
@@ -2256,7 +2289,7 @@ fn ask_probe_of<'a>(env: &mut Env<'a>, class: JClass<'a>, query: ProbeQuery) -> 
                 ASK_HOST_SIG,
                 &[JValue::Object(&host), JValue::Int(timeout_s as jint)],
             );
-            probe_answer(env, object_of(called))
+            probe_answer(env, object_of(env, called))
         }
     }
 }
