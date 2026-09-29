@@ -18,8 +18,9 @@
 //!   private key of that pair, without which an encrypted record is an error
 //!   and not a silent skip. This is upstream's `decode_mars_log_file.py` over
 //!   the same bytes. A record that cannot be read stops it — but the records
-//!   before the damage are printed anyway, on standard output, with the reason
-//!   on standard error: a file that lost its end still has days of log in it.
+//!   before the damage are written out anyway, to `--out` when one was given
+//!   and to standard output when there is none, with the reason on standard
+//!   error: a file that lost its end still has days of log in it.
 //! * `keygen` makes that pair: the 128 hex characters a `pubKey` is configured
 //!   with, and the 64 that `decode` reads what it wrote back with. It is drawn
 //!   from the system's generator and kept nowhere, so a pair that was not
