@@ -523,6 +523,7 @@ dependencies = [
  "marsrs-buffer",
  "marsrs-core",
  "marsrs-crypt",
+ "marsrs-stn",
  "marsrs-xlog",
  "serde_json",
  "tempfile",
