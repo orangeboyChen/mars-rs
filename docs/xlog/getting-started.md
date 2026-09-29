@@ -421,7 +421,7 @@ has no `#file` to fill one in with, so `__FILE__`, `__PRETTY_FUNCTION__` and
 `log(level, tag, message, file, function, line)`.
 
 The header is C++17: `std::string_view` is what the console sink of
-`Xlog::setConsoleSink` is handed, and `std::future` is what `flush()` answers.
+`Xlog::log` is handed, and `std::future` is what `flush()` answers.
 
 ```bash
 c++ -std=c++17 -I include -o app app.cpp libmars_ffi.a -lpthread -ldl

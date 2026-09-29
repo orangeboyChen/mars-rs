@@ -98,6 +98,22 @@ class XlogPlugin :
      * is answered with, rather than a handle it would write through the
      * process-wide appender with.
      */
+    private fun open(call: MethodCall, result: Result) {
+        val config = XlogConfig(
+            logDir = call.string("logDir"),
+            namePrefix = call.string("namePrefix").ifBlank { DEFAULT_NAME_PREFIX },
+            level = LogLevel.of(call.int("level", LogLevel.INFO.ordinal)),
+            mode = appenderMode(call.int("mode", AppenderMode.ASYNC.ordinal)),
+            pubKey = call.string("pubKey"),
+            compressMode = compressMode(call.int("compressMode", CompressMode.ZLIB.ordinal)),
+            compressLevel = call.int("compressLevel", DEFAULT_COMPRESS_LEVEL),
+            cacheDir = call.optionalString("cacheDir"),
+            cacheDays = call.int("cacheDays", NO_CACHE_DAYS)
+        )
+        appenders[config.namePrefix] = Xlog.open(config)
+        result.success(null)
+    }
+
     /**
      * The file the appender of `namePrefix` is writing to, or `null` before the
      * first record of the day opens one.
@@ -114,22 +130,6 @@ class XlogPlugin :
     /** The day's names, whether or not the files are there yet. */
     private fun logFileNames(call: MethodCall, result: Result) {
         result.success(call.appender().logFileNames(call.long("daysAgo")))
-    }
-
-    private fun open(call: MethodCall, result: Result) {
-        val config = XlogConfig(
-            logDir = call.string("logDir"),
-            namePrefix = call.string("namePrefix").ifBlank { DEFAULT_NAME_PREFIX },
-            level = LogLevel.of(call.int("level", LogLevel.INFO.ordinal)),
-            mode = appenderMode(call.int("mode", AppenderMode.ASYNC.ordinal)),
-            pubKey = call.string("pubKey"),
-            compressMode = compressMode(call.int("compressMode", CompressMode.ZLIB.ordinal)),
-            compressLevel = call.int("compressLevel", DEFAULT_COMPRESS_LEVEL),
-            cacheDir = call.optionalString("cacheDir"),
-            cacheDays = call.int("cacheDays", NO_CACHE_DAYS)
-        )
-        appenders[config.namePrefix] = Xlog.open(config)
-        result.success(null)
     }
 
     /**

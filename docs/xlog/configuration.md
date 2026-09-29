@@ -173,13 +173,6 @@ set_console_fun(Some(|info, log| println!("{:?}: {log}", info.level)));
 set_console_fun(None);   // the console has it again
 ```
 
-```swift [Swift]
-Xlog.setConsoleSink { level, tag, file, function, line, log in
-    os_log(.default, "%{public}@", String(cString: log))
-}
-Xlog.setConsoleSink(nil)   // the console has it again
-```
-
 ```c [C]
 /* There is no sink to set any more: the console copy of a record is the
    built-in stderr line. `mars_xlog_set_console_fun` was the process-wide

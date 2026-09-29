@@ -27,9 +27,8 @@
 // adds behaviour the C ABI does not have.
 //
 // The class and every member an app reaches are `@objc`, and `Xlog` is an
-// `NSObject` — but for `setConsoleSink(_:)`, which takes a C function pointer
-// and so has no Objective-C spelling, and for the `async` `flush()`, which
-// no Objective-C caller can `await`. An app written in Objective-C takes the port
+// `NSObject` — but for the `async` `flush()`, which no Objective-C caller can
+// `await`. An app written in Objective-C takes the port
 // through `[[Xlog alloc] initWithConfig:error:]`, and the `Xlog` it writes is
 // the one the compiler writes out of this file, into `MarsRSXlog-Swift.h` —
 // there is no Objective-C source in the port, the linkage is Swift's own.
@@ -113,36 +112,6 @@ public final class Xlog: NSObject {
         didSet {
             withHandle { mars_xlog_set_console_log_instance($0, isConsoleLogEnabled ? 1 : 0) }
         }
-    }
-
-    /// `mars_xlog_set_console_fun`: where the console copy of a record goes
-    /// instead of the built-in sink, which is standard error on every platform
-    /// of the port — `os_log_with_type` is a macro with no symbol to link
-    /// against, so nothing here can write to the system log.
-    ///
-    /// An Apple app that wants its records there is what this is for: the C++
-    /// has an Apple enum of three sinks of its own, `kConsoleOSLog` among them,
-    /// and the app is the only code that can call `os_log` — which Swift can.
-    ///
-    /// ```swift
-    /// Xlog.setConsoleSink { level, tag, file, function, line, log in
-    ///     os_log(.default, "%{public}@", String(cString: log))
-    /// }
-    /// ```
-    ///
-    /// `nil` takes the sink away, and the console copy is standard error's
-    /// again. What a sink is handed is the record unformatted — the level, the
-    /// tag, where the call site is and the message — and it is called on the
-    /// thread that wrote the record, the writer thread of an async appender
-    /// included.
-    ///
-    /// One sink for the process and not one for this `Xlog`: the C ABI has no
-    /// instance of it. Objective-C sets the same one through
-    /// `mars_xlog_set_console_fun`, which `import MarsRSXlog` re-exports.
-    ///
-    /// - Parameter sink: what the console copy is handed to, or `nil`.
-    public static func setConsoleSink(_ sink: MarsXLogConsoleFun?) {
-        mars_xlog_set_console_fun(sink)
     }
 
     /// How many bytes a log file may reach before it is closed and a new one

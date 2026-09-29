@@ -388,8 +388,8 @@ appender，所以一个自动存储期的 `Xlog` 在作用域末尾不需要 `cl
 `__PRETTY_FUNCTION__` 和 `__LINE__` 交给
 `log(level, tag, message, file, function, line)`。
 
-这个头文件要 C++17：`Xlog::setConsoleSink` 的控制台 sink 收到的是
-`std::string_view`，`flush()` 回答的是 `std::future`。
+这个头文件要 C++17：`Xlog::log` 的记录收到的是 `std::string_view`，`flush()` 回答的是
+`std::future`。
 
 ```bash
 c++ -std=c++17 -I include -o app app.cpp libmars_ffi.a -lpthread -ldl

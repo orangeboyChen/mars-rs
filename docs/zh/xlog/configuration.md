@@ -140,10 +140,8 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 整条记录，而不只是那句话。
 
 内置的出口是标准错误，每个平台、每个包都是 —— 这里没有任何一处写进 `os_log` 或
-logcat。在 Apple 上系统日志只隔着一次 `Xlog.setConsoleSink`，而 `os_log` 只有 App 自己
-的代码调得到，也就只能由它来调。
-
-想让它去别处的 App 可以给 logger 一个自己的出口，原本要进控制台的那一份就改去那里：
+logcat，也没有 sink 可设了：原来那个坐在进程级 appender 上，控制台那份记录就是内置的
+那一行，没有别的。
 
 ::: code-group
 
@@ -152,13 +150,6 @@ use marsrs::xlog::set_console_fun;
 
 set_console_fun(Some(|info, log| println!("{:?}: {log}", info.level)));
 set_console_fun(None);   // 又回到控制台
-```
-
-```swift [Swift]
-Xlog.setConsoleSink { level, tag, file, function, line, log in
-    os_log(.default, "%{public}@", String(cString: log))
-}
-Xlog.setConsoleSink(nil)   // 又回到控制台
 ```
 
 ```c [C]
