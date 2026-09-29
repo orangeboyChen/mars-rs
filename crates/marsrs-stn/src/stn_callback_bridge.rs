@@ -179,8 +179,12 @@ pub trait App: Send {
     /// `ReportTaskLimited` — a task the anti-avalanche gates refused, and the
     /// number they answered with: how long ago the same body went out, or how
     /// many bytes the funnel refused. What the app answers is that number
-    /// back — `0` is "go ahead" — which is the C++'s `unsigned int& _param`:
-    /// in and out, and the caller reads it after the call.
+    /// back, which is the C++'s `unsigned int& _param`, in and out.
+    ///
+    /// A report, and not an override: the C++'s is `void`, and
+    /// `AntiAvalanche::Check` answers `false` whatever an app wrote to
+    /// `_param`, so a task a gate refused stays refused and ends with
+    /// `LOCAL_ANTI_AVALANCHE`.
     fn report_task_limited(&mut self, _check_type: i32, _task: &Task, param: u32) -> u32 {
         param
     }
@@ -572,7 +576,9 @@ impl StnCallbackBridge {
     }
 
     /// `ReportTaskLimited` — the number it was handed while there is no app,
-    /// which is "go ahead": an app that says nothing leaves the limit alone.
+    /// which is the gate's own: the C++'s is `void`, and what an app answers
+    /// is the out-value of `unsigned int& _param`, which nothing reads. A task
+    /// a gate refused stays refused.
     pub fn report_task_limited(&mut self, check_type: i32, task: &Task, param: u32) -> u32 {
         self.app.as_mut().map_or(param, |app| {
             app.report_task_limited(check_type, task, param)

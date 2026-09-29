@@ -204,9 +204,11 @@ pub type ReportTaskProfile = dyn FnMut(&TaskProfile) + Send;
 /// `mars/stn/src/anti_avalanche.cc` refused, asked as the C++ asks it: which
 /// gate it was, the task, and the number the gate answered with — how long ago
 /// the same body went out, or how many bytes the funnel refused. What the app
-/// answers is that number back, and `0` is "go ahead", which is what the C++'s
-/// `unsigned int&` holds until an app writes to it. Unset, and a refused task
-/// is reported nowhere.
+/// answers is that number back, which is the C++'s `unsigned int&`, in and
+/// out — and which the C++ does not read either: `AntiAvalanche::Check` is
+/// `void` there and answers `false` once a gate refused, so the answer is a
+/// report of what the gate decided and not a way to overrule it. Unset, and a
+/// refused task is reported nowhere.
 pub type ReportTaskLimited = dyn FnMut(i32, &Task, u32) -> u32 + Send;
 
 /// `NetCore::SetShortLinkOnTimeoutOrRemoteShutdown`
@@ -2134,7 +2136,10 @@ fn anti_avalanche_check(
     };
     // `AntiAvalanche::Check` reports the task it refused itself, which is the
     // only place it can be reported from: the C++ does it through its
-    // `StnManager`, and a task the gates refused never reaches a queue.
+    // `StnManager`, and a task the gates refused never reaches a queue. What
+    // the app answers is the out-value of the C++'s `unsigned int&`, and the
+    // C++ does not read it either — `Check` is `void` there and answers
+    // `false` once a gate refused, so the gate's answer stands.
     if let Some(report) = hooks
         .lock()
         .unwrap_or_else(poisoned)
