@@ -843,6 +843,36 @@ mod tests {
         );
     }
 
+    /// `Select(kTimeout)` answering `0` — nothing was ready anywhere inside
+    /// the timeout — is what ends the race in the C++, and a host that says
+    /// the same thing with an `Ok` full of `SocketEvent::Nothing` is one this
+    /// loop sat in for ever: no pair succeeded, none failed, and nothing was
+    /// going to arrive. The select below is asked once, and a second round is
+    /// a loop that did not end.
+    #[test]
+    fn a_round_nothing_was_ready_in_ends_the_race() {
+        let _guard = crate::test_lock();
+        let mut test = LongLinkSpeedTest::new_at(0, [pair("1.1.1.1", 80)]);
+        let rounds = Arc::new(Mutex::new(0usize));
+        let count = Arc::clone(&rounds);
+        test.set_select(move |items| {
+            let mut rounds = count.lock().unwrap_or_else(|p| p.into_inner());
+            *rounds += 1;
+            assert!(
+                *rounds <= 1,
+                "a round nothing was ready in ends the race, and not a second one"
+            );
+            Ok(vec![SocketEvent::Nothing; items.len()])
+        });
+
+        assert_eq!(
+            test.fastest_at(0),
+            None,
+            "a race nothing was ready for has no winner"
+        );
+        assert_eq!(*rounds.lock().unwrap(), 1);
+    }
+
     #[test]
     fn a_race_nobody_wins_hands_nothing_back() {
         let _guard = crate::test_lock();
