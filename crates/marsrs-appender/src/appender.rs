@@ -321,30 +321,29 @@ fn clear_cache_file(path: &Path) {
     }
 }
 
-/// Whether the blocks of `file` do not cover its length: fewer than the length
-/// asks for, which is what `set_len` leaves behind and what turns the first
-/// store into a mapping of it into SIGBUS on a full disk.
+/// Whether the whole region reads as zeros: a hole `set_len` made, with no
+/// record stored through the mapping yet.
 ///
-/// The length is what the file claims, and this is what the disk gave it. A
-/// filesystem that reports no blocks at all is taken at its word: nothing is
-/// safer to assume about a file it will not account for than that it has to
-/// be written to before it is mapped.
-#[cfg(unix)]
-fn is_sparse(file: &File) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    // `blocks()` is a `u64` on Linux and an `i64` on macOS, so both are
-    // widened instead of cast: what this asks is a size in bytes that cannot
-    // come out negative whichever integer the platform counts blocks in.
-    file.metadata()
-        .map(|meta| i128::from(meta.blocks()) * 512 < i128::from(meta.len()))
-        .unwrap_or(true)
-}
-
-/// There is no block count to ask for off unix, so the length is all there is:
-/// see [`open_region`].
-#[cfg(not(unix))]
-fn is_sparse(_file: &File) -> bool {
-    false
+/// `st_blocks` cannot answer this, though it looks like it should. It counts
+/// what the disk has given the file, and a file written the only way this one
+/// is written to — through a mapping — is not promised blocks before
+/// writeback: a cache file holding a crashed run's records measures as sparse
+/// on a filesystem that allocates late (ext4's delayed allocation) or
+/// compresses (f2fs, btrfs), and accounts nothing at all on one that does not
+/// implement it (FUSE, a card's sdcardfs). Taking that at its word and
+/// pre-allocating over such a file writes a block of zeros over records no
+/// log holds a copy of, and the "begin of mmap" recovery never fires. What is
+/// asked instead is the one thing a hole cannot be: a byte that is not zero.
+///
+/// A read that fails is answered as `false`: a file this process cannot read
+/// is one the mapping is not going to take either, and zeroing bytes nobody
+/// could inspect first is the wrong way round to be careful.
+fn is_unwritten(file: &mut File) -> bool {
+    let mut buffer = vec![0u8; BUFFER_BLOCK_LENGTH];
+    file.seek(SeekFrom::Start(0))
+        .and_then(|_| file.read_exact(&mut buffer))
+        .map(|()| buffer.iter().all(|byte| *byte == 0))
+        .unwrap_or(false)
 }
 
 /// Opens (creating if needed) and maps the claimed cache file; falls back to a
@@ -362,18 +361,18 @@ fn open_region(file: &mut File, path: &Path) -> (Region, bool) {
     // What the file measured on entry: both whether it has to be
     // pre-allocated, and the length a failed pre-allocation puts it back to.
     //
-    // Measuring the length is not enough on its own, though. A build before
-    // this one — and the C++ the port sits beside during a migration — made
-    // this file `BUFFER_BLOCK_LENGTH` long with `set_len` and wrote nothing
-    // into it, and that is a hole of exactly the length a later open would
-    // take for "already allocated". So the length says what the file claims
-    // and `st_blocks` says what the disk gave it, and a file whose blocks do
-    // not cover its length is a hole whatever it measures: pre-allocating
-    // over one costs a write of zeros that lands on bytes no record of ours
-    // is in — a hole holds nothing to lose — while mapping one is the SIGBUS
-    // above.
+    // A file shorter than a block has never been written to, and length alone
+    // says so. A file that measures a block is asked what its bytes are: a
+    // build before this one — and the C++ the port sits beside during a
+    // migration — made this file `BUFFER_BLOCK_LENGTH` long with `set_len` and
+    // wrote nothing into it, and that is a hole of exactly the length a later
+    // open would take for "already allocated". A hole reads as zeros, so a
+    // file that is all zeros is pre-allocated over whatever it measures, and
+    // a file with a single byte in it that is not is left as it is: it holds
+    // records, and the bytes of a record are the one thing this may not write
+    // over. See [`is_unwritten`] for why the block count is not what is asked.
     let entry_len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
-    let needs_preallocation = entry_len < BUFFER_BLOCK_LENGTH as u64 || is_sparse(file);
+    let needs_preallocation = entry_len < BUFFER_BLOCK_LENGTH as u64 || is_unwritten(file);
     if file.set_len(BUFFER_BLOCK_LENGTH as u64).is_err() {
         return (Region::heap(), false);
     }
@@ -384,17 +383,14 @@ fn open_region(file: &mut File, path: &Path) -> (Region, bool) {
             .and_then(|()| file.flush())
             .is_ok();
         if !ok {
-            // Leaving the file the length `set_len` just gave it is leaving
-            // behind the very hole this pre-allocation exists to prevent: a
-            // disk that is out of space fails the write and stays out of
-            // space, and the next `open` — which sees a file that is already
-            // `BUFFER_BLOCK_LENGTH` long — skips the pre-allocation, maps the
-            // hole, and takes SIGBUS on the first record it stores. Taken back
-            // to the length it had on entry, the same file re-arms this
-            // pre-allocation instead. A `set_len` that fails too is ignored:
-            // nothing is written through the file either way, the heap region
-            // below does not read it, and the length is the only thing at
-            // stake.
+            // A failed pre-allocation is put back the way the file was found:
+            // what it leaves behind is a length the file does not hold, and
+            // the length of a cache file is what a reader of the cache
+            // directory — the heap fallback below, a decoder, or the C++
+            // still linked into the same app — takes for how much of it is
+            // real. A `set_len` that fails too is ignored: nothing is written
+            // through the file either way, the heap region below does not read
+            // it, and the length is the only thing at stake.
             let _ = file.set_len(entry_len);
             return (Region::heap(), false);
         }
@@ -3273,12 +3269,11 @@ mod tests {
 
     /// The other half of the same hole: a file that already measures the
     /// block, which is what `set_len` of a build before this one left behind.
-    /// The length is what the file claims and the blocks are what it has, so
-    /// one that measures the whole block with nothing behind it is
-    /// pre-allocated like any other and not taken at its word.
-    #[cfg(unix)]
+    /// The length is what the file claims and the zeros are what say nothing
+    /// was stored, so one that measures the whole block and reads as nothing
+    /// is pre-allocated like any other and not taken at its word.
     #[test]
-    fn a_cache_file_that_measures_the_block_but_holds_no_blocks_is_filled() {
+    fn a_cache_file_that_measures_the_block_but_reads_as_zeros_is_filled() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("Mars.mmap3");
         let mut file = OpenOptions::new()
@@ -3289,18 +3284,65 @@ mod tests {
             .open(&path)
             .unwrap();
         file.set_len(BUFFER_BLOCK_LENGTH as u64).unwrap();
-        assert!(is_sparse(&file), "a hole the length of the block");
+        assert!(
+            is_unwritten(&mut file),
+            "a hole the length of the block reads as zeros"
+        );
 
         let (region, use_mmap) = open_region(&mut file, &path);
         drop(region);
-        assert!(!is_sparse(&file), "the hole got its blocks");
+        // What is asserted is the decision, and not the disk's bookkeeping: a
+        // filesystem that allocates late or compresses is free to answer the
+        // block count either way for a file of zeros, and that count is what
+        // stopped being asked. A mapping is the answer only when the
+        // pre-allocation ran through — a write of zeros it could not do sends
+        // `open_region` to the heap instead.
         if use_mmap {
             assert_eq!(
                 file.metadata().unwrap().len(),
                 BUFFER_BLOCK_LENGTH as u64,
-                "the pre-allocation writes the block and leaves it at the block"
+                "the pre-allocation wrote the block and left the file at the block"
             );
         }
+    }
+
+    /// The way round that costs records: a file that measures the block *and*
+    /// holds a crashed run's undrained ones. That is exactly the file a block
+    /// count calls sparse on a filesystem that allocates late or compresses,
+    /// and pre-allocating over it would write a block of zeros over the only
+    /// copy of those records there is — the "begin of mmap" recovery of the
+    /// next open would find nothing to recover. What decides is what is in
+    /// the file, and not what the disk says it gave it.
+    #[test]
+    fn a_cache_file_that_holds_records_is_not_written_over() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("Mars.mmap3");
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        file.set_len(BUFFER_BLOCK_LENGTH as u64).unwrap();
+        // One byte of a record: `st_blocks` cannot tell this file from a hole
+        // of the same length, and the length cannot either.
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.write_all(&[1u8]).unwrap();
+        file.flush().unwrap();
+        assert!(!is_unwritten(&mut file), "the file holds a record");
+
+        let (region, _use_mmap) = open_region(&mut file, &path);
+        drop(region);
+
+        let mut first = [0u8; 1];
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.read_exact(&mut first).unwrap();
+        assert_eq!(
+            first,
+            [1u8],
+            "the record the appender has not drained yet is still in the file"
+        );
     }
 
     #[test]
