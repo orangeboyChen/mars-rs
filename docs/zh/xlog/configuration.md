@@ -147,7 +147,8 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 `XLoggerInfo` 的每条记录”：Rust 的 `appender_write(None, …)` 没给 info，它就没有副本。
 
 内置的出口是标准错误，每个平台、每个包都是 —— 这里没有任何一处写进 `os_log` 或
-logcat。App 想要的是系统日志的话，得靠下面那个自己的出口把记录送过去。
+logcat。在 Apple 上系统日志只隔着一次 `Xlog.setConsoleSink`，而 `os_log` 只有 App 自己
+的代码调得到，也就只能由它来调。
 
 想让它去别处的 App 可以给 logger 一个自己的出口，原本要进控制台的那一份就改去那里：
 
@@ -158,6 +159,13 @@ use marsrs::xlog::set_console_fun;
 
 set_console_fun(Some(|info, log| println!("{:?}: {log}", info.level)));
 set_console_fun(None);   // 又回到控制台
+```
+
+```swift [Swift]
+Xlog.setConsoleSink { level, tag, file, function, line, log in
+    os_log(.default, "%{public}@", String(cString: log))
+}
+Xlog.setConsoleSink(nil)   // 又回到控制台
 ```
 
 ```c [C]
