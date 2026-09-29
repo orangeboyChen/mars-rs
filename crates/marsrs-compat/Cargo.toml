@@ -23,6 +23,9 @@ marsrs-xlog = { workspace = true }
 # formats too. `marsrs-comm` is the http head the short link writes.
 marsrs-stn = { workspace = true }
 marsrs-comm = { workspace = true }
+# The diagnosis half: `sdt-compat` is the Rust of the URL parser an HTTP check
+# reads its own URL with, so the same cross-read can be run over `mars/sdt` too.
+marsrs-sdt = { workspace = true }
 tempfile = { workspace = true }
 serde_json = { workspace = true }
 
@@ -33,6 +36,10 @@ path = "src/main.rs"
 [[bin]]
 name = "stn-compat"
 path = "src/bin/stn.rs"
+
+[[bin]]
+name = "sdt-compat"
+path = "src/bin/sdt.rs"
 
 [lints]
 workspace = true
