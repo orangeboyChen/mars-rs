@@ -325,7 +325,7 @@ if (mars_xlog_open(&config) != MARS_XLOG_OK) { /* 看返回码 */ }
 
 mars_xlog_write(MarsLevelInfo, "startup", __FILE__, __func__, __LINE__, "hello from mars");
 
-mars_xlog_flush_sync();  /* 返回时记录已经在磁盘上 */
+mars_xlog_flush_now();  /* 返回时记录已经在磁盘上 */
 mars_xlog_close();
 ```
 

@@ -43,8 +43,8 @@ The appender is one struct of options and a handful of free calls in
 |---|---|---|
 | `appender_open(const XLogConfig&)` | `appender_open(XLogConfig)` | `mars_xlog_open(&config)` |
 | `xlogger_Write(info, log)`, or the `xinfo2` family | `appender_write(info, message)` | `mars_xlog_write(...)` |
-| `appender_flush()` | `appender_signal_flush()` | `mars_xlog_flush()` |
-| `appender_flush_sync()` | `appender_flush_now()` | `mars_xlog_flush_sync()` |
+| `appender_flush()` | `appender_signal_flush()` | `mars_xlog_signal_flush()` |
+| `appender_flush_sync()` | `appender_flush_now()` | `mars_xlog_flush_now()` |
 | `appender_close()` | `appender_close()` | `mars_xlog_close()` |
 | `xlogger_SetLevel(level)` | `set_level(handle, level)` | `mars_xlog_set_level(level)` |
 | `appender_setmode(mode)` | `appender_set_mode(mode)` | `mars_xlog_set_mode(mode)` |
@@ -58,7 +58,12 @@ what the C++ calls `appender_flush` is `appender_signal_flush` here, because
 `appender_flush` in Rust is the drain a caller `await`s — see
 [log files](/xlog/log-files). `appender_flush_sync` still compiles and does what
 `appender_flush_now` does, deprecated, so that code written against the C++'s
-name keeps building.
+name keeps building. The C ABI column is the same story: `mars_xlog_flush` and
+`mars_xlog_flush_sync` are the C++'s names and still link, and the instance
+pair no longer takes a `sync` — what a caller wrote as
+`mars_xlog_flush_instance(handle, 0)` or `(handle, 1)` is
+`mars_xlog_signal_flush_instance(handle)` or
+`mars_xlog_flush_now_instance(handle)`.
 
 The config is one struct in all three, and the eight fields are the same eight:
 `mode_`, `logdir_`, `nameprefix_`, `pub_key_`, `compress_mode_`,
