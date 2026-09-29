@@ -93,6 +93,20 @@ fn hex_round_trips() {
     assert_eq!(strutil::str2hex("zz"), None);
 }
 
+/// The C++ reads two characters as two nibbles, so a `+` in front of one is
+/// not a byte at all: `u8::from_str_radix` reads a sign, which made `"+8"`
+/// the byte 8.
+#[test]
+fn hex_reads_two_hex_digits_at_a_time() {
+    assert_eq!(strutil::str2hex("+8"), None);
+    assert_eq!(strutil::str2hex("+f0f"), None);
+    assert_eq!(strutil::str2hex("-f"), None);
+    assert_eq!(strutil::str2hex(" f"), None);
+    assert_eq!(strutil::str2hex("ab"), Some(vec![0xab]));
+    assert_eq!(strutil::str2hex("AB"), Some(vec![0xab]), "either case");
+    assert_eq!(strutil::str2hex("00ff00"), Some(vec![0x00, 0xff, 0x00]));
+}
+
 #[test]
 fn replaces_every_occurrence() {
     assert_eq!(strutil::replace_char("a@b@c", '@', '.'), "a.b.c");

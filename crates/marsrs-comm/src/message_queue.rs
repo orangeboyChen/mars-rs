@@ -251,6 +251,24 @@ impl QueueState {
             running_posts: Vec::new(),
         }
     }
+
+    /// The sequence number of the next post, which is never 0 and never
+    /// one that is still out.
+    ///
+    /// Wrapping, and not `+= 1`: the number is a `u32` the way the C++'s
+    /// `MessagePost_t` is, so a queue that lives long enough runs it past
+    /// `u32::MAX` — a panic in a debug build, and in a release one a post
+    /// that is equal to an earlier post of the same handler, so
+    /// `cancel_message` and `found_message` answer for a message the
+    /// caller never asked about. 0 is skipped for the same reason: it is
+    /// the `seq` of [`NULL_POST`] and of a broadcast handler, which is to
+    /// say a post the queue never handed out.
+    fn next_post_seq(&mut self) -> u32 {
+        let seq = self.next_post_seq;
+        // `max(1)` is the skip: a wrap to 0 moves on to 1 instead
+        self.next_post_seq = seq.wrapping_add(1).max(1);
+        seq
+    }
 }
 
 struct Queue {
@@ -445,8 +463,7 @@ fn post(
     }
     let (due, period) = first_due(&timing);
     let mut state = queue.lock();
-    let seq = state.next_post_seq;
-    state.next_post_seq += 1;
+    let seq = state.next_post_seq();
     let entry = PostedMessage {
         post: MessagePost { reg: *handler, seq },
         title: message.title,
@@ -469,37 +486,70 @@ fn post(
 /// pending one; otherwise the pending one wins and its post is returned.
 pub fn singleton_message(replace: bool, handler: &MessageHandler, message: Message) -> MessagePost {
     let title = message.title;
-    if let Some(queue) = queue(handler.queue) {
-        let mut state = queue.lock();
-        // The title is matched on the queue entry, and the payload is never
-        // locked: a periodic message is still in the queue while it runs —
-        // the dispatcher re-arms it before it calls the handlers and holds
-        // the message's lock for as long as they do — and a `Mutex` is not
-        // reentrant, so a handler asking for its own message would stop the
-        // queue thread for good.
-        if let Some(index) = state
-            .messages
-            .iter()
-            .position(|m| m.post.reg.seq == handler.seq && m.title == title)
-        {
-            if replace {
-                // A new `Message` behind a new `Arc`, which is what the C++
-                // does when it drops the pending wrapper and posts a fresh
-                // one: whatever the replacement was asked for is what the
-                // next dispatch hands to the handlers, and a dispatch that
-                // is already under way keeps the copy it took.
-                //
-                // Writing through the lock instead needs `try_lock` for the
-                // reason above, and a `try_lock` that fails drops the
-                // payload on the floor: a handler that replaced its own
-                // periodic message — the one case where the lock is always
-                // held — silently kept logging the old one.
-                state.messages[index].message = Arc::new(Mutex::new(message));
-            }
-            return state.messages[index].post;
-        }
+    let Some(queue) = queue(handler.queue) else {
+        return NULL_POST;
+    };
+    let mut state = queue.lock();
+    // An uninstalled handler has nothing left to deliver a message to, so a
+    // message carrying its `reg` could never run: `post_message` answers
+    // `NULL_POST` for the same reason, and matching a pending entry below
+    // would hand back a post that no dispatch will ever pick up.
+    if handler.seq != 0 && !state.handlers.iter().any(|it| it.seq == handler.seq) {
+        return NULL_POST;
     }
-    post_message(handler, message, MessageTiming::Immediate)
+    // Search and insertion are one step under the queue's lock, not two,
+    // which is what `faster_message` says it does and why: two threads
+    // asking for the same title when nothing is pending would each see an
+    // empty queue and post a copy of its own, and the handler would run
+    // twice — the one thing this call promises it does not do.
+    let post = if let Some(index) = state
+        .messages
+        .iter()
+        .position(|m| m.post.reg.seq == handler.seq && m.title == title)
+    {
+        if replace {
+            // A new `Message` behind a new `Arc`, which is what the C++
+            // does when it drops the pending wrapper and posts a fresh
+            // one: whatever the replacement was asked for is what the
+            // next dispatch hands to the handlers, and a dispatch that
+            // is already under way keeps the copy it took.
+            //
+            // Writing through the lock instead needs `try_lock` for the
+            // reason above, and a `try_lock` that fails drops the
+            // payload on the floor: a handler that replaced its own
+            // periodic message — the one case where the lock is always
+            // held — silently kept logging the old one.
+            //
+            // The title is matched on the queue entry, and the payload is
+            // never locked: a periodic message is still in the queue while
+            // it runs — the dispatcher re-arms it before it calls the
+            // handlers and holds the message's lock for as long as they
+            // do — and a `Mutex` is not reentrant, so a handler asking for
+            // its own message would stop the queue thread for good.
+            state.messages[index].message = Arc::new(Mutex::new(message));
+        }
+        state.messages[index].post
+    } else {
+        let post = MessagePost {
+            reg: *handler,
+            seq: state.next_post_seq(),
+        };
+        state.messages.push_back(PostedMessage {
+            post,
+            title,
+            due: None,
+            period: None,
+            message: Arc::new(Mutex::new(message)),
+        });
+        post
+    };
+    drop(state);
+    // `content.breaker->Notify(lock)` of the C++, which it does on the way
+    // out of every post: a thread sleeping on this queue until the next
+    // message is due is waiting for this title too, and what it will be
+    // handed is the payload a `replace` just swapped in.
+    queue.cond.notify_all();
+    post
 }
 
 /// `MessageQueue::BroadcastMessage(queue, message, timing)` — every
@@ -581,8 +631,7 @@ pub fn faster_message(handler: &MessageHandler, message: Message) -> MessagePost
     // calling it: the sequence number and the insertion have to happen
     // under the lock the search above took, and `MessageTiming::Immediate`
     // is what "faster" posts — a message that is due now.
-    let seq = state.next_post_seq;
-    state.next_post_seq += 1;
+    let seq = state.next_post_seq();
     state.messages.push_back(PostedMessage {
         post: MessagePost { reg: *handler, seq },
         title,
@@ -853,5 +902,31 @@ fn first_due(timing: &MessageTiming) -> (Option<Instant>, Option<Duration>) {
             Some(Instant::now() + Duration::from_millis(after)),
             Some(Duration::from_millis(period)),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A queue does not run out of sequence numbers at the top of a `u32`:
+    /// the count wraps, and the wrap skips 0, which is the `seq` of
+    /// [`NULL_POST`] and of a broadcast handler — a post the queue never
+    /// hands out.
+    ///
+    /// It is tested here and not in `tests/`, because the counter is a
+    /// field of [`QueueState`]: reaching `u32::MAX` from outside would take
+    /// four thousand million posts.
+    #[test]
+    fn the_sequence_number_of_a_post_wraps_past_the_top_of_a_u32() {
+        let mut state = QueueState::new();
+        state.next_post_seq = u32::MAX - 1;
+        assert_eq!(state.next_post_seq(), u32::MAX - 1);
+        assert_eq!(state.next_post_seq(), u32::MAX);
+        assert_eq!(
+            state.next_post_seq(),
+            1,
+            "it wrapped to 0, which is no post"
+        );
     }
 }

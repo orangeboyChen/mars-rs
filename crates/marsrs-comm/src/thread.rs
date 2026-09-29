@@ -89,7 +89,11 @@ impl SpinLock {
             .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
-            spins += 1;
+            // Saturation, and not `+= 1`: the count only ever decides
+            // whether to spin or to yield, so a thread that has failed
+            // `u32::MAX` times keeps yielding — where an overflow is a
+            // panic in a debug build, in the middle of taking a lock.
+            spins = spins.saturating_add(1);
             if spins < 16 {
                 std::hint::spin_loop();
             } else {

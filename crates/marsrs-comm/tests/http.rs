@@ -179,6 +179,66 @@ fn a_number_that_does_not_fit_is_the_longest_body_there_can_be() {
     );
 }
 
+/// The last chunk is a size of nothing, then the trailer section, then an
+/// empty line — `0\r\nTrailer-Field: v\r\n\r\n`. Looking for a single
+/// `CRLF` in the trailer took the end of the first field for the end of
+/// the whole body and left the empty line in the buffer.
+#[test]
+fn a_chunked_answer_with_trailer_fields_ends_at_the_empty_line() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\nTrailer-Field: v\r\n\r\n"
+        ),
+        RecvStatus::End
+    );
+    assert_eq!(parser.body(), b"hello");
+    assert_eq!(
+        parser.buffered(),
+        b"",
+        "the empty line that ends the trailer was left in the buffer"
+    );
+}
+
+/// What that stray `CRLF` did to the answer that came next on the same
+/// connection: handed to a parser — which is what a keep-alive connection
+/// does with the bytes that are left — it is not a first line at all.
+#[test]
+fn the_answer_after_a_chunked_one_is_read_off_the_same_connection() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\nTrailer-Field: v\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"
+        ),
+        RecvStatus::End
+    );
+    assert_eq!(parser.body(), b"hello");
+
+    let mut next = Parser::new();
+    assert_eq!(next.recv(parser.buffered()), RecvStatus::End);
+    assert_eq!(next.body(), b"hi");
+}
+
+/// `MAX_CHUNK_LENGTH` is 4g, and a chunk that big is one this parser does
+/// not read: on a 32-bit target — `armv7` is one this repository builds —
+/// `size as usize` truncated it to 0, and `begin + size` either wrapped or
+/// read the chunk's own bytes as the `CRLF` that ends it.
+#[test]
+fn a_chunk_of_the_biggest_size_there_is_is_not_read_as_one_of_nothing() {
+    // `100000000` is the limit itself, and `ffffffff` one byte below it
+    for size in ["100000000", "ffffffff"] {
+        let mut parser = Parser::new();
+        let status = parser.recv(
+            format!("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{size}\r\nabc")
+                .as_bytes(),
+        );
+        // a body that is not read, and no overflow on the way there: which
+        // of the two it is depends on how wide a `usize` is
+        assert!(!parser.is_success(), "{size} of chunk: {status:?}");
+        assert!(parser.body().is_empty(), "{size} of chunk was read as none");
+    }
+}
+
 #[test]
 fn the_size_of_a_chunk_is_hexadecimal() {
     // `strtoull(_, 16)` reads the `0x` in front of it, which a parse of the

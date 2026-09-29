@@ -3,7 +3,7 @@
 //! Every test uses its own queue: the default one is process-wide and the
 //! tests run in parallel.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Barrier, Mutex};
@@ -187,6 +187,120 @@ fn a_singleton_keeps_one_pending_message_per_title() {
     );
     assert_eq!(replaced, first);
     assert_eq!(pending_message_count(queue), 1);
+    destroy_message_queue(queue);
+}
+
+/// A post is what [`cancel_message`] and [`found_message`] name one message
+/// by, so no two posts of a queue may be equal. The sequence number behind
+/// it used to be `+= 1` on a `u32`, which panics at `u32::MAX` in a debug
+/// build and wraps in a release one, after which a post named a message the
+/// caller never asked for.
+#[test]
+fn every_message_of_a_queue_has_a_post_of_its_own() {
+    let queue = create_message_queue();
+    let handler = install(|_| {}, false, queue);
+    let posts: Vec<MessagePost> = (0..1000)
+        .map(|index| {
+            post_message(
+                &handler,
+                Message::new(MessageTitle(index), "posted"),
+                MessageTiming::Immediate,
+            )
+        })
+        .collect();
+    let sequences: HashSet<u32> = posts.iter().map(|post| post.seq).collect();
+    assert_eq!(
+        sequences.len(),
+        posts.len(),
+        "two messages share a post, so cancelling one cancels both"
+    );
+
+    assert!(cancel_message(&posts[500]));
+    assert_eq!(
+        pending_message_count(queue),
+        posts.len() - 1,
+        "one post cancelled more than the message it was given for"
+    );
+    destroy_message_queue(queue);
+}
+
+/// The search and the insertion are one step under the queue's lock: two
+/// threads asking for the same title when nothing is pending must not each
+/// post a copy of their own, which is the one thing a singleton promises.
+#[test]
+fn two_singletons_asked_at_once_are_still_one_pending_message() {
+    let queue = create_message_queue();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&runs);
+    let handler = install(
+        move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        },
+        false,
+        queue,
+    );
+
+    let barrier = Arc::new(Barrier::new(2));
+    let threads: Vec<_> = (0..2)
+        .map(|_| {
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                singleton_message(
+                    false,
+                    &handler,
+                    Message::new(MessageTitle(7), "asked twice"),
+                )
+            })
+        })
+        .collect();
+    let posts: Vec<MessagePost> = threads
+        .into_iter()
+        .map(|thread| thread.join().expect("the asking thread panicked"))
+        .collect();
+    assert_eq!(
+        posts[0], posts[1],
+        "the two asks were not coalesced into one message"
+    );
+    assert_eq!(
+        pending_message_count(queue),
+        1,
+        "both asks are pending: the handler would run twice"
+    );
+
+    assert!(RunLoop::dispatch_timeout(queue, Duration::from_millis(200)));
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "the handler ran once per ask instead of once"
+    );
+    destroy_message_queue(queue);
+}
+
+/// A handler that has been uninstalled has nothing left to deliver a message
+/// to, and a message it still has pending does not install it again: a
+/// singleton for it is answered the way [`post_message`] answers one.
+#[test]
+fn a_singleton_for_an_uninstalled_handler_is_no_post() {
+    let queue = create_message_queue();
+    let handler = install(|_| {}, false, queue);
+    singleton_message(false, &handler, Message::new(MessageTitle(7), "pending"));
+    uninstall_message_handler(&handler);
+
+    assert_eq!(
+        singleton_message(
+            false,
+            &handler,
+            Message::new(MessageTitle(7), "asked anyway")
+        ),
+        NULL_POST,
+        "a message that can never be delivered was posted"
+    );
+    assert_eq!(
+        pending_message_count(queue),
+        1,
+        "the uninstalled handler's pending message was replaced instead of refused"
+    );
     destroy_message_queue(queue);
 }
 

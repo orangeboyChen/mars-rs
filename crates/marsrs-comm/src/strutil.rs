@@ -174,6 +174,8 @@ pub fn hex2str(bytes: &[u8]) -> String {
 ///
 /// The C++ bails out above 1024 input characters (512 bytes of output), which
 /// is kept as a documented limit: `None` is returned instead of an assert.
+/// So is a pair of characters that is not two hex digits of either case —
+/// the C++ reads the two as two nibbles, and has no sign to read.
 pub fn str2hex(s: &str) -> Option<Vec<u8>> {
     let bytes = s.as_bytes();
     if bytes.len() > 1024 {
@@ -184,9 +186,21 @@ pub fn str2hex(s: &str) -> Option<Vec<u8>> {
         if pair.len() != 2 {
             break;
         }
-        out.push(u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?);
+        // Two characters are two nibbles, and anything that is not a hex
+        // digit is not one: `from_str_radix` reads a leading `+` as a
+        // sign, so `"+8"` was the byte 8 where the C++ has no byte at all.
+        let (Some(high), Some(low)) = (hex_nibble(pair[0]), hex_nibble(pair[1])) else {
+            return None;
+        };
+        out.push((high << 4) | low);
     }
     Some(out)
+}
+
+/// What one character of a hex pair stands for: `None` for anything that is
+/// not a hex digit of either case, and never a sign or a space.
+fn hex_nibble(byte: u8) -> Option<u8> {
+    u8::try_from(char::from(byte).to_digit(16)?).ok()
 }
 
 /// `strutil::ReplaceChar`.

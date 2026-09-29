@@ -1070,7 +1070,19 @@ impl Parser {
 
         if size != 0 {
             let begin = size_end + CRLF.len();
-            let end = begin + size as usize;
+            // The size has to fit in a `usize` before it is an offset into
+            // this buffer, and adding it to `begin` must not wrap: on a
+            // 32-bit target — `armv7` is one this repository builds —
+            // `MAX_CHUNK_LENGTH` is exactly the value `as usize` truncates
+            // to 0, and an offset of `begin` then reads the chunk's own
+            // bytes as the `CRLF` that ends it.
+            let Some(end) = usize::try_from(size)
+                .ok()
+                .and_then(|length| begin.checked_add(length))
+            else {
+                self.status = RecvStatus::BodyError;
+                return true;
+            };
             if self.buffer.len() < end + CRLF.len() {
                 return true;
             }
@@ -1085,13 +1097,26 @@ impl Parser {
 
         // the last chunk: a size of nothing, and then the trailer
         let trailer_begin = size_end + CRLF.len();
-        if self.buffer.len() < trailer_begin + CRLF.len() {
-            return true;
-        }
-        let Some(trailer_end) = find(&self.buffer[trailer_begin..], CRLF) else {
-            return true;
+        // The trailer ends where the head did, with an empty line, and not
+        // with the first `CRLF` in it: a response that carries trailer
+        // fields (`0\r\nTrailer-Field: v\r\n\r\n`) left the second `CRLF`
+        // in the buffer, and the next response of this keep-alive
+        // connection then began with it and failed `first_line`. What is
+        // consumed is therefore the whole trailer section, and a single
+        // `CRLF` only when there are no fields in it — `0\r\n\r\n`, which
+        // is `CHUNK_EOF` and the common case.
+        let consumed = if self.buffer[trailer_begin..].starts_with(CRLF.as_bytes()) {
+            CRLF.len()
+        } else {
+            let Some(trailer_end) = find(&self.buffer[trailer_begin..], CRLF_CRLF) else {
+                return true;
+            };
+            trailer_end + CRLF_CRLF.len()
         };
-        self.consume(trailer_begin + trailer_end + CRLF.len());
+        // nothing is consumed until the terminator has been found: a
+        // trailer that is still coming must stay in the buffer for the
+        // bytes that finish it
+        self.consume(trailer_begin + consumed);
         self.status = RecvStatus::End;
         true
     }
@@ -1122,10 +1147,18 @@ impl Parser {
             self.status = RecvStatus::BodyError;
             return true;
         }
+        // A length that is under the limit can still be one this buffer
+        // cannot hold: on a 32-bit target `MAX_CONTENT_LENGTH` is exactly
+        // the value `as usize` truncates to 0, and a parser that appends
+        // nothing never reaches the end of the body it is reading.
+        let Ok(append) = usize::try_from(append) else {
+            self.status = RecvStatus::BodyError;
+            return true;
+        };
 
-        self.body.extend_from_slice(&self.buffer[..append as usize]);
-        self.consume(append as usize);
-        if have + append == content_length {
+        self.body.extend_from_slice(&self.buffer[..append]);
+        self.consume(append);
+        if have + append as u64 == content_length {
             self.status = RecvStatus::End;
             return true;
         }
