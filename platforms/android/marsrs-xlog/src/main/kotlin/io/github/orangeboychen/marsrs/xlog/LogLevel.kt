@@ -5,7 +5,7 @@
 // door to the `.so`.
 //
 // They are named the way the Kotlin of this port already names things, which
-// is why `XlogConfig` sits next to `Xlog.XLogConfig` and `LogLevel.INFO`
+// is why `XlogConfig` sits next to `XLogConfigJni` and `LogLevel.INFO`
 // next to `Xlog.LEVEL_INFO`: the first of each pair is what new code writes,
 // the second is what the API the C++ project's Java spelled still answers.
 // Both reach one appender.

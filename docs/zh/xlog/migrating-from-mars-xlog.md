@@ -116,13 +116,9 @@ xlog.log_with_info(
 
 ### 从 C++ 项目的 Java 来
 
-Android 包是唯一还留着旧写法的地方：七个参数的 `Xlog.open`、`XLogConfig`、
-`XLoggerInfo`、`logWrite` 和 `LEVEL_*` 常量都还能用。带着 `@Deprecated` 和取代它的写法
-的是七个参数的 `Xlog.open`、`logWrite`、无参的 `Xlog()` 以及围着它们的 `Log` 门面；
-`XLogConfig`、`XLoggerInfo` 和 `LEVEL_*` 常量没有这个标记，所以用到它们的调用点照样
-编译，没有任何东西把它们指向新写法 —— 找出来得靠应用自己 grep。`Log.setLogImp(Xlog())`
-和 `Log.d(tag, message)` 仍然写进 `Xlog.open` 装上的那个 appender，所以其余部分可以
-一个调用点一个调用点地走：
+旧写法一个都不剩了。Android 包就是 Kotlin Multiplatform 模块里那个 `Xlog`，成员对
+成员，所以调过 `Log.d(tag, message)`、`Log.setLogImp(Xlog())` 或七个参数 `Xlog.open`
+的应用，现在写的是这个移植每个平台打开 appender 用的那一个调用：
 
 ```kotlin
 // 之前
