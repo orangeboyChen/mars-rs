@@ -50,6 +50,11 @@ Every release also ships the `xlog` CLI, which writes and reads those files from
 a shell and makes the key pair that decides who can — `cargo install marsrs-xlog`,
 `xlog keygen`.
 
+Every one of those platforms has a demo in [`demo/`](demo/README.md) — one
+directory each, and the same six records written in all eight, so that what
+differs between them is what the platform makes of it and not what the app
+does.
+
 ## Use it
 
 Two ways in, and the difference is how much of the port you take: **xlog alone**,
