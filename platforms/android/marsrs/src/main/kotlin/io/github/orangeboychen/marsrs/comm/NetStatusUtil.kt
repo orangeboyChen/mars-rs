@@ -14,6 +14,7 @@ import android.telephony.PhoneStateListener
 import android.telephony.SignalStrength
 import android.telephony.TelephonyManager
 import android.util.Log
+import java.util.Locale
 
 /**
  * The network-status helpers `C2Java.getStatisticsNetType`, `getCurSIMInfo` and
