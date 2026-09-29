@@ -42,6 +42,3 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "marsrs-demo-kmp"
-
-    }
-}
