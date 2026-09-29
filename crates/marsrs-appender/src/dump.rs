@@ -7,9 +7,12 @@
 //! lifetime trap.
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use chrono::{Datelike, Local, Timelike};
+
+use crate::file_util::private_file;
 
 /// `kMaxDumpLength` in `appender.cc`.
 const MAX_DUMP_LENGTH: usize = 4096;
@@ -89,7 +92,9 @@ pub(crate) fn dump_to_logdir(bytes: &[u8], logdir: &Path) -> String {
         now.month(),
         now.day()
     ));
-    if let Err(err) = fs::create_dir_all(&day_dir) {
+    // The same mode the log and cache directories are created with: a dump is
+    // a blob of the app's own memory.
+    if let Err(err) = crate::file_util::create_private_dir(&day_dir) {
         eprintln!(
             "[marsrs-appender] xlogger_dump: {}: {err}",
             day_dir.display()
@@ -107,7 +112,17 @@ pub(crate) fn dump_to_logdir(bytes: &[u8], logdir: &Path) -> String {
         now.second(),
         bytes.len()
     ));
-    if let Err(err) = fs::write(&path, bytes) {
+    // Two dumps in the same second overwrite each other unless their lengths
+    // differ — as in the C++ — so this truncates rather than creating new.
+    let written = private_file(
+        fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true),
+    )
+    .open(&path)
+    .and_then(|mut file| file.write_all(bytes));
+    if let Err(err) = written {
         eprintln!("[marsrs-appender] xlogger_dump: {}: {err}", path.display());
         return String::new();
     }

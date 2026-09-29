@@ -29,6 +29,29 @@ use marsrs_appender::{
 use marsrs_buffer::CompressMode;
 use marsrs_core::PtrBuffer;
 
+/// The timespan is an `int64` a caller computed and it reaches these two from
+/// the C ABI and from the JNI: `i64::MIN` days times the seconds of a day
+/// overflows before the subtraction behind it ever runs, which is a panic in
+/// debug and a day in the far future in release. Both saturate, the way the
+/// appender's own lookups do.
+#[test]
+fn a_timespan_that_overflows_a_day_in_seconds_is_saturated() {
+    let dir = Path::new("/tmp/mars-xlog-timespan-saturation");
+    for timespan in [i64::MAX, i64::MIN, i64::MAX / 86_400, i64::MIN / 86_400] {
+        let names = appender_make_logfile_name(timespan, "Mars", dir);
+        assert_eq!(names.len(), 1, "timespan {timespan}: {names:?}");
+        assert!(
+            names[0]
+                .file_name()
+                .is_some_and(|name| name.to_str().is_some_and(|name| name.starts_with("Mars_"))),
+            "timespan {timespan}: {:?}",
+            names[0]
+        );
+        // Nothing is in that directory, so neither is a file of that day.
+        assert!(appender_getfilepath_from_timespan(timespan, "Mars", dir).is_empty());
+    }
+}
+
 #[test]
 fn the_object_is_the_api_an_app_takes() {
     let _: fn(XLogConfig, LogLevel) -> Result<Xlog, AppenderError> = Xlog::open;

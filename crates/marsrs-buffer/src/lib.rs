@@ -197,7 +197,9 @@ impl LogBuffer {
     ///
     /// Returns `false` when `data` is empty, when the region cannot hold the
     /// header, or when there is no room left for the payload (the C++ relies on
-    /// `size_t` underflow here and corrupts memory instead).
+    /// `size_t` underflow here and corrupts memory instead) — a compressor that
+    /// emitted nothing included, which is the same thing said by a write that
+    /// put no byte of the record anywhere.
     pub fn write(&mut self, region: &mut [u8], data: &[u8]) -> bool {
         if data.is_empty() {
             return false;
@@ -234,8 +236,14 @@ impl LogBuffer {
 
             let dst = &mut region[self.length..self.length + avail_out];
             match compressor.compress(data, dst) {
+                // A compressor that emitted nothing wrote no record at all —
+                // the C++ cannot say so either (`Compress` answers a length,
+                // and `0` and `(size_t)-1` are the same length to the code
+                // behind it), so this is the port's answer to "no room": a
+                // `true` here would report a record that is in no file and
+                // left no marker behind as a record that was written.
+                Some(0) | None => return false,
                 Some(n) => n,
-                None => return false,
             }
         } else {
             // Reserve the tailer byte like the compress branch does, or a full

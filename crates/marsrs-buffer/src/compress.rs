@@ -64,7 +64,11 @@ impl Compressor {
     /// `(size_t)-1`.
     ///
     /// Note that, exactly like the C++, input that does not fit in `dst` is
-    /// dropped rather than buffered.
+    /// dropped rather than buffered — and that `Some(0)` is therefore "no
+    /// room", not "no work": a flush that could put nothing in `dst` left the
+    /// bytes of `src` in the stream's own window and wrote no record, which is
+    /// why [`LogBuffer::write`](crate::LogBuffer::write) answers `false` for it
+    /// instead of reporting a record nobody will ever read.
     pub fn compress(&mut self, src: &[u8], dst: &mut [u8]) -> Option<usize> {
         match self {
             Self::Zlib(stream) => {

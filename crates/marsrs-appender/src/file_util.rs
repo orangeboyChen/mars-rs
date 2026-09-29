@@ -26,6 +26,59 @@ pub(crate) const MMAP_EXT: &str = "mmap3";
 /// One day in seconds — the unit of the `timespan` arguments.
 pub(crate) const SECONDS_PER_DAY: i64 = 24 * 60 * 60;
 
+/// The mode every file this crate creates gets on unix: for its owner alone.
+///
+/// A log holds everything an app wrote since it was installed, and the cache
+/// file holds the records of the block that is not in a log yet — which is the
+/// one file a reader would have to go after to read records before they are
+/// filed. `std` creates both with the process default, `0666 & umask`, which
+/// under the usual `022` leaves them readable by every other uid on the
+/// device; the private key `xlog keygen` writes was already opened this way.
+/// A platform with no unix modes has nothing to set: there the directory the
+/// app is sandboxed in is what keeps its files private.
+#[cfg(unix)]
+const PRIVATE_FILE_MODE: u32 = 0o600;
+/// [`PRIVATE_FILE_MODE`] for a directory: `0o700`, because a directory every
+/// uid can traverse is one whose files every uid can open however narrow the
+/// files' own mode is.
+#[cfg(unix)]
+const PRIVATE_DIR_MODE: u32 = 0o700;
+
+/// Sets the mode a file of this crate is created with: see
+/// [`PRIVATE_FILE_MODE`]. Given to the `open` that creates the file, so there
+/// is no window in which it is permissive.
+#[cfg(unix)]
+pub(crate) fn private_file(options: &mut OpenOptions) -> &mut OpenOptions {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    options.mode(PRIVATE_FILE_MODE)
+}
+
+/// On a platform with no unix modes there is nothing to set — see
+/// [`PRIVATE_FILE_MODE`].
+#[cfg(not(unix))]
+pub(crate) fn private_file(options: &mut OpenOptions) -> &mut OpenOptions {
+    options
+}
+
+/// [`fs::create_dir_all`] over [`PRIVATE_DIR_MODE`].
+#[cfg(unix)]
+pub(crate) fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(PRIVATE_DIR_MODE)
+        .create(path)
+}
+
+/// On a platform with no unix modes there is nothing to set — see
+/// [`PRIVATE_FILE_MODE`].
+#[cfg(not(unix))]
+pub(crate) fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(path)
+}
+
 /// `gettimeofday` — the pair `XLoggerInfo::timeval` carries.
 pub(crate) fn now_timeval() -> (i64, i64) {
     SystemTime::now()
@@ -218,9 +271,16 @@ pub(crate) fn build_stamp() -> (String, String) {
 
 /// `__DelTimeoutFile`.
 ///
-/// Removes `.xlog` files and the `YYYYMMDD` dump directories that have not been
-/// touched for `_max_alive_time` seconds.
-pub(crate) fn del_timeout_file(dir: &Path, max_alive_time: i64) {
+/// Removes `<nameprefix>*.xlog` files and the `YYYYMMDD` dump directories that
+/// have not been touched for `_max_alive_time` seconds.
+///
+/// The `.xlog` files are matched by prefix, the way [`move_old_files`] does:
+/// one `logdir` is what two `Xlog`s with two prefixes share — an app and a
+/// module it links, say — and a sweep over every `.xlog` in it deletes the
+/// other one's logs, on a schedule that is not its own. The C++ has one prefix
+/// per process, so it never had the question. The dump directories carry no
+/// prefix in their name, so they go whatever wrote them.
+pub(crate) fn del_timeout_file(dir: &Path, max_alive_time: i64, nameprefix: &str) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -242,14 +302,12 @@ pub(crate) fn del_timeout_file(dir: &Path, max_alive_time: i64) {
         }
 
         let path = entry.path();
-        if meta.is_file() && path.extension().and_then(|e| e.to_str()) == Some(LOG_EXT) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if meta.is_file() && name.starts_with(nameprefix) && name.ends_with(LOG_EXT) {
             let _ = fs::remove_file(&path);
         }
-        if meta.is_dir() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.len() == 8 && name.chars().all(|c| c.is_ascii_digit()) {
-                let _ = fs::remove_dir_all(&path);
-            }
+        if meta.is_dir() && name.len() == 8 && name.chars().all(|c| c.is_ascii_digit()) {
+            let _ = fs::remove_dir_all(&path);
         }
     }
 }
@@ -271,7 +329,10 @@ pub(crate) fn append_file(src_file: &Path, dst_file: &Path) -> bool {
     let Ok(mut src) = File::open(src_file) else {
         return false;
     };
-    let Ok(mut dst) = OpenOptions::new().create(true).append(true).open(dst_file) else {
+    // The destination is a log file this crate may be creating: see
+    // [`private_file`].
+    let Ok(mut dst) = private_file(OpenOptions::new().create(true).append(true)).open(dst_file)
+    else {
         return false;
     };
 
@@ -464,10 +525,34 @@ mod tests {
             f.set_modified(old).unwrap();
         }
 
-        del_timeout_file(dir, 24 * 3600);
+        del_timeout_file(dir, 24 * 3600, "Mars");
         assert!(fresh.exists());
         assert!(!stale.exists());
         assert!(keep.exists());
+    }
+
+    /// One `logdir` is what two `Xlog`s with two prefixes share, and a sweep
+    /// that removed every `.xlog` in it deleted the other one's logs — on an
+    /// expiry that is not its own. (`move_old_files` has always matched the
+    /// prefix; this is the sweep catching up with it.)
+    #[test]
+    fn the_expiry_sweep_leaves_the_log_files_of_another_prefix_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let mine = dir.join("Mars_20240101.xlog");
+        let theirs = dir.join("Other_20240101.xlog");
+        touch(&mine, b"a");
+        touch(&theirs, b"a");
+
+        // A negative alive time is "everything is expired": no file was
+        // modified less than zero seconds ago.
+        del_timeout_file(dir, -1, "Mars");
+
+        assert!(!mine.exists());
+        assert!(
+            theirs.exists(),
+            "the logs of another prefix are not this sweep's to delete"
+        );
     }
 
     #[test]

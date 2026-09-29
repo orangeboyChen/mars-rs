@@ -682,7 +682,12 @@ pub fn appender_make_logfile_name(timespan: i64, prefix: &str, logdir: &Path) ->
         return Vec::new();
     }
 
-    let tv = file_util::now_secs() - timespan * file_util::SECONDS_PER_DAY;
+    // Saturated, the way the appender's own lookup is: the timespan reaches
+    // this from the C ABI and JNI seams as an `int64` the caller computed, and
+    // `i64::MIN * SECONDS_PER_DAY` is a panic in debug and a day in the far
+    // future in release.
+    let days = timespan.saturating_mul(file_util::SECONDS_PER_DAY);
+    let tv = file_util::now_secs().saturating_sub(days);
     vec![file_util::make_log_file_name(
         tv,
         logdir,
@@ -710,7 +715,9 @@ pub fn appender_getfilepath_from_timespan(
         return Vec::new();
     }
 
-    let tv = file_util::now_secs() - timespan * file_util::SECONDS_PER_DAY;
+    // Saturated: see [`appender_make_logfile_name`].
+    let days = timespan.saturating_mul(file_util::SECONDS_PER_DAY);
+    let tv = file_util::now_secs().saturating_sub(days);
     file_util::get_file_paths_from_timeval(tv, logdir, prefix, file_util::LOG_EXT)
 }
 

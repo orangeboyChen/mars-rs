@@ -295,6 +295,55 @@ pub fn unlock(file: &File) -> bool {
     }
 }
 
+/// A file a test can hold whose `ftruncate` succeeds and whose every `write`
+/// fails — the pair a cache file on a full disk presents, which is the one
+/// `open_region` has to survive.
+///
+/// No ordinary file gives that pair: a filesystem that refuses the `write`
+/// refuses the `ftruncate` in front of it as well, and one that takes the
+/// `ftruncate` takes the write. A `memfd_create` file sealed with
+/// `F_SEAL_WRITE` does: the seal denies writes to the buffer (`EPERM`) and
+/// leaves `ftruncate` alone, which is exactly what a disk with no space left
+/// looks like from the appender — a length recorded with no blocks behind it,
+/// and the write that would reserve them failing.
+///
+/// `None` where the file cannot be made: not Linux, no `memfd_create`, or a
+/// kernel that will not take the seal. A test that gets `None` passes rather
+/// than fails — what it asserts is what the appender does with such a file,
+/// and there is no way to ask without one.
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn unwritable_file() -> Option<File> {
+    use std::os::unix::io::FromRawFd;
+
+    /// `MFD_ALLOW_SEALING`, which `libc` exports for android and not for the
+    /// gnu and musl targets this crate is built for.
+    const MFD_ALLOW_SEALING: libc::c_uint = 0x0002;
+    /// `MFD_CLOEXEC`, for the same reason: the tests re-execute this binary to
+    /// get a second process, and a descriptor that outlives the one that made
+    /// it would be one the child cannot account for.
+    const MFD_CLOEXEC: libc::c_uint = 0x0001;
+
+    let name = b"marsrs-unwritable\0";
+    // SAFETY: `memfd_create` returns a descriptor of its own or -1, and the
+    // name is a live NUL-terminated buffer.
+    let fd = unsafe {
+        libc::memfd_create(
+            name.as_ptr().cast::<libc::c_char>(),
+            MFD_ALLOW_SEALING | MFD_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return None;
+    }
+    // SAFETY: `fd` is the descriptor created above and nothing else owns it,
+    // so the `File` — which closes it — is its only owner from here.
+    let file = unsafe { File::from_raw_fd(fd) };
+    // SAFETY: `fcntl` over a descriptor this function owns; the third argument
+    // is a flag and not a pointer, so there is nothing for it to outlive.
+    let sealed = unsafe { libc::fcntl(fd, libc::F_ADD_SEALS, libc::F_SEAL_WRITE) };
+    (sealed == 0).then_some(file)
+}
+
 /// Whether two handles of `path` opened independently really exclude each
 /// other here.
 ///
