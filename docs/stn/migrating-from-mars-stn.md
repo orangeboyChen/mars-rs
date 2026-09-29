@@ -51,6 +51,12 @@ In a shared Kotlin module the wait is the app's own too: `common` Kotlin carries
 no sleep of its own, so `wait` above is an `expect` the app writes —
 `Thread.sleep(due)` on Android and `usleep(due * 1000)` on the native targets.
 
+In Rust one call starts one: `Driver::spawn(stn)` starts a thread of this crate's
+that drains the queues — `run_pending()` when it is due, sleeping `due_delay()`
+meanwhile — and joins it when the `Driver` is dropped. An app that awaits a task
+and has no loop of its own takes it; an app with a loop keeps the loop, because a
+pass that ends a task wakes whoever awaited it.
+
 A task that is started and never drained stays in its queue — `has_task` answers
 `true` for one that is going nowhere.
 
@@ -66,7 +72,7 @@ DNS ahead of the connect, the retry, the timeout, and the report at the end.
 
 | the C++ | Rust | Android | Swift | C |
 |---|---|---|---|---|
-| `mars::stn::StartTask` | `stn.start_task(task)` | `StnLogic.startTask(task)` | `MarsStn.start(task)` | `mars_stn_start_task(&task)` |
+| `mars::stn::StartTask` | `stn.send(task, body)` — `start_task(task)` still starts a task nobody awaits, and it is deprecated | `StnLogic.startTask(task)` | `MarsStn.start(task)` | `mars_stn_start_task(&task)` |
 | `mars::stn::StopTask` | `stn.stop_task(id)` | `StnLogic.stopTask(id)` | `MarsStn.stop(taskID:)` | `mars_stn_stop_task(id)` |
 | `mars::stn::HasTask` | `stn.has_task(id)` | `StnLogic.hasTask(id)` | `MarsStn.hasTask(id)` | `mars_stn_has_task(id)` |
 | `mars::stn::SetCallback` | `stn.set_callback(app)` | `StnLogic.setCallBack(cb)` | `MarsStn.setApp { … }` | `mars_stn_set_app(ctx, ask)` |
@@ -75,6 +81,12 @@ DNS ahead of the connect, the retry, the timeout, and the report at the end.
 | `mars::stn::DestroyLonglink_ext` | `stn.destroy_long_link(name)` | `StnLogic.destroyLonglink(name)` | `MarsStn.destroyLongLink(name)` | `mars_stn_destroy_longlink(name)` |
 | `mars::stn::MarkMainLonglink_ext` | `stn.mark_main_longlink(name)` | `StnLogic.markMainLonglink(name)` | `MarsStn.markMainLongLink(name)` | `mars_stn_mark_main_longlink(name)` |
 | the queue's thread | `stn.run_pending()` | `StnLogic.runPending()` | `MarsStn.runPending()` | `mars_stn_run_pending()` |
+
+Rust is the only platform whose `StartTask` has a newer call beside it: `send`
+starts the task and hands back the answer of it, to await, while `start_task` —
+the upstream call, for a task nobody is awaiting — is the one that carries a
+deprecation. The Android, Swift and C `start` calls are the upstream call and
+carry none.
 
 In a shared Kotlin module these are `StnLogic`'s as well, and the names are the
 Android ones but for the app: `StnLogic.setApp { question -> … }` takes one

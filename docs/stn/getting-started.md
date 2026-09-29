@@ -41,11 +41,14 @@ code and carries it across to the Dart or the JS itself.
    Swift, one `ask` in the shared Kotlin, one callback in C, and on Android the
    interface the app implements. See [the questions](/stn/callbacks).
 2. **Start a task.** It is taken, given a link and put on the queue, and the call
-   returns at once.
-3. **Drive the queue.** This is the one thing this port asks of the caller. What
-   would have been a thread is a pair of calls the app makes — `run_pending()`,
-   and `due_time()` to know how long it may wait before making it. A task that is
-   started and never drained stays in its queue.
+   returns at once. In Rust `stn.send(task, body)` starts one and hands back the
+   answer of it, to await.
+3. **Drive the queue.** What would have been a thread is a pair of calls the app
+   makes — `run_pending()`, and `due_time()` to know how long it may wait before
+   making it. In Rust one call runs that pair for you: `Driver::spawn(stn)`
+   drains the queues on a thread of this crate's until the `Driver` is dropped.
+   On every platform, a task that is started and never drained stays in its
+   queue.
 
 ## Rust
 
@@ -54,10 +57,13 @@ cargo add marsrs          # the whole port: xlog, stn and sdt
 ```
 
 ```rust
-use marsrs::stn::{gen_task_id, App, ErrCmdType, StnLogic, Task, TaskFailHandleType};
+use std::sync::{Arc, Mutex};
+
+use marsrs::stn::{gen_task_id, App, Driver, ErrCmdType, StnLogic, Task, TaskFailHandleType};
 
 // 1. the app: every question has a default, so this is the whole of one that
-//    encodes a request and reads an answer.
+//    encodes a request and reads an answer. A task you await is asked neither
+//    of those two; the other sixteen it always is.
 struct MyApp;
 
 impl App for MyApp {
@@ -95,28 +101,61 @@ impl App for MyApp {
     }
 }
 
-let mut stn = StnLogic::new();
-stn.set_callback(MyApp);
-stn.create(); // builds the net core; nothing above works before this
+let stn = Arc::new(Mutex::new(StnLogic::new()));
+stn.lock().unwrap().set_callback(MyApp);
+stn.lock().unwrap().create(); // builds the net core; nothing above works before this
 
-// 2. one task
+// 2. one task: `send` starts it and hands back the future of its end
 let mut task = Task::new(gen_task_id(), 100);
 task.cgi = "/cgi-bin/hello".to_owned();
 task.shortlink_host_list = vec!["example.com".to_owned()];
 task.total_timeout = 10_000;
-stn.start_task(task);
 
-// 3. the run loop: `due_delay()` is how long the pass may wait
-while let Some(wait) = stn.due_delay() {
+// the lock is dropped at the semicolon: a `Sent` borrows nothing
+let sent = stn.lock().unwrap().send(task, b"hello".to_vec());
+
+// 3. the queues: a `Driver` drains them on a thread of this crate's, and
+//    stops when it is dropped
+let _driver = Driver::spawn(Arc::clone(&stn));
+
+let answer = sent.await.expect("the task came back");   // in the app's async fn
+```
+
+`stn.create()` builds the net core, and nothing works before it. What `send`
+hands back is a `Sent`: a future whose output is the `Answer` of the task — the
+bytes the server answered with, and the profile of the connect — or the
+`Failure` of the run, which says where the task failed and with what code. A
+`Sent` borrows nothing, so the lock is let go before the `.await`: holding it
+across the `.await` is waiting for the pass that cannot happen.
+
+The `body` you hand `send` is what `req2buf` would have been asked for, and the
+bytes in the `Answer` are what `buf2resp` would have been handed, so a request
+and its answer need no `App`: those two questions are asked of the app only for
+a task nobody is awaiting. Every other question is still asked of it,
+`on_task_end` among them. See [the task](/stn/tasks).
+
+`start_task(task)` still starts a task nobody awaits, and in Rust it is
+deprecated in favour of `send`. On every other platform the `start` above is
+the call, and it carries no deprecation.
+
+An app that drives the queues itself takes no `Driver` and keeps its loop, on a
+thread of its own — a pass that ends a task wakes whoever awaited it, so the two
+work together:
+
+```rust
+loop {
+    let wait = match stn.lock().unwrap().due_delay() {
+        Some(wait) => wait,
+        None => break,
+    };
     std::thread::sleep(std::time::Duration::from_millis(wait));
-    stn.run_pending();
+    stn.lock().unwrap().run_pending();
 }
 ```
 
-`stn.create()` builds the net core, and nothing works before it. `due_delay()`
-answers how long the pass may wait in milliseconds, and `None` when there is
-nothing to wait for; `StnLogic::due_time` is the tick reading that a caller in
-the same process compares against its own clock.
+`due_delay()` answers how long the pass may wait in milliseconds, and `None` when
+there is nothing to wait for; `StnLogic::due_time` is the tick reading that a
+caller in the same process compares against its own clock.
 
 A link is a model of a connection here and not one, so the socket is the app's:
 a task's connect, send, receive and close are the `SocketOperator` a link is made
@@ -125,6 +164,7 @@ with, wired in Rust through the factory of the net core:
 ```rust
 use marsrs::stn::{ShortLink, StnLogic};
 
+let mut stn = stn.lock().unwrap();
 let core = stn.net_core().expect("create() has been through");
 core.factory().set_create_shortlink(|task, use_proxy| {
     let mut link = ShortLink::new(task, use_proxy);

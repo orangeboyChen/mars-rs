@@ -36,12 +36,21 @@ builds with no arguments leaves it `false`.
 | what | Rust | Swift | Android, KMP | C |
 |---|---|---|---|---|
 | start it | `stn.start_task(task)` | `MarsStn.start(task)` | `StnLogic.startTask(task)` | `mars_stn_start_task(&task)` |
+| start it and await the answer | `stn.send(task, body)` | — | — | — |
 | stop it | `stn.stop_task(id)` | `MarsStn.stop(taskID:)` | `StnLogic.stopTask(id)` | `mars_stn_stop_task(id)` |
 | is it still there | `stn.has_task(id)` | `MarsStn.hasTask(id)` | `StnLogic.hasTask(id)` | `mars_stn_has_task(id)` |
 
 `start_task` returns at once: the task runs on the queue and not on the calling
 thread. `has_task` answers `true` for a task that is going nowhere, too — one
 that was started and never drained.
+
+`send` is Rust's, and it is the one to take for a task whose answer you want: it
+starts the task and hands back a `Sent`, a future whose output is the answer or
+the failure of the run. `body` is the bytes the task sends — what `req2buf`
+would have been asked for — and `send_at(now, task, body)` is the same call with
+the clock reading handed in. In Rust `start_task` is deprecated in favour of
+`send`; `start_task_at` is not, and neither is the `start` of any other
+platform, which is the upstream call for a task nobody awaits.
 
 ## How a task ends
 
@@ -62,13 +71,47 @@ two numbers and a profile:
 tells STN what to do about a bad answer rather than only that it was one:
 `Normal`, `RetryAllTasks`, `SessionTimeout`, `TaskEnd`, `TaskTimeout`.
 
+### Awaiting it instead, in Rust
+
+In Rust a task can be awaited and not only listened for. What `send` hands back
+is a `Sent`, and its `Output` is:
+
+- **`Ok(Answer)`** — `body`, the bytes the server answered with, which is what
+  `buf2Resp` would have been handed; and `profile`, the timings of the connect.
+- **`Err(Failure)`** — why there is no answer. `NotCreated` is no net core yet:
+  `create()` has not been through. `Refused` is a released core, which starts
+  nothing and reports nothing. `Ended { err_type, err_code, profile }` is where
+  it failed and with what code — the same two numbers `on_task_end` carries —
+  and it is also how a task the core refused on its way in is reported.
+
+A `Sent` borrows nothing, so it is awaited wherever the app's own executor puts
+it, and the lock the logic sits behind is let go before the `.await`: holding it
+across the `.await` deadlocks the pass that would answer it. A `Sent` nothing
+drains stays `Pending`, the way a task that is started and never drained stays in
+its queue.
+
+The questions do not stop: every one of them is still asked of the app while an
+awaited task runs, `on_task_end` among them, so awaiting is a value the app takes
+and not a question the app stops being asked. What falls through to the app is
+the two a request and its answer would have been asked for — `req2buf` and
+`buf2resp` — for a task nobody is awaiting. See
+[the questions](/stn/callbacks).
+
 ## What a task runs on
 
 Nothing drains the queue for you. `run_pending` / `due_time` — in every spelling
 on [the getting started page](/stn/getting-started) — is what moves a task out of
-it, and this port runs no thread of its own to call them: the loop is the app's,
+it, and no thread is started unless an app asks for one: the loop is the app's,
 and a task that is started and never drained sits in its queue until the process
 ends.
+
+In Rust one call is enough: `Driver::spawn(stn)` starts a thread of this crate's
+that does what the host loop does — `run_pending()` when it is due, sleeping
+`due_delay()` meanwhile — and the thread is joined when the `Driver` is dropped.
+The logic is shared and not moved, so an app keeps its own `Arc` and goes on
+starting tasks through it. A host that already has a `run_pending` loop keeps it
+and takes no `Driver`: a pass that ends a task wakes whoever awaited it, so a
+`Driver` and a host's own loop work together.
 
 `due_time` is how long the host may wait until the next pass is due, in
 milliseconds: `0` is a pass that is already due, which a follow-up waiting in the
