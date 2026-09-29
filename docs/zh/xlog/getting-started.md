@@ -31,7 +31,7 @@ cargo add marsrs          # 整个移植：xlog、stn、sdt
 cargo add marsrs-xlog     # 只有 xlog —— 日志，别的都没有
 ```
 
-`marsrs` 是 mars 的每一块一个模块 —— `xlog`、`stn`、`sdt`、`comm` —— 每块有自己
+`marsrs` 给 mars 的每一块一个模块 —— `xlog`、`stn`、`sdt`、`comm` —— 每块有自己
 的 feature，默认全开。只打日志的 App 拿 `marsrs-xlog`，或者把 `marsrs` 里其余的
 关掉：
 
@@ -218,7 +218,7 @@ xlog.close()
 
 这就是 Android 的那个 `Xlog` —— 成员一样、名字一样 —— 所以在 `xlog-kmp` 和 `xlog`
 之间换的共享模块什么都不用改名。`common` 声明只能是两座桥的交集：C ABI 那些进程级
-调用不在里面，因为 JNI bridge 没有导出对应的东西，想要它们的调用方写在那个平台的
+调用不在里面，因为 JNI bridge 没有导出对应的东西，要它们的调用方，写在那个平台的
 source set 里。
 
 ## Flutter
@@ -251,9 +251,10 @@ await xlog.close();
 ```
 
 这个插件是 method channel 而不是 `dart:ffi`，所以过到平台线程上的是一条消息而不是
-一次调用：写和一个设置把消息递过去就返回，只有四个 App 有东西要等的方法回答
-`Future` —— `Xlog.open` 打开的那个 appender，`flush` 和 `close` 等的那个 drain，
-以及 `isLoggable` 给的答案。[任务链路](/zh/stn/getting-started)和
+一次调用：写和一个设置把消息递过去就返回，只有四个回答
+`Future`，也只有它们有 App 要等的东西 —— `Xlog.open` 打开的那个
+appender，`flush` 和 `close` 等的那个 drain，以及 `isLoggable` 给的答案。
+[任务链路](/zh/stn/getting-started)和
 [网络诊断](/zh/sdt/getting-started)都还没进 Dart：这个插件是日志，在它的两个包里都
 是。
 
@@ -283,7 +284,7 @@ xlog.flush(true);        // 返回时记录已经在磁盘上
 xlog.close();
 ```
 
-模块的方法在 JS 线程上创建、也从那里返回，所以没有一个回答 `Promise`：
+模块的方法都在 JS 线程上调用，也从那里返回，所以没有一个回答 `Promise`：
 `Xlog.open(config)` 直接回答那个 appender，`xlog.i(tag, message)` 在它返回时就已经
 落地了。[任务链路](/zh/stn/getting-started)和[网络诊断](/zh/sdt/getting-started)都
 还没进 TypeScript。
@@ -339,7 +340,7 @@ cc -I include -o app app.c -L. -lmars_ffi                  # 动态
 ohpm install marsrs-harmonyos-xlog
 ```
 
-ohpm 还没开始发布，所以在那之前包从 release 来：从那里取
+包还没发到 ohpm 上，在那之前只能从 release 拿：从那里取
 `marsrs-harmonyos-xlog-<version>.har`，`ohpm install` 那个文件。HAR 里带的是
 `libmarsrs_xlog.so` —— C ABI 的 staticlib 外面包了一层 NAPI 模块 —— 覆盖
 `arm64-v8a`、`armeabi-v7a` 和 `x86_64`，所以拿到它的 App 不需要再解析别的。要自己
@@ -365,12 +366,12 @@ xlog.close();
 
 NAPI 模块的每个方法都是同步的，所以调用从发起它的线程返回，不回答 promise。
 `LogLevel` 是 `Verbose` / `Debug` / `Info` / `Warning` / `Error` / `Fatal` /
-`None` —— PascalCase，不是 Kotlin 那个 `INFO`，因为 ArkTS 的枚举是写在满屏
-HarmonyOS 枚举的 App 里的。这个包的 ArkTS 没有伸到
+`None` —— PascalCase，不是 Kotlin 那个 `INFO`，因为写 ArkTS 的 App 里满屏都是
+HarmonyOS 的枚举。这个包的 ArkTS 没有伸到
 [任务链路](/zh/stn/getting-started)或[网络诊断](/zh/sdt/getting-started)：HAR 是日
 志。
 
-## 下一步
+## 接着看
 
 - [配置项](/zh/xlog/configuration) —— 每个选项和它的默认值，以及每个平台上的写法。
 - [日志文件](/zh/xlog/log-files) —— 文件落在哪里、叫什么名字、怎么读回来。

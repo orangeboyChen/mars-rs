@@ -34,13 +34,13 @@ native 一侧在 Android 上倒是带着 STN —— 整个移植的那个 AAR �
 ## 三件事，按这个顺序
 
 1. **回答那些问题。** 一个任务跑着的时候，STN 会问 App 十八个问题 —— *这个用户登录
-   了吗？*，*这个任务要发哪些字节？*，*那个回答是什么意思？* —— 由 App 来回答：
+   了吗？*，*这个任务要发哪些字节？*，*那个回答是什么意思？* —— 都由 App 答：
    Rust 里一个 trait，Swift 里一个闭包，共享 Kotlin 里一个 `ask`，C 里一个回调，
    Android 上是 App 实现的那个 interface。见[那些问题](/zh/stn/callbacks)。
 2. **发起一个任务。** 它被接过去，挑一条链路，放进队列，调用立刻返回。
 3. **驱动队列。** 这是这个移植对调用方唯一的要求。本该是一个线程的地方，是 App 的
    一对调用 —— `run_pending()`，以及告诉它这一趟最多还能等多久的 `due_time()`。
-   一个发起了却从没被排空的任务，会一直待在它的队列里。
+   一个任务发起了却从没排空，就一直待在它的队列里。
 
 ## Rust
 
@@ -168,8 +168,8 @@ while let wait = MarsStn.dueTime {
 ```
 
 `MarsStn` 是一个 `enum`，装的是 C ABI 那套 `mars_stn_*` 上的 static，pod 是同一个
-framework 上的同一份 Swift。Objective-C 看不见它：一个只有 static 成员的 Swift
-`enum` 不是 Objective-C 能 import 的类型，所以跑任务的 App 得把那部分写在 Swift
+framework 上的同一份 Swift。Objective-C 看不见它：只有 static 成员的 Swift
+`enum`，Objective-C import 不了，所以跑任务的 App 得把那部分写在 Swift
 里。
 
 ## Android
@@ -225,7 +225,7 @@ while (due >= 0) {
 
 `Mars.init` 和 `Mars.onCreate` 起两座桥，`AppLogic.setCallBack` 是 STN 问的账号和
 设备的来源 —— 见[那些问题](/zh/stn/callbacks)。`ICallBack` 是个没有默认实现的普通
-interface，所以那个对象得由 App 补完。
+interface，所以那个对象要 App 自己补完。
 
 ## Kotlin Multiplatform
 
@@ -282,7 +282,7 @@ while (due != null) {
 `StnLogic` 是 `commonMain` 里一个 `expect object`，每个平台族有一个 `actual` ——
 Android 上走 JNI 桥，每个 Kotlin/Native target 上通过 cinterop 走 C ABI。一个
 `common` 声明只能是两者都能说出来的东西：Android 上那座桥自己回答十八个问题里的
-五个，所以 `setApp` 在那里被问到十三个，在 Kotlin/Native 上是全部十八个。
+五个，所以 `setApp` 在那里只接到十三个，在 Kotlin/Native 上是全部十八个。
 
 ## The C ABI {#c-abi}
 
@@ -329,8 +329,8 @@ while (due >= 0) {
 }
 ```
 
-头文件里每个 `int` 回答 `MARS_STN_OK`（0）或一个负的 `MARS_STN_ERR_*`，C ABI 里没
-有任何东西会把栈展开到 C 里。
+头文件里每个 `int` 回答 `MARS_STN_OK`（0）或一个负的 `MARS_STN_ERR_*`，C ABI 这一侧
+不会往 C 里展开栈。
 
 ## HarmonyOS
 
