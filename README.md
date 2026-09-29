@@ -128,8 +128,22 @@ xlog.flushNow()  // before the app reads or uploads the files
 
 The file is `<logDir>/<namePrefix>_YYYYMMDD.xlog` — `marsrs_20260927.xlog` above.
 The default mode is async, so a record can sit in the cache for a moment: flush
-before the file is read or uploaded. Every option, and its name on each platform,
-is on [the configuration page](https://orangeboychen.github.io/mars-rs/xlog/configuration);
+before the file is read or uploaded.
+
+There are three drains, and every platform spells them the same way:
+
+| Rust | Kotlin, Swift, TypeScript | what the caller gets back |
+|---|---|---|
+| `xlog.flush_now()` | `xlog.flushNow()` | the records are on disk when it returns |
+| `xlog.flush().await` | `await xlog.flush()` | the same drain, off the calling thread |
+| `xlog.request_flush()` | `xlog.requestFlush()` | nothing: it asks and returns at once |
+
+`request_flush` is what a timer calls — what is still in the cache sits in a
+file the kernel holds, so a drain that has not happened yet has lost nothing.
+The two that answer are the ones an app wants before it reads or uploads.
+
+Every option, and its name on each platform, is on
+[the configuration page](https://orangeboychen.github.io/mars-rs/xlog/configuration);
 what has to happen when the app goes away is on
 [log files](https://orangeboychen.github.io/mars-rs/xlog/log-files).
 

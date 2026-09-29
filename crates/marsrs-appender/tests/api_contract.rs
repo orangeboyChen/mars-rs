@@ -21,8 +21,8 @@ use marsrs_appender::{
     appender_getfilepath_from_timespan, appender_make_logfile_name, appender_oneshot_flush,
     appender_open, category_set_max_alive_duration, category_set_max_file_size, current_log_path,
     flush, flush_all, flush_now, flush_now_all, get_filter, get_level, get_xlogger_instance,
-    is_enabled_for, log_formater, new_xlogger_instance, release_xlogger_instance,
-    set_appender_mode, set_console_log_open, set_filter, set_level, signal_flush, signal_flush_all,
+    is_enabled_for, log_formater, new_xlogger_instance, release_xlogger_instance, request_flush,
+    request_flush_all, set_appender_mode, set_console_log_open, set_filter, set_level,
     xlogger_assert, xlogger_assert_p, xlogger_write, AppenderError, AppenderMode, FileIoAction,
     Flush, LogLevel, XLogConfig, XLoggerInfo, Xlog, XloggerFilter, XloggerHandle, DEFAULT_HANDLE,
 };
@@ -57,7 +57,7 @@ fn the_object_is_the_api_an_app_takes() {
     let _: for<'a, 'b> fn(&Xlog, &'a str, &'b str) -> bool = Xlog::w;
     let _: for<'a, 'b> fn(&Xlog, &'a str, &'b str) -> bool = Xlog::e;
     let _: for<'a, 'b> fn(&Xlog, &'a str, &'b str) -> bool = Xlog::f;
-    let _: fn(&Xlog) = Xlog::signal_flush;
+    let _: fn(&Xlog) = Xlog::request_flush;
     let _: fn(&Xlog) = Xlog::flush_now;
     let _: fn(&Xlog) -> Flush = Xlog::flush;
     let _: fn(&Xlog) -> Option<PathBuf> = Xlog::current_log_path;
@@ -94,10 +94,10 @@ fn function_signatures_match_the_contract() {
     let _: fn(XloggerHandle, bool) = set_console_log_open;
     let _: fn(XloggerHandle, u64) = category_set_max_file_size;
     let _: fn(XloggerHandle, u64) = category_set_max_alive_duration;
-    let _: fn(XloggerHandle) = signal_flush;
+    let _: fn(XloggerHandle) = request_flush;
     let _: fn(XloggerHandle) = flush_now;
     let _: fn(XloggerHandle) -> Flush = flush;
-    let _: fn() = signal_flush_all;
+    let _: fn() = request_flush_all;
     let _: fn() = flush_now_all;
     let _: fn() -> Flush = flush_all;
     let _: fn(XloggerHandle) -> Option<PathBuf> = current_log_path;

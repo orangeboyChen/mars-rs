@@ -278,8 +278,8 @@ public final class Xlog: NSObject {
     /// not want to wait for — a record still in the cache is in a file the
     /// kernel holds, so nothing is lost by a drain that has not happened yet.
     @objc
-    public func signalFlush() {
-        withHandle { mars_xlog_signal_flush_instance($0) }
+    public func requestFlush() {
+        withHandle { mars_xlog_request_flush_instance($0) }
     }
 
     /// Takes what is in the cache to the log file on the calling thread, and

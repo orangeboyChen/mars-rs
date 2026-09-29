@@ -100,8 +100,8 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
     [self isLoggable:call result:result];
   } else if ([call.method isEqualToString:@"flush"]) {
     [self flush:call result:result];
-  } else if ([call.method isEqualToString:@"signalFlush"]) {
-    [self signalFlush:call result:result];
+  } else if ([call.method isEqualToString:@"requestFlush"]) {
+    [self requestFlush:call result:result];
   } else if ([call.method isEqualToString:@"setLevel"]) {
     [self setLevel:call result:result];
   } else if ([call.method isEqualToString:@"getLevel"]) {
@@ -191,7 +191,7 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
 
 /// `mars_xlog_flush_now_instance`: the drain is on the thread this is called
 /// on, which is what the Dart caller awaiting `flush()` is waiting for, and
-/// what the writer thread that `signalFlush:` only wakes is not.
+/// what the writer thread that `requestFlush:` only wakes is not.
 - (void)flush:(FlutterMethodCall *)call result:(FlutterResult)result {
   long long instance = [self instanceForCall:call result:result];
   if (instance == 0) {
@@ -208,13 +208,13 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   });
 }
 
-/// `mars_xlog_signal_flush_instance`: the drain is the writer thread's.
-- (void)signalFlush:(FlutterMethodCall *)call result:(FlutterResult)result {
+/// `mars_xlog_request_flush_instance`: the drain is the writer thread's.
+- (void)requestFlush:(FlutterMethodCall *)call result:(FlutterResult)result {
   long long instance = [self instanceForCall:call result:result];
   if (instance == 0) {
     return;
   }
-  mars_xlog_signal_flush_instance(instance);
+  mars_xlog_request_flush_instance(instance);
   result(nil);
 }
 

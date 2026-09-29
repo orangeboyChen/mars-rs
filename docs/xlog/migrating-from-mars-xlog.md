@@ -43,7 +43,7 @@ The appender is one struct of options and a handful of free calls in
 |---|---|---|
 | `appender_open(const XLogConfig&)` | `Xlog::open(config, level)` | `mars_xlog_new_instance(&config, level)` |
 | `xlogger_Write(info, log)`, or the `xinfo2` family | `xlog.log(level, tag, message)` | `mars_xlog_write_instance(handle, ...)` |
-| `appender_flush()` | `xlog.signal_flush()` | `mars_xlog_signal_flush_instance(0)` |
+| `appender_flush()` | `xlog.request_flush()` | `mars_xlog_request_flush_instance(0)` |
 | `appender_flush_sync()` | `xlog.flush_now()` | `mars_xlog_flush_now_instance(0)` |
 | `appender_close()` | `xlog.close()` | `mars_xlog_release_instance(prefix)` |
 | `xlogger_SetLevel(level)` | `xlog.set_level(level)` | `mars_xlog_set_level_instance(0, level)` |
@@ -61,14 +61,19 @@ when it is dropped. What the object names is a member and not a call, so
 functions are the plumbing the C ABI and the JNI bridge are written over, and an
 app has no reason to name them.
 
-The two flush rows are the one place neither column is the C++'s name: what the
-C++ calls `appender_flush` is `signalFlush` on every platform here, because
-`flush` is the drain a caller `await`s — see [log files](/xlog/log-files). The C
-ABI column is the same story, and it takes no `sync` anywhere: the C++'s
-`appender_flush` is `mars_xlog_signal_flush_instance(0)` and its `appender_flush_sync` is
-`mars_xlog_flush_now_instance(0)`, and the instance pair is two calls too — what a caller
-wrote as `mars_xlog_flush_instance(handle, 0)` or `(handle, 1)` is
-`mars_xlog_signal_flush_instance(handle)` or
+The two flush rows are the one place neither column is the C++'s name. The C++'s
+`appender_flush` is `xlog.request_flush()` — `requestFlush` on every platform —
+and not `flush`, because `flush` here is the drain a caller awaits: that one
+answers when the records are on disk, and `appender_flush` answers nothing about
+when the drain happens. "flush" in the C++ said which mode the appender was
+opened in; here a drain is named by what the caller gets back, and what this one
+gives is no answer at all. The three are side by side on [log
+files](/xlog/log-files). The C ABI column is the same story, and it takes no
+`sync` anywhere: the C++'s `appender_flush` is
+`mars_xlog_request_flush_instance(0)` and its `appender_flush_sync` is
+`mars_xlog_flush_now_instance(0)`, and the instance pair is two calls too — what a
+caller wrote as `mars_xlog_flush_instance(handle, 0)` or `(handle, 1)` is
+`mars_xlog_request_flush_instance(handle)` or
 `mars_xlog_flush_now_instance(handle)`. The two names the process-wide pair had
 are gone and not deprecated: they were the port's own spellings and not the
 C++'s, which has no `mars_xlog_*` of its own to keep.

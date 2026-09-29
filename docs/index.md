@@ -19,7 +19,7 @@ features:
   - title: One shape on every platform
     details: Open an appender once, write a tag and a message through it, flush before you upload. Rust, Swift, Kotlin, Kotlin Multiplatform, Flutter, React Native, HarmonyOS and C spell the same three steps with the same options.
   - title: Off the logging thread
-    details: "The default async mode hands the record to a writer thread through a memory-mapped cache, so a write returns without waiting for the disk. `flushNow()` is what drains it, and `await flush()` is the same drain off the calling thread."
+    details: "The default async mode hands the record to a writer thread through a memory-mapped cache, so a write returns without waiting for the disk. `requestFlush()` asks for the drain and returns at once, `flushNow()` drains it on the calling thread, and `await flush()` hands it to another thread and answers when it is over."
   - title: Compressed, encrypted, rotated
     details: zlib or zstd per file, ECDH + TEA per record when you give it a public key, and a size or an age at which a file is closed and a new one opened.
   - title: The task pipeline, and the diagnosis

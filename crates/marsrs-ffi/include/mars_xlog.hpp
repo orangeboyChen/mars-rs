@@ -380,9 +380,9 @@ public:
     /** Tells the writer thread to take what is in the cache to the log file,
      * and returns at once: nothing is in the file because this returned. What
      * it is for is a drain an app wants soon and does not want to wait for. */
-    void signalFlush() {
+    void requestFlush() {
         withHandle([](long long handle) {
-            mars_xlog_signal_flush_instance(handle);
+            mars_xlog_request_flush_instance(handle);
         });
     }
 

@@ -2,10 +2,12 @@
 
 Three steps on every platform: **open** an appender once, when the app or the
 process starts; **write** records through it; **flush** before its file is read
-or uploaded. The drain is three calls, and not every platform carries all three:
-`signalFlush()` asks the writer thread for it and returns at once, `flushNow()`
-drains on the calling thread, and `await flush()` waits for the same drain
-without holding one.
+or uploaded. The drain is three calls, and not every platform carries all three.
+What separates them is who waits and who learns when the drain is over:
+`requestFlush()` asks for it and returns at once, and nothing answers when it
+happened; `flushNow()` drains on the calling thread, so the records are on disk
+when it returns; `await flush()` hands the drain to another thread and answers
+when it is over.
 
 ## Where it is
 
@@ -281,12 +283,13 @@ await xlog.close();
 
 The plugin is a method channel and not `dart:ffi`, so what crosses to the
 platform thread is a message and not a call: a write, a setting and
-`signalFlush()` hand the message over and return, and only the four that have
+`requestFlush()` hand the message over and return, and only the four that have
 something an app can act on answer a `Future` — the appender `Xlog.open` opens,
 the drain `await flush()` waits for, `close()`, and the answer `isLoggable`
 gives. What Dart has no face for is the blocking drain: a channel cannot block
-this side of it, so `signalFlush()` is the one that does not wait and
-`await xlog.flush()` is the one that does. Neither
+this side of it, so what Dart gets is the other two — `requestFlush()`, which
+asks for the drain and returns at once with nothing to say about when it is
+over, and `await xlog.flush()`, which answers when it is. Neither
 [the task pipeline](/stn/getting-started) nor
 [the network diagnosis](/sdt/getting-started) is in the Dart yet: the plugin is
 the logger, in both of its packages.
@@ -323,8 +326,9 @@ A method of the module is made on the JS thread and returns from there, so
 nothing the app calls blocks it for long: `Xlog.open(config)` answers the
 appender, and `xlog.i(tag, message)` has landed by the time it returns. The
 drain is the one that can take longer than the JS thread should sit through, so
-it is three calls — `xlog.signalFlush()` asks for it and returns,
-`xlog.flushNow()` does it on this thread, and `await xlog.flush()` hands it to a
+it is three calls — `xlog.requestFlush()` asks for it and returns at once, and
+nothing answers when it is over; `xlog.flushNow()` does it on this thread, so the
+records are on disk when it returns; and `await xlog.flush()` hands it to a
 thread of the module's own and answers when it is over. Neither
 [the task pipeline](/stn/getting-started) nor
 [the network diagnosis](/sdt/getting-started) is in the TypeScript yet.
@@ -402,9 +406,10 @@ the same members — `v`, `d`, `i`, `w`, `e` and `f` take a tag and a message,
 `level`, `mode`, `consoleLogEnabled`, `maxFileSizeBytes` and
 `maxAliveTimeSeconds` are set and read back, `isLoggable` is the question to ask
 before building a message that is expensive to build, and the drain is the same
-three calls: `signalFlush()` asks the writer thread for it and returns at once,
-`flushNow()` does it on this thread, and `flush()` answers a
-`std::future<void>` for the same drain off it.
+three calls: `requestFlush()` asks for the drain and returns at once, and nothing
+answers when it is over; `flushNow()` does it on this thread, so the records are
+on disk when it returns; and `flush()` answers a `std::future<void>` for the same
+drain off it.
 
 Two things are C++'s own. An `Xlog` is move-only — a prefix is one appender, and
 two copies of one handle would be two owners of one close — and its destructor

@@ -117,18 +117,18 @@ The drain is three calls and not one with a flag:
 
 | call | what it does |
 |---|---|
-| `signalFlush()` — `xlog.signal_flush()`, `mars_xlog_signal_flush_instance(0)` | tells the writer thread it may drain, and returns at once: nothing is in the file because it returned |
+| `requestFlush()` — `xlog.request_flush()`, `mars_xlog_request_flush_instance(0)` | asks for the drain and returns at once: nothing answers when it is over, and the records are not in the file when it returns |
 | `flushNow()` — `xlog.flush_now()`, `mars_xlog_flush_now_instance(0)` | drains on the calling thread: the records are on disk when it returns |
-| `await flush()` — `xlog.flush().await`, `flush(handle)` | the same drain, off the calling thread |
+| `await flush()` — `xlog.flush().await`, `flush(handle)` | the same drain, handed to another thread: it answers when the records are on disk |
 
-`signalFlush()` is the one a timer calls. It guarantees nothing about when the
-drain is over, and nothing is lost while it is not: a record still in the cache
-is in a file the kernel holds. `flushNow()` is the one to call before the file is
-read or uploaded, and `await flush()` is that same drain for a caller that would
-rather not hold a thread. Rust carries all three, and its `await flush()` is a
-`Future` written against `std::thread::spawn` — no runtime, and any executor
-waits on it. Dart has no `flushNow()`, because a method channel cannot block the
-Dart side of it, and HarmonyOS has no `await flush()`, because every method of
+`requestFlush()` is the one a timer calls: it asks for the drain and answers
+nothing about when it is over, and nothing is lost while it is not, because a
+record still in the cache is in a file the kernel holds. `flushNow()` is the one
+to call before the file is read or uploaded, and `await flush()` is that same
+drain for a caller that would rather not hold a thread. Rust carries all three,
+and its `await flush()` is a `Future` written against `std::thread::spawn` — no
+runtime, and any executor waits on it. Dart has no `flushNow()`, because a
+method channel cannot block the Dart side of it, and HarmonyOS has no `await flush()`, because every method of
 its NAPI module is synchronous.
 
 ## When the app goes away

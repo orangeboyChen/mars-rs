@@ -26,7 +26,7 @@ the same class, under the same name, the Swift package,
 properties they are in Kotlin and in Swift — `xlog.level = LogLevel.Debug` —
 and not `setLevel` / `getLevel` pairs.
 
-The drain is three calls and not one with a flag: `xlog.signalFlush()` tells
+The drain is three calls and not one with a flag: `xlog.requestFlush()` tells
 the writer thread it may take the cache to the file and returns at once,
 `xlog.flushNow()` does the same on the calling thread and is over when it
 returns, and `await xlog.flush()` is `flushNow` off the JS thread — the one

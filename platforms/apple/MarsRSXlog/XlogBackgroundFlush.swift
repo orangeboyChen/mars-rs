@@ -78,7 +78,8 @@ internal final class XlogBackgroundFlush {
         // `flushNow` does nothing once [Xlog.close()] ran, so an appender
         // closed between the notification and here loses nothing by being
         // asked. The drain is this thread's: the app is suspended the moment
-        // this returns, so the signal that only wakes the writer is not enough.
+        // this returns, so a drain that is only requested — and answers nothing
+        // about when it happens — is not enough.
         for appender in live {
             appender.appender?.flushNow()
         }

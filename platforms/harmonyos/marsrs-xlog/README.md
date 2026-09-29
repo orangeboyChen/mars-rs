@@ -43,7 +43,7 @@ xlog.flushNow();    // before the app reads or uploads the files
 The file is `<logDir>/<namePrefix>_YYYYMMDD.xlog` —
 `marsrs_20260927.xlog` above. The default mode is async, so a record can sit in
 the cache for a moment: `flushNow()` before the file is read or uploaded —
-`signalFlush()` only tells the writer thread it may drain, and guarantees
+`requestFlush()` only tells the writer thread it may drain, and guarantees
 nothing when it returns.
 
 ## The API
@@ -58,7 +58,7 @@ Native packages carry, member for member:
 | `xlog.log(level, tag, message)` | writes at a level of your own |
 | `xlog.level`, `.mode`, `.consoleLogEnabled`, `.maxFileSizeBytes`, `.maxAliveTimeSeconds` | the five settings, as properties |
 | `xlog.isLoggable(level)` | whether a record at `level` would be written |
-| `xlog.signalFlush()` | tells the writer thread it may take the cache to the file, and returns at once |
+| `xlog.requestFlush()` | tells the writer thread it may take the cache to the file, and returns at once |
 | `xlog.flushNow()` | takes the cache to the file on the calling thread; the records are on disk when it returns |
 | `xlog.close()` | closes the appender |
 | `xlog.isOpen` | whether it is still open |

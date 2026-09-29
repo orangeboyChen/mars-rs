@@ -132,18 +132,18 @@ internal final class Xlog: NSObject {
         return Double(mars_xlog_get_level(handle))
     }
 
-    /// `mars_xlog_signal_flush_instance`: tells the writer thread it may take what is
+    /// `mars_xlog_request_flush_instance`: tells the writer thread it may take what is
     /// in the cache to the log file, and returns at once — nothing waits, and
     /// nothing is in the file because this returned. A record still in the cache
     /// is in a file the kernel holds, so one whose process dies keeps it; what
     /// an app wants before it reads the file or uploads it is `flushNow` or
     /// `flush`.
-    @objc(signalFlush:)
-    internal func signalFlush(_ namePrefix: String) {
+    @objc(requestFlush:)
+    internal func requestFlush(_ namePrefix: String) {
         guard let handle = handles[namePrefix] else {
             return
         }
-        mars_xlog_signal_flush_instance(handle)
+        mars_xlog_request_flush_instance(handle)
     }
 
     /// `mars_xlog_flush_now_instance`: the drain is this thread's, so the records are

@@ -125,10 +125,11 @@ int main(void) {
 
     /* -- 3. flush ----------------------------------------------------------
      *
-     * `mars_xlog_signal_flush_instance` only signals the writer thread and
-     * returns; this one waits, so every record above is on disk before the next
-     * line runs. An app calls it before it reads the files, uploads them, or
-     * exits. */
+     * `mars_xlog_request_flush_instance` asks the writer thread for the drain
+     * and returns at once, and nothing ever answers when it is over. This one
+     * drains on the calling thread, so every record above is on disk before the
+     * next line runs. An app calls it before it reads the files, uploads them,
+     * or exits. */
     mars_xlog_flush_now_instance(xlog);
 
     /* -- 4. where it went, and close ---------------------------------------

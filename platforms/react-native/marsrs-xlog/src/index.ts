@@ -289,18 +289,18 @@ export class Xlog {
     this.log(LogLevel.fatal, tag, message);
   }
 
-  /** `mars_xlog_signal_flush_instance`: tells the writer thread it may take what is in
+  /** `mars_xlog_request_flush_instance`: tells the writer thread it may take what is in
    * the cache to the file, and returns at once. Nothing waits, and nothing is
    * in the file because this returned — a record still in the cache is in a file
    * the kernel holds, so one whose process dies keeps it. What it is for is a
    * drain an app wants soon and does not want to wait for; before the file is
    * read, uploaded or left behind, it is `flushNow()` or `await flush()`
    * that an app wants and not this. */
-  signalFlush(): void {
+  requestFlush(): void {
     if (!this.open) {
       return;
     }
-    NativeXlog.signalFlush(this.namePrefix);
+    NativeXlog.requestFlush(this.namePrefix);
   }
 
   /** `mars_xlog_flush_now_instance`: the drain is the calling thread's, so the

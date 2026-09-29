@@ -128,7 +128,7 @@ class _LogPageState extends State<LogPage> {
     }
 
     // The writes are not awaited: a write hands the record to the appender and
-    // returns, and the one call here that crosses the channel is the flush.
+    // returns, and the call that waits for the six of them is the flush.
     xlog.v('trace', 'the finest record there is');
     xlog.d('net', 'resolved 3 addresses for example.com');
     xlog.i('startup', 'cold start in 412 ms');
@@ -149,8 +149,9 @@ class _LogPageState extends State<LogPage> {
     //
     // Dart is the one platform with no `flushNow` to call instead, and it is
     // deliberate: a method channel is a message and an answer, and there is
-    // no blocking on this side of one. `signalFlush()` is the call that asks
-    // and does not wait.
+    // no blocking on this side of one. `requestFlush()` asks for the same drain
+    // and returns at once — it never says when the drain is over, so it is not
+    // the one to call before the files are read or uploaded.
     await xlog.flush();
     setState(() => status = 'six records written and flushed');
   }

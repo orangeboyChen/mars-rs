@@ -14,11 +14,11 @@ use mars_ffi::abi::{
     mars_xlog_current_log_path_instance, mars_xlog_flush_now_all, mars_xlog_flush_now_instance,
     mars_xlog_get_instance, mars_xlog_get_level, mars_xlog_getfilepath_from_timespan,
     mars_xlog_is_enabled_for, mars_xlog_make_logfile_name, mars_xlog_new_instance,
-    mars_xlog_oneshot_flush, mars_xlog_release_instance, mars_xlog_set_console_log_instance,
+    mars_xlog_oneshot_flush, mars_xlog_release_instance, mars_xlog_request_flush_all,
+    mars_xlog_request_flush_instance, mars_xlog_set_console_log_instance,
     mars_xlog_set_level_instance, mars_xlog_set_max_alive_duration_instance,
-    mars_xlog_set_max_file_size_instance, mars_xlog_set_mode_instance, mars_xlog_signal_flush_all,
-    mars_xlog_signal_flush_instance, mars_xlog_write_instance, MarsXLogConfig,
-    MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_CONFIG,
+    mars_xlog_set_max_file_size_instance, mars_xlog_set_mode_instance, mars_xlog_write_instance,
+    MarsXLogConfig, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_CONFIG,
     MARS_XLOG_ERR_NULL_OUT,
 };
 
@@ -206,9 +206,9 @@ fn the_whole_abi_runs_over_one_appender() {
         MARS_XLOG_ERR_NULL_OUT
     );
 
-    mars_xlog_signal_flush_instance(0);
+    mars_xlog_request_flush_instance(0);
     mars_xlog_flush_now_instance(0);
-    mars_xlog_signal_flush_instance(0);
+    mars_xlog_request_flush_instance(0);
     mars_xlog_flush_now_instance(0);
     let prefix = CString::new("surface").unwrap();
     unsafe {
@@ -299,7 +299,7 @@ fn the_void_symbols_survive_a_closed_appender() {
             std::ptr::null(),
         );
     }
-    mars_xlog_signal_flush_instance(0);
+    mars_xlog_request_flush_instance(0);
     mars_xlog_flush_now_instance(0);
     mars_xlog_flush_now_instance(0);
     let prefix = CString::new("surface").unwrap();
@@ -317,7 +317,7 @@ fn the_void_symbols_survive_a_closed_appender() {
         mars_xlog_release_instance(std::ptr::null());
     }
     // the void symbols added for the rest of the C++ surface
-    mars_xlog_signal_flush_all();
+    mars_xlog_request_flush_all();
     mars_xlog_flush_now_all();
     mars_xlog_set_console_log_instance(0, 0);
     mars_xlog_set_max_file_size_instance(0, 0);

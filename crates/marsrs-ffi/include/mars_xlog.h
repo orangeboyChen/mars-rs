@@ -231,21 +231,24 @@ void mars_xlog_set_level_instance(long long instance, int level);
 /* appender_setmode / SetAppenderMode; `0` is the process-wide appender. */
 void mars_xlog_set_mode_instance(long long instance, int mode);
 
-/* Drains an instance (0 = the process-wide appender), signalled: the writer
+/* Drains an instance (0 = the process-wide appender), requested: the writer
  * thread is told it may drain, and this returns at once. Nothing is in the file
- * because this returned. The C++'s name for this call is `appender_flush`, and
- * "flush" there said which mode the appender was opened in and not what the
- * call does to the thread it was called on: the port names the two drains
- * apart instead. */
-void mars_xlog_signal_flush_instance(long long instance);
+ * because this returned, and nothing answers when the drain is over. The C++'s
+ * name for this call is `appender_flush`, and "flush" there said which mode the
+ * appender was opened in and not what the call does to the thread it was called
+ * on: the port names the drain by what the caller gets back, and what this one
+ * gives is no answer at all — hence "request", which is the one thing the two
+ * drains that do answer, `mars_xlog_flush_now_instance` and the awaited
+ * `flush()` every platform carries, do give. */
+void mars_xlog_request_flush_instance(long long instance);
 
 /* Drains an instance on the calling thread, which is what
  * `appender_flush_sync` is: its records are on the disk when this returns, and
- * that is a promise the signalled call above does not make. */
+ * that is a promise the requested call above does not make. */
 void mars_xlog_flush_now_instance(long long instance);
 
-/* FlushAll, signalled: every appender is told its writer thread may drain. */
-void mars_xlog_signal_flush_all(void);
+/* FlushAll, requested: every appender is told its writer thread may drain. */
+void mars_xlog_request_flush_all(void);
 
 /* FlushAll on the calling thread: drains the process-wide appender *and* every
  * instance — each of which owns an appender of its own, so a caller that leaves

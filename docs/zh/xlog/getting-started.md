@@ -1,9 +1,10 @@
 # 快速开始
 
 每个平台都是三步：App 或进程启动时**打开**一个 appender，往里**写**记录，读文件或
-上传之前**排空**它。排空是三个调用，不是每个平台三个都有：`signalFlush()` 请写线程去
-排空、自己立刻返回，`flushNow()` 在调用方线程上排空，`await flush()` 等的是同一次排
-空，但不占着一个线程。
+上传之前**排空**它。排空是三个调用，不是每个平台三个都有，分别只在**谁等**：
+`requestFlush()` 提出一次排空就返回，不回答它什么时候排完；`flushNow()` 占着调用方
+线程排，返回时记录已经在磁盘上；`await flush()` 是同一次排空，交给别的线程，调用方
+await 到记录落盘。
 
 ## 它在哪里
 
@@ -261,11 +262,11 @@ await xlog.close();
 ```
 
 这个插件是 method channel 而不是 `dart:ffi`，所以过到平台线程上的是一条消息而不是
-一次调用：写、一个设置和 `signalFlush()` 都是把消息递过去就返回，只有四个回答
+一次调用：写、一个设置和 `requestFlush()` 都是把消息递过去就返回，只有四个回答
 `Future`，也只有它们有 App 要等的东西 —— `Xlog.open` 打开的那个
 appender，`await flush()` 和 `close()` 等的那个 drain，以及 `isLoggable` 给的答案。
 Dart 这边没有阻塞式排空的那个面：channel 阻塞不了 Dart 这一侧，所以不等的那一下是
-`signalFlush()`，要等的那一下是 `await xlog.flush()`。
+`requestFlush()`，要等的那一下是 `await xlog.flush()`。
 [任务链路](/zh/stn/getting-started)和
 [网络诊断](/zh/sdt/getting-started)都还没进 Dart：这个插件是日志，在它的两个包里都
 是。
@@ -299,8 +300,9 @@ xlog.close();
 模块的方法都在 JS 线程上调用，也从那里返回，所以 App 调的没有哪个会长时间堵住它：
 `Xlog.open(config)` 直接回答那个 appender，`xlog.i(tag, message)` 在它返回时就已经落地
 了。排空是唯一可能比 JS 线程该等的时间更长的那件事，所以它有三个写法 ——
-`xlog.signalFlush()` 通知一声就返回，`xlog.flushNow()` 在当前线程上排空，
-`await xlog.flush()` 把它交给模块自己的线程，排空结束时才落地。[任务链路](/zh/stn/getting-started)和[网络诊断](/zh/sdt/getting-started)都
+`xlog.requestFlush()` 通知一声就返回，排完没排完它不说；`xlog.flushNow()` 在当前
+线程上排空，返回时记录已经落盘；`await xlog.flush()` 把它交给模块自己的线程，await
+回来时排空已经结束。[任务链路](/zh/stn/getting-started)和[网络诊断](/zh/sdt/getting-started)都
 还没进 TypeScript。
 
 ## The C ABI {#c-abi}
@@ -373,9 +375,10 @@ log.close();
 TypeScript 的 `Xlog.open(config)`，成员也是同一批成员 —— `v`、`d`、`i`、`w`、
 `e`、`f` 收一个 tag 和一条消息，`level`、`mode`、`consoleLogEnabled`、
 `maxFileSizeBytes` 和 `maxAliveTimeSeconds` 既能设也能读回来，`isLoggable` 是那
-句在拼一条很贵的消息之前该问的问题，而落盘还是那三个调用：`signalFlush()` 通知
-写线程然后立刻返回，`flushNow()` 在这个线程上做，`flush()` 回答一个
-`std::future<void>`，把同一次落盘交给别的线程。
+句在拼一条很贵的消息之前该问的问题，而落盘还是那三个调用，分别只在谁等：
+`requestFlush()` 提出一次排空就返回，不回答它什么时候结束；`flushNow()` 在这个线程
+上排空，返回时记录已经在磁盘上；`flush()` 回答一个 `std::future<void>`，同一次排空
+交给别的线程，等它的人在记录落盘时拿到完成。
 
 有两样是 C++ 自己的。`Xlog` 只能移动不能复制 —— 一个 prefix 就是一个 appender，
 一个 handle 的两份副本会是同一次关闭的两个主人 —— 而它的析构函数会关掉这个

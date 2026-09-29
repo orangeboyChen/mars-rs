@@ -5,7 +5,7 @@
 // and `platforms/apple/MarsRSXlog/Xlog.swift` to a Swift one. So what this
 // file is is a native module over an API that already exists, and nothing of
 // the API is invented here: `Xlog.open(XlogConfig(...))`, `log`,
-// `isLoggable`, `signalFlush`, `flushNow`, `flush`, `close`, and the five
+// `isLoggable`, `requestFlush`, `flushNow`, `flush`, `close`, and the five
 // settings, under the names every other platform of the port gives them.
 //
 // A TurboModule, and not a bridge module: `src/NativeXlog.ts` is the spec
@@ -115,9 +115,9 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
     override fun getLevel(namePrefix: String): Double =
         appender(namePrefix)?.level?.ordinal?.toDouble() ?: LogLevel.NONE.ordinal.toDouble()
 
-    /** `Xlog.signalFlush`: the signal the writer thread is told to drain by. */
-    override fun signalFlush(namePrefix: String) {
-        appender(namePrefix)?.signalFlush()
+    /** `Xlog.requestFlush`: asks the writer thread to drain, answers nothing. */
+    override fun requestFlush(namePrefix: String) {
+        appender(namePrefix)?.requestFlush()
     }
 
     /** `Xlog.flushNow`: the drain that is over, records on disk, when it returns. */

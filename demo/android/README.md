@@ -38,8 +38,10 @@ documentation quotes and is not out yet. Both of those are one line of
 - `xlog.v`, `d`, `i`, `w`, `e`, `f` — one method per level, and
   `xlog.log(level, tag, message)` for the call whose level is not known until it
   runs.
-- `xlog.flush(sync = true)` and `xlog.close()` in `onDestroy` — the two calls an
-  app makes so that the last records are not lost when the process goes.
+- `xlog.flushNow()` after the writes and `xlog.close()` in `onDestroy` — the
+  two calls an app makes so that the last records are not lost when the process
+  goes. `xlog.requestFlush()` is the third drain: it asks for the same one and
+  returns at once, without ever saying when it is over.
 - `BuildConfig.DEBUG` for `consoleLogEnabled` — off in a build that ships.
 
 The APK carries `libmarsrsxlog.so` for `arm64-v8a`, `armeabi-v7a` and `x86_64`,

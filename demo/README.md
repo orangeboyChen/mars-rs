@@ -34,7 +34,9 @@ whether the call is a future.
    every record above is on disk when it returns. The whole point of the
    appender is that a write does not block the thread that made it, and the
    whole point of the flush is that the last records are not lost when the
-   process goes. `signalFlush` is the other one, and it does not wait.
+   process goes. `requestFlush` asks for the same drain and returns at once,
+   and it never answers when the drain is over — so it is not the one to call
+   before the files are read or uploaded.
 4. **Close.** Which drains what is left.
 
 The file that comes out is `<prefix>_<YYYYMMDD>.xlog`, and
