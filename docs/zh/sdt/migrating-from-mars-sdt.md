@@ -22,7 +22,16 @@
 | 报告 | `Callback::ReportNetCheckResult` | `report_json(&results)` | `takeReport()`，或那个回调 | `takeReport()` | `mars_sdt_take_report(buf, len)` |
 
 mode 是同一套 bit —— 先 ping 和 DNS，再 TCP，再 net-check CGI 的那次 HTTP —— `0`
-还是一项都不跑。见[检查项](/zh/sdt/checks)。
+还是一项都不跑。在 Rust 里这些 bit 有了名字：`Mode::NONE`、`BASIC`、`LONG`、
+`SHORT` 和 `ALL`，用 `|` 拼起来，`mode.bits()` 交回上游那个调用要的 `i32`。见
+[检查项](/zh/sdt/checks)。
+
+在 Rust 里那三步也是一个调用：
+`sdt.diagnose(longlink, shortlink, mode, timeout, &mut ask, net)` 就是
+`start_active_check`、`run_checks` 和报告，已经有检查在跑的时候它回答 `None` —— 也就
+是上游那个调用的 `false`。`start_active_check` 没有带 deprecated：一个要跨线程驱动
+这趟跑的宿主 —— 在一个线程上开检查，在另一个线程上取报告 —— 还是要把这三个调用分开
+用。
 
 ## App 接过去的那两件事
 
@@ -34,7 +43,8 @@ mode 是同一套 bit —— 先 ping 和 DNS，再 TCP，再 net-check CGI 的�
 
 **本该是一个线程的地方，是一次调用。** C++ 在它的 `__RunOn` 线程上跑诊断；这个移植
 里没有线程，所以 `runChecks` 在调用它的那个线程上问它的探测，所有探测回答了才返回
-—— App 跑一趟、取报告，没有循环，也没有 sleep。
+—— App 跑一趟、取报告，没有循环，也没有 sleep。把两个调用合成一个的 `diagnose` 是
+一样的，而且它不是一个 future：想让这趟诊断离开当前线程的 App 自己把它挪过去。
 
 取走报告就清空了，`mars_sdt_take_report` 的 buffer 在报告塞不下时会把结果留着 ——
 见[报告](/zh/sdt/report)。
