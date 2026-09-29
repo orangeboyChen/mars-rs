@@ -5,7 +5,7 @@
 //!
 //! 1. describe where the files go and how they are written — [`XLogConfig`];
 //! 2. open the appender — [`Xlog::open`];
-//! 3. write one record at every level — [`Xlog::log_with_info`];
+//! 3. write one record at every level — [`Xlog::log`];
 //! 4. drain it to disk — [`Xlog::flush_now`];
 //! 5. read the file back — [`decode_log_file`];
 //! 6. close it — [`Xlog::close`].
@@ -31,8 +31,7 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use marsrs_xlog::{
-    appender_getfilepath_from_timespan, decode_log_file, AppenderMode, CompressMode, LogLevel,
-    XLogConfig, XLoggerInfo, Xlog,
+    decode_log_file, AppenderMode, CompressMode, LogLevel, XLogConfig, Xlog,
 };
 
 /// The prefix every file of this demo is named after. A file is
@@ -109,29 +108,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // -- 3. write ------------------------------------------------------------
     //
-    // A write is a tag and a message. [`Xlog::v`] through [`Xlog::f`] are the
-    // six levels as six one-letter methods, and this loop takes
-    // [`Xlog::log_with_info`] instead so that a record can carry where the call
-    // came from: the file, the function and the line go into the `XLoggerInfo`
-    // and land in the record beside the message, which is what a caller that
-    // wants them there — and not only inside the message — hands in.
-    //
-    // `file!`, `line!` and the function name are compile-time constants of the
-    // line the macro sits on, which is why every record below carries the same
-    // one: a real caller writes them from inside the `log!` macro it wraps the
-    // port in, where `line!` is the caller's line and not the wrapper's.
+    // A write is a level, a tag and a message: [`Xlog::v`] through
+    // [`Xlog::f`] are the six levels as six one-letter methods, and
+    // [`Xlog::log`] takes the level an app named itself. The file, the function
+    // and the line of the record are the port's to fill in, so a record says
+    // where it was written without the caller naming it.
+
     for (level, tag, message) in RECORDS {
-        let written = xlog.log_with_info(
-            Some(&XLoggerInfo {
-                level,
-                tag: Some(tag.into()),
-                filename: Some(file!().into()),
-                func_name: Some("main".into()),
-                line: line!() as i32,
-                ..Default::default()
-            }),
-            message,
-        );
+        let written = xlog.log(level, tag, message);
         println!("wrote {:?} [{}] {}", level, tag, message);
         debug_assert!(written, "a write after a successful open is accepted");
     }
@@ -167,7 +151,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // name is `<prefix>_<YYYYMMDD>.xlog`, and a file that was split for size
     // has a second one beside it, which is why this answers a list.
     // `timespan` is days ago — `0` is today.
-    let today = appender_getfilepath_from_timespan(0, PREFIX, &logdir);
+    let today = xlog.log_files(0);
     let path = today.first().ok_or("no log file was written today")?;
     println!("log file:      {}", path.display());
 
