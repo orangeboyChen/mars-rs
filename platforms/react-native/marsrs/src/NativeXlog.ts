@@ -37,8 +37,20 @@ export interface Spec extends TurboModule {
    * holds. */
   getLevel(namePrefix: string): number;
 
-  /** `mars_xlog_flush_instance`. */
-  flush(namePrefix: string, sync: boolean): void;
+  /** `mars_xlog_flush_instance`: tells the writer thread it may take what is in
+   * the cache to the file, and returns at once — nothing waits, and nothing is
+   * in the file because this returned. */
+  signalFlush(namePrefix: string): void;
+
+  /** `mars_xlog_flush_instance` with the drain on the calling thread: the cache
+   * is in the log file, and the file's buffer is the OS's, when this returns. */
+  flushNow(namePrefix: string): void;
+
+  /** `flushNow` on a thread of the module's own, and a `Promise` settled when
+   * the drain is over: the one of the three that leaves the JS thread alone.
+   * A `Promise<void>` and not a `Promise` of a value — there is nothing to
+   * answer, only a drain to be over. */
+  flush(namePrefix: string): Promise<void>;
 
   /** `mars_xlog_set_level_instance`. */
   setLevel(namePrefix: string, level: number): void;
