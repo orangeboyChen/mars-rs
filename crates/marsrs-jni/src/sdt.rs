@@ -46,8 +46,17 @@ use marsrs_sdt::{Callback, CheckIPPorts, NetCheckType, SdtLogic};
 /// loaded, which in this port is this one library.
 pub const LOAD_LIBRARIES: &[&str] = &["marsrsxlog"];
 
-/// Keeps the results `SdtLogic` reported, so the host can pick them up — and
-/// hands them to Java as well, which is what a report is for.
+/// Keeps the results `SdtLogic` reported, so the host can pick them up.
+///
+/// What it does *not* do is hand them to Java: the callback runs inside
+/// [`run_checks_impl`], which holds the process-wide diagnosis for the whole
+/// run, and handing a report over is a call into the JVM — from which an app's
+/// `onSignalDetectResults` is free to ask `isChecking()`, `plan()` or
+/// `startActiveCheck()`, all of which come back into [`with_state`] on the
+/// thread that is already holding it. `std::sync::Mutex` is not reentrant, so
+/// that is a hang, and on the app's main thread it is an ANR. The run hands
+/// its own results over once it has let the diagnosis go; see
+/// [`run_checks_impl`].
 struct Sink(Arc<Mutex<Vec<CheckResultProfile>>>);
 
 impl Callback for Sink {
@@ -55,15 +64,15 @@ impl Callback for Sink {
         if let Ok(mut reported) = self.0.lock() {
             reported.extend_from_slice(check_results);
         }
-        deliver_report_impl(check_results);
     }
 }
 
 /// The JSON reports handed to Java since the last call.
 ///
-/// This lives outside [`SdtState`] on purpose: the callback runs *inside*
-/// [`run_checks_impl`], which holds the state lock for the whole run, so
-/// taking that lock again to record a report would deadlock.
+/// This lives outside [`SdtState`] on purpose: a report is handed over while
+/// the app's own handler for the one before it may still be on the stack, so
+/// taking the state lock to record one would reach for a lock a caller is
+/// already behind.
 fn delivered() -> &'static Mutex<Vec<String>> {
     static DELIVERED: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
     DELIVERED.get_or_init(|| Mutex::new(Vec::new()))
@@ -186,10 +195,18 @@ pub fn plan_impl() -> Vec<NetCheckType> {
 /// Runs the planned checks, one `do_check` per check, and reports what they
 /// recorded. This is the `__RunOn` thread of the C++, driven by the host: the
 /// port has no sockets of its own, so the caller supplies the checkers.
+///
+/// The report is handed over *after* `with_state` has let the diagnosis go,
+/// which is the whole point: delivering it is a call into the JVM, and an
+/// app's `onSignalDetectResults` asks the diagnosis questions of its own from
+/// inside it. Holding the lock across the delivery would make that a hang —
+/// an ANR on the main thread — because `std::sync::Mutex` is not reentrant.
 pub fn run_checks_impl(
     do_check: impl FnMut(NetCheckType, &mut CheckRequestProfile),
 ) -> Vec<CheckResultProfile> {
-    with_state(|state| state.logic.run(do_check))
+    let results = with_state(|state| state.logic.run(do_check));
+    deliver_report_impl(&results);
+    results
 }
 
 /// [`run_checks_impl`] with the port's own checkers: the four classes the C++
@@ -200,8 +217,17 @@ pub fn run_checks_impl(
 /// profiles. The platform is the host's here, which is why it comes with the
 /// run: [`run_active_check_with_net_info_impl`] is this call with the one
 /// [`crate::platform_comm::net_info_impl`] answered.
+///
+/// The probes are asked while the process-wide diagnosis is held, so a probe
+/// must not ask the diagnosis about itself — `isChecking()`, `plan()`,
+/// `startActiveCheck()` — from inside its answer. The port cannot move the ask
+/// off that lock without moving the run off it, which is `marsrs-sdt`'s and not
+/// this seam's; what the C ABI says about its own probe (`mars_sdt.h`) is the
+/// same constraint, and it is written down there too.
 pub fn run_active_check_impl(ask: &mut Ask, network_type: i32) -> Vec<CheckResultProfile> {
-    with_state(|state| state.logic.run_checks(ask, network_type))
+    let results = with_state(|state| state.logic.run_checks(ask, network_type));
+    deliver_report_impl(&results);
+    results
 }
 
 /// [`run_active_check_impl`] with the network type of the platform: the
@@ -220,7 +246,9 @@ pub fn run_active_check_with_net_info_impl(ask: &mut Ask) -> Vec<CheckResultProf
 ///
 /// This is the `__RunOn` thread of the C++, run on the thread that called it:
 /// it holds the process-wide diagnosis until every probe has answered, so a
-/// run is one at a time and it does not come back until it is over.
+/// run is one at a time and it does not come back until it is over. A probe
+/// that asks the diagnosis about itself from inside its answer waits for that
+/// lock on the thread holding it; see [`run_active_check_impl`].
 ///
 /// `false` when nothing was in flight, and when the one that was got cancelled
 /// before its first check: a run that answered nothing is a run that reported
@@ -250,6 +278,9 @@ pub fn take_reported_impl() -> Vec<CheckResultProfile> {
 /// This is the call the C++ makes from inside `ReportNetCheckResult`, so a
 /// diagnosis that ends is never just buffered: it reaches the app's
 /// `SdtLogic.ICallBack` (or is recorded, when there is no JVM yet).
+///
+/// It is reached with the process-wide diagnosis released, and never from
+/// inside a run: what it calls is Java, and Java calls back.
 pub fn deliver_report_impl(check_results: &[CheckResultProfile]) -> String {
     let json = report_json_impl(check_results);
     if let Ok(mut delivered) = delivered().lock() {
@@ -324,12 +355,14 @@ mod tests {
             Query::Dns { .. } => Answer::Dns {
                 error_code: 0,
                 rtt: 10,
+                local_dns: String::new(),
                 ips: vec!["1.2.3.4".to_owned()],
             },
             Query::Tcp { .. } => Answer::Tcp {
                 sent: 0,
                 received: 0,
                 is_noop_resp: true,
+                conntime: 0,
                 rtt: 10,
             },
             Query::Http { .. } => Answer::Http {

@@ -103,13 +103,24 @@ static VM: OnceLock<JavaVM> = OnceLock::new();
 ///
 /// `vm` has to be the live VM the JVM hands `JNI_OnLoad`: nothing checks it
 /// here, and it is kept until the process goes away.
+///
+/// A version the JVM does not know is a library it refuses to load, which is
+/// the honest answer when setting the VM up did not happen — so `0` is what
+/// `guard` falls back to, and not the version a successful call returns.
 #[no_mangle]
 pub unsafe extern "system" fn JNI_OnLoad(
     vm: *mut jni::sys::JavaVM,
     _reserved: *mut std::ffi::c_void,
 ) -> jint {
-    let _ = VM.set(JavaVM::from_raw(vm));
-    JNI_VERSION_1_6 as jint
+    // `guard`, like every other entry point of this file: a panic unwinding
+    // into the JVM is undefined behaviour. Its fallback is `jint`'s default,
+    // which is the `0` a refused version is answered with above.
+    guard(|| {
+        // SAFETY: `vm` is the live VM the JVM handed this call, by the
+        // contract above.
+        let _ = VM.set(unsafe { JavaVM::from_raw(vm) });
+        JNI_VERSION_1_6 as jint
+    })
 }
 
 /// `SdtLogic.reportSignalDetectResults(String)` — the C2Java call at the end of
@@ -2268,12 +2279,16 @@ fn probe_answer(env: &mut Env<'_>, answer: Option<JObject<'_>>) -> ProbeAnswer {
         PROBE_DNS => ProbeAnswer::Dns {
             error_code: int_field(env, &answer, jni_str!("errorCode")),
             rtt,
+            // the Java `Answer` carries no resolver and no connect time, so
+            // a probe on this seam answers the two profiles keep as empty.
+            local_dns: String::new(),
             ips: string_array_field(env, &answer, jni_str!("ips")),
         },
         PROBE_TCP => ProbeAnswer::Tcp {
             sent: int_field(env, &answer, jni_str!("sent")),
             received: int_field(env, &answer, jni_str!("received")),
             is_noop_resp: bool_field(env, &answer, jni_str!("isNoopResponse")),
+            conntime: 0,
             rtt,
         },
         PROBE_HTTP => ProbeAnswer::Http {

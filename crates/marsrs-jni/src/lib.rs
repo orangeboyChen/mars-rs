@@ -37,6 +37,7 @@
 use jni::sys::{jint, jlong};
 
 use std::borrow::Cow;
+use std::io::Write;
 
 use marsrs_appender::{
     category_set_max_alive_duration as set_max_alive_duration,
@@ -96,8 +97,6 @@ fn guard<R: Default>(f: impl FnOnce() -> R) -> R {
         }
     }
 }
-
-use std::io::Write;
 
 /// `appender_open` plus the level of the Java config, i.e. what
 /// `Java2C_Xlog.cc` did with `appender_open(config); xlogger_SetLevel(level);`.
