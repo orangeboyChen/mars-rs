@@ -292,7 +292,10 @@ fn the_link_s_own_traffic_is_what_the_keeper_s_next_buffer_waits_on() {
 
     // what the host's run does with the buffer: the whole of it goes out, and
     // the write is what the C++'s `GetSignalOnNetworkDataChange()` carries to
-    // the keeper, which posts the next one a period later
+    // the keeper, which posts the next one a period later. The carrying is
+    // not the link's to do: its callback runs under the link's lock, which is
+    // the one lock the keeper takes from inside its own, so what the write
+    // leaves on the metadata is a reading
     assert!(meta
         .channel()
         .lock()
@@ -300,11 +303,27 @@ fn the_link_s_own_traffic_is_what_the_keeper_s_next_buffer_waits_on() {
         .write_at(1_500, SocketFd(3), false)
         .is_ok());
     assert!(!meta.channel().lock().unwrap().has_data_to_send());
+    assert_eq!(meta.take_network_data_changed(), Some(1_500));
+    assert_eq!(
+        meta.take_network_data_changed(),
+        None,
+        "a reading is taken once"
+    );
+    assert_eq!(
+        meta.keeper().due_time(),
+        None,
+        "the keeper has not been told yet"
+    );
+    // ... and it is the net core that tells it, of every link's readings and
+    // to the keeper of the link that is the main one
+    meta.keeper().on_network_data_changed_at(1_500);
     assert_eq!(meta.keeper().due_time(), Some(1_500 + DEFAULT_PERIOD));
 
-    // a read is data that moved too, and it posts again from the new reading
+    // a read is data that moved too, and it leaves a reading of its own
     let answers = meta.channel().lock().unwrap().read_at(2_000, SocketFd(3));
     assert_eq!(answers.unwrap().len(), 1);
+    assert_eq!(meta.take_network_data_changed(), Some(2_000));
+    meta.keeper().on_network_data_changed_at(2_000);
     assert_eq!(meta.keeper().due_time(), Some(2_000 + DEFAULT_PERIOD));
 
     // ... and one that heard nothing for longer than its `keepTime` is not

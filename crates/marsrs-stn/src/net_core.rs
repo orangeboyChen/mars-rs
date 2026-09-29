@@ -1279,14 +1279,51 @@ impl NetCore {
     /// Only the main link's, which is the only one the C++ connects to the
     /// signal (`net_core.cc:1161`) and the only one
     /// [`NetCore::keep_signal_at`] ever starts.
-    fn signalling_due_time(&self) -> Option<u64> {
+    fn signalling_due_time(&mut self) -> Option<u64> {
+        self.feed_signalling();
         let name = self.default_link.as_deref()?;
         self.links.get(name)?.keeper().due_time()
+    }
+
+    /// `GetSignalOnNetworkDataChange()(…)` — what every link has seen since
+    /// the host's last turn, carried to the main link's keeper.
+    ///
+    /// The C++'s signal is one of the process's: every link emits into it on
+    /// every write and every read, and the one slot connected to it is the
+    /// main link's keeper, so data on a link that is not the main one is what
+    /// keeps the mapping up as well — a minor link carrying the traffic while
+    /// the main one is quiet is ordinary, and a keeper that hears nothing
+    /// about it stops keeping.
+    ///
+    /// The carrying happens here, and not in the link's callback, because that
+    /// callback runs under the link's lock while the keeper sends over the
+    /// link from under its own: two threads taking the two in either order is
+    /// a deadlock. What a link leaves is one reading, and the newest of them
+    /// is enough — the keeper asks the same question of every one, and the
+    /// answer only ever moves with the clock.
+    fn feed_signalling(&mut self) {
+        let mut changed = None;
+        let names: Vec<String> = self.links.keys().cloned().collect();
+        for name in names {
+            if let Some(meta) = self.links.get(&name) {
+                changed = changed.max(meta.take_network_data_changed());
+            }
+        }
+        let Some(now) = changed else {
+            return;
+        };
+        let Some(name) = self.default_link.clone() else {
+            return;
+        };
+        if let Some(meta) = self.links.get_mut(&name) {
+            meta.keeper().on_network_data_changed_at(now);
+        }
     }
 
     /// `SignallingKeeper::__OnTimeOut()` — the buffer the keeper posted, sent
     /// once the reading the host handed in has reached it.
     fn fire_signalling_at(&mut self, now: u64) {
+        self.feed_signalling();
         let Some(name) = self.default_link.clone() else {
             return;
         };
@@ -2217,6 +2254,7 @@ mod tests {
     use crate::task_profile::LOCAL_LONG_LINK_RELEASED;
     use crate::timing_sync::{ACTIVE_SYNC_INTERVAL, INACTIVE_SYNC_INTERVAL};
     use crate::{DynamicTimeoutStatus, RespHandle, RunId, TaskFailHandleType, NET_TYPE_WIFI};
+    use crate::{OpBreaker, SocketFd, SocketOperator, SocketProfile, DEFAULT_PERIOD};
 
     const NOW: u64 = 100 * 1000;
     const MAIN: &str = DEFAULT_LONGLINK_NAME;
@@ -3709,6 +3747,122 @@ mod tests {
         // that is not the long link's
         assert_eq!(core.connect_profile(7, Task::CHANNEL_SHORT).ip, "");
         assert_eq!(core.connect_profile(7, Task::CHANNEL_NORMAL).ip, "");
+    }
+
+    /// `GetSignalOnNetworkDataChange()` is a signal of the process's
+    /// (`net_core.cc:1161`), and the one slot connected to it is the *main*
+    /// link's keeper: data on a link that is not the main one is what keeps
+    /// the mapping up too. A keeper that hears of nothing stops keeping,
+    /// however much a minor link is carrying.
+    #[test]
+    fn data_on_a_link_that_is_not_the_main_one_keeps_the_signal_up() {
+        let (mut core, _rec) = wired_in_front();
+        up(&core, LongLinkStatus::Connected);
+        assert!(core.start_task_at(NOW, minor_task(7, 1)));
+        minor_up(&core);
+
+        core.keep_signal_at(NOW);
+        assert_eq!(core.long_link_meta(MAIN).unwrap().keeper().sent(), 1);
+        assert_eq!(
+            core.long_link_meta(MAIN).unwrap().keeper().due_time(),
+            None,
+            "the first touch sends at once and posts nothing"
+        );
+
+        // the minor link carries a record of its own, which is data that moved
+        let link = Arc::clone(core.long_link(MINOR).expect("the minor link"));
+        {
+            let mut link = link.lock().unwrap_or_else(poisoned);
+            link.set_socket_operator(Socket::default());
+            assert!(link.send_when_no_data(1, 0, b"a record"));
+            assert!(link.write_at(NOW + 100, SocketFd(3), false).is_ok());
+        }
+
+        // and the host's turn is what carries it to the main link's keeper,
+        // which posts the next buffer a period after the data
+        let _ = core.due_time_at(NOW + 200);
+        assert_eq!(
+            core.long_link_meta(MAIN).unwrap().keeper().due_time(),
+            Some(NOW + 100 + DEFAULT_PERIOD)
+        );
+    }
+
+    /// A socket that takes everything the link writes: only a write that got
+    /// as far as the socket is data that moved.
+    #[derive(Default)]
+    struct Socket {
+        breaker: Never,
+    }
+
+    impl SocketOperator for Socket {
+        fn connect(
+            &mut self,
+            _addresses: &[marsrs_comm::SocketAddress],
+            _proxy: &marsrs_comm::ProxyInfo,
+        ) -> SocketFd {
+            SocketFd(3)
+        }
+
+        fn send(
+            &mut self,
+            _socket: SocketFd,
+            buffer: &[u8],
+            _timeout_ms: i32,
+        ) -> Result<usize, i32> {
+            Ok(buffer.len())
+        }
+
+        fn recv(
+            &mut self,
+            _socket: SocketFd,
+            _max_size: usize,
+            _timeout_ms: i32,
+            _wait_full_size: bool,
+        ) -> Result<Vec<u8>, i32> {
+            Ok(Vec::new())
+        }
+
+        fn close(&mut self, _socket: SocketFd) {}
+
+        fn identify(&self, socket: SocketFd) -> String {
+            crate::tcp_identify(socket)
+        }
+
+        fn protocol(&self) -> i32 {
+            Task::TRANSPORT_PROTOCOL_TCP
+        }
+
+        fn error_desc(&self, error_code: i32) -> String {
+            format!("{error_code}")
+        }
+
+        fn profile(&self) -> SocketProfile {
+            SocketProfile::default()
+        }
+
+        fn breaker(&mut self) -> &mut dyn OpBreaker {
+            &mut self.breaker
+        }
+
+        fn create_stream(&mut self, _socket: SocketFd) -> SocketFd {
+            SocketFd::INVALID
+        }
+
+        fn set_ip_connection_timeout(&mut self, _v4_timeout_ms: u32, _v6_timeout_ms: u32) {}
+    }
+
+    /// A pipe nobody wakes.
+    #[derive(Default)]
+    struct Never;
+
+    impl OpBreaker for Never {
+        fn is_break(&mut self) -> bool {
+            false
+        }
+
+        fn break_(&mut self) -> bool {
+            true
+        }
     }
 
     #[test]

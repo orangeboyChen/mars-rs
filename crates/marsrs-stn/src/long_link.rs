@@ -245,9 +245,9 @@ pub type NoopAlarmReceived = dyn FnMut(bool) + Send;
 /// process's, emitted on every write (`longlink.cc:955`) and every read
 /// (`:1025`) of every link, and what listens to it is the *main* link's
 /// signalling keeper, which `NetCore` connects when it makes one
-/// (`net_core.cc:1161`). The port wires it on every link, and a keeper that is
-/// not keeping answers for itself: it is not moved by data
-/// (`signalling_keeper.cc:73`).
+/// (`net_core.cc:1161`). The port wires it on every link and leaves what it
+/// hears for the net core to carry to the keeper that is the main one's,
+/// because a link does not know whether it is the main one.
 pub type NetworkDataChanged = dyn FnMut(u64) + Send;
 
 /// `comm::Alarm::TAlarmStatus` — where a one-shot timer is.
