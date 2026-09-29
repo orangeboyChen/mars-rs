@@ -5,9 +5,72 @@
 //! callback directly.
 
 use crate::checkimpl::Ask;
+use crate::constants::{NET_CHECK_BASIC, NET_CHECK_LONG, NET_CHECK_SHORT};
 use crate::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
 use crate::sdt::{Callback, CheckIPPorts, NetCheckType};
 use crate::sdt_core::{CancelHandle, SdtCore};
+
+/// Which checks a diagnosis runs — the `mode` of the C++, named instead of
+/// counted.
+///
+/// The C++ hands this around as an `int` of `NET_CHECK_*` bits, and every
+/// platform spells the bits differently: `NET_CHECK_BASIC` here,
+/// `CheckMode.K_BASIC` in the shared Kotlin, `1 | 2` in an app that kept the
+/// numbers. This is the same bits with names, and `|` to put them together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mode(i32);
+
+impl Mode {
+    /// Nothing to check.
+    pub const NONE: Self = Self(0);
+    /// `NET_CHECK_BASIC` — ping and DNS.
+    pub const BASIC: Self = Self(NET_CHECK_BASIC);
+    /// `NET_CHECK_LONG` — TCP against the long-link hosts.
+    pub const LONG: Self = Self(NET_CHECK_LONG);
+    /// `NET_CHECK_SHORT` — HTTP against the net-check CGI.
+    pub const SHORT: Self = Self(NET_CHECK_SHORT);
+    /// Every one of them, which is what an app that wants the whole picture
+    /// asks for.
+    pub const ALL: Self = Self(NET_CHECK_BASIC | NET_CHECK_LONG | NET_CHECK_SHORT);
+
+    /// The `mode` the C++ wrote, which is what [`SdtLogic::start_active_check`]
+    /// takes and what a bridge gets from an app that still counts.
+    pub const fn bits(self) -> i32 {
+        self.0
+    }
+
+    /// The other way round: a `mode` an app was handed, which is how the
+    /// upstream call is still answered with a mode it understands.
+    pub const fn of(bits: i32) -> Self {
+        Self(bits)
+    }
+}
+
+impl std::ops::BitOr for Mode {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitOrAssign for Mode {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+impl From<Mode> for i32 {
+    fn from(mode: Mode) -> Self {
+        mode.bits()
+    }
+}
+
+impl From<i32> for Mode {
+    fn from(bits: i32) -> Self {
+        Self::of(bits)
+    }
+}
 
 /// The `sdt_logic` of the C++, as one value.
 pub struct SdtLogic {
@@ -64,6 +127,36 @@ impl SdtLogic {
     /// The URL the HTTP check goes to.
     pub fn http_netcheck_cgi(&self) -> &str {
         self.core.http_netcheck_cgi()
+    }
+
+    /// The whole diagnosis in one call: [`SdtLogic::start_active_check`],
+    /// [`SdtLogic::run_checks`] and the report, which is what the C++ does in
+    /// `StartActiveCheck` and on the `__RunOn` thread it starts behind it.
+    ///
+    /// [`None`] is a check that is already in flight, which is the `false` of
+    /// the upstream call. The results are also handed to the app's
+    /// [`Callback`], the way they are when an app makes the three calls itself.
+    ///
+    /// What it is not is a future: every check is a probe that runs to its own
+    /// timeout on the thread that asks for it, and an app that wants it off
+    /// the thread it is on puts it there — `std::thread::spawn` around this
+    /// call, or an executor's own `spawn_blocking`.
+    pub fn diagnose(
+        &mut self,
+        longlink_items: &CheckIPPorts,
+        shortlink_items: &CheckIPPorts,
+        mode: Mode,
+        timeout: u32,
+        ask: &mut Ask,
+        network_type: i32,
+    ) -> Option<Vec<CheckResultProfile>> {
+        if !self
+            .core
+            .start_check(longlink_items, shortlink_items, mode.bits(), timeout)
+        {
+            return None;
+        }
+        Some(self.run_checks(ask, network_type))
     }
 
     /// `StartActiveCheck(longlink_check_item, shortlink_check_item, mode, timeout)`.

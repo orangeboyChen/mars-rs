@@ -41,9 +41,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use marsrs_comm::tickcount::gettickcount;
 
 use crate::net_core::{IsForeground, LastForegroundChangeTime, NetCore};
+use crate::sent::{self, Failure, Sent};
 use crate::signalling_keeper::set_strategy;
-use crate::stn_callback_bridge::{App, DnsProfile, StnCallbackBridge};
-use crate::{xorshift, LongLink, LongLinkEncoder, LongLinkStatus, LonglinkConfig, NetStatus, Task};
+use crate::stn_callback_bridge::{App, CgiProfile, DnsProfile, StnCallbackBridge};
+use crate::{
+    xorshift, LongLink, LongLinkEncoder, LongLinkStatus, LonglinkConfig, NetStatus, Task,
+    TaskFailHandleType,
+};
 
 /// `kReservedTaskIDStart` — the id the counter is put back to `1` at, so a
 /// generated id is never one of the four the C++ keeps for itself (`kNoopTaskID`
@@ -107,6 +111,10 @@ pub fn gen_sequence_id() -> u16 {
 pub struct StnLogic {
     core: Option<NetCore>,
     bridge: Arc<Mutex<StnCallbackBridge>>,
+    /// The tasks an app is awaiting, which is what [`StnLogic::send`] adds to
+    /// and what a pass that ends one finishes: one value for the logic, shared
+    /// with every [`Sent`] it handed out.
+    ends: Arc<Mutex<sent::Ends>>,
     encoder: LongLinkEncoder,
     encoder_version: i32,
     encoder_name: String,
@@ -146,6 +154,7 @@ impl StnLogic {
         Self {
             core: None,
             bridge: Arc::new(Mutex::new(StnCallbackBridge::new())),
+            ends: Arc::new(Mutex::new(sent::Ends::default())),
             encoder: LongLinkEncoder::new(),
             encoder_version: 0,
             encoder_name: String::new(),
@@ -209,7 +218,7 @@ impl StnLogic {
         }
         let mut core = NetCore::with_encoder_at(now, true, self.encoder);
         core.set_packer_encoder(self.encoder_version, self.encoder_name.clone());
-        Self::wire(&mut core, &self.bridge);
+        Self::wire(&mut core, &self.bridge, &self.ends);
         // `ActiveLogic` is one object for the whole process upstream and not
         // one the net core owns, so what the host said about the foreground
         // outlives the core it was said to — a reset hands it on.
@@ -319,8 +328,71 @@ impl StnLogic {
     //===------------------------------------------------------------------===//
 
     /// `StartTask(_task)` — `true` is a task a queue took.
+    ///
+    /// The app that wants the answer of the task it started takes
+    /// [`StnLogic::send`], which is this and the [`Sent`] of the task's end in
+    /// one call; what is left here is a task nobody is waiting for, which is
+    /// what the C++ project's own `StartTask` is for.
+    #[deprecated = "await the answer of the task instead: StnLogic::send(task, body)"]
     pub fn start_task(&mut self, task: Task) -> bool {
         self.start_task_at(gettickcount(), task)
+    }
+
+    /// Starts a task and hands back the [`Sent`] of its end.
+    ///
+    /// This is [`StnLogic::start_task`] for an app that wants the answer: the
+    /// task is started now, `body` is what `Req2Buf` is answered with while it
+    /// runs, and the [`Sent`] is a future whose output is the bytes the server
+    /// answered with, or [`Failure`] of the run. An app that names neither a
+    /// body nor an answer still writes an [`App`] for `Req2Buf` and
+    /// `Buf2Resp`, which every question of a task nobody is awaiting falls
+    /// through to.
+    ///
+    /// A [`Sent`] borrows nothing, so the lock the logic is behind may be let
+    /// go before the `await`: `let sent = stn.lock().unwrap().send(task, body);`
+    /// and not `stn.lock().unwrap().send(task, body).await`, which would hold
+    /// the logic across the await and wait for the pass that never comes.
+    ///
+    /// What is still the caller's is the draining — a [`sent::Driver`], or the
+    /// host's own [`StnLogic::run_pending`] loop. See [`sent`].
+    pub fn send(&mut self, task: Task, body: Vec<u8>) -> Sent {
+        self.send_at(gettickcount(), task, body)
+    }
+
+    /// The same, with the reading handed in.
+    pub fn send_at(&mut self, now: u64, task: Task, body: Vec<u8>) -> Sent {
+        let taskid = task.taskid;
+        let ends = Arc::clone(&self.ends);
+        let started = self.core.as_mut().is_some_and(|core| {
+            locked(&ends).start(taskid, body);
+            core.start_task_at(now, task)
+        });
+        // a task the gates refused ends inside the call that refused it, so
+        // what the queue took is not the only end there can be this soon
+        self.flush();
+        let ended = locked(&ends).take(taskid);
+        match ended {
+            Some(ended) => Sent::answered(ended.into()),
+            None if started => Sent::waiting(ends, taskid),
+            None => {
+                locked(&ends).forget(taskid);
+                Sent::answered(Err(if self.is_created() {
+                    Failure::Refused
+                } else {
+                    Failure::NotCreated
+                }))
+            }
+        }
+    }
+
+    /// Wakes whoever awaited a task a pass has ended, which happens after the
+    /// pass and not during it: the poll a wake schedules asks for the lock the
+    /// pass is still holding.
+    fn flush(&self) {
+        let wakes = locked(&self.ends).wakes();
+        for waker in wakes {
+            waker.wake();
+        }
     }
 
     /// The same, with the reading handed in.
@@ -438,6 +510,10 @@ impl StnLogic {
         if let Some(core) = self.core.as_mut() {
             core.run_pending_at(now);
         }
+        // a pass that ended a task is the only thing that can answer a `Sent`,
+        // so the wakes are queued by the pass and made here, once the core has
+        // been let go
+        self.flush();
     }
 
     //===------------------------------------------------------------------===//
@@ -607,19 +683,35 @@ impl StnLogic {
     /// decode, whether the app is logged in, the sequence a task is tied to its
     /// report by, and everything the net core, the net source, the network
     /// check and the timing sync ask the app about.
-    fn wire(core: &mut NetCore, bridge: &Arc<Mutex<StnCallbackBridge>>) {
+    fn wire(
+        core: &mut NetCore,
+        bridge: &Arc<Mutex<StnCallbackBridge>>,
+        ends: &Arc<Mutex<sent::Ends>>,
+    ) {
         let wired = Arc::clone(bridge);
+        let awaited = Arc::clone(ends);
         core.longlink().set_req2buf(move |task, channel| {
-            locked(&wired).req2buf(
-                task.taskid,
-                &task.user_id,
-                channel,
-                host_of(&task.longlink_host_list),
-                task.client_sequence_id,
-            )
+            let body = locked(&awaited).request(task.taskid);
+            match body {
+                Some(body) => Ok(body),
+                None => locked(&wired).req2buf(
+                    task.taskid,
+                    &task.user_id,
+                    channel,
+                    host_of(&task.longlink_host_list),
+                    task.client_sequence_id,
+                ),
+            }
         });
         let wired = Arc::clone(bridge);
+        let awaited = Arc::clone(ends);
         core.longlink().set_buf2resp(move |task, body, channel| {
+            // the answer of a task somebody is awaiting is theirs and not the
+            // app's to decode: what comes back is the bytes, and the handle a
+            // task that is not being awaited would have got from `App`
+            if locked(&awaited).answer(task.taskid, body) {
+                return (0, TaskFailHandleType::Normal);
+            }
             locked(&wired).buf2resp(task.taskid, &task.user_id, body, channel)
         });
         let wired = Arc::clone(bridge);
@@ -631,17 +723,26 @@ impl StnLogic {
         core.longlink().set_gen_sequence_id(gen_sequence_id);
 
         let wired = Arc::clone(bridge);
+        let awaited = Arc::clone(ends);
         core.shortlink().set_req2buf(move |task, channel| {
-            locked(&wired).req2buf(
-                task.taskid,
-                &task.user_id,
-                channel,
-                host_of(&task.shortlink_host_list),
-                task.client_sequence_id,
-            )
+            let body = locked(&awaited).request(task.taskid);
+            match body {
+                Some(body) => Ok(body),
+                None => locked(&wired).req2buf(
+                    task.taskid,
+                    &task.user_id,
+                    channel,
+                    host_of(&task.shortlink_host_list),
+                    task.client_sequence_id,
+                ),
+            }
         });
         let wired = Arc::clone(bridge);
+        let awaited = Arc::clone(ends);
         core.shortlink().set_buf2resp(move |task, body, channel| {
+            if locked(&awaited).answer(task.taskid, body) {
+                return (0, TaskFailHandleType::Normal);
+            }
             locked(&wired).buf2resp(task.taskid, &task.user_id, body, channel)
         });
         let wired = Arc::clone(bridge);
@@ -653,8 +754,13 @@ impl StnLogic {
         core.shortlink().set_gen_sequence_id(gen_sequence_id);
 
         let wired = Arc::clone(bridge);
+        let awaited = Arc::clone(ends);
         core.set_on_task_end(move |taskid, user_id, err_type, err_code, profile| {
-            locked(&wired).on_task_end(taskid, user_id, err_type, err_code, profile)
+            let reported = locked(&wired).on_task_end(taskid, user_id, err_type, err_code, profile);
+            // the app is told first and the one awaiting the task second, so
+            // what it saw and what it hears is the same end
+            locked(&awaited).finish(taskid, err_type, err_code, CgiProfile::of(profile));
+            reported
         });
         let wired = Arc::clone(bridge);
         core.set_on_push(move |channel, cmdid, taskid, body| {
@@ -865,7 +971,7 @@ mod tests {
         assert!(logic.net_core().is_none());
 
         // every call the C++ answers with a warning and a `false`
-        assert!(!logic.start_task(Task::new(7, 12)));
+        assert!(!logic.start_task_at(gettickcount(), Task::new(7, 12)));
         assert!(!logic.stop_task(7));
         assert!(!logic.has_task(7));
         assert!(!logic.destroy_long_link("link"));

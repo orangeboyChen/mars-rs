@@ -49,6 +49,11 @@ while (due != null) {
 `wait` 是 App 写的一个 `expect` —— Android 上 `Thread.sleep(due)`，native 目标上
 `usleep(due * 1000)`。
 
+在 Rust 里一个调用就能起一个：`Driver::spawn(stn)` 起这个 crate 的一个线程排空
+队列 —— 到点了 `run_pending()`，其间睡 `due_delay()` —— `Driver` 被 drop 的时候把它
+join 掉。要 await 一个任务又没有自己循环的 App 用它；有循环的 App 留着那个循环，
+因为一趟把某个任务跑完的时候，await 它的人会被唤醒。
+
 一个发起了却一直没排空的任务会一直待在它的队列里 —— `has_task` 对一个哪儿也去不了
 的任务照样回答 `true`。
 
@@ -63,7 +68,7 @@ C++ 里 `net_channel_factory.cc` 那两个钩子。Kotlin、Swift 和 C 的绑�
 
 | C++ | Rust | Android | Swift | C |
 |---|---|---|---|---|
-| `mars::stn::StartTask` | `stn.start_task(task)` | `StnLogic.startTask(task)` | `MarsStn.start(task)` | `mars_stn_start_task(&task)` |
+| `mars::stn::StartTask` | `stn.send(task, body)` —— `start_task(task)` 还能发起没人 await 的任务，它带 deprecated | `StnLogic.startTask(task)` | `MarsStn.start(task)` | `mars_stn_start_task(&task)` |
 | `mars::stn::StopTask` | `stn.stop_task(id)` | `StnLogic.stopTask(id)` | `MarsStn.stop(taskID:)` | `mars_stn_stop_task(id)` |
 | `mars::stn::HasTask` | `stn.has_task(id)` | `StnLogic.hasTask(id)` | `MarsStn.hasTask(id)` | `mars_stn_has_task(id)` |
 | `mars::stn::SetCallback` | `stn.set_callback(app)` | `StnLogic.setCallBack(cb)` | `MarsStn.setApp { … }` | `mars_stn_set_app(ctx, ask)` |
@@ -72,6 +77,11 @@ C++ 里 `net_channel_factory.cc` 那两个钩子。Kotlin、Swift 和 C 的绑�
 | `mars::stn::DestroyLonglink_ext` | `stn.destroy_long_link(name)` | `StnLogic.destroyLonglink(name)` | `MarsStn.destroyLongLink(name)` | `mars_stn_destroy_longlink(name)` |
 | `mars::stn::MarkMainLonglink_ext` | `stn.mark_main_longlink(name)` | `StnLogic.markMainLonglink(name)` | `MarsStn.markMainLongLink(name)` | `mars_stn_mark_main_longlink(name)` |
 | 队列那个线程 | `stn.run_pending()` | `StnLogic.runPending()` | `MarsStn.runPending()` | `mars_stn_run_pending()` |
+
+Rust 是唯一一个 `StartTask` 旁边还站着一个更新的调用的平台：`send` 发起任务，并把
+它的回答交回来让你 await，而 `start_task` —— 上游那个调用，给没人 await 的任务用的
+—— 才是带着 deprecated 的那个。Android、Swift 和 C 的 `start` 是上游的调用，没有
+deprecated。
 
 共享 Kotlin 模块里这几个也是 `StnLogic` 的，名字跟 Android 的一样，只有 App 那个不
 一样：`StnLogic.setApp { question -> … }` 接的是一个闭包而不是 `ICallBack`，

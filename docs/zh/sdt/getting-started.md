@@ -28,6 +28,8 @@ Flutter 插件和 React Native 模块目前都只有日志：两个都起不了�
 3. **取报告**，把它送到你送日志的地方 —— 或者装一个回调，让这一趟跑完直接递给你。
    见[报告](/zh/sdt/report)。
 
+在 Rust 里这三步是一个调用 —— `sdt.diagnose(…)` —— 而且 mode 有名字。
+
 ## Rust
 
 ```bash
@@ -36,7 +38,7 @@ cargo add marsrs          # 整个移植：xlog、stn、sdt
 
 ```rust
 use marsrs::sdt::checkimpl::{Answer, Ask, Query};
-use marsrs::sdt::{report_json, CheckIPPort, CheckIPPorts, SdtLogic, NET_CHECK_BASIC, NET_CHECK_LONG};
+use marsrs::sdt::{report_json, CheckIPPort, CheckIPPorts, Mode, SdtLogic};
 
 let mut sdt = SdtLogic::new();
 sdt.set_http_netcheck_cgi("http://example.com/netcheck");
@@ -45,8 +47,6 @@ sdt.set_http_netcheck_cgi("http://example.com/netcheck");
 let mut longlink = CheckIPPorts::new();
 longlink.insert("default".to_owned(), vec![CheckIPPort::new("1.2.3.4", 80)]);
 let shortlink = CheckIPPorts::new();
-// mode 是要跑哪些检查：先 ping 和 dns，再 tcp。`0` 是一个都不跑。
-sdt.start_active_check(&longlink, &shortlink, NET_CHECK_BASIC | NET_CHECK_LONG, 10_000);
 
 // 2. 计划，跑在 `ask` 回答的那个网络之上
 let mut ask = Ask::new(|query| match query {
@@ -57,15 +57,34 @@ let mut ask = Ask::new(|query| match query {
     Query::Http { .. } => Answer::Http { error_code: 0, status_code: 200, rtt: 40 },
     Query::Ping { .. } => Answer::Ping { error_code: 0, rtt: 20, status: None },
 });
-let results = sdt.run_checks(&mut ask, 1 /* comm::getNetInfo() */);
+});
 
-// 3. 报告
+// 3. 一整趟诊断：先 ping 和 dns，再 tcp，跑在 `1` 说的那个网络之上 —— 也就是 C++
+//    里的 `comm::getNetInfo()`。`None` 是已经有一趟在跑了。
+let results = sdt
+    .diagnose(
+        &longlink, &shortlink, Mode::BASIC | Mode::LONG, 10_000, &mut ask, 1,
+    )
+    .expect("没有正在跑的检查");
+
+// 4. 报告
 println!("{}", report_json(&results));
 ```
 
 `sdt.plan()` 在这一趟问任何东西之前，按检查要跑的顺序把计划交回来。在 Rust 里一趟
 会独占借用这个 logic，所以取消一趟要用 `CancelHandle`，而且得在这一趟之前就造好 ——
 见[报告](/zh/sdt/report)。
+
+`Mode` 是那几个 `NET_CHECK_*` bit 有了名字 —— `Mode::NONE`、`BASIC`、`LONG`、
+`SHORT` 和 `ALL` —— 用 `|` 拼起来；`Mode::of(bits)` 和 `mode.bits()` 是给还在数数
+的 App 留的。`start_active_check` 依然吃那个裸的 `i32`，也没有带 deprecated：一个
+要跨线程驱动这趟跑的宿主 —— 在一个线程上开检查，在另一个线程上取报告 —— 还是要把
+这三个调用分开用。
+
+`diagnose` 不是一个 future：每一项检查都是一次探测，在问它的那个线程上跑到自己的
+超时。想让这趟诊断离开当前线程的 App 自己把它挪过去 —— 在这个调用外面套一层
+`std::thread::spawn`，或者用 executor 自己的 `spawn_blocking`。它交回来的结果也照样
+递给 App 用 `set_callback` 装的那个回调，跟三个调用分开用的时候一样。
 
 ## Swift
 

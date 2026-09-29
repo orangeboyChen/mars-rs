@@ -3,10 +3,11 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use marsrs_sdt::checkimpl::Ask;
 use marsrs_sdt::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
 use marsrs_sdt::{
-    Callback, CheckIPPort, CheckIPPorts, NetCheckType, SdtLogic, NET_CHECK_BASIC, NET_CHECK_LONG,
-    NET_CHECK_SHORT, UNUSE_TIMEOUT,
+    Callback, CheckIPPort, CheckIPPorts, Mode, NetCheckType, SdtLogic, NET_CHECK_BASIC,
+    NET_CHECK_LONG, NET_CHECK_SHORT, UNUSE_TIMEOUT,
 };
 
 fn hosts(names: &[&str]) -> CheckIPPorts {
@@ -186,4 +187,95 @@ fn the_cgi_reaches_the_core() {
     let mut logic = SdtLogic::default();
     logic.set_http_netcheck_cgi("/cgi-bin/netcheck");
     assert_eq!(logic.http_netcheck_cgi(), "/cgi-bin/netcheck");
+}
+
+/// Whoever the app set is told, and what it was told is kept.
+fn listener() -> (Arc<Mutex<Vec<Vec<CheckResultProfile>>>>, impl Callback) {
+    struct Forward(Arc<Mutex<Vec<Vec<CheckResultProfile>>>>);
+    impl Callback for Forward {
+        fn report_net_check_result(&self, check_results: &[CheckResultProfile]) {
+            self.0.lock().unwrap().push(check_results.to_vec());
+        }
+    }
+
+    let results = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&results);
+    (results, Forward(sink))
+}
+
+#[test]
+fn one_call_is_the_whole_diagnosis() {
+    let longlink = hosts(&["long.weixin.qq.com"]);
+    let shortlink = hosts(&["short.weixin.qq.com"]);
+    let (reported, callback) = listener();
+
+    let mut logic = SdtLogic::new();
+    logic.set_http_netcheck_cgi("/cgi-bin/netcheck");
+    logic.set_callback(callback);
+
+    // what the C++ needs three calls and its `__RunOn` thread for
+    let mut ask = Ask::default();
+    let results = logic
+        .diagnose(
+            &longlink,
+            &shortlink,
+            Mode::BASIC | Mode::SHORT,
+            UNUSE_TIMEOUT,
+            &mut ask,
+            2,
+        )
+        .expect("no check was in flight");
+
+    assert!(!results.is_empty());
+    assert!(!logic.is_checking(), "the run is over when the call is");
+    assert_eq!(*reported.lock().unwrap(), vec![results.clone()]);
+
+    // and the logic is one diagnosis richer: nothing is left in flight, so a
+    // second one is taken
+    let again = logic.diagnose(
+        &longlink,
+        &shortlink,
+        Mode::LONG,
+        UNUSE_TIMEOUT,
+        &mut ask,
+        2,
+    );
+    assert!(again.is_some(), "the first run is over");
+}
+
+#[test]
+fn a_diagnosis_that_is_already_in_flight_is_not_taken() {
+    let longlink = hosts(&["long.weixin.qq.com"]);
+    let shortlink = hosts(&["short.weixin.qq.com"]);
+
+    let mut logic = SdtLogic::new();
+    assert!(logic.start_active_check(&longlink, &shortlink, NET_CHECK_LONG, 3000));
+
+    // the `false` of the upstream call, which is what `None` is here
+    let mut ask = Ask::default();
+    assert!(logic
+        .diagnose(&longlink, &shortlink, Mode::BASIC, 3000, &mut ask, 2)
+        .is_none());
+    assert!(
+        logic.is_checking(),
+        "the run that was in flight is still in flight"
+    );
+}
+
+#[test]
+fn a_mode_is_the_bits_the_cpp_counts() {
+    assert_eq!(Mode::NONE.bits(), 0);
+    assert_eq!(Mode::BASIC.bits(), NET_CHECK_BASIC);
+    assert_eq!(Mode::LONG.bits(), NET_CHECK_LONG);
+    assert_eq!(Mode::SHORT.bits(), NET_CHECK_SHORT);
+    assert_eq!(
+        (Mode::BASIC | Mode::LONG | Mode::SHORT).bits(),
+        Mode::ALL.bits()
+    );
+    // and the other way round, for an app that still counts
+    assert_eq!(
+        Mode::of(NET_CHECK_BASIC | NET_CHECK_SHORT),
+        Mode::BASIC | Mode::SHORT
+    );
+    assert_eq!(i32::from(Mode::ALL), Mode::ALL.bits());
 }

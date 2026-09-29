@@ -30,6 +30,8 @@ today: neither can start a check.
 3. **Take the report**, and send it wherever your logs go — or install a callback
    and let the run hand it to you instead. See [the report](/sdt/report).
 
+In Rust the three are one call — `sdt.diagnose(…)` — and the mode has names.
+
 ## Rust
 
 ```bash
@@ -38,7 +40,7 @@ cargo add marsrs          # the whole port: xlog, stn and sdt
 
 ```rust
 use marsrs::sdt::checkimpl::{Answer, Ask, Query};
-use marsrs::sdt::{report_json, CheckIPPort, CheckIPPorts, SdtLogic, NET_CHECK_BASIC, NET_CHECK_LONG};
+use marsrs::sdt::{report_json, CheckIPPort, CheckIPPorts, Mode, SdtLogic};
 
 let mut sdt = SdtLogic::new();
 sdt.set_http_netcheck_cgi("http://example.com/netcheck");
@@ -47,8 +49,6 @@ sdt.set_http_netcheck_cgi("http://example.com/netcheck");
 let mut longlink = CheckIPPorts::new();
 longlink.insert("default".to_owned(), vec![CheckIPPort::new("1.2.3.4", 80)]);
 let shortlink = CheckIPPorts::new();
-// the mode is the checks to run: ping and dns, then tcp. `0` is none of them.
-sdt.start_active_check(&longlink, &shortlink, NET_CHECK_BASIC | NET_CHECK_LONG, 10_000);
 
 // 2. the plan, over the network `ask` answers with
 let mut ask = Ask::new(|query| match query {
@@ -59,15 +59,36 @@ let mut ask = Ask::new(|query| match query {
     Query::Http { .. } => Answer::Http { error_code: 0, status_code: 200, rtt: 40 },
     Query::Ping { .. } => Answer::Ping { error_code: 0, rtt: 20, status: None },
 });
-let results = sdt.run_checks(&mut ask, 1 /* comm::getNetInfo() */);
 
-// 3. the report
+// 3. the whole diagnosis: ping and dns, then tcp, over the network `1` names,
+//    which is what `comm::getNetInfo()` is in the C++. `None` is a check that
+//    is already in flight.
+let results = sdt
+    .diagnose(
+        &longlink, &shortlink, Mode::BASIC | Mode::LONG, 10_000, &mut ask, 1,
+    )
+    .expect("no check was in flight");
+
+// 4. the report
 println!("{}", report_json(&results));
 ```
 
 `sdt.plan()` hands the plan back in the order the checks will run, before the run
 asks anything. A run borrows the logic exclusively in Rust, so cancelling one
 takes a `CancelHandle` made before it — see [the report](/sdt/report).
+
+`Mode` is the `NET_CHECK_*` bits with names — `Mode::NONE`, `BASIC`, `LONG`,
+`SHORT` and `ALL` — and `|` puts them together; `Mode::of(bits)` and
+`mode.bits()` are there for an app that counts. `start_active_check` still takes
+the raw `i32` and carries no deprecation: a host that drives the run across
+threads — starting the check on one and reporting it on another — needs the
+three calls apart.
+
+`diagnose` is not a future: every check is a probe that runs to its own timeout
+on the thread that asks for it. An app that wants the diagnosis off that thread
+puts it there — `std::thread::spawn` around the call, or an executor's own
+`spawn_blocking`. What it hands back is also handed to the callback an app set
+with `set_callback`, the way it is when the three calls are made apart.
 
 ## Swift
 

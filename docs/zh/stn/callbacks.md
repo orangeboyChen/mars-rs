@@ -41,6 +41,12 @@ App 不回答的问题，STN 都给它默认答案；除 Android 之外每个平
 默认 —— 所以 App 只写它关心的那几个：Swift 里 `default: return .nothing`，共享
 Kotlin 里 `else -> Answer.None`，Rust 里一个带三个方法的 `App`。
 
+在 Rust 里，十八个里有两个只在没人 await 的任务上才问 App：你交给
+`stn.send(task, body)` 的 `body` 就是本来要问 `req2buf` 的东西，服务器回答的那些
+字节就是本来要递给 `buf2resp` 的东西 —— 两个都替那个 `Sent` 留着。其余每一个问题照
+旧问，包括 `on_task_end`；而没人 await 的任务，App 要答的是全部十八个。见
+[任务](/zh/stn/tasks)。
+
 Android 的 `ICallBack` 是 C++ 项目的 Java 声明出来的一个普通 interface，没有默认实
 现：这个对象要 App 自己补全。十八个里 STN 会问它十三个 —— 上表标 `—` 的那五个，Java
 api 没有对应的方法，于是 STN 用自己的答案 —— 外加一个它自己的 `isLogoned`，那个谁也

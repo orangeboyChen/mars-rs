@@ -33,11 +33,18 @@ core 一见这个值就判失败 —— 上面三个里只有 Rust 的 `Task::ne
 | 什么 | Rust | Swift | Android、KMP | C |
 |---|---|---|---|---|
 | 发起 | `stn.start_task(task)` | `MarsStn.start(task)` | `StnLogic.startTask(task)` | `mars_stn_start_task(&task)` |
+| 发起并 await 它的回答 | `stn.send(task, body)` | — | — | — |
 | 停下 | `stn.stop_task(id)` | `MarsStn.stop(taskID:)` | `StnLogic.stopTask(id)` | `mars_stn_stop_task(id)` |
 | 还在不在 | `stn.has_task(id)` | `MarsStn.hasTask(id)` | `StnLogic.hasTask(id)` | `mars_stn_has_task(id)` |
 
 `start_task` 立刻返回：任务跑在队列上，不在调用它的线程上。`has_task` 对一个哪儿
 也去不了的任务也回答 `true` —— 一个发起了却一直没排空的任务。
+
+`send` 是 Rust 才有的，想要任务回答的时候就用它：它发起任务，并交回一个 `Sent` ——
+一个 future，输出是这个任务的回答，或者这一趟的失败。`body` 是这个任务要发的字节，
+也就是本来要问 `req2buf` 的东西；`send_at(now, task, body)` 是同一个调用，只是时钟
+读数由你递进去。Rust 里 `start_task` 让位给 `send`，带着 deprecated；`start_task_at`
+不带，其他平台的 `start` 也不带 —— 那是上游的调用，给没人 await 的任务用的。
 
 ## 一个任务怎么结束
 
@@ -56,12 +63,40 @@ profile：
 回答该怎么办、而不只是说它是坏的：`Normal`、`RetryAllTasks`、`SessionTimeout`、
 `TaskEnd`、`TaskTimeout`。
 
+### 改成 await 它，在 Rust 里
+
+在 Rust 里，一个任务除了被听见，还可以被 await。`send` 交回的是一个 `Sent`，它的
+`Output` 是：
+
+- **`Ok(Answer)`** —— `body`，服务器回答的那些字节，也就是本来要递给 `buf2Resp` 的
+  东西；以及 `profile`，这次连接的耗时。
+- **`Err(Failure)`** —— 为什么没有回答。`NotCreated` 是还没有 net core：
+  `create()` 还没走。`Refused` 是一个已经释放的 core，它什么都不启动、也什么都不
+  上报。`Ended { err_type, err_code, profile }` 是失败在哪、用的什么错误码 —— 就是
+  `on_task_end` 带着的那两个数 —— 一个在入口就被 core 拒掉的任务也是这么报的。
+
+一个 `Sent` 不借任何东西，所以它可以在 App 自己的 executor 放到哪就在哪 await，而
+那个 logic 底下的锁要在 `.await` 之前放开：把锁握过 `.await`，就是卡住了本来要回答
+它的那一趟。一个没人排空的 `Sent` 一直是 `Pending`，就像一个发起了却从没排空的任务
+一直待在队列里。
+
+那些问题并没有停止：一个被 await 的任务跑着的时候，App 照旧被问到每一个问题，包括
+`on_task_end` —— await 是 App 拿到的一个值，不是一个 App 从此不再被问的问题。会落回
+App 的，是一个请求和它的回答本来要问的那两个 —— `req2buf` 和 `buf2resp` —— 在没人
+await 的任务上。见[那些问题](/zh/stn/callbacks)。
+
 ## 一个任务跑在什么上面
 
 没有谁替你排空队列。`run_pending` / `due_time` —— [快速开始](/zh/stn/getting-started)
-那页上每种写法里都有 —— 就是把任务从队列里挪出去，而这个移植不会起自己的线程去调
-它们：那个循环是 App 的，一个发起了却一直没排空的任务会一直坐在队列里，直到进程
-结束。
+那页上每种写法里都有 —— 就是把任务从队列里挪出去，而 App 不要求就一个线程也不起：
+那个循环是 App 的，一个发起了却一直没排空的任务会一直坐在队列里，直到进程结束。
+
+在 Rust 里一个调用就够了：`Driver::spawn(stn)` 起这个 crate 的一个线程，做的正是
+宿主那个循环做的事 —— 到点了 `run_pending()`，其间睡 `due_delay()` —— `Driver`
+被 drop 的时候这个线程被 join。那个 logic 是共享的、不是被搬走的，所以 App 留着自己
+的 `Arc`，继续通过它发任务。已经有 `run_pending` 循环的宿主留着它就好，不需要
+`Driver`：一趟把某个任务跑完的时候，await 它的人会被唤醒，所以一个 `Driver` 和宿主
+自己的循环可以一起用。
 
 `due_time` 是距离下一趟还有多久，单位是毫秒：`0` 是已经到期的一趟，队列里等着的一
 个 follow-up 就是。它是一个时长，不是一个时刻，跨 ABI 的调用方要的正是这个：tick

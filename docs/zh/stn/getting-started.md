@@ -37,10 +37,12 @@ native 一侧在 Android 上倒是带着 STN —— 整个移植的那个 AAR �
    了吗？*，*这个任务要发哪些字节？*，*那个回答是什么意思？* —— 都由 App 答：
    Rust 里一个 trait，Swift 里一个闭包，共享 Kotlin 里一个 `ask`，C 里一个回调，
    Android 上是 App 实现的那个 interface。见[那些问题](/zh/stn/callbacks)。
-2. **发起一个任务。** 它被接过去，挑一条链路，放进队列，调用立刻返回。
-3. **驱动队列。** 这是这个移植对调用方唯一的要求。本该是一个线程的地方，是 App 的
-   一对调用 —— `run_pending()`，以及告诉它这一趟最多还能等多久的 `due_time()`。
-   一个任务发起了却从没排空，就一直待在它的队列里。
+2. **发起一个任务。** 它被接过去，挑一条链路，放进队列，调用立刻返回。Rust 里
+   `stn.send(task, body)` 还会把任务的回答交回来，可以 await。
+3. **驱动队列。** 本该是一个线程的地方，是 App 的一对调用 —— `run_pending()`，以及
+   告诉它这一趟最多还能等多久的 `due_time()`。Rust 里一个调用就把这一对跑起来：
+   `Driver::spawn(stn)` 起这个 crate 的一个线程排空队列，直到 `Driver` 被 drop。
+   每个平台上，一个发起了却从没排空的任务都会待在它的队列里。
 
 ## Rust
 
@@ -49,9 +51,12 @@ cargo add marsrs          # 整个移植：xlog、stn、sdt
 ```
 
 ```rust
-use marsrs::stn::{gen_task_id, App, ErrCmdType, StnLogic, Task, TaskFailHandleType};
+use std::sync::{Arc, Mutex};
 
-// 1. App：每个问题都有默认值，所以这就是一个会编码请求、读回答的 App 的全部
+use marsrs::stn::{gen_task_id, App, Driver, ErrCmdType, StnLogic, Task, TaskFailHandleType};
+
+// 1. App：每个问题都有默认值，所以这就是一个会编码请求、读回答的 App 的全部。
+//    你 await 的任务不会问它这两个；其余十六个一直都会问。
 struct MyApp;
 
 impl App for MyApp {
@@ -89,27 +94,55 @@ impl App for MyApp {
     }
 }
 
-let mut stn = StnLogic::new();
-stn.set_callback(MyApp);
-stn.create(); // 建出 net core；这之前上面这些都不起作用
+let stn = Arc::new(Mutex::new(StnLogic::new()));
+stn.lock().unwrap().set_callback(MyApp);
+stn.lock().unwrap().create(); // 建出 net core；这之前上面这些都不起作用
 
-// 2. 一个任务
+// 2. 一个任务：`send` 发起它，并把它的结束作为一个 future 交回来
 let mut task = Task::new(gen_task_id(), 100);
 task.cgi = "/cgi-bin/hello".to_owned();
 task.shortlink_host_list = vec!["example.com".to_owned()];
 task.total_timeout = 10_000;
-stn.start_task(task);
 
-// 3. 循环：`due_delay()` 是这一趟还能等多久
-while let Some(wait) = stn.due_delay() {
+// 锁在分号那里就放开了：一个 `Sent` 不借任何东西
+let sent = stn.lock().unwrap().send(task, b"hello".to_vec());
+
+// 3. 队列：一个 `Driver` 在这个 crate 的一个线程上排空它们，被 drop 时停下来
+let _driver = Driver::spawn(Arc::clone(&stn));
+
+let answer = sent.await.expect("the task came back");   // 在 App 自己的 async fn 里
+```
+
+`stn.create()` 建出 net core，这之前什么都不起作用。`send` 交回来的是一个 `Sent`：
+一个 future，它的输出是这个任务的 `Answer` —— 服务器回答的那些字节，以及这次连接的
+profile —— 或者这一趟的 `Failure`，它说的是任务失败在哪、用的什么错误码。一个 `Sent`
+不借任何东西，所以锁要在 `.await` 之前放开：把锁握过 `.await`，就是在等一趟不可能
+发生的 pass。
+
+你交给 `send` 的 `body` 就是本来要问 `req2buf` 的东西，`Answer` 里那串字节就是本来
+要递给 `buf2resp` 的东西，所以一个请求和它的回答根本不需要 `App`：那两个问题只有在
+没人 await 的任务上才去问 App。其余每一个问题照旧问 App，包括 `on_task_end`。见
+[任务](/zh/stn/tasks)。
+
+`start_task(task)` 依然能发起一个没人 await 的任务，在 Rust 里它带上了
+deprecated，让位给 `send`。其他每个平台上的 `start` 就是那个调用，不带 deprecated。
+
+自己驱动队列的 App 不需要 `Driver`，在自己一个线程上留着它的循环就好 —— 一趟把某个
+任务跑完的时候，await 它的人会被唤醒，所以两者可以一起用：
+
+```rust
+loop {
+    let wait = match stn.lock().unwrap().due_delay() {
+        Some(wait) => wait,
+        None => break,
+    };
     std::thread::sleep(std::time::Duration::from_millis(wait));
-    stn.run_pending();
+    stn.lock().unwrap().run_pending();
 }
 ```
 
-`stn.create()` 建出 net core，这之前什么都不起作用。`due_delay()` 回答这一趟还能
-等多少毫秒，没有可等的东西时回答 `None`；`StnLogic::due_time` 是那个 tick 读数，
-同一进程里的调用方可以拿它跟自己的钟比。
+`due_delay()` 回答这一趟还能等多少毫秒，没有可等的东西时回答 `None`；
+`StnLogic::due_time` 是那个 tick 读数，同一进程里的调用方可以拿它跟自己的钟比。
 
 这里的一条链路是连接的**模型**而不是连接本身，所以 socket 是 App 的：一个任务的
 连接、发送、接收和关闭就是造链路时给它的那个 `SocketOperator`，在 Rust 里通过 net
@@ -118,6 +151,7 @@ core 的 factory 接上去：
 ```rust
 use marsrs::stn::{ShortLink, StnLogic};
 
+let mut stn = stn.lock().unwrap();
 let core = stn.net_core().expect("create() has been through");
 core.factory().set_create_shortlink(|task, use_proxy| {
     let mut link = ShortLink::new(task, use_proxy);

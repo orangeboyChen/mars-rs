@@ -43,6 +43,13 @@ every platform but Android carries one for all eighteen — so an app writes the
 ones it cares about: `default: return .nothing` in Swift, `else -> Answer.None`
 in the shared Kotlin, an `App` with three methods in Rust.
 
+In Rust, two of the eighteen are asked of the app only for a task nobody is
+awaiting: the `body` you hand `stn.send(task, body)` is what `req2buf` would
+have been asked for, and the bytes the server answers with are what `buf2resp`
+would have been handed — both are kept for the `Sent` instead. Every other
+question is asked the same way, `on_task_end` included, and all eighteen are
+asked of the app for a task nobody awaits. See [the task](/stn/tasks).
+
 Android's `ICallBack` is the plain interface the C++ project's Java declared, and
 it has no defaults: the object is the app's to finish. It is asked thirteen of
 the eighteen — the five marked `—` above are ones the Java api has no method

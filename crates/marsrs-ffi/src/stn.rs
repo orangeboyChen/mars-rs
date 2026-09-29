@@ -870,6 +870,11 @@ pub unsafe extern "C" fn mars_stn_start_task(task: *const MarsStnTask) -> c_int 
         // SAFETY: `task` is non-null and the caller promises an initialised
         // `MarsStnTask` whose strings and lists outlive this call.
         let task = unsafe { task_from_c(&*task) };
+        // the C abi keeps the call the C++ named and does not deprecate it:
+        // what `mars_stn_start_task` starts is a task nobody awaits, which is
+        // what `StartTask` is for, and an app that wants the answer has no
+        // await on this side of the abi to get it with
+        #[allow(deprecated)]
         let started = with_logic(|logic| logic.start_task(task));
         if started {
             MARS_STN_OK

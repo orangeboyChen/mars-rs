@@ -23,7 +23,18 @@ and the checks, run them, take the report — and the report is the same
 | the report | `Callback::ReportNetCheckResult` | `report_json(&results)` | `takeReport()`, or the callback | `takeReport()` | `mars_sdt_take_report(buf, len)` |
 
 The mode is the same bit set — ping and DNS, then TCP, then the HTTP check of the
-net-check CGI — and `0` is still no checks at all. See [the checks](/sdt/checks).
+net-check CGI — and `0` is still no checks at all. In Rust the bits have names:
+`Mode::NONE`, `BASIC`, `LONG`, `SHORT` and `ALL`, put together with `|`, and
+`mode.bits()` hands back the `i32` the upstream call takes. See
+[the checks](/sdt/checks).
+
+In Rust the three steps are one call as well:
+`sdt.diagnose(longlink, shortlink, mode, timeout, &mut ask, net)` is
+`start_active_check`, `run_checks` and the report, and it answers `None` when a
+check is already in flight — the `false` of the upstream call.
+`start_active_check` carries no deprecation: a host that drives a run across
+threads — starting the check on one and reporting it on another — still needs
+the three calls apart.
 
 ## The two things the app takes over
 
@@ -38,7 +49,9 @@ records. On Android and in the shared Kotlin that is the `IProbe` you hand to
 **What would have been a thread is a call.** The C++ runs a diagnosis on its
 `__RunOn` thread; this port has no threads in it, so `runChecks` asks its probes
 on the thread that called it and does not come back until they have answered — an
-app runs it once and takes the report, with no loop and no sleep.
+app runs it once and takes the report, with no loop and no sleep. `diagnose`,
+which is both calls in one, is the same and is not a future: an app that wants a
+diagnosis off the thread it is on puts it there.
 
 Taking the report empties it, and the buffer of `mars_sdt_take_report` keeps its
 results when the report did not fit — see [the report](/sdt/report).

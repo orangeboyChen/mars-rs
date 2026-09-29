@@ -122,7 +122,12 @@ pub fn set_backup_ips_impl(host: &str, ips: &[String]) {
 /// `StnLogic.startTask` — `false` when the task is not one the queues would
 /// take: the C++ answers the same way for a task it cannot run.
 pub fn start_task_impl(task: Task) -> bool {
-    with_logic(|logic| logic.start_task(task))
+    // the jni keeps the call the C++ project's Java named and does not
+    // deprecate it: `startTask` starts a task nobody awaits, and the answer of
+    // one comes back to `ICallBack.onTaskEnd` as it does in the C++
+    #[allow(deprecated)]
+    let started = with_logic(|logic| logic.start_task(task));
+    started
 }
 
 /// `StnLogic.stopTask` — `true` when the task was one of ours.
