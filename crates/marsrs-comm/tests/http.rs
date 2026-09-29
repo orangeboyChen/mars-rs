@@ -236,6 +236,25 @@ fn a_trailer_that_never_ends_is_an_error() {
     assert_eq!(parser.recv(field.as_bytes()), RecvStatus::BodyError);
 }
 
+/// The bound is on the wait for a trailer and not on the trailer: one that
+/// came in whole is taken whole, however many fields it carries — a peer is
+/// entitled to a trailer longer than the head's own bound, and a parser that
+/// refuses it loses the answer that came with it.
+#[test]
+fn a_trailer_longer_than_the_bound_is_read_when_it_is_whole() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n"),
+        RecvStatus::Body
+    );
+    // a field past the bound, and the empty line that ends the section
+    let mut trailer = "Trailer-Field: ".to_string();
+    trailer.push_str(&"v".repeat(MAX_HEADER_FIELDS + 1));
+    trailer.push_str("\r\n\r\n");
+    assert_eq!(parser.recv(trailer.as_bytes()), RecvStatus::End);
+    assert_eq!(parser.body(), b"hello");
+}
+
 /// `MAX_CHUNK_LENGTH` is 4g, and a chunk that big is one this parser does
 /// not read: on a 32-bit target — `armv7` is one this repository builds —
 /// `size as usize` truncated it to 0, and `begin + size` either wrapped or

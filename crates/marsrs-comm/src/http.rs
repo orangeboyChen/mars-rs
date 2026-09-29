@@ -1119,18 +1119,16 @@ impl Parser {
             // Searched inside a window the size of the one the head's own
             // fields are bounded by, and not in the rest of the buffer: a
             // trailer with no empty line in it is a response that is never
-            // going to end, and an unbounded search keeps scanning — and
-            // keeps buffering — for a terminator that is not coming, which
-            // is a parser that grows without a limit on what a peer sends
-            // it. Over the bound it is an error, the way a head that never
-            // ends is one, and not a wait.
-            let buffered = self.buffer.len() - trailer_begin;
-            let window = buffered.min(MAX_HEADER_FIELDS);
-            let Some(trailer_end) = find(
-                &self.buffer[trailer_begin..trailer_begin + window],
-                CRLF_CRLF,
-            ) else {
-                if buffered > MAX_HEADER_FIELDS {
+            // going to end, so the wait for one is bounded and the search is
+            // not: see below.
+            let Some(trailer_end) = find(&self.buffer[trailer_begin..], CRLF_CRLF) else {
+                // The bound is on how long the parser waits for a terminator
+                // that has not come, and not on how much of the trailer it
+                // is willing to look at: a trailer section that arrived
+                // whole is taken whole, however long it is. Over the bound
+                // it is an error, the way a head that never ends is one, and
+                // not a wait.
+                if self.buffer.len() - trailer_begin > MAX_HEADER_FIELDS {
                     self.status = RecvStatus::BodyError;
                 }
                 return true;
