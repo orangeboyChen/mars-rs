@@ -33,6 +33,7 @@ public actual object StnLogic {
     }
 
     /** The app STN asks, which is the one [setApp] was handed. */
+    @Volatile
     private var app: ((Question) -> Answer)? = null
 
     public actual fun setApp(ask: ((Question) -> Answer)?) {
@@ -122,6 +123,7 @@ public actual object StnLogic {
     @JvmStatic
     public actual external fun noopTaskID(): Int
 
+    @JvmStatic
     public actual external fun createLonglink(config: LonglinkConfig): Boolean
 
     @JvmStatic

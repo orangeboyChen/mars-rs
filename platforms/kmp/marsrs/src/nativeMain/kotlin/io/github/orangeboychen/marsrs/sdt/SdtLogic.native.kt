@@ -52,8 +52,9 @@ import kotlinx.cinterop.toKString
  * The report is the one thing the C ABI hands back differently from the JNI
  * bridge: there the port calls `SdtLogic.reportSignalDetectResults` itself, here
  * it is [takeReport] the caller asks. So [runChecks] takes the report of a run
- * that went, keeps it for the [takeReport] that comes looking for it, and hands
- * it to [SdtLogic.ICallBack], which is what makes the two platforms one API.
+ * that went and hands it to [SdtLogic.ICallBack] — and when no callback is
+ * listening it puts it by for the [takeReport] that comes looking for it, which
+ * is what makes the two platforms one API.
  */
 @OptIn(ExperimentalForeignApi::class)
 public actual object SdtLogic {
@@ -61,13 +62,16 @@ public actual object SdtLogic {
     private var callBack: ICallBack? = null
 
     /**
-     * The reports of runs that are over and that nothing has taken yet.
+     * The reports of runs that are over, that no callback was listening for, and
+     * that nothing has taken yet.
      *
      * The C ABI has one buffer and [takeReport] empties it, so a report handed
-     * to the callback by way of a take is a report a later [takeReport] would
-     * find gone. What the common API promises is one document either way — the
-     * callback gets it, and an app that would rather ask keeps its own copy to
-     * ask for — which is what this list is: the copy the callback was handed.
+     * to a callback is a report a later [takeReport] would find gone. What the
+     * common API promises is one document either way — the callback gets it, and
+     * an app that would rather ask keeps its own copy to ask for. Which is why
+     * the copy is kept *only* while nobody is listening: an app that installed a
+     * callback is an app that never polls, and one complete document per run for
+     * the life of the process is a report nobody can ever take.
      */
     private val pending = mutableListOf<String>()
 
@@ -138,15 +142,19 @@ public actual object SdtLogic {
             // The report of the run, which is the one thing the C ABI has no
             // callback of its own for: taken here, and handed to the callback,
             // the way the JNI bridge hands it over from inside the run. The take
-            // empties the buffer it takes from, so the document is put by for
-            // the [takeReport] that comes looking for it afterwards — one run,
-            // one report, handed over twice.
+            // empties the buffer it takes from, so what a caller that asks
+            // instead gets is the copy put by below — and only when there is no
+            // callback to hand this one to.
             if (ran == MARS_SDT_OK) {
-                val report = takeReport()
-                if (report != null) {
-                    pending.add(report)
+                val report = drainReport()
+                val listener = callBack
+                if (listener == null) {
+                    if (report != null) {
+                        pending.add(report)
+                    }
+                } else {
+                    listener.reportSignalDetectResults(report)
                 }
-                callBack?.reportSignalDetectResults(report)
             }
             ran == MARS_SDT_OK
         } finally {
@@ -161,6 +169,17 @@ public actual object SdtLogic {
         if (pending.isNotEmpty()) {
             return pending.removeAt(0)
         }
+        return drainReport()
+    }
+
+    /**
+     * The document the C ABI is holding, or `null` when it is holding none.
+     *
+     * Not [takeReport], which hands over a report a run put by first: a run that
+     * reads this through that one would be handed the report of an *earlier*
+     * run whenever one was waiting.
+     */
+    private fun drainReport(): String? {
         var size = REPORT_BUFFER_SIZE
         while (size <= REPORT_BUFFER_LIMIT) {
             val (text, written) = memScoped {

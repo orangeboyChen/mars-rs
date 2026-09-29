@@ -27,6 +27,7 @@ public actual object SdtLogic {
     }
 
     /** The callback the report of a run is handed to, which is the app's. */
+    @Volatile
     private var callBack: ICallBack? = null
 
     /** What [SdtLogic]'s own KDoc says, which is where the words are. */
@@ -78,17 +79,29 @@ public actual object SdtLogic {
     @JvmName("plan")
     private external fun planNative(): IntArray?
 
+    /**
+     * What makes a run one at a time: the native side holds the process-wide
+     * diagnosis for as long as the run takes anyway, and [probe] is a field the
+     * run reads and not an argument it was handed — so two runs at once would
+     * let the second one's `finally` take the probe away from the first one's
+     * checks, and hand the first one the second one's network while it was at
+     * it. Waiting here is what the native lock would have made them do.
+     */
+    private val runLock = Any()
+
     public actual fun runChecks(networkType: Int, probe: IProbe): Boolean {
         // The four probes are asked of this class's own statics, from the native
         // call below this one on the stack, on this very thread: that is why the
         // probe is a field for as long as the run is and not an argument the
         // native side was handed. `finally` takes it away again even when a
         // probe threw.
-        this.probe = probe
-        return try {
-            nativeRunChecks(networkType)
-        } finally {
-            this.probe = null
+        synchronized(runLock) {
+            this.probe = probe
+            return try {
+                nativeRunChecks(networkType)
+            } finally {
+                this.probe = null
+            }
         }
     }
 
@@ -160,6 +173,7 @@ public actual object SdtLogic {
     }
 
     /** The probe of the run that is in flight: a field, because the bridge asks it of this class's statics. */
+    @Volatile
     private var probe: IProbe? = null
 
     /**

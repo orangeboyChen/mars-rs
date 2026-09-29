@@ -32,6 +32,12 @@ import kotlinx.coroutines.withContext
  * the `*_instance` call of the header, so a level, a mode or a size this [Xlog]
  * moves is this appender's and no other's.
  *
+ * The appender is the prefix's, though, and not the wrapper's: a second [Xlog]
+ * of one [namePrefix] is answered with the handle of the first, so [close]
+ * through either closes what both write through — which is why [isOpen] is
+ * asked against the handle this process has for the prefix and not against the
+ * handle this [Xlog] was opened with.
+ *
  * The strings of the C ABI are Kotlin strings at a call: cinterop maps the
  * `const char*` parameter of `mars_xlog.h` to `String?`, which is what lets the
  * optional ones be passed as `null` — the very thing the header's "NULL is
@@ -66,8 +72,12 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
     private var currentMode: AppenderMode = config.mode
 
+    init {
+        openHandles[namePrefix] = handle
+    }
+
     public actual val isOpen: Boolean
-        get() = handle != NO_HANDLE
+        get() = handle != NO_HANDLE && handle == openHandles[namePrefix]
 
     public actual var level: LogLevel
         get() = LogLevel.of(mars_xlog_get_level(requireOpen()))
@@ -122,6 +132,13 @@ public actual class Xlog actual constructor(config: XlogConfig) {
             return
         }
         mars_xlog_release_instance(namePrefix)
+        // The appender is the prefix's and not this wrapper's: the C ABI answers
+        // an [Xlog] of the same prefix with the same handle, so every one of
+        // them is closed with this one — and it is the record below, and not
+        // this [Xlog]'s own handle, that tells the others so.
+        if (openHandles[namePrefix] == handle) {
+            openHandles.remove(namePrefix)
+        }
         handle = NO_HANDLE
     }
 
@@ -145,8 +162,21 @@ public actual class Xlog actual constructor(config: XlogConfig) {
          */
         public actual fun open(config: XlogConfig): Xlog = Xlog(config)
 
-        /** What `mars_xlog_new_instance` answers for a config it opened nothing for. */
+        /**
+         * The handle of a closed [Xlog], and one `mars_xlog_new_instance` never
+         * answers: `0` is the process-wide appender, and a config the C ABI
+         * refuses is a negative `MARS_XLOG_ERR_*` code.
+         */
         const val NO_HANDLE = 0L
+
+        /**
+         * The handle of every appender this process has open, by the prefix it
+         * was opened with: what tells an [Xlog] that the appender it shares with
+         * another [Xlog] of the same [namePrefix] has been closed, which the
+         * handle alone cannot — `mars_xlog_new_instance` answers both with the
+         * same one, so a [close] through either is a [close] of both.
+         */
+        private val openHandles: MutableMap<String, Long> = mutableMapOf()
 
         /** `mars_xlog_set_console_log_instance` reads a non-zero `open` as on. */
         const val CONSOLE_LOG_OPEN = 1
@@ -178,8 +208,11 @@ public actual class Xlog actual constructor(config: XlogConfig) {
             native.cache_dir = config.cacheDir?.cstr?.ptr
             native.cache_days = config.cacheDays
             val handle = mars_xlog_new_instance(native.ptr, config.level.ordinal)
-            require(handle != NO_HANDLE) {
-                "mars_xlog_new_instance opened no appender for ${config.namePrefix} in ${config.logDir}"
+            // A refusal is a negative `MARS_XLOG_ERR_*` code and never `0`, which
+            // is the process-wide appender: an [Xlog] that read `0` as "no
+            // appender" would write through a logger it never opened.
+            require(handle > NO_HANDLE) {
+                "mars_xlog_new_instance answered $handle for ${config.namePrefix} in ${config.logDir}"
             }
             handle
         }
