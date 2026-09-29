@@ -1,0 +1,45 @@
+# The Flutter demo of mars-rs: one screen, one button, six records into a
+# `.xlog` file.
+#
+# This is the app's own `pubspec.yaml` and not a full Flutter project: the
+# platform folders — `android/`, `ios/`, `macos/` and the rest — are generated
+# by Flutter's own tool, and a repository that checked them in would be checking
+# in a hundred files that are one `flutter create` away. So:
+#
+#     flutter create --org io.github.orangeboychen --project-name marsrs_demo .
+#     flutter pub add marsrs_xlog path_provider
+#     flutter run
+#
+# `flutter create` leaves this file and `lib/` alone and writes the runners
+# around them. `README.md` next to this one says the same three lines again,
+# with what to look at when they are done.
+#
+# `publish_to: none` is what an app says: this is a program and not a package,
+# and `flutter pub publish` has nothing to do with it.
+
+name: marsrs_demo
+description: The Flutter demo of mars-rs: write a .xlog file and read it back.
+publish_to: none
+
+# The newest stable Dart SDK, and the floor the plugin's own is at.
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # The logging half of the port — the plugin an app that only logs takes.
+  # `marsrs` is the whole port and is the other line an app writes; an app takes
+  # one of the two and never both, because both carry the same native library.
+  marsrs_xlog: ^0.1.0-alpha.3
+  # Where the app may write: `getApplicationSupportDirectory()` is the
+  # directory the platform gives it, on Android and on iOS alike.
+  path_provider: ^2.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
