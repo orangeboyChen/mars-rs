@@ -1138,9 +1138,13 @@ impl NetCore {
     /// `ClearTasks()` — the long link's and the zombies' only while the core
     /// uses one, which is the C++'s `if (need_use_longlink_)`; the short
     /// link's are always cleared. The ids of what that threw away are handed
-    /// back, because a task a queue still holds is one a pass is still going
-    /// to end: an await answered "cancelled" here would be answered again
-    /// when that end comes, and one task would be two answers.
+    /// back, because an await is only ever answered by the end of the task it
+    /// waits for: a queue emptied here is never going to end that task, so the
+    /// await is answered as cancelled, or it stays `Pending` for the life of
+    /// the process. A queue this does *not* empty — the long link's and the
+    /// zombies' when the core was told not to use one — still ends its tasks
+    /// on a later pass, and the answer those ends carry is the true one: a
+    /// task that is still going to succeed is not one to answer as cancelled.
     pub fn clear_tasks(&mut self) -> Vec<u32> {
         let mut cleared = self.shortlink.task_ids();
         self.shortlink.clear_tasks();

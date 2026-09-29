@@ -488,8 +488,11 @@ impl StnLogic {
     ///
     /// What is cancelled is what the queues actually let go of, and not every
     /// await there is: a core that was told not to use a long link keeps the
-    /// tasks it is still holding and still ends them, so an await answered as
-    /// cancelled here would be answered a second time when that end came.
+    /// tasks it is still holding and still ends them, and the answer that end
+    /// carries is the true one — a task that is still going to succeed is not
+    /// one to answer as cancelled. What was thrown away is another matter: no
+    /// queue holds it any more, so no pass is ever going to end it, and an
+    /// await left alone here would stay `Pending` for the life of the process.
     pub fn clear_tasks(&mut self) {
         let Some(core) = self.core.as_mut() else {
             return;
