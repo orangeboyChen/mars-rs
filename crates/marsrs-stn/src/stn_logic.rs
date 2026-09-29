@@ -502,6 +502,24 @@ impl StnLogic {
         }
     }
 
+    /// `ReleaseNet` — the net core is let go of in place, which is what a host
+    /// that reached [`StnLogic::net_core`] asks for: the logic stays created,
+    /// and every call of it from then on finds a released core.
+    ///
+    /// The awaits of the tasks the core dropped are answered as cancelled, the
+    /// way [`StnLogic::clear_tasks`] answers them: nothing holds those tasks
+    /// any more, so nothing is going to end them. [`StnLogic::destroy`] takes
+    /// the core out instead, and answers every await there is and not just
+    /// those.
+    pub fn release(&mut self) {
+        let Some(core) = self.core.as_mut() else {
+            return;
+        };
+        for taskid in core.release() {
+            self.cancel(taskid);
+        }
+    }
+
     /// `DisableLongLink` — no task is put on a long link again.
     pub fn disable_long_link(&mut self) {
         if let Some(core) = self.core.as_mut() {

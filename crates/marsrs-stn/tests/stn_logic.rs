@@ -819,6 +819,20 @@ fn tasks_a_core_threw_away_are_answered_as_cancelled() {
     assert_cancelled(settled(awaited));
 }
 
+/// `ReleaseNet` leaves the logic created and empties every queue, so an await
+/// of a task it threw away has to be answered here too: a released core ends
+/// nothing, and a pass never comes for it again.
+#[test]
+fn tasks_a_released_core_threw_away_are_answered_as_cancelled() {
+    let mut host = Host::new();
+    host.bring_up(MAIN, LongLinkStatus::Connected);
+    let awaited = awaited(&mut host, 7);
+    host.logic.release();
+    assert!(host.logic.is_created(), "the core is still there");
+    assert!(!host.logic.has_task(7));
+    assert_cancelled(settled(awaited));
+}
+
 /// What a task that was dropped rather than run out ends with: `kEctCanceld`,
 /// and no error code of its own.
 fn assert_cancelled(outcome: Result<Answer, Failure>) {

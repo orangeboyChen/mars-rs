@@ -1895,12 +1895,20 @@ impl NetCore {
     }
 
     /// `ReleaseNet()` — the tasks are dropped and the links are gone.
-    pub fn release(&mut self) {
-        self.clear_tasks();
+    ///
+    /// The ids of what that threw away are handed back, the way
+    /// [`NetCore::clear_tasks`] hands them back and for the same reason: a
+    /// queue emptied here is never going to end those tasks, so an await of
+    /// one of them is answered as cancelled by whoever holds the awaits, or
+    /// stays `Pending` for the life of the process. [`crate::StnLogic::release`] is
+    /// that caller.
+    pub fn release(&mut self) -> Vec<u32> {
+        let cleared = self.clear_tasks();
         self.links.clear();
         self.default_link = None;
         self.timing_sync.cancel();
         self.released = true;
+        cleared
     }
 
     /// `IsAlreadyRelease()`.
