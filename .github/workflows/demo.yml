@@ -208,6 +208,14 @@ jobs:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
       - uses: dtolnay/rust-toolchain@stable
+      # The three targets the script builds on this host want linkers `apt`
+      # carries and the image does not: linuxArm64 and mingwX64 cross-compile,
+      # and `zstd-sys` compiles C through cc-rs, so it is the C compiler of
+      # each triple that has to be there and not only the Rust target.
+      - name: Install the cross toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu mingw-w64
       # `libmars_ffi.a` per Kotlin/Native target, which cinterop embeds into
       # the klib. `platforms/kmp` does not compile them — the release builds
       # them once per host — so without this the composite build below has
@@ -342,14 +350,13 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$DEVECO_HOME/bin:$DEVECO_HOME/tool/node/bin:$PATH"
-          for ohpm in "$DEVECO_HOME/bin/ohpm" "$DEVECO_HOME/ohpm/bin/ohpm" ohpm; do
-            if command -v "$ohpm" > /dev/null 2>&1; then
-              "$ohpm" install
-              exit 0
-            fi
-          done
-          echo "::error::no ohpm under $DEVECO_HOME"
-          exit 1
+          # Searched for and not named: where ohpm sits inside the DevEco
+          # archive is not the same in every release of the tools, and
+          # scripts/fetch_deveco_cli.sh keeps `ohpm/` without saying what is
+          # under it. `hvigorw` is found the same way and has no such problem.
+          ohpm="$(find "$DEVECO_HOME" -name ohpm -type f -perm -u+x -print -quit)"
+          test -n "$ohpm" || { echo "::error::no ohpm under $DEVECO_HOME"; exit 1; }
+          "$ohpm" install
       # The app, with DevEco's own ArkTS compiler — the only one in this
       # repository, and the one thing that answers whether the ArkTS still
       # builds against the module it imports.
