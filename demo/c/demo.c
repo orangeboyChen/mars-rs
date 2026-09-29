@@ -142,12 +142,13 @@ int main(void) {
         printf("writing into:  %s\n", dir);
     }
 
-    /* Today's file, asked of the port rather than rebuilt from the date. The
-     * `0` before `path` is the index: a day split for size has a second file
-     * beside the first, and the call answers `MARS_XLOG_ERR_NO_PATH` once the
-     * caller has walked past the last one. */
+    /* Today's file, asked of the appender rather than rebuilt from the date:
+     * the call names a day out of the handle's own prefix and directory. The `0`
+     * before `path` is the index: a day split for size has a second file beside
+     * the first, and the call answers `MARS_XLOG_ERR_NO_PATH` once the caller
+     * has walked past the last one. */
     char path[1024];
-    if (mars_xlog_getfilepath_from_timespan(0, PREFIX, LOGDIR, 0, path, sizeof path) > 0) {
+    if (mars_xlog_getfilepath_from_timespan_instance(xlog, 0, 0, path, sizeof path) > 0) {
         printf("log file:      %s\n", path);
     }
 
