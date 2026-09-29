@@ -47,7 +47,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::process::ExitCode;
 
-use marsrs_crypt::TAILER_LEN;
+use marsrs_crypt::{HEADER_LEN, TAILER_LEN};
 use marsrs_xlog::{bytes::AutoBuffer, decode_records, CompressMode, LogBuffer};
 
 /// `kBufferBlockLength` in `mars/xlog/src/appender.cc` (150 KiB), the size of
@@ -55,16 +55,18 @@ use marsrs_xlog::{bytes::AutoBuffer, decode_records, CompressMode, LogBuffer};
 const DEFAULT_REGION: usize = 150 * 1024;
 /// `ZSTD_c_compressionLevel` default of `XlogConfig` in the C++ appender.
 const DEFAULT_LEVEL: i32 = 6;
-/// The bytes one record needs of the region: its own length, the tailer byte,
-/// and the most a compressor adds to an input it cannot compress — zstd's
-/// `ZSTD_COMPRESSBOUND` is `len + len / 128 + 64`, and that also covers zlib's
-/// stored blocks, five bytes per 64 KiB.
+/// The bytes one record needs of the region: the block's header, its own
+/// length, the tailer byte, and the most a compressor adds to an input it
+/// cannot compress — zstd's `ZSTD_COMPRESSBOUND` is `len + len / 128 + 64`,
+/// and that also covers zlib's stored blocks, five bytes per 64 KiB.
 ///
 /// [`LogBuffer::write`] writes into the room there is and drops the rest, so
 /// the CLI has to know this before it writes and not after: a record that
-/// turned out not to fit would be truncated in silence.
+/// turned out not to fit would be truncated in silence. The header is one
+/// block's and not one record's, but a region sized for one record carries
+/// one block, so it is part of the room that record needs.
 fn room_for(len: usize) -> usize {
-    len + len / 128 + TAILER_LEN + 64
+    HEADER_LEN + len + len / 128 + TAILER_LEN + 64
 }
 
 const USAGE: &str = "\

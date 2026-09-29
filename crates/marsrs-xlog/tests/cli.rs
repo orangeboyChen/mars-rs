@@ -613,6 +613,51 @@ fn a_region_smaller_than_the_records_round_trips_them_anyway() {
     assert_eq!(out, std::fs::read(&one).expect("read the input"));
 }
 
+/// Bytes no compressor can shrink.
+///
+/// What the size of the region is raised to is computed from the length of the
+/// largest record and from the most a compressor adds to an input like that,
+/// so a record a compressor only makes longer is the one that asks the whole
+/// question: a region sized without the block's header is a region too short
+/// by [`HEADER_LEN`], and [`LogBuffer::write`] drops what does not fit without
+/// saying so.
+fn incompressible_record(len: usize) -> Vec<u8> {
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut bytes = Vec::with_capacity(len + 1);
+    while bytes.len() < len {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mixed = (state ^ (state >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        bytes.extend_from_slice(&mixed.to_le_bytes());
+    }
+    bytes.truncate(len);
+    bytes.push(b'\n');
+    bytes
+}
+
+#[test]
+fn a_record_a_compressor_cannot_shrink_is_written_whole() {
+    let dir = scratch("incompressible");
+    for mode in ["zlib", "zstd"] {
+        for len in [512usize, 2048] {
+            let record = incompressible_record(len);
+            let input = write(&dir, &format!("record-{mode}-{len}.txt"), &record);
+            let file = dir.join(format!("a-{mode}-{len}.xlog"));
+            let (ok, _, err) = run(&[
+                "encode",
+                &format!("--mode={mode}"),
+                &format!("--region={len}"),
+                &input.display().to_string(),
+                "-o",
+                &file.display().to_string(),
+            ]);
+            assert!(ok, "encode of a {len} byte record failed: {err}");
+            let (ok, out, err) = run(&["decode", &file.display().to_string()]);
+            assert!(ok, "decode of a {len} byte record failed: {err}");
+            assert_eq!(out, record, "the tail of a {len} byte record was dropped");
+        }
+    }
+}
+
 #[test]
 fn every_subcommand_and_option_has_a_short_spelling() {
     let dir = scratch("short");
