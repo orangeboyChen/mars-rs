@@ -73,10 +73,13 @@ site, and `xlog.log(level, tag, message)` is the short form that writes the empt
 ones, as Kotlin's does. Rust has no `#file` to fill them in with.
 
 `Xlog::open` for a prefix that is already open answers the appender that is open
-and not a second one, which is why `close()` on one `Xlog` closes what another
-`Xlog` of the same prefix writes through — on every platform of the port, and in
-C++ of `mars_xlog.hpp` too. An `Xlog` closes itself when it is dropped, so one
-held for the life of the process needs no `close()` at all.
+and not a second one, and the config that second call hands in is ignored —
+level, directory and all — because the appender was opened with the first one's.
+Which is why `close()` on one `Xlog` closes what another `Xlog` of the same
+prefix writes through: they share the appender, the file and the level. On every
+platform of the port, and in the C++ of `mars_xlog.hpp` too. An `Xlog` closes
+itself when it is dropped, so one held for the life of the process needs no
+`close()` at all.
 
 ## SwiftPM
 

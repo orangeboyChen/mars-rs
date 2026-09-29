@@ -66,8 +66,10 @@ xlog.flush_now();   // 返回时记录已经在磁盘上
 短写法，Kotlin 写的也是这样 —— Rust 没有 `#file` 可以填进去。
 
 已经开着的 prefix 再 `Xlog::open` 一次，回答的是那个已经开着的 appender 而不是第
-二个，所以一个 `Xlog` 上 `close()` 会关掉同 prefix 的另一个 `Xlog` 正在写的那个
-—— 这个移植的每个平台都是这样，`mars_xlog.hpp` 里的 C++ 也是。`Xlog` 被 drop 时
+二个，而且第二次传进去的 config 会被忽略 —— 级别、目录都在内 —— 因为那个 appender
+是用第一次的 config 开的。所以一个 `Xlog` 上 `close()` 会关掉同 prefix 的另一个
+`Xlog` 正在写的那个：它们共用同一个 appender、同一个文件、同一个级别。这个移植的每个
+平台都是这样，`mars_xlog.hpp` 里的 C++ 也是。`Xlog` 被 drop 时
 自己会关，所以一个活到进程结束的 `Xlog` 根本不需要 `close()`。
 
 ## SwiftPM

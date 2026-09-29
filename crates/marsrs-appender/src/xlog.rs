@@ -61,6 +61,12 @@ use crate::flush::Flush;
 /// has no `#file` to fill one in with. A record is dropped before anything is
 /// formatted when its level is below [`Xlog::level`], so a message that is
 /// expensive to build is worth an `if xlog.is_loggable(LogLevel::Debug)` first.
+///
+/// One thing two `Xlog`s of one prefix do *not* share: the four the appender has
+/// no getter for are a per-object answer, so `set_mode` on one moves the
+/// appender the other writes through and leaves the other's `mode()` saying what
+/// that other one last wrote itself. Kotlin and Swift answer the same way, and
+/// for the same reason — there is nothing to read the value back from.
 #[derive(Debug)]
 pub struct Xlog {
     /// The handle [`crate::category`] answered; `DEFAULT_HANDLE` once
@@ -82,7 +88,14 @@ impl Xlog {
     /// and cache file, all of them `config`'s.
     ///
     /// Asking for a prefix that is already open answers the appender that is
-    /// open and not a second one.
+    /// open and not a second one — and the `config` of that second call is
+    /// ignored, `level` included: what was opened with the first one's is what
+    /// both then write through, and what cannot be changed after an open (the
+    /// directory, the key, the compression) is the first one's for good. This is
+    /// the C++'s `NewXloggerInstance`, and it is what every platform of the port
+    /// says about itself: two `Xlog`s of one prefix write one file, share one
+    /// level, and are closed together. An app that wants two loggers in one
+    /// process gives them two prefixes.
     ///
     /// The level is beside the config and not in it, which is the one place
     /// this is not Kotlin's shape: `XLogConfig` is the C++'s `XLogConfig`, and

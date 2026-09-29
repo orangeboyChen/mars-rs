@@ -143,6 +143,42 @@ fn close_is_safe_twice_and_the_destructor_closes() {
     assert_eq!(get_xlogger_instance("dropped"), DEFAULT_HANDLE);
 }
 
+/// The C++'s `NewXloggerInstance`, and what every platform of the port says about
+/// itself: a prefix is one appender, so the second `Xlog::open` of one is the
+/// first one — and the config it hands in is ignored, level included. What that
+/// buys is that two modules of one app can each open the logger they write
+/// through without either of them holding a handle for the other; what it costs
+/// is that a config that differs is silently the first one's.
+#[test]
+fn a_second_open_of_one_prefix_answers_the_first_appender() {
+    let first_dir = tempfile::tempdir().unwrap();
+    let second_dir = tempfile::tempdir().unwrap();
+
+    let one = Xlog::open(config(first_dir.path(), "twice"), LogLevel::Warn).unwrap();
+    // The same prefix, a different directory and a different level: both are
+    // the first config's.
+    let two = Xlog::open(config(second_dir.path(), "twice"), LogLevel::Verbose).unwrap();
+
+    assert!(two.is_open());
+    assert_eq!(two.level(), Some(LogLevel::Warn));
+    assert_eq!(two.current_log_path(), Some(first_dir.path().to_path_buf()));
+
+    assert!(one.w("startup", "through the first"));
+    assert!(!two.d("startup", "dropped: the level is the first one's"));
+    assert!(two.w("startup", "through the second"));
+    one.flush_now();
+
+    let bytes = wrote(first_dir.path()).expect("the appender wrote one file");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("through the first"), "{text}");
+    assert!(text.contains("through the second"), "{text}");
+    assert!(!text.contains("dropped"), "{text}");
+
+    // Nothing was opened in the second config's directory: an appender is one
+    // per prefix, and the prefix was already taken.
+    assert!(files_first(second_dir.path()).is_none());
+}
+
 #[test]
 fn a_config_the_appender_refuses_is_an_error() {
     let xlog = Xlog::open(
