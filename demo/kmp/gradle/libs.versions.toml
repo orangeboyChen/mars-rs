@@ -15,13 +15,6 @@ kotlin = "2.4.20"
 # this build that has to move when a new one is out. The newest tag the Kotlin
 # Multiplatform packages were published from is `v0.1.0-alpha.3`; `0.1.0` is
 # what the documentation quotes and is not out yet.
-#
-# What this line is for, now that `settings.gradle.kts` substitutes
-# `platforms/kmp` for it: it is the coordinate a copy of this demo on its own
-# resolves, and not the one a build inside this repository compiles against. A
-# tag is a release behind the tree, so the two disagree — the package of the
-# newest one still answers `flush(sync = true)` — and only the first is this
-# line's to move.
 marsrs = "0.1.0-alpha.3"
 
 [libraries]

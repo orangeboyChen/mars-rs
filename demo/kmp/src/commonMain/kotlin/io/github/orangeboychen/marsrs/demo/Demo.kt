@@ -71,10 +71,8 @@ fun Xlog.writeDemoRecords() {
         d("startup", "the appender is $namePrefix")
     }
 
-    // `flushNow` waits for the write, so every record above is on disk when
-    // this returns; `flush()` is the same drain as a `suspend` call, and
-    // `signalFlush()` is the one that asks the writer thread and comes
-    // straight back. An app calls it before it reads the files, uploads them,
-    // or exits.
-    flushNow()
+    // `sync = true` waits for the write, so every record above is on disk when
+    // this returns. An app calls it before it reads the files, uploads them, or
+    // exits.
+    flush(sync = true)
 }
