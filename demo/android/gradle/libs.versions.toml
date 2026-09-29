@@ -1,0 +1,37 @@
+# The one place in this build the versions are written down.
+#
+# A version catalog is what a Gradle build written today starts from: the
+# coordinates are named here and the modules ask for them by name, so `marsrs`
+# below is bumped in one line and not in every `build.gradle.kts` that takes
+# it.
+
+[versions]
+# The newest stable Android Gradle Plugin; 9.5.0 is alpha only.
+agp = "9.4.1"
+# The release of the port this demo is written against — and the only line in
+# this build that has to move when a new one is out.
+#
+# Why an alpha and not the `0.1.0` the documentation quotes: JitPack builds an
+# artifact from a tag, and the tags there are today are `v0.1.0-alpha.1` through
+# `v0.1.0-alpha.3`, so `0.1.0` is a version that resolves to nothing yet and the
+# newest alpha is the newest thing an app can actually take. A run that answers
+# "401 from jitpack.io" is this line and not the build.
+marsrs = "0.1.0-alpha.3"
+
+[libraries]
+# The logging half — the AAR an app that only logs takes. `marsrs` is the whole
+# port (xlog, STN and SDT) and is the other line an app writes; an app takes one
+# of the two and never both, because both carry the same `libmarsrsxlog.so` and
+# an app with two opens one appender twice over the same files.
+#
+# The group is JitPack's own `com.github.<user>.<repo>` and not the
+# `io.github.orangeboychen.marsrs` the documentation quotes, because that is a
+# custom group and JitPack serves one only after the repository's owner has
+# claimed it — until then every coordinate under it answers 401, which is what
+# a build that takes the documented group reports. `jitpack.yml` publishes under
+# both names, so the two are the same AAR and the difference is only in what
+# JitPack will hand out today.
+marsrs-xlog = { module = "com.github.orangeboyChen.mars-rs:xlog", version.ref = "marsrs" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }

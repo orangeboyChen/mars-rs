@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The whole UI of the demo: where the file went, and a button that writes one
+  more record into it. Deliberately the framework's own widgets and not
+  anything of AndroidX — an app that takes the logging half of the port does
+  not need a UI library to do it, and a demo that pulls one in is a demo about
+  the library and not about the port.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:id="@+id/status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/opening"
+        android:textAppearance="@android:style/TextAppearance.Material.Body1" />
+
+    <Button
+        android:id="@+id/write"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="@string/write" />
+
+</LinearLayout>
