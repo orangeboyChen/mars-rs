@@ -315,8 +315,11 @@ fn mark_missing_seq(out: &mut Vec<u8>, data: &[u8], offset: usize, lastseq: &mut
         *lastseq = seq;
     }
     // Widened, so that the record behind a sequence of `u16::MAX` is compared
-    // against 65536 and not against a wrapped 0.
-    if seq == 0 || seq == 1 || previous == 0 || u32::from(seq) == u32::from(previous) + 1 {
+    // against 65536 and not against a wrapped 0. `<=` and not `==`: a
+    // sequence that went *backwards* — a file whose records are not in the
+    // order they were written — is not a hole either, and `6-1 is missing`
+    // names nothing at all.
+    if seq == 0 || seq == 1 || previous == 0 || u32::from(seq) <= u32::from(previous) + 1 {
         return;
     }
     out.extend_from_slice(
