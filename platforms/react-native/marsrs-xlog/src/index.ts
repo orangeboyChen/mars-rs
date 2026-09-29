@@ -328,6 +328,47 @@ export class Xlog {
     await NativeXlog.flush(this.namePrefix);
   }
 
+  /** `mars_xlog_current_log_path_instance`: the file this appender is writing to,
+   * or `undefined` when it has none open — the first record of the day is what
+   * opens one.
+   *
+   * A day is one file, so this is the path an app hands to something that reads
+   * the log while it is being written. What an app that uploads a whole day asks
+   * for is [`logFiles`]. */
+  get currentLogPath(): string | undefined {
+    if (!this.open) {
+      return undefined;
+    }
+    return NativeXlog.currentLogPath(this.namePrefix);
+  }
+
+  /** `mars_xlog_getfilepath_from_timespan_instance`: the log files of `daysAgo`
+   * days ago that are *there* — what an app that uploads yesterday's opens. `[]`
+   * when the directory holds none of that day's. `0` is today, `1` is yesterday,
+   * and so on.
+   *
+   * This is a day of files and not the file being written: what `currentLogPath`
+   * answers is one, and this is this appender's own prefix and directory. */
+  logFiles(daysAgo: number): string[] {
+    if (!this.open) {
+      return [];
+    }
+    return NativeXlog.logFiles(this.namePrefix, daysAgo);
+  }
+
+  /** `mars_xlog_make_logfile_name_instance`: the paths of the log files of
+   * `daysAgo` days ago whether or not they are *there yet* — the name an app
+   * that is about to write, or that is naming a file to someone else, asks for.
+   *
+   * A day's answer can be two where [`logFiles`] answers one, when a cache dir
+   * is given and the file is there. */
+  logFileNames(daysAgo: number): string[] {
+    if (!this.open) {
+      return [];
+    }
+    return NativeXlog.logFileNames(this.namePrefix, daysAgo);
+  }
+
   /** `mars_xlog_release_instance`: closes the appender `Xlog.open` made.
    * Nothing is closed twice: an `Xlog` that is already closed answers `false`
    * from `isOpen` and drops what it is asked to write — and an appender two

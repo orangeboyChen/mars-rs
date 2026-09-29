@@ -112,6 +112,40 @@ internal final class Xlog: NSObject {
         }
     }
 
+    /// `mars_xlog_current_log_path_instance`: the file this appender is writing
+    /// to, or `nil` before the first record of the day opens one.
+    ///
+    /// A day is one file, so this is the path an app hands to something that
+    /// reads the log while it is being written.
+    @objc(currentLogPath:)
+    internal func currentLogPath(of namePrefix: String) -> String? {
+        guard let handle = handles[namePrefix] else {
+            return nil
+        }
+        return path { out, len in
+            mars_xlog_current_log_path_instance(handle, out, len)
+        }
+    }
+
+    /// `mars_xlog_getfilepath_from_timespan_instance`: the log files of
+    /// `daysAgo` days ago that are *there* — what an app that uploads
+    /// yesterday's opens. `0` is today, `1` is yesterday, and so on.
+    @objc(logFiles:daysAgo:)
+    internal func logFiles(of namePrefix: String, daysAgo: Double) -> [String] {
+        dayPaths(of: namePrefix, daysAgo: daysAgo) { handle, timespan, index, out, len in
+            mars_xlog_getfilepath_from_timespan_instance(handle, timespan, index, out, len)
+        }
+    }
+
+    /// `mars_xlog_make_logfile_name_instance`: the paths of the log files of
+    /// `daysAgo` days ago, whether or not they are there yet.
+    @objc(logFileNames:daysAgo:)
+    internal func logFileNames(of namePrefix: String, daysAgo: Double) -> [String] {
+        dayPaths(of: namePrefix, daysAgo: daysAgo) { handle, timespan, index, out, len in
+            mars_xlog_make_logfile_name_instance(handle, timespan, index, out, len)
+        }
+    }
+
     /// `mars_xlog_is_enabled_for`: whether a record of the level would be
     /// written, which an app asks before it builds a message that is expensive
     /// to build.
@@ -298,4 +332,41 @@ internal final class Xlog: NSObject {
     private func int(_ config: [AnyHashable: Any], _ key: String, _ fallback: Int32) -> Int32 {
         (config[key] as? NSNumber)?.int32Value ?? fallback
     }
+    /// What `read` writes into the buffer it is handed, as a string; `nil` when
+    /// it wrote nothing — a negative code, or a path of no length. A path never
+    /// fills the buffer, and a symbol that answers a length rather than a
+    /// pointer is the C ABI's way of saying the caller decides how much it can
+    /// hold.
+    private func path(of read: (UnsafeMutablePointer<CChar>, UInt32) -> Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: 1024)
+        let written = read(&buffer, UInt32(buffer.count))
+        guard written > 0 else {
+            return nil
+        }
+        return String(cString: buffer)
+    }
+
+    /// The paths of one day, walked index by index until the symbol answers that
+    /// there is nothing at that index: the list the C++ fills a `std::vector`
+    /// with, asked one at a time.
+    private func dayPaths(
+        of namePrefix: String,
+        daysAgo: Double,
+        at symbol: (Int64, Int32, UInt32, UnsafeMutablePointer<CChar>, UInt32) -> Int32
+    ) -> [String] {
+        guard let handle = handles[namePrefix] else {
+            return []
+        }
+        var walked: [String] = []
+        var index: UInt32 = 0
+        while let found = path(of: { out, len in
+            symbol(handle, Int32(daysAgo), index, out, len)
+        }) {
+            walked.append(found)
+            index += 1
+        }
+        return walked
+    }
+
+
 }

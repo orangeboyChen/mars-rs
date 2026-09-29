@@ -52,6 +52,19 @@ export interface Spec extends TurboModule {
    * answer, only a drain to be over. */
   flush(namePrefix: string): Promise<void>;
 
+  /** `mars_xlog_current_log_path_instance`: the file this appender is writing to,
+   * or `undefined` when it has none open yet — the first record of the day is
+   * what opens one. */
+  currentLogPath(namePrefix: string): string | undefined;
+
+  /** `mars_xlog_getfilepath_from_timespan_instance`: the day's files that are
+   * there — `0` is today, `1` is yesterday. */
+  logFiles(namePrefix: string, daysAgo: number): string[];
+
+  /** `mars_xlog_make_logfile_name_instance`: the day's names, whether or not the
+   * files are there yet. */
+  logFileNames(namePrefix: string, daysAgo: number): string[];
+
   /** `mars_xlog_set_level_instance`. */
   setLevel(namePrefix: string, level: number): void;
 

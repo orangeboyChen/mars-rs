@@ -30,8 +30,10 @@
 
 package io.github.orangeboychen.marsrs.xlog.reactnative
 
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReadableMap
 import io.github.orangeboychen.marsrs.xlog.AppenderMode
 import io.github.orangeboychen.marsrs.xlog.CompressMode
@@ -106,6 +108,19 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
     override fun log(namePrefix: String, level: Double, tag: String, message: String) {
         appender(namePrefix)?.log(LogLevel.of(level.toInt()), tag, message)
     }
+
+    /** `Xlog.currentLogPath`: the file this appender is writing to, or `null`
+     * before the first record of the day opens one. */
+    override fun currentLogPath(namePrefix: String): String? =
+        appender(namePrefix)?.currentLogPath
+
+    /** `Xlog.logFiles`: the day's files that are there. */
+    override fun logFiles(namePrefix: String, daysAgo: Double): ReadableArray? =
+        appender(namePrefix)?.logFiles(daysAgo.toLong())?.let { Arguments.fromList(it) }
+
+    /** `Xlog.logFileNames`: the day's names, whether or not they are there yet. */
+    override fun logFileNames(namePrefix: String, daysAgo: Double): ReadableArray? =
+        appender(namePrefix)?.logFileNames(daysAgo.toLong())?.let { Arguments.fromList(it) }
 
     /** `Xlog.isLoggable`: whether a record of the level would be written. */
     override fun isLoggable(namePrefix: String, level: Double): Boolean =
