@@ -474,7 +474,9 @@ fn a_ping_that_did_not_come_back_has_no_status() {
     assert!(profile.rtt_str.is_empty());
     // a run that came back failed has no status to take a round trip from
     assert_eq!(profile.rtt, 0);
-    // a run that was started without one asks for no timeout at all
+    // and it is filed under the item it was made for, which is the long-link
+    // host's ip and not `DEFAULT_PING_HOST`: the ip is an empty string only
+    // when the item has none
     assert_eq!(profile.ip, "1.2.3.4");
 }
 
