@@ -195,14 +195,24 @@ impl PackerUnpacked {
 
 /// `Packer_Pack` — the header, then the URL, then the body.
 ///
-/// The URL is cut at [`MAX_URL_LEN`] bytes (`strnlen(_url, 128)`), which the
-/// C++ only asserts is short enough for the header to hold it. With `do_hash`
+/// The URL is cut at [`MAX_URL_LEN`] bytes and at the first NUL in it, which
+/// is what `strnlen(_url, 128)` reads; the C++ only asserts that what it
+/// read is short enough for the header to hold it. With `do_hash`
 /// the hash is the Adler-32 of the URL read on over the body — the C++ seeds
 /// the second call with the first one's answer, which is [`adler32_seeded`] —
 /// and without it the hash stays `0`, which `packer_unpack` then does not
 /// check.
 pub fn packer_pack(url: &str, sequence: u32, data: &[u8], do_hash: bool) -> Vec<u8> {
-    let url = &url.as_bytes()[..url.len().min(MAX_URL_LEN)];
+    // Both halves of `strnlen(_url, 128)`: 128 bytes, or up to the first
+    // NUL, whichever comes first. A `&str` can hold a NUL where the C++'s
+    // `char*` cannot get past one, so this is the one reading the two can
+    // differ on, and no URL of mars' is long enough for the other.
+    let bytes = url.as_bytes();
+    let cut = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    let url = &bytes[..cut.min(MAX_URL_LEN)];
 
     let head_length = HEAD_LEN as u8;
     let url_length = url.len() as u8;
