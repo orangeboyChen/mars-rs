@@ -11,7 +11,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub use std::sync::atomic;
 /// `comm::Condition` — the condition variable of `std::sync`.
@@ -295,7 +295,7 @@ pub struct Thread {
     name: Option<String>,
     handle: Option<thread::JoinHandle<()>>,
     running: Arc<AtomicBool>,
-    cancel: Arc<AtomicBool>,
+    cancel: Arc<CancelSignal>,
 }
 
 impl Thread {
@@ -305,7 +305,7 @@ impl Thread {
             name: name.map(str::to_owned),
             handle: None,
             running: Arc::new(AtomicBool::new(false)),
-            cancel: Arc::new(AtomicBool::new(false)),
+            cancel: Arc::new(CancelSignal::new()),
         }
     }
 
@@ -319,12 +319,8 @@ impl Thread {
             return false;
         }
         self.detach_previous();
-        self.cancel.store(false, Ordering::SeqCst);
-        self.spawn(|cancel, _running| {
-            let _ = cancel;
-            op();
-        })
-        .is_ok()
+        self.cancel.reset();
+        self.spawn(|_cancel, _running| op()).is_ok()
     }
 
     /// `Thread::start_after(after)` — run once, `after` milliseconds from now.
@@ -337,10 +333,10 @@ impl Thread {
             return false;
         }
         self.detach_previous();
-        self.cancel.store(false, Ordering::SeqCst);
+        self.cancel.reset();
         let cancel = Arc::clone(&self.cancel);
         self.spawn(move |_, _| {
-            if !sleep_until_cancelled(Duration::from_millis(after_ms), &cancel) {
+            if !cancel.wait(Duration::from_millis(after_ms)) {
                 return;
             }
             op();
@@ -358,19 +354,19 @@ impl Thread {
             return false;
         }
         self.detach_previous();
-        self.cancel.store(false, Ordering::SeqCst);
+        self.cancel.reset();
         let cancel = Arc::clone(&self.cancel);
         let mut op = op;
         self.spawn(move |_, _| {
-            if !sleep_until_cancelled(Duration::from_millis(after_ms), &cancel) {
+            if !cancel.wait(Duration::from_millis(after_ms)) {
                 return;
             }
             loop {
-                if cancel.load(Ordering::SeqCst) {
+                if cancel.is_cancelled() {
                     break;
                 }
                 op();
-                if !sleep_until_cancelled(Duration::from_millis(period_ms), &cancel) {
+                if !cancel.wait(Duration::from_millis(period_ms)) {
                     break;
                 }
             }
@@ -380,12 +376,12 @@ impl Thread {
 
     /// `Thread::cancel_after()` — abort a pending delayed start.
     pub fn cancel_after(&mut self) {
-        self.cancel.store(true, Ordering::SeqCst);
+        self.cancel.cancel();
     }
 
     /// `Thread::cancel_periodic()` — stop after the current iteration.
     pub fn cancel_periodic(&mut self) {
-        self.cancel.store(true, Ordering::SeqCst);
+        self.cancel.cancel();
     }
 
     /// `Thread::isruning()`.
@@ -415,7 +411,7 @@ impl Thread {
 
     fn spawn<F>(&mut self, body: F) -> std::io::Result<()>
     where
-        F: FnOnce(Arc<AtomicBool>, Arc<AtomicBool>) + Send + 'static,
+        F: FnOnce(Arc<CancelSignal>, Arc<AtomicBool>) + Send + 'static,
     {
         let running = Arc::clone(&self.running);
         let cancel = Arc::clone(&self.cancel);
@@ -446,17 +442,67 @@ impl Thread {
     }
 }
 
-/// Sleeps in slices so a cancellation is picked up; `false` when cancelled.
-fn sleep_until_cancelled(duration: Duration, cancel: &AtomicBool) -> bool {
-    const SLICE: Duration = Duration::from_millis(1);
-    let mut left = duration;
-    while !cancel.load(Ordering::SeqCst) {
-        if left <= SLICE {
-            thread::sleep(left);
-            break;
+/// What a delayed or periodic start waits on: the flag [`Thread::cancel_after`]
+/// and [`Thread::cancel_periodic`] set, and the condition the waiter sleeps
+/// on — the C++'s `condtime`.
+///
+/// The wait is one `wait_timeout` on a [`Condition`] and not a run of short
+/// sleeps, which is what a start thirty seconds from now used to cost: a
+/// wake-up every millisecond, thirty thousand of them, and a cancellation
+/// that went unnoticed for up to a millisecond after it was asked for.
+#[derive(Debug)]
+struct CancelSignal {
+    cancelled: AtomicBool,
+    lock: Mutex<()>,
+    wake: Condition,
+}
+
+impl CancelSignal {
+    fn new() -> Self {
+        Self {
+            cancelled: AtomicBool::new(false),
+            lock: Mutex::new(()),
+            wake: Condition::new(),
         }
-        thread::sleep(SLICE);
-        left -= SLICE;
     }
-    !cancel.load(Ordering::SeqCst)
+
+    /// `false` when the wait was cancelled, whether that happened before it
+    /// began or while it was being waited out.
+    fn wait(&self, duration: Duration) -> bool {
+        let deadline = Instant::now() + duration;
+        // The flag is read under the lock, and a canceller takes the lock
+        // before it notifies: a cancel that lands between the read and the
+        // wait is therefore one the wait knows about before it sleeps.
+        let mut guard = self.lock.lock().unwrap();
+        while !self.cancelled.load(Ordering::SeqCst) {
+            let now = Instant::now();
+            if deadline <= now {
+                break;
+            }
+            // A wake-up that came early — spurious, or notified by a start
+            // that has since been cancelled — is waited out again, so what
+            // is left of the wait is what is left of it.
+            let (next, _) = self.wake.wait_timeout(guard, deadline - now).unwrap();
+            guard = next;
+        }
+        !self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// `Thread::cancel_after()` / `Thread::cancel_periodic()`.
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        let _guard = self.lock.lock().unwrap();
+        self.wake.notify_all();
+    }
+
+    /// What a new start does with it.
+    fn reset(&self) {
+        self.cancelled.store(false, Ordering::SeqCst);
+    }
+
+    /// Whether a cancellation is pending, which a periodic start asks before
+    /// it runs its next iteration.
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
 }
