@@ -95,10 +95,13 @@ public expect object SdtLogic {
          * The JSON of the report.
          *
          * This is called on the thread that ran the checks, which is the thread
-         * that called [runChecks], and it is called *inside* that call: a
-         * diagnosis holds one process-wide lock for the whole run, so nothing in
-         * [SdtLogic] may be called from here — the call would not come back. Take
-         * what is handed over and hand it to another thread.
+         * that called [runChecks], and it is called before that call comes back
+         * — but after the run itself is over and the diagnosis has been let go,
+         * which is the difference that matters: [isChecking], [plan] and
+         * [takeReport] are questions an app asks from here as a matter of
+         * course, and every one of them is answered. What a callback should
+         * still not do is start a second run on this thread: it would run its
+         * checks inside the [runChecks] the caller is still waiting on.
          */
         public fun reportSignalDetectResults(resultsJson: String?)
     }

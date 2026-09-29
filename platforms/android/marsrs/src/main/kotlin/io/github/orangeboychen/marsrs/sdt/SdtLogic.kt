@@ -167,10 +167,13 @@ object SdtLogic {
          * hands its own `SdtLogic.ICallBack`.
          *
          * This is called on the thread that ran the checks, which is the thread
-         * that called [runChecks], and it is called *inside* that call: a
-         * diagnosis holds one process-wide lock for the whole run, so nothing
-         * in this class may be called from here — the call would not come back.
-         * Take what is handed over and hand it to another thread.
+         * that called [runChecks], and it is called before that call comes
+         * back — but after the run has let the diagnosis go, which is the
+         * difference that matters: [isChecking], [plan] and [startActiveCheck]
+         * are questions an app asks from here as a matter of course, and every
+         * one of them is answered. What a handler should still not do is start
+         * a second run on this thread: it would run its checks inside the
+         * [runChecks] the caller is still waiting on.
          */
         fun reportSignalDetectResults(resultsJson: String?)
     }
