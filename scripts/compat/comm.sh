@@ -4,11 +4,12 @@
 #   sh scripts/compat/comm.sh
 #
 # `stn.sh` proves the long link's wire format, `shortlink.sh` the short link's
-# and `sdt.sh` the URL of an HTTP check. This one proves the two that sit under
+# and `sdt.sh` the URL of an HTTP check. This one proves the three that sit under
 # all of them: `mars/comm/basepacker.cc` — the package the long link spoke
 # before `longlink_packer.cc` took it over, and the `Simple*` pair of a length
-# and a body — and `mars/comm/adler32.c`, the hash the first one puts over its
-# URL and its body.
+# and a body — `mars/comm/adler32.c`, the hash the first one puts over its URL
+# and its body, and `mars/comm/strutil.cc`, the string helpers every one of them
+# spells its URL with.
 #
 # A case asks three things:
 #
@@ -33,6 +34,16 @@
 #   The C++ hands the caller `_packlen - sizeof(T)` bytes, which has wrapped
 #   around, and the port refuses. No case feeds one in: there is nothing for the
 #   C++ to read and still be alive to answer.
+#
+# Three more belong to `strutil`, and no case asks for any of them either:
+#
+# - `Str2Hex` of text that is not hex. The C++ reads every two characters with
+#   `strtol`, which answers `0` for a pair it cannot read, and the port answers
+#   "there are no bytes" — which is the answer a caller can act on.
+# - `ci_find_substr` with a `pos` past the end of the haystack. The C++ starts
+#   its `std::search` at `str.begin() + pos`, which is not an iterator of the
+#   string at all, and the port answers "not found".
+# - `Str2Hex` of more than 1024 characters, which the C++ asserts on.
 #
 # `adler32` has one case it cannot have, and it is why the seeded ones below
 # start from a real checksum: the C++ reduces a seed whose two halves are not
@@ -62,6 +73,7 @@ if [ ! -x "$CPP" ]; then
     MARS_SRCS="$UP/mars/comm/basepacker.cc \
                $UP/mars/comm/autobuffer.cc \
                $UP/mars/comm/ptrbuffer.cc \
+               $UP/mars/comm/strutil.cc \
                $UP/mars/comm/unix/xlogger_threadinfo.cc \
                $UP/mars/comm/xlogger/xlogger.cc \
                $UP/mars/comm/xlogger/xlogger_category.cc" \
@@ -136,6 +148,7 @@ compare_readings() {
 # `exp-<name>.txt` next to it, and the bytes a `raw` case reads are in
 # `in-<name>.bin`.
 python3 - "$WORK" <<'PY'
+import hashlib
 import os
 import struct
 import sys
@@ -328,6 +341,120 @@ for name, kind, data, line in [
 
 with open(os.path.join(work, "simple-unpack.txt"), "w") as f:
     f.write("\n".join(rows) + "\n")
+
+# --- strutil: the string helpers, one line each. ---------------------------
+# A row is `name fn data arg pos`: `--data` is the bytes of the string and
+# `--arg` the second string, both hex so that a byte the shell would eat — a
+# tab, a newline, a backslash — is still one a case can name.
+def h(text):
+    return text.encode().hex()
+
+
+def url_encode(text):
+    out = []
+    for byte in text.encode():
+        ch = chr(byte)
+        if ch.isascii() and (ch.isalnum() or ch in ".-_*"):
+            out.append(ch)
+        elif byte == 0x20:
+            out.append("+")
+        else:
+            out.append("%%%02X" % byte)
+    return "".join(out)
+
+
+SPACE = " \t\n\x0b\x0c\r"
+
+
+def trim(text):
+    return text.strip(SPACE)
+
+
+def split_token(text, delimiters):
+    tokens = []
+    for token in "".join(" " if c in delimiters else c for c in text).split(" "):
+        if token:
+            tokens.append(token)
+    return "|".join(tokens)
+
+
+def file_name_from_path(path):
+    pos = path.rfind("\\")
+    if pos < 0:
+        pos = path.rfind("/")
+    if pos < 0 or pos + 1 >= len(path):
+        return path
+    return path[pos + 1:]
+
+
+def ci_find_substr(haystack, needle, pos):
+    at = haystack.lower().find(needle.lower(), pos)
+    return str(at) if 0 <= at else "-1"
+
+
+rows = []
+for name, fn, data, arg, pos in [
+    ("a-url-of-nothing", "url_encode", "", None, None),
+    ("a-url-and-its-query", "url_encode", "a b?c=d&e", None, None),
+    ("the-bytes-that-stay", "url_encode", "AZaz09.-_*", None, None),
+    ("a-url-that-is-not-ascii", "url_encode", "é", None, None),
+    ("whitespace-on-both-ends", "trim", " \t\n\x0b\x0c\rhello\r\n", None, None),
+    ("nothing-but-whitespace", "trim", "    ", None, None),
+    ("no-whitespace-to-trim", "trim", "hello", None, None),
+    ("the-case-of-a-mixed-word", "lower", "MiXeD-123", None, None),
+    ("the-case-of-a-mixed-word-upper", "upper", "MiXeD-123", None, None),
+    ("a-prefix-that-is-one", "starts_with", "mars-rs", "mars", None),
+    ("a-prefix-that-is-not", "starts_with", "mars-rs", "rs", None),
+    ("a-suffix-that-is-one", "ends_with", "mars-rs", "rs", None),
+    ("a-suffix-that-is-not", "ends_with", "mars-rs", "mars", None),
+    ("the-tokens-of-a-request-line", "split_token", "GET /cgi HTTP/1.1", " ", None),
+    ("runs-of-delimiters-are-one", "split_token", "a,,b;c", ",;", None),
+    ("every-default-delimiter", "split_token", "a:b,c;d e", " \t\n\r;:,.?", None),
+    # `--data` of a `hex2str` is bytes and not text, so the case is the three
+    # bytes `00 ff 10` and the answer is the hex of them.
+    ("bytes-become-hex", "hex2str", None, None, None),
+    ("hex-becomes-bytes", "str2hex", "00ff10", None, None),
+    ("a-path-of-two-slashes", "file_name_from_path", "a/b/c", None, None),
+    ("a-path-of-a-backslash", "file_name_from_path", "a\\b/c", None, None),
+    # a path that ends in a separator is one with no name behind it, and the
+    # answer is the path itself on both sides
+    ("a-path-that-ends-in-one", "file_name_from_path", "a/b/", None, None),
+    ("a-needle-of-another-case", "ci_find_substr", "MarsRS", "rs", 0),
+    ("a-needle-that-is-not-there", "ci_find_substr", "MarsRS", "zz", 0),
+    ("a-search-that-starts-later", "ci_find_substr", "MarsRS", "rs", 3),
+    ("the-md5-of-nothing", "md5", "", None, None),
+    ("the-md5-of-mars", "md5", "mars", None, None),
+]:
+    if fn == "hex2str":
+        row_data, line = "00ff10", "00ff10"
+    elif fn == "str2hex":
+        row_data, line = h(data), bytes.fromhex(data).hex()
+    elif fn == "url_encode":
+        row_data, line = h(data), url_encode(data)
+    elif fn == "trim":
+        row_data, line = h(data), trim(data)
+    elif fn == "lower":
+        row_data, line = h(data), data.lower()
+    elif fn == "upper":
+        row_data, line = h(data), data.upper()
+    elif fn == "starts_with":
+        row_data, line = h(data), "1" if data.startswith(arg) else "0"
+    elif fn == "ends_with":
+        row_data, line = h(data), "1" if data.endswith(arg) else "0"
+    elif fn == "split_token":
+        row_data, line = h(data), split_token(data, arg)
+    elif fn == "file_name_from_path":
+        row_data, line = h(data), file_name_from_path(data)
+    elif fn == "ci_find_substr":
+        row_data, line = h(data), ci_find_substr(data, arg, pos)
+    else:
+        row_data, line = h(data), hashlib.md5(data.encode()).hexdigest()
+
+    row(name, fn, row_data, "" if arg is None else h(arg), "" if pos is None else pos)
+    expect(name, line)
+
+with open(os.path.join(work, "strutil.txt"), "w") as f:
+    f.write("\n".join(rows) + "\n")
 PY
 
 # --- adler32 -----------------------------------------------------------------
@@ -429,6 +556,41 @@ while read -r name kind; do
     compare_readings "$name" "simple unpack --kind=$kind" "$WORK/in-$name.bin"
     printf '| %s | %s | %s |\n' "$name" "$CROSS" "$EXPECTED"
 done < "$WORK/simple-unpack.txt"
+
+# --- strutil -----------------------------------------------------------------
+# Nothing is written here: what a case compares is the one line each side
+# answers, against the other's and against the one Python wrote. `--data` and
+# `--arg` are hex, so a byte the shell would eat — a tab, a newline, a
+# backslash — is still one a case can name.
+printf '\n### strutil\n\n| case | cross-read | expected |\n|---|---|---|\n'
+while read -r name fn data arg pos; do
+    if [ "$data" = "-" ]; then data=""; fi
+    if [ "$arg" = "-" ]; then arg=""; fi
+    if [ "$pos" = "-" ]; then pos=0; fi
+
+    "$RUST" strutil "$fn" --data="$data" --arg="$arg" --pos="$pos" > "$WORK/$name-rust.txt"
+    "$CPP" strutil "$fn" --data="$data" --arg="$arg" --pos="$pos" > "$WORK/$name-cpp.txt"
+
+    if cmp -s "$WORK/$name-rust.txt" "$WORK/$name-cpp.txt"; then
+        CROSS=ok
+    else
+        CROSS=FAILED
+        FAILED=$((FAILED + 1))
+        diff "$WORK/$name-rust.txt" "$WORK/$name-cpp.txt" || true
+    fi
+
+    EXPECTED=ok
+    for side in rust cpp; do
+        if ! cmp -s "$WORK/$name-$side.txt" "$WORK/exp-$name.txt"; then
+            EXPECTED=FAILED
+            FAILED=$((FAILED + 1))
+            echo "$name: $side answered $(cat "$WORK/$name-$side.txt")" >&2
+            echo "$name: want $(cat "$WORK/exp-$name.txt")" >&2
+        fi
+    done
+
+    printf '| %s | %s | %s |\n' "$name" "$CROSS" "$EXPECTED"
+done < "$WORK/strutil.txt"
 
 if [ "$FAILED" -ne 0 ]; then
     echo "$FAILED check(s) failed" >&2

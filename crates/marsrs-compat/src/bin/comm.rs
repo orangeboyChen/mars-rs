@@ -1,6 +1,7 @@
 //! CLI front-end for the comm cross-read tests: the Rust of
-//! `mars/comm/basepacker.cc` and of `mars/comm/adler32.c`, driven the way
-//! `scripts/compat/upstream_comm.cpp` drives the C++.
+//! `mars/comm/basepacker.cc`, of `mars/comm/adler32.c` and of
+//! `mars/comm/strutil.cc`, driven the way `scripts/compat/upstream_comm.cpp`
+//! drives the C++.
 //!
 //! ```text
 //! comm-compat adler32 --data=HEX [--seed=N]
@@ -8,7 +9,14 @@
 //! comm-compat packer unpack --in=PATH
 //! comm-compat simple pack --kind=short|int --data=HEX --out=PATH
 //! comm-compat simple unpack --kind=short|int --in=PATH
+//! comm-compat strutil FN --data=HEX [--arg=HEX] [--pos=N]
 //! ```
+//!
+//! `strutil` is the string helpers: `--data` is the bytes of the string, hex
+//! so that a byte the shell would eat is still one a case can name, and
+//! `--arg` is the second string — the delimiters of `split_token`, the prefix
+//! or suffix, the needle. One line comes back, and it is the same line the
+//! C++ half prints for the same call.
 //!
 //! `packer unpack` and `simple unpack` print one line: the `int` the C++
 //! answers, then what it read out of the package. A code that is not `0` is a
@@ -27,6 +35,7 @@ use marsrs_comm::basepacker::{
     packer_pack, packer_unpack, simple_int_pack, simple_int_unpack, simple_short_pack,
     simple_short_unpack, PackerUnpacked, SimpleUnpacked,
 };
+use marsrs_comm::strutil;
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -34,10 +43,10 @@ fn main() -> ExitCode {
         usage();
         return ExitCode::FAILURE;
     };
-    // `packer` and `simple` are the two subcommands with an action of their
-    // own, and it sits where every option sits: before them, and not among
-    // them.
-    let action = matches!(command.as_str(), "packer" | "simple")
+    // `packer`, `simple` and `strutil` are the three subcommands with an
+    // action of their own, and it sits where every option sits: before them,
+    // and not among them.
+    let action = matches!(command.as_str(), "packer" | "simple" | "strutil")
         .then(|| args.next())
         .flatten();
 
@@ -48,6 +57,7 @@ fn main() -> ExitCode {
         ("packer", Some("unpack")) => unpack_packer(&opts),
         ("simple", Some("pack")) => simple(&opts),
         ("simple", Some("unpack")) => unpack_simple(&opts),
+        ("strutil", Some(name)) => strutil(name, &opts),
         _ => {
             usage();
             return ExitCode::FAILURE;
@@ -70,7 +80,8 @@ fn usage() {
          --out=PATH\n       \
          comm-compat packer unpack --in=PATH\n       \
          comm-compat simple pack --kind=short|int --data=HEX --out=PATH\n       \
-         comm-compat simple unpack --kind=short|int --in=PATH"
+         comm-compat simple unpack --kind=short|int --in=PATH\n       \
+         comm-compat strutil FN --data=HEX [--arg=HEX] [--pos=N]"
     );
 }
 
@@ -152,6 +163,81 @@ fn unpack_simple(opts: &Opts) -> Result<(), String> {
     };
     println!("{code} {pack_len} {}", hex(&data));
     Ok(())
+}
+
+/// One `strutil` call, named by its action. `--data` is the bytes of the
+/// string and `--arg` the second string, both hex; `--pos` is where
+/// `ci_find_substr` starts looking.
+///
+/// A `str2hex` that found nothing and a `ci_find_substr` that found nothing
+/// print `-` and `-1`: the C++ answers an empty string and
+/// `std::string::npos`, and an unsigned `npos` is not a number a case should
+/// have to spell.
+fn strutil(name: &str, opts: &Opts) -> Result<(), String> {
+    let data = unhex(opts.value("data").unwrap_or(""))?;
+    // Owned, and not a borrow of the bytes `--arg` was unhexed into: the
+    // string outlives the vector it came from.
+    let arg = match opts.value("arg") {
+        Some(arg) => {
+            let bytes = unhex(arg)?;
+            Some(String::from_utf8(bytes).map_err(|_| "--arg is not UTF-8".to_owned())?)
+        }
+        None => None,
+    };
+    let pos = number(opts, "pos")? as usize;
+
+    // Two of the helpers are helpers of bytes and the rest are helpers of a
+    // string, so only the latter ask that `--data` is one.
+    let answer = match name {
+        "hex2str" => strutil::hex2str(&data),
+        "md5" => strutil::buffer_md5(&data),
+        _ => strutil_text(name, text(&data)?, arg.as_deref(), pos)?,
+    };
+    println!("{answer}");
+    Ok(())
+}
+
+/// The `strutil` helpers that take a string rather than bytes.
+fn strutil_text(name: &str, text: &str, arg: Option<&str>, pos: usize) -> Result<String, String> {
+    let answer = match name {
+        "url_encode" => strutil::url_encode(text),
+        "trim" => strutil::trim(text).to_owned(),
+        "trim_left" => strutil::trim_left(text).to_owned(),
+        "trim_right" => strutil::trim_right(text).to_owned(),
+        "lower" => strutil::cast_lower(text),
+        "upper" => strutil::cast_upper(text),
+        // `1` and `0`, and not `true` and `false`: the C++ prints a `%d` of its
+        // `bool`, and the two sides print the same line for the same call.
+        "starts_with" => bit(strutil::starts_with(text, second(name, arg)?)),
+        "ends_with" => bit(strutil::ends_with(text, second(name, arg)?)),
+        "split_token" => strutil::split_token(text, second(name, arg)?).join("|"),
+        "str2hex" => match strutil::str2hex(text) {
+            Some(bytes) => hex(&bytes),
+            None => "-".to_owned(),
+        },
+        "file_name_from_path" => strutil::file_name_from_path(text).to_owned(),
+        "ci_find_substr" => match strutil::ci_find_substr(text, second(name, arg)?, pos) {
+            Some(at) => at.to_string(),
+            None => "-1".to_owned(),
+        },
+        _ => return Err(format!("strutil {name} is not a helper this CLI drives")),
+    };
+    Ok(answer)
+}
+
+/// A `bool` as the `1` or `0` of a `%d`, which is what the C++ prints it as.
+fn bit(value: bool) -> String {
+    if value { "1" } else { "0" }.to_owned()
+}
+
+/// `--data` as a string, which is what most of the helpers read.
+fn text(data: &[u8]) -> Result<&str, String> {
+    std::str::from_utf8(data).map_err(|_| "--data is not UTF-8".to_owned())
+}
+
+/// `--arg`, which every helper but the ones of one string needs.
+fn second<'a>(name: &str, arg: Option<&'a str>) -> Result<&'a str, String> {
+    arg.ok_or_else(|| format!("strutil {name} needs --arg=HEX"))
 }
 
 /// Which of the two `Simple*` pairs a case is about: the `uint16_t` one or the

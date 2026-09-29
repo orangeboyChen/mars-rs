@@ -1,12 +1,19 @@
-// The C++ half of the comm cross-read test: `mars/comm/basepacker.cc` and
-// `mars/comm/adler32.c`, driven the way `scripts/compat/comm.sh` drives the
-// Rust of the same two files.
+// The C++ half of the comm cross-read test: `mars/comm/basepacker.cc`,
+// `mars/comm/adler32.c` and `mars/comm/strutil.cc`, driven the way
+// `scripts/compat/comm.sh` drives the Rust of the same files.
 //
 //   upstream_comm adler32 --data=HEX [--seed=N]
 //   upstream_comm packer pack --url=U --seq=N --data=HEX [--hash=no] --out=PATH
 //   upstream_comm packer unpack --in=PATH
 //   upstream_comm simple pack --kind=short|int --data=HEX --out=PATH
 //   upstream_comm simple unpack --kind=short|int --in=PATH
+//   upstream_comm strutil FN --data=HEX [--arg=HEX] [--pos=N]
+//
+// `strutil` is the string helpers: `--data` is the bytes of the string and
+// `--arg` the second string — the delimiters, the prefix or suffix, the
+// needle — both hex so that a byte the shell would eat is still one a case can
+// name. One line comes back, and it is the same line `comm-compat` prints for
+// the same call.
 //
 // `packer unpack` and `simple unpack` print one line: the `int` the C++ answers,
 // then what it read out of the package — the URL, the sequence and the length
@@ -29,6 +36,7 @@
 #include "mars/comm/adler32.h"
 #include "mars/comm/autobuffer.h"
 #include "mars/comm/basepacker.h"
+#include "mars/comm/strutil.h"
 
 namespace {
 
@@ -210,6 +218,70 @@ int checksum(int argc, char** argv) {
     return 0;
 }
 
+// The string helpers of `mars/comm/strutil.cc`, named the way `comm-compat`
+// names them: `--data` is the string, `--arg` the second one and `--pos` where
+// a search starts. A helper that found nothing prints what the port prints —
+// `-` for a `Str2Hex` that read no hex and `-1` for an `npos` — since an
+// unsigned `npos` is not a number a case should have to spell.
+int strings(int argc, char** argv) {
+    const char* name = (argc > 2) ? argv[2] : "";
+    std::vector<unsigned char> raw = unhex(opt(argc, argv, "data"));
+    std::string text((const char*)bytes(raw), raw.size());
+    std::vector<unsigned char> arg = unhex(opt(argc, argv, "arg"));
+    std::string second((const char*)bytes(arg), arg.size());
+    const char* pos_text = opt(argc, argv, "pos");
+    size_t pos = pos_text ? (size_t)strtoul(pos_text, NULL, 10) : 0;
+
+    // `Trim`, `ToLower` and their like take the string they change, so what
+    // goes in is a copy.
+    std::string copy = text;
+    std::vector<std::string> tokens;
+
+    if (0 == strcmp(name, "url_encode")) {
+        printf("%s\n", strutil::URLEncode(text).c_str());
+    } else if (0 == strcmp(name, "trim")) {
+        printf("%s\n", strutil::Trim(copy).c_str());
+    } else if (0 == strcmp(name, "trim_left")) {
+        printf("%s\n", strutil::TrimLeft(copy).c_str());
+    } else if (0 == strcmp(name, "trim_right")) {
+        printf("%s\n", strutil::TrimRight(copy).c_str());
+    } else if (0 == strcmp(name, "lower")) {
+        printf("%s\n", strutil::cast_lower(text).c_str());
+    } else if (0 == strcmp(name, "upper")) {
+        printf("%s\n", strutil::cast_upper(text).c_str());
+    } else if (0 == strcmp(name, "starts_with")) {
+        printf("%d\n", strutil::StartsWith(text, second) ? 1 : 0);
+    } else if (0 == strcmp(name, "ends_with")) {
+        printf("%d\n", strutil::EndsWith(text, second) ? 1 : 0);
+    } else if (0 == strcmp(name, "split_token")) {
+        strutil::SplitToken(text, second, tokens);
+        for (size_t at = 0; at < tokens.size(); ++at) {
+            printf("%s%s", 0 == at ? "" : "|", tokens[at].c_str());
+        }
+        printf("\n");
+    } else if (0 == strcmp(name, "hex2str")) {
+        printf("%s\n", strutil::Hex2Str(text).c_str());
+    } else if (0 == strcmp(name, "str2hex")) {
+        std::string out = strutil::Str2Hex(text);
+        printf("%s\n", hex((const unsigned char*)out.data(), out.size()).c_str());
+    } else if (0 == strcmp(name, "file_name_from_path")) {
+        printf("%s\n", strutil::GetFileNameFromPath(text.c_str()).c_str());
+    } else if (0 == strcmp(name, "ci_find_substr")) {
+        size_t at = strutil::ci_find_substr(text, second, pos);
+        if (std::string::npos == at) {
+            printf("-1\n");
+        } else {
+            printf("%zu\n", at);
+        }
+    } else if (0 == strcmp(name, "md5")) {
+        printf("%s\n", strutil::BufferMD5(text).c_str());
+    } else {
+        fprintf(stderr, "strutil %s is not a helper this harness drives\n", name);
+        return 1;
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -218,6 +290,7 @@ int main(int argc, char** argv) {
     if (command == "adler32") return checksum(argc, argv);
     if (command == "packer") return packer(argc, argv);
     if (command == "simple") return simple(argc, argv);
+    if (command == "strutil") return strings(argc, argv);
 
     fprintf(stderr,
             "usage: upstream_comm adler32 --data=HEX [--seed=N]\n"
@@ -226,6 +299,8 @@ int main(int argc, char** argv) {
             "       upstream_comm packer unpack --in=PATH\n"
             "       upstream_comm simple pack --kind=short|int --data=HEX "
             "--out=PATH\n"
-            "       upstream_comm simple unpack --kind=short|int --in=PATH\n");
+            "       upstream_comm simple unpack --kind=short|int --in=PATH\n"
+            "       upstream_comm strutil FN --data=HEX [--arg=HEX] "
+            "[--pos=N]\n");
     return 1;
 }
