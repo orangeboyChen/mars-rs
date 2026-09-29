@@ -20,7 +20,7 @@
 // Three of the types of that surface are not nested here but are types of the
 // module, named again by the typealiases below: an extension may not carry an
 // access modifier and neither may its members, so a type nested in `MarsStn`
-// has to be declared in this one body, and this file is held to 450 lines —
+// has to be declared in this one body, and this file is held to 500 lines —
 // which holds the values a task is made of, but not `StnTask`, `StnQuestion`
 // and `StnAnswer` as well. `MarsStn.Task` is what an app writes either way.
 //
@@ -175,8 +175,12 @@ public enum MarsStn {
     /// The app is asked while the process-wide pipeline is held, so `ask` must
     /// not call another `MarsStn`: everything it needs is in the question it is
     /// given.
+    ///
+    /// [`clearApp()`] is the way back out of this — a closure is not an optional
+    /// here, and the C ABI's way of saying "no app" is a `NULL` `ask`.
     public static func setApp(_ ask: @escaping (StnQuestion) -> StnAnswer) {
         let app = AppBox(ask)
+        lock.lock()
         // The box is the context of every question, and `installed` is what
         // keeps it alive: the C ABI hands the pointer back with a question and
         // never gives it back.
@@ -188,6 +192,12 @@ public enum MarsStn {
         // has put the new context in its place is a question that
         // dereferences a freed one. Both are locals of this call, so the old
         // box dies here at the earliest — after the swap.
+        //
+        // The lock is what makes the read of `installed`, the swap of the
+        // context and the write back one step: Swift initializes a static
+        // lazily and atomically, but a *later* read of a reference-counted
+        // `var` beside a later write of it is a retain and a release of one
+        // object with nothing between them.
         let previous = installed
         mars_stn_set_app(Unmanaged.passUnretained(app).toOpaque()) { ctx, question, answer in
             guard let ctx, let question, let answer else {
@@ -199,6 +209,25 @@ public enum MarsStn {
         withExtendedLifetime(previous) {
             installed = app
         }
+        lock.unlock()
+    }
+
+    /// Takes the app away, and STN answers the eighteen questions itself again:
+    /// a `NULL` `ask` is what `mars_stn.h` calls an app that answers nothing,
+    /// which gets STN's own answers — and [`setApp`] cannot hand one in, its
+    /// closure not being an optional.
+    ///
+    /// The box this drops is held until the swap is over, as it is in [`setApp`]:
+    /// a question asked before this call can still be in flight, and it reads
+    /// the box out of the context it was handed.
+    public static func clearApp() {
+        lock.lock()
+        let previous = installed
+        mars_stn_set_app(nil, nil)
+        withExtendedLifetime(previous) {
+            installed = nil
+        }
+        lock.unlock()
     }
 
     /// `Reset` — a net core made again from nothing: the tasks, the signalling
@@ -441,6 +470,13 @@ public enum MarsStn {
     public static func onNetworkChange() {
         mars_stn_on_network_change()
     }
+
+    /// What guards [`installed`], and with it the read-modify-write [`setApp`]
+    /// and [`clearApp`] make of it: two threads may install an app at once, and
+    /// a static `var` is only *initialized* atomically — a later read of a
+    /// reference-counted one beside a later write of it is a retain and a
+    /// release of the same object with nothing between them.
+    private static let lock = NSLock()
 
     /// The app that is installed, which is the only thing the C ABI does not
     /// give back: `setApp` remembers it so that the next app releases it.

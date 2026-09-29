@@ -45,8 +45,8 @@ public enum CompressMode: Int32 {
 }
 
 /// Why an `Xlog` was not opened. The C ABI answers a config it refuses with a
-/// handle of `0`, so what an app gets is this and not a logger that writes
-/// nowhere.
+/// negative `MARS_XLOG_ERR_*` code, so what an app gets is this and not a logger
+/// that writes nowhere.
 ///
 /// The raw values are the ones Objective-C reads: `initWithConfig:error:` hands
 /// an `NSError` back whose `code` is one of them and whose
@@ -68,7 +68,15 @@ public enum XlogError: Int32, Error, CustomStringConvertible, LocalizedError {
     /// `cacheDays` was negative.
     case negativeCacheDays = 3
 
-    /// `mars_xlog_new_instance` answered `0`: the appender refused the config.
+    /// `mars_xlog_new_instance` answered a negative `MARS_XLOG_ERR_*` code: the
+    /// appender refused the config.
+    ///
+    /// Which code it answered says which part of it was refused —
+    /// `MARS_XLOG_ERR_BAD_MODE`, `MARS_XLOG_ERR_BAD_COMPRESS`,
+    /// `MARS_XLOG_ERR_EMPTY_LOG_DIR` or `MARS_XLOG_ERR_APPENDER` — and an
+    /// `@objc` enum carries no payload to hand one to the app with, so every one
+    /// of them comes to this. `0` is not one of them: it is the process-wide
+    /// appender, which this call never opens.
     case refused = 4
 
     public var description: String {
