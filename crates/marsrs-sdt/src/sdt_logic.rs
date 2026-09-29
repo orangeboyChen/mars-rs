@@ -142,6 +142,11 @@ impl SdtLogic {
 
     /// `ReportNetCheckResult(_check_results)` — hands the results to whoever
     /// was set with [`SdtLogic::set_callback`], if anybody was.
+    ///
+    /// The C++'s own is an empty body (`sdt_manager.cc:71`): the comment in it
+    /// says the results were meant for `MMReportNetCheckResult` in `stn`, which
+    /// is a piece this port does not carry, so reporting here is what the app
+    /// asked [`SdtLogic::set_callback`] for and nothing else.
     pub fn report(&self, check_results: &[CheckResultProfile]) {
         if let Some(callback) = &self.callback {
             callback.report_net_check_result(check_results);

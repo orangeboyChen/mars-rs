@@ -100,6 +100,15 @@ fn a_port_that_did_not_read_as_a_number_is_the_default_one() {
 }
 
 #[test]
+fn a_port_the_c_reads_as_negative_is_cast_and_not_dropped() {
+    // `(uint16_t)atoi("-1")`: the cast wraps, so a sign a URL had no business
+    // carrying is a port and not a number that did not read
+    assert_eq!(HttpUrlParser::new("http://1.2.3.4:-1/x").port(), 65535);
+    // and a `+` is the number it stands in front of
+    assert_eq!(HttpUrlParser::new("http://1.2.3.4:+8080/x").port(), 8080);
+}
+
+#[test]
 fn a_port_that_does_not_fit_in_sixteen_bits_is_truncated() {
     // `(uint16_t)atoi(...)`, which wraps: 65536 is 0, and 0 is the default
     assert_eq!(HttpUrlParser::new("http://1.2.3.4:65536/x").port(), 80);
