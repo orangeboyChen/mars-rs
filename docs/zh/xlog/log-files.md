@@ -79,27 +79,27 @@ appender_flush_instance(id, true)
 ```
 
 ```swift [Swift]
-log.flush(sync: true)
+log.flushNow()
 ```
 
 ```kotlin [Android]
-xlog.flush(sync = true)
+xlog.flushNow()
 ```
 
 ```kotlin [Kotlin Multiplatform]
-Xlog.flush(sync = true)
+xlog.flushNow()
 ```
 
 ```typescript [HarmonyOS]
-xlog.flush(true)
+xlog.flushNow()
 ```
 
 ```dart [Flutter]
-await xlog.flush(sync: true)
+await xlog.flush()
 ```
 
 ```ts [React Native]
-xlog.flush(true)
+xlog.flushNow()
 ```
 
 ```c [C]
@@ -108,9 +108,19 @@ mars_xlog_flush_sync();
 
 :::
 
-`flush(sync = false)` —— `appender_flush()`、`mars_xlog_flush()`，也就是上面那几行不传
-`true` 的写法 —— 只是通知写线程就返回，适合定时调用，但上传前不能用它。Flutter 那边凡是
-跨到原生一侧的调用都返回 `Future`，`flush` 也一样，所以要 `await`。
+排空是三个调用，不是一个带开关的调用：
+
+| 调用 | 做什么 |
+|---|---|
+| `signalFlush()` —— `appender_flush()`、`mars_xlog_flush()` | 通知写线程可以排空，然后立刻返回：它返回了，不代表记录已经在文件里 |
+| `flushNow()` —— `appender_flush_sync()`、`mars_xlog_flush_sync()` | 在调用方线程上排空：它返回时记录已经在磁盘上 |
+| `await flush()` | 同一次排空，只是不在调用方线程上 |
+
+`signalFlush()` 是定时器该调的那个。它不保证排空什么时候结束，而没结束也不丢东西：
+还在缓存里的记录在一个内核手里的文件里。读文件或上传之前要调的是 `flushNow()`，
+`await flush()` 是同一次排空，给不想占着一个线程的调用方。Dart 没有 `flushNow()`
+—— method channel 阻塞不了 Dart 这一侧；HarmonyOS 没有 `await flush()` —— 它的
+NAPI 每个方法都是同步的。
 
 ## App 退出的时候
 
@@ -128,12 +138,12 @@ mars_xlog_flush_sync();
 | SwiftPM | 每个 `Xlog`，建好就开始：它看着 `didEnterBackground` 和 `willTerminate`，在 watchOS 上还看着 `WKExtension` 的 |
 | 其余每个平台 | 下次启动，如上 |
 
-`close()` 也会排空，所以退出时顺手关掉 appender 的 App 同样没事。上面那两个 `flush` 是为
+`close()` 也会排空，所以退出时顺手关掉 appender 的 App 同样没事。上面的 flush 是为
 另一种情况准备的：**App 还活着**的时候要读文件或上传。
 
 同步模式是唯一的例外，也是唯一一个答案不是“什么都不用”的地方：它后面没有缓存文件兜底，
 所以进程还攒着的那截 —— 不到 4 KiB —— 会跟着进程一起消失。用同步模式又想要这几条的 App
-得自己 `close()` 或 `flush(sync: true)`：上面那两个 hook 做了这件事，顺手关掉 appender 的
+得自己 `close()` 或 `flushNow()`：上面那两个 hook 做了这件事，顺手关掉 appender 的
 App 也做了。
 
 ## 轮转与保留

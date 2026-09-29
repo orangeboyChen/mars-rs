@@ -1,7 +1,9 @@
 # 快速开始
 
 每个平台都是三步：App 或进程启动时**打开**一个 appender，往里**写**记录，读文件或
-上传之前**flush**。
+上传之前**排空**它。排空是三个调用，不是每个平台三个都有：`signalFlush()` 请写线程去
+排空、自己立刻返回，`flushNow()` 在调用方线程上排空，`await flush()` 等的是同一次排
+空，但不占着一个线程。
 
 ## 它在哪里
 
@@ -95,7 +97,7 @@ log.isConsoleLogEnabled = true
 
 log.info(message: "hello from mars", tag: "startup")
 
-log.flush(sync: true)    // 返回时记录已经在磁盘上
+log.flushNow()    // 返回时记录已经在磁盘上
 ```
 
 `XlogConfig(logDirectory:)` 是简写形式 —— 其余字段之后在它上面设，每个都在
@@ -136,7 +138,7 @@ log.isConsoleLogEnabled = YES;
 
 [log writeWithLevel:LogLevelInfo message:@"hello from mars" tag:@"startup"];
 
-[log flushWithSync:YES];   // 在 App 读文件或上传之前
+[log flushNow];   // 在 App 读文件或上传之前
 ```
 
 Objective-C 没有 `#file` 可填，所以这里写的记录带的是空文件名和行号 0，除非用长形
@@ -172,7 +174,7 @@ xlog.consoleLogEnabled = BuildConfig.DEBUG
 
 xlog.i("startup", "hello from mars")
 
-xlog.flush(sync = true)  // 返回时记录已经在磁盘上
+xlog.flushNow()  // 返回时记录已经在磁盘上
 ```
 
 写是 `android.util.Log` 的形状 —— `xlog.v`、`d`、`i`、`w`、`e`、`f`，每个都是一个
@@ -212,7 +214,7 @@ xlog.consoleLogEnabled = isDebug
 
 xlog.i("startup", "hello from mars")
 
-xlog.flush(sync = true)  // 返回时记录已经在磁盘上
+xlog.flushNow()  // 返回时记录已经在磁盘上
 xlog.close()
 ```
 
@@ -246,14 +248,16 @@ xlog.consoleLogEnabled = kDebugMode;
 
 xlog.i('startup', 'hello from mars');
 
-await xlog.flush(sync: true);  // 返回时记录已经在磁盘上
+await xlog.flush();      // 等它返回时记录已经在磁盘上
 await xlog.close();
 ```
 
 这个插件是 method channel 而不是 `dart:ffi`，所以过到平台线程上的是一条消息而不是
-一次调用：写和一个设置把消息递过去就返回，只有四个回答
+一次调用：写、一个设置和 `signalFlush()` 都是把消息递过去就返回，只有四个回答
 `Future`，也只有它们有 App 要等的东西 —— `Xlog.open` 打开的那个
-appender，`flush` 和 `close` 等的那个 drain，以及 `isLoggable` 给的答案。
+appender，`await flush()` 和 `close()` 等的那个 drain，以及 `isLoggable` 给的答案。
+Dart 这边没有阻塞式排空的那个面：channel 阻塞不了 Dart 这一侧，所以不等的那一下是
+`signalFlush()`，要等的那一下是 `await xlog.flush()`。
 [任务链路](/zh/stn/getting-started)和
 [网络诊断](/zh/sdt/getting-started)都还没进 Dart：这个插件是日志，在它的两个包里都
 是。
@@ -280,13 +284,15 @@ xlog.consoleLogEnabled = __DEV__;
 
 xlog.i('startup', 'hello from mars');
 
-xlog.flush(true);        // 返回时记录已经在磁盘上
+xlog.flushNow();        // 返回时记录已经在磁盘上
 xlog.close();
 ```
 
-模块的方法都在 JS 线程上调用，也从那里返回，所以没有一个回答 `Promise`：
-`Xlog.open(config)` 直接回答那个 appender，`xlog.i(tag, message)` 在它返回时就已经
-落地了。[任务链路](/zh/stn/getting-started)和[网络诊断](/zh/sdt/getting-started)都
+模块的方法都在 JS 线程上调用，也从那里返回，所以 App 调的没有哪个会长时间堵住它：
+`Xlog.open(config)` 直接回答那个 appender，`xlog.i(tag, message)` 在它返回时就已经落地
+了。排空是唯一可能比 JS 线程该等的时间更长的那件事，所以它有三个写法 ——
+`xlog.signalFlush()` 通知一声就返回，`xlog.flushNow()` 在当前线程上排空，
+`await xlog.flush()` 把它交给模块自己的线程，排空结束时才落地。[任务链路](/zh/stn/getting-started)和[网络诊断](/zh/sdt/getting-started)都
 还没进 TypeScript。
 
 ## The C ABI {#c-abi}
@@ -360,7 +366,7 @@ xlog.consoleLogEnabled = true;
 
 xlog.i('startup', 'hello from mars');
 
-xlog.flush(true);   // 返回时记录已经在磁盘上
+xlog.flushNow();   // 返回时记录已经在磁盘上
 xlog.close();
 ```
 

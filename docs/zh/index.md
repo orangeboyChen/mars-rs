@@ -19,7 +19,7 @@ features:
   - title: 八个平台，一个写法
     details: 启动时开一个 appender，往里写 tag 和消息，上传前 flush。Rust、Swift、Kotlin、Kotlin Multiplatform、Flutter、React Native、HarmonyOS 和 C 都是这三步，配置项也一样。
   - title: 写日志不卡在磁盘上
-    details: "默认的异步模式把记录交给 mmap 缓存和写线程，write 不等待落盘就返回；`flush(sync: true)` 才是把缓存排空的那一下。"
+    details: "默认的异步模式把记录交给 mmap 缓存和写线程，write 不等待落盘就返回；`flushNow()` 才是把缓存排空的那一下，`await flush()` 是同一次排空，只是不在调用方那个线程上。"
   - title: 压缩、加密、轮转
     details: 每个文件 zlib 或 zstd 压缩，给了公钥就按 ECDH + TEA 加密每条记录，还可以按大小或时间关掉旧文件、开新文件。
   - title: 任务链路，还有网络诊断

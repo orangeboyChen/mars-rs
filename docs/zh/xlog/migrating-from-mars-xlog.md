@@ -140,7 +140,7 @@ config.namePrefix = @"marsrs";
 NSError *error = nil;
 Xlog *log = [[Xlog alloc] initWithConfig:config error:&error];
 [log writeWithLevel:LogLevelInfo message:@"cold start" tag:@"startup"];
-[log flushWithSync:YES];        // 读文件或上传前
+[log flushNow];        // 读文件或上传前
 ```
 
 :::

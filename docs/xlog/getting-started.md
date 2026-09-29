@@ -2,7 +2,10 @@
 
 Three steps on every platform: **open** an appender once, when the app or the
 process starts; **write** records through it; **flush** before its file is read
-or uploaded.
+or uploaded. The drain is three calls, and not every platform carries all three:
+`signalFlush()` asks the writer thread for it and returns at once, `flushNow()`
+drains on the calling thread, and `await flush()` waits for the same drain
+without holding one.
 
 ## Where it is
 
@@ -101,7 +104,7 @@ log.isConsoleLogEnabled = true
 
 log.info(message: "hello from mars", tag: "startup")
 
-log.flush(sync: true)    // the records are on disk when this returns
+log.flushNow()    // the records are on disk when this returns
 ```
 
 `XlogConfig(logDirectory:)` is the short form — the other fields are set on it
@@ -146,7 +149,7 @@ log.isConsoleLogEnabled = YES;
 
 [log writeWithLevel:LogLevelInfo message:@"hello from mars" tag:@"startup"];
 
-[log flushWithSync:YES];   // before the app reads or uploads the files
+[log flushNow];   // before the app reads or uploads the files
 ```
 
 Objective-C has no `#file` to fill a call site with, so a record written here
@@ -184,7 +187,7 @@ xlog.consoleLogEnabled = BuildConfig.DEBUG
 
 xlog.i("startup", "hello from mars")
 
-xlog.flush(sync = true)  // the records are on disk when this returns
+xlog.flushNow()  // the records are on disk when this returns
 ```
 
 The write is `android.util.Log`'s shape — `xlog.v`, `d`, `i`, `w`, `e` and `f`,
@@ -226,7 +229,7 @@ xlog.consoleLogEnabled = isDebug
 
 xlog.i("startup", "hello from mars")
 
-xlog.flush(sync = true)  // the records are on disk when this returns
+xlog.flushNow()  // the records are on disk when this returns
 xlog.close()
 ```
 
@@ -262,15 +265,18 @@ xlog.consoleLogEnabled = kDebugMode;
 
 xlog.i('startup', 'hello from mars');
 
-await xlog.flush(sync: true);  // the records are on disk when this returns
+await xlog.flush();      // the records are on disk when this resolves
 await xlog.close();
 ```
 
 The plugin is a method channel and not `dart:ffi`, so what crosses to the
-platform thread is a message and not a call: a write and a setting hand the
-message over and return, and only the four that have something an app can act on
-answer a `Future` — the appender `Xlog.open` opens, the drain `flush` and
-`close` wait for, and the answer `isLoggable` gives. Neither
+platform thread is a message and not a call: a write, a setting and
+`signalFlush()` hand the message over and return, and only the four that have
+something an app can act on answer a `Future` — the appender `Xlog.open` opens,
+the drain `await flush()` waits for, `close()`, and the answer `isLoggable`
+gives. What Dart has no face for is the blocking drain: a channel cannot block
+this side of it, so `signalFlush()` is the one that does not wait and
+`await xlog.flush()` is the one that does. Neither
 [the task pipeline](/stn/getting-started) nor
 [the network diagnosis](/sdt/getting-started) is in the Dart yet: the plugin is
 the logger, in both of its packages.
@@ -299,13 +305,17 @@ xlog.consoleLogEnabled = __DEV__;
 
 xlog.i('startup', 'hello from mars');
 
-xlog.flush(true);        // the records are on disk when this returns
+xlog.flushNow();        // the records are on disk when this returns
 xlog.close();
 ```
 
-A method of the module is made on the JS thread and returns from there, so none
-of them answers a `Promise`: `Xlog.open(config)` answers the appender, and
-`xlog.i(tag, message)` has landed by the time it returns. Neither
+A method of the module is made on the JS thread and returns from there, so
+nothing the app calls blocks it for long: `Xlog.open(config)` answers the
+appender, and `xlog.i(tag, message)` has landed by the time it returns. The
+drain is the one that can take longer than the JS thread should sit through, so
+it is three calls — `xlog.signalFlush()` asks for it and returns,
+`xlog.flushNow()` does it on this thread, and `await xlog.flush()` hands it to a
+thread of the module's own and answers when it is over. Neither
 [the task pipeline](/stn/getting-started) nor
 [the network diagnosis](/sdt/getting-started) is in the TypeScript yet.
 
@@ -381,7 +391,7 @@ xlog.consoleLogEnabled = true;
 
 xlog.i('startup', 'hello from mars');
 
-xlog.flush(true);   // the records are on disk when this returns
+xlog.flushNow();   // the records are on disk when this returns
 xlog.close();
 ```
 

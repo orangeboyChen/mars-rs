@@ -114,15 +114,15 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 |---|---|---|
 | what a write does | compresses the record into a memory-mapped cache and hands it to a writer thread | writes it through to the file |
 | what it costs | the `write` syscall is not on the logging thread | the thread that logs waits for the file |
-| what you must do | `flush(sync: true)` before the file is read or uploaded — and nothing at all when the app goes away ([log files](/xlog/log-files)) | `close()` or `flush(sync: true)` before the process can be killed: what is still buffered goes with it |
+| what you must do | `flushNow()` before the file is read or uploaded — and nothing at all when the app goes away ([log files](/xlog/log-files)) | `close()` or `flushNow()` before the process can be killed: what is still buffered goes with it |
 
 Async is the default because the file is slower than the record; sync is what you
 want when a record cannot wait for a writer thread — a crash log, or the last
 lines before an exit.
 
 What neither mode does is reach the kernel once per record: both hold what they
-have until roughly 4 KiB of it has piled up, or until `close()` or
-`flush(sync: true)` runs. Async loses nothing by waiting — the record is in the
+have until roughly 4 KiB of it has piled up, or until `close()` or `flushNow()`
+runs. Async loses nothing by waiting — the record is in the
 cache file the kernel holds as well — but sync has nothing behind it, so a
 process that is killed loses the tail it was still holding. That tail is the one
 thing an exit needs a call for.

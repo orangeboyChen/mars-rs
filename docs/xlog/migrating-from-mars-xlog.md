@@ -159,7 +159,7 @@ config.namePrefix = @"marsrs";
 NSError *error = nil;
 Xlog *log = [[Xlog alloc] initWithConfig:config error:&error];
 [log writeWithLevel:LogLevelInfo message:@"cold start" tag:@"startup"];
-[log flushWithSync:YES];        // before the app reads or uploads the files
+[log flushNow];        // before the app reads or uploads the files
 ```
 
 :::

@@ -119,7 +119,7 @@ val xlog = Xlog.open(
 )
 xlog.i("startup", "cold start in $elapsedMillis ms")
 
-xlog.flush(sync = true)  // before the app reads or uploads the files
+xlog.flushNow()  // before the app reads or uploads the files
 ```
 
 The file is `<logDir>/<namePrefix>_YYYYMMDD.xlog` — `marsrs_20260927.xlog` above.
