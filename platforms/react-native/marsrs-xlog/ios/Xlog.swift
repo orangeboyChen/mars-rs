@@ -105,12 +105,12 @@ internal final class Xlog: NSObject {
     /// empty: there is no JS frame to name, and the C++ writes an empty one too.
     @objc(log:level:tag:message:)
     internal func log(_ namePrefix: String, level: Double, tag: String, message: String) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = handles[namePrefix], let level = int32(level) else {
             return
         }
         tag.withCString { cTag in
             message.withCString { cMessage in
-                mars_xlog_write_instance(handle, Int32(level), cTag, nil, nil, 0, cMessage)
+                mars_xlog_write_instance(handle, level, cTag, nil, nil, 0, cMessage)
             }
         }
     }
@@ -120,10 +120,10 @@ internal final class Xlog: NSObject {
     /// to build.
     @objc(isLoggable:level:)
     internal func isLoggable(_ namePrefix: String, level: Double) -> Bool {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = handles[namePrefix], let level = int32(level) else {
             return false
         }
-        return mars_xlog_is_enabled_for(handle, Int32(level)) != 0
+        return mars_xlog_is_enabled_for(handle, level) != 0
     }
 
     /// `mars_xlog_get_level`: what the appender answers, and not what JS holds.
@@ -190,19 +190,19 @@ internal final class Xlog: NSObject {
     /// `mars_xlog_set_level_instance`.
     @objc(setLevel:level:)
     internal func setLevel(_ namePrefix: String, level: Double) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = handles[namePrefix], let level = int32(level) else {
             return
         }
-        mars_xlog_set_level_instance(handle, Int32(level))
+        mars_xlog_set_level_instance(handle, level)
     }
 
     /// `mars_xlog_set_mode_instance`.
     @objc(setMode:mode:)
     internal func setMode(_ namePrefix: String, mode: Double) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = handles[namePrefix], let mode = int32(mode) else {
             return
         }
-        mars_xlog_set_mode_instance(handle, Int32(mode))
+        mars_xlog_set_mode_instance(handle, mode)
     }
 
     /// `mars_xlog_set_console_log_instance`.
@@ -313,5 +313,20 @@ internal final class Xlog: NSObject {
     /// hands over whichever the value fits in.
     private func int(_ config: [AnyHashable: Any], _ key: String, _ fallback: Int32) -> Int32 {
         (config[key] as? NSNumber)?.int32Value ?? fallback
+    }
+
+    /// What a level or a mode the caller sent is read as an `Int32` with: `nil`
+    /// when it is not one — a `NaN`, an infinity, anything past 2^31.
+    /// `Int32(_:)` traps on all three, and a trap in a method the JS thread
+    /// called into is the app going down for a number the C ABI answers "no
+    /// such level" for; the size and the time above are narrowed with `exactly`
+    /// for the same reason. What is left out is what the appender was set to:
+    /// a level that does not exist is not one the appender is moved to, and a
+    /// record of one is not one it writes.
+    private func int32(_ value: Double) -> Int32? {
+        guard value.isFinite, value >= Double(Int32.min), value <= Double(Int32.max) else {
+            return nil
+        }
+        return Int32(value)
     }
 }
