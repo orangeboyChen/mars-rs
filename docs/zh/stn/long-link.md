@@ -37,12 +37,22 @@
 |---|---|
 | Android | `BaseEvent.onNetworkChange()`，以及 App 回来或离开时 `BaseEvent.onForeground(true / false)` |
 | Rust | `stn.on_network_change { … }` —— 闭包里是宿主自己的变更，它比 STN 的先跑 |
-| 其余每个平台 | `reset` —— 连的地方变了的话，再加上上面那两个地址 |
+| Swift | `MarsStn.onNetworkChange()`，以及 `MarsStn.onForeground(true / false)` |
+| Kotlin Multiplatform | `BaseEvent.onNetworkChange()`，以及 `BaseEvent.onForeground(true / false)` —— 就是 Android 那两个名字 |
+| C ABI，以及经过它的 HarmonyOS | `mars_stn_on_network_change()`，以及 `mars_stn_on_foreground(1 / 0)` |
 
 一次网络变化做的事不止是记一笔：STN 会把每条长连接拆掉、重新去连 —— 立刻，或者
 等它自己的 monitor 走到下一个间隔 —— 走在那条连接上的任务会先取消、再发起一次，
-这样它们才会落到一条已经起来的链路上。C ABI、HarmonyOS、Swift 和共享 Kotlin
-模块上的 App 没有这个调用，在那里一次变化能要求的只有 `reset`。
+这样它们才会落到一条已经起来的链路上。
+
+屏幕是 App 最容易忘的那一半，也是没有别的调用会替它说的那一半：App 不说自己到了
+前台，STN 就当它在后台 —— 而一个任务要唤醒一条断开的长连接，只有 App 在前台、
+而且是最近一刻钟之内到的前台才行。在后台待满十分钟，App 就变成不活跃：抗雪崩
+检查和授时同步读的就是这个。C++ 用自己的一个 alarm 数这十分钟；自己驱动
+`run_pending` 的宿主在那里数。
+
+Rust 回答屏幕的方式和它回答网络的方式一样：`stn.set_is_foreground { … }` 是
+STN 问的时候取的一次读数，所以宿主没有要告诉它的东西。
 
 短连接不需要告诉：一个任务会走第一条已经起来的链路，`Task::new` 两条都要。
 

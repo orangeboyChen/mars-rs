@@ -85,9 +85,10 @@ BaseEvent.onNetworkChange()
 ```
 
 `AppLogic` is the account and the device; `BaseEvent` is the screen and the
-network. On every other platform there is no boot: `stn.create()` in Rust, and
-the address and `reset` calls of [the long link](/stn/long-link), are the whole
-of what an app has to make.
+network. The screen and the network are two an app reports on every platform —
+under the name that platform spells them with, which
+[the long link](/stn/long-link) lists. What is Android's alone is the boot:
+`Mars.init` and `Mars.onCreate`.
 
 ## Where to go next
 
