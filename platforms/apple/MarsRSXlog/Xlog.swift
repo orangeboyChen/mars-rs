@@ -18,8 +18,10 @@
 // the app writes through what it was given. Nothing here is deprecated, because
 // there is no older Swift API to keep — the process-wide appender
 // `mars_xlog_open` opens is a set of C symbols, and `import MarsRSFFI` reaches
-// them. `currentLogPath` and `currentCachePath` are the exception: they are that
-// appender's, and they say so.
+// them. Every question about a file is asked of the `Xlog` it belongs to —
+// [`currentLogPath`], [`logFiles(daysAgo:)`] and [`logFileNames(daysAgo:)`] —
+// which is the shape the Kotlin Multiplatform module has: `Xlog.open` is the one
+// call that is not an appender's own.
 //
 // Every call is a straight translation of a symbol in the header; nothing here
 // adds behaviour the C ABI does not have.
@@ -340,60 +342,51 @@ public final class Xlog: NSObject {
         handle = Self.noHandle
     }
 
-    /// The path of the file the *process-wide* appender is writing — the one
-    /// `mars_xlog_open` opens, not the one of an `Xlog` — or `nil` when there is
-    /// no open file (or the buffer was too small, which 1024 bytes never is).
-    @objc public static var currentLogPath: String? {
-        path(of: mars_xlog_current_log_path)
+    /// `mars_xlog_current_log_path_instance`: the file this appender is writing
+    /// to, or `nil` when it has none open yet — the first record of a day is what
+    /// opens one (or the buffer was too small, which 1024 bytes never is).
+    ///
+    /// A day is one file, so this is the path an app hands to something that reads
+    /// the log while it is being written. What an app that uploads a whole day
+    /// asks for is [`logFiles(daysAgo:)`].
+    @objc public var currentLogPath: String? {
+        guard isOpen else {
+            return nil
+        }
+        return path { out, len in mars_xlog_current_log_path_instance(handle, out, len) }
     }
 
-    /// `mars_xlog_current_log_cache_path`: the cache file of the process-wide
-    /// appender. An `Xlog` of its own keeps its cache in its `XlogConfig`'s
-    /// `cacheDirectory ?? logDirectory`.
-    @objc public static var currentCachePath: String? {
-        path(of: mars_xlog_current_log_cache_path)
-    }
-
-    /// `mars_xlog_getfilepath_from_timespan`: the log files of `daysAgo` days
-    /// ago that are *there* — what an app that uploads yesterday's opens. `[]`
-    /// when the directory holds none of that day's.
+    /// `mars_xlog_getfilepath_from_timespan`: the log files of `daysAgo` days ago
+    /// that are *there* — what an app that uploads yesterday's opens. `[]` when
+    /// the directory holds none of that day's. `0` is today, `1` is yesterday,
+    /// and so on.
     ///
-    /// This is a day of files and not the file being written: what `currentLogPath`
-    /// answers is one, and it is the process-wide appender's, while this takes
-    /// the prefix and the directory of the files it is asked about.
-    ///
-    /// - Parameters:
-    ///   - daysAgo: `0` is today, `1` yesterday, and so on.
-    ///   - prefix: what every file of that appender's starts with.
-    ///   - logDirectory: the directory those files are in.
+    /// This is a day of files and not the file being written: what
+    /// [`currentLogPath`] answers is one, and this is the day of *this* appender
+    /// — its own prefix, and the directory it writes into.
     @objc
-    public static func logFiles(daysAgo: Int, prefix: String, logDirectory: String) -> [String] {
-        paths { index, out, len in
-            prefix.withCString { name in
-                logDirectory.withCString { directory in
+    public func logFiles(daysAgo: Int) -> [String] {
+        namePrefix.withCString { name in
+            logDirectory.withCString { directory in
+                paths { index, out, len in
                     mars_xlog_getfilepath_from_timespan(Int32(daysAgo), name, directory, index, out, len)
                 }
             }
         }
     }
 
-    /// `mars_xlog_make_logfile_name`: the paths of the log files of `daysAgo`
-    /// days ago whether or not they are *there yet* — the name an app that is
-    /// about to write, or that is naming a file to someone else, asks for.
+    /// `mars_xlog_make_logfile_name`: the paths of the log files of `daysAgo` days
+    /// ago whether or not they are *there yet* — the name an app that is about to
+    /// write, or that is naming a file to someone else, asks for.
     ///
-    /// A day's answer is the log-dir file and, when a cache dir is configured
-    /// and the file exists, its cache-dir twin, so this can answer two where
-    /// [`logFiles(daysAgo:prefix:logDirectory:)`] answers one.
-    ///
-    /// - Parameters:
-    ///   - daysAgo: `0` is today, `1` yesterday, and so on.
-    ///   - prefix: what every file of that appender's starts with.
-    ///   - logDirectory: the directory those files are written into.
+    /// A day's answer is the log-dir file and, when a cache dir is configured and
+    /// the file exists, its cache-dir twin, so this can answer two where
+    /// [`logFiles(daysAgo:)`] answers one.
     @objc
-    public static func logFileNames(daysAgo: Int, prefix: String, logDirectory: String) -> [String] {
-        paths { index, out, len in
-            prefix.withCString { name in
-                logDirectory.withCString { directory in
+    public func logFileNames(daysAgo: Int) -> [String] {
+        namePrefix.withCString { name in
+            logDirectory.withCString { directory in
+                paths { index, out, len in
                     mars_xlog_make_logfile_name(Int32(daysAgo), name, directory, index, out, len)
                 }
             }
@@ -463,6 +456,7 @@ public final class Xlog: NSObject {
         }
 
         self.namePrefix = config.namePrefix
+        self.logDirectory = config.logDirectory
         self.handle = opened
         self.currentMode = config.mode
         super.init()
@@ -475,6 +469,11 @@ public final class Xlog: NSObject {
 
     /// The handle `mars_xlog_new_instance` answered with; `0` once [close()] ran.
     private var handle: Int64
+
+    /// The directory this appender writes into: what [`logFiles(daysAgo:)`] and
+    /// [`logFileNames(daysAgo:)`] name a day out of, which is the prefix's other
+    /// half and not something an app should have to hand them twice.
+    private let logDirectory: String
 
     /// What [mode] answers while this side is the only one that knows it.
     private var currentMode: AppenderMode

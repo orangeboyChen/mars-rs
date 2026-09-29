@@ -23,7 +23,7 @@ appender_get_current_log_path()          // 进程级那个 appender 的
 ```
 
 ```swift [Swift]
-Xlog.currentLogPath
+log.currentLogPath
 ```
 
 ```c [C]
@@ -33,7 +33,8 @@ mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK，或负的错�
 
 :::
 
-能给出这个路径的就是这三个包。其余平台要 App 自己拼出文件名，拼的时候用的还是交给
+能给出这个路径的就是这三个包 —— 而且 Swift 那个是这个 `Xlog` 自己的，跟 Rust 和
+Kotlin Multiplatform 模块里一样。其余平台要 App 自己拼出文件名，拼的时候用的还是交给
 配置的那两样：目录和前缀，中间夹着当天日期。
 
 一整**天**的文件是另一件事，要上传昨天日志的 App 问的就是它。这里有两个调用：一个是
@@ -47,8 +48,8 @@ appender_make_logfile_name(1, "marsrs", Path::new(log_dir))          // 名字�
 ```
 
 ```swift [Swift]
-Xlog.logFiles(daysAgo: 1, prefix: "marsrs", logDirectory: logDir)
-Xlog.logFileNames(daysAgo: 1, prefix: "marsrs", logDirectory: logDir)
+log.logFiles(daysAgo: 1)
+log.logFileNames(daysAgo: 1)
 ```
 
 ```c [C]

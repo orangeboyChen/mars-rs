@@ -24,7 +24,7 @@ appender_get_current_log_path()          // the process-wide appender's
 ```
 
 ```swift [Swift]
-Xlog.currentLogPath
+log.currentLogPath
 ```
 
 ```c [C]
@@ -34,9 +34,10 @@ mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK, or a negative 
 
 :::
 
-Those three are the ones that answer it. The rest leave the app to name the
-file itself, which is the two things it gave the config: the directory and the
-prefix, with the day in between.
+Those three are the ones that answer it — and the Swift one is the `Xlog`'s
+own, the way it is in Rust and in the Kotlin Multiplatform module. The rest leave
+the app to name the file itself, which is the two things it gave the config: the
+directory and the prefix, with the day in between.
 
 A whole *day* of files is what an app that uploads yesterday's asks for, and
 there are two calls for it: the files that are there, and the names the day is
@@ -50,8 +51,8 @@ appender_make_logfile_name(1, "marsrs", Path::new(log_dir))          // the name
 ```
 
 ```swift [Swift]
-Xlog.logFiles(daysAgo: 1, prefix: "marsrs", logDirectory: logDir)
-Xlog.logFileNames(daysAgo: 1, prefix: "marsrs", logDirectory: logDir)
+log.logFiles(daysAgo: 1)
+log.logFileNames(daysAgo: 1)
 ```
 
 ```c [C]
@@ -64,8 +65,8 @@ mars_xlog_make_logfile_name(1, "marsrs", log_dir, 0, path, sizeof path);
 :::
 
 `0` is today and `1` is yesterday. Rust and Swift answer the day's list in one
-call; the C ABI answers one index of it at a time, and the two Swift calls are
-that walk. Names answer two where files answer one when a cache dir is given and
+call, and out of the `Xlog` the day belongs to; the C ABI answers one index of it
+at a time, and the two Swift calls are that walk. Names answer two where files answer one when a cache dir is given and
 the file is there: the log-dir file and its twin in the cache dir.
 
 ## Async: the record may still be in the cache
