@@ -335,6 +335,26 @@ fn a_proxy_named_by_host_is_reached_at_the_ip_dns_gave() {
 }
 
 #[test]
+fn a_tunnel_is_opened_at_the_proxy_address_the_local_stack_carries() {
+    for kind in [ProxyType::HttpTunnel, ProxyType::Socks5] {
+        let seen = Seen::default();
+        let mut link = proxy_link(Arc::new(Mutex::new(net_source())), &seen);
+        link.set_proxy(move |_| ProxyInfo::new(kind, "", "10.0.0.1", 1080, "", ""));
+        link.set_local_ip_stack(|| LocalIpStack::IPv6);
+
+        link.connect_at(NOW).unwrap();
+
+        // `shortlink.cc:361` maps the address a tunnel is opened *at* onto the
+        // stack the local network carries; a network that carries only v6 is
+        // asked for an address it cannot reach without it. The connect itself
+        // still goes to the pair dns named, which is what a tunnel is for.
+        let proxies = seen.proxies.lock().unwrap();
+        assert_eq!(proxies[0].ip, "64:ff9b::10.0.0.1", "{kind:?} is mapped");
+        assert_eq!(seen.addresses.lock().unwrap()[0][0].ip(), "183.3.226.35");
+    }
+}
+
+#[test]
 fn a_task_on_a_host_dns_could_not_name_is_no_socket_at_all() {
     let seen = Seen::default();
     // a dns that knows nothing, and no backup pair to fall back to

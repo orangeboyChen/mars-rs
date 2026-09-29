@@ -672,9 +672,17 @@ impl ShortLink {
 
         // a tunnel or a socks5 proxy is connected *through*: the pairs stay
         // where they are and the operator is told where the proxy is. The C++
-        // hands it the nat64-mapped address of the proxy separately; the port
-        // hands it the whole [`ProxyInfo`] instead, so mapping it is the
-        // operator's.
+        // hands that address over separately from the `proxy_info` the app
+        // wrote, and hands over the one it gets from
+        // `socket_address(proxy_ip, port).v4tov6_address(local_stack)`
+        // (`shortlink.cc:361`) — mapped onto the stack the local network
+        // carries, because a tunnel is opened *at* the proxy and not merely
+        // sent to it. The port hands the whole [`ProxyInfo`] over, so the
+        // mapped address is what its `ip` has to carry.
+        //
+        // [`SocketAddress::ipv6`] and not [`SocketAddress::ip`]: the latter is
+        // the address with the prefix stripped off it again, which is the v4
+        // address the mapping was made from.
         //
         // The C++ marks the profile `kIPSourceProxy` here (`shortlink.cc:363`)
         // and overwrites it with the first pair's own source type twenty lines
@@ -683,14 +691,21 @@ impl ShortLink {
         // be kept does look in the pool even behind a tunnel. Writing it and
         // overwriting it is not a thing the port has to do twice: it leaves
         // the pair's own source type alone.
-        // the proxy the operator is given is the one dns named, not the host the
-        // app told it about
         let connect_proxy = match &proxy_ip {
-            Some(ip) => ProxyInfo {
-                ip: ip.clone(),
-                port: proxy.port,
-                ..proxy.clone()
-            },
+            Some(ip) => {
+                let mut address = SocketAddress::new(ip, proxy.port);
+                // an Http one is only ever sent to — the connect goes to the
+                // address in the list below — so its address stays as the app
+                // wrote it
+                if matches!(proxy.kind, ProxyType::HttpTunnel | ProxyType::Socks5) {
+                    address.v4_to_v6_address(stack);
+                }
+                ProxyInfo {
+                    ip: address.ipv6().to_string(),
+                    port: proxy.port,
+                    ..proxy.clone()
+                }
+            }
             None => ProxyInfo::none(),
         };
 
