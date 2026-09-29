@@ -40,6 +40,7 @@ import io.github.orangeboychen.marsrs.xlog.Xlog
 import io.github.orangeboychen.marsrs.xlog.XlogConfig
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 /** The Android half of `Xlog`. */
 class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactContext) {
@@ -132,9 +133,20 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * A TurboModule method that answers a promise is the one codegen calls off
      * the JS thread, which is the whole reason this one answers one: a drain
      * blocks the thread it runs on, and the JS thread is not one to block.
+     *
+     * A queue that has been shut down rejects what it is handed — [invalidate]
+     * shuts this one down — and a promise an exception out of `execute` left
+     * unsettled is an `await` in JS that never comes back. So the drain is run
+     * where it was asked for: the caller's thread pays for it, which is the
+     * price of the one thread that would have paid being gone.
      */
     override fun flush(namePrefix: String, promise: Promise) {
-        flushQueue.execute {
+        try {
+            flushQueue.execute {
+                appender(namePrefix)?.flushNow()
+                promise.resolve(null)
+            }
+        } catch (e: RejectedExecutionException) {
             appender(namePrefix)?.flushNow()
             promise.resolve(null)
         }
