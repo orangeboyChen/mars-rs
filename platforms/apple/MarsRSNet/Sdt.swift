@@ -286,7 +286,13 @@ public enum MarsSdt {
             var buffer = [CChar](repeating: 0, count: size)
             let written = mars_sdt_take_report(&buffer, UInt32(size))
             if written >= 0 {
-                return String(cString: buffer)
+                let report = String(cString: buffer)
+                // `noResults` is what the C ABI hands over when there was
+                // nothing to take: `report_json` of no checks at all. The ABI
+                // has no answer but a document for it — no count comes with
+                // one — and a diagnosis of nothing is the `nil` this promises
+                // and not a report an app has to parse to find out.
+                return report == noResults ? nil : report
             }
             // The C ABI answers "no room" and not the size it needs, so the only
             // way to ask for more is to ask again with more. It keeps the
@@ -310,4 +316,8 @@ public enum MarsSdt {
     /// Where it stops: a diagnosis that reports more than a megabyte is not one
     /// an app parses.
     private static let reportBufferLimit = 1_048_576
+
+    /// The document `report_json` writes for no results: `{"details":[]}`, and
+    /// nothing else — the one the C ABI answers when there was nothing to take.
+    private static let noResults = "{\"details\":[]}"
 }
