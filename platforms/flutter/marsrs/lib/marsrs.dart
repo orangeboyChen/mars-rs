@@ -4,7 +4,7 @@
 // C ABI, and they land here.
 //
 // A method channel, and not `dart:ffi`: the Apple binary is a static library
-// inside `MarsRSXlog.xcframework`, and `DynamicLibrary.open` has nothing to open
+// inside `marsrs-xlog.xcframework`, and `DynamicLibrary.open` has nothing to open
 // for one. So what the two halves call is the instance API the Swift and the
 // Kotlin of the port publish — `mars_xlog_new_instance` and friends over the C
 // ABI on iOS, `Xlog(XlogConfig(...))` over the AAR on Android.
@@ -155,7 +155,8 @@ class Xlog {
   /// Opens an appender of its own with [config].
   ///
   /// The platform side answers `marsrs` / `the appender refused the
-  /// configuration` when the appender would not take it, and
+  /// configuration (<code>)` when the appender would not take it, the code
+  /// being the negative `MARS_XLOG_ERR_*` it was refused with, and
   /// `logDir is empty` when [XlogConfig.logDir] is.
   static Future<Xlog> open(XlogConfig config) async {
     await _channel.invokeMethod<void>('open', config.toMap());

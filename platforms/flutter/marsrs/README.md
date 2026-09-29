@@ -53,7 +53,7 @@ ecosystem's, not the port's:
   (`io.github.orangeboychen.marsrs:marsrs`) from JitPack — the same coordinate,
   resolved the same way, as for an app that takes the AAR directly. The `.so`
   files are the AAR's, so nothing is built here and nothing Rust is needed.
-* **iOS** carries `MarsRSXlog.xcframework` with it, in `ios/Frameworks`, and
+* **iOS** carries `marsrs-xlog.xcframework` with it, in `ios/Frameworks`, and
   `mars_xlog.h` next to it in `ios/include`. CocoaPods cannot resolve the SwiftPM
   binary target of `Package.swift`, and there is no CocoaPods pod for it, so the
   release drops the framework of its own tag into the plugin before packaging it.

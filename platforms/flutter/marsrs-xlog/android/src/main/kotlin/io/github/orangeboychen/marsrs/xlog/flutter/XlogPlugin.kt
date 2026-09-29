@@ -23,6 +23,8 @@
 
 package io.github.orangeboychen.marsrs.xlog.flutter
 
+import android.os.Handler
+import android.os.Looper
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -34,6 +36,7 @@ import io.github.orangeboychen.marsrs.xlog.LogLevel
 import io.github.orangeboychen.marsrs.xlog.Xlog
 import io.github.orangeboychen.marsrs.xlog.XlogConfig
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
 /** The Android half of `marsrs_xlog`. */
 class XlogPlugin :
@@ -49,6 +52,20 @@ class XlogPlugin :
      */
     private val appenders = ConcurrentHashMap<String, Xlog>()
 
+    /**
+     * The one thread `flush` drains on, and the one the iOS half drains on for
+     * the same reason: a drain blocks the thread it runs on, and the thread a
+     * platform channel is handled on is the app's main looper — which is the
+     * thread the UI draws on, and not one an app's `await xlog.flush()` may
+     * hold up. Serial, so two drains of one appender are one drain after
+     * another and not two writers in one file.
+     */
+    private val flushQueue = Executors.newSingleThreadExecutor()
+
+    /** What a drain is answered on: a `Result` is a reply on the channel, and
+     * the channel is the main thread's. */
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(binding.binaryMessenger, CHANNEL).also {
             it.setMethodCallHandler(this)
@@ -58,6 +75,10 @@ class XlogPlugin :
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel?.setMethodCallHandler(null)
         channel = null
+        // The thread `flush` drains on is this plugin's and not the app's, and
+        // a plugin outlives the engine it was attached to: a thread left
+        // running would be one more per engine, for the life of the process.
+        flushQueue.shutdown()
     }
 
     override fun onMethodCall(call: MethodCall, result: Result) {
@@ -136,10 +157,17 @@ class XlogPlugin :
      * disk, and the one the Dart caller awaits — that caller has no thread of
      * its own to block on, so the wait is this side's and the answer is what
      * it awaits.
+     *
+     * Off the main thread, and back to it for the answer, the way the iOS half
+     * does it: `onMethodCall` runs on the app's main looper, so a drain here
+     * would be a drain on the thread the UI draws on.
      */
     private fun flush(call: MethodCall, result: Result) {
-        call.appender().flushNow()
-        result.success(null)
+        val appender = call.appender()
+        flushQueue.execute {
+            appender.flushNow()
+            mainHandler.post { result.success(null) }
+        }
     }
 
     /** `Xlog.requestFlush`: asks the writer thread to drain, answers nothing. */

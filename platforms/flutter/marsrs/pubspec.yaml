@@ -16,7 +16,7 @@
 # `marsrs-flutter-<version>.tar.gz` on the release of the same tag, and
 # `scripts/package_flutter.sh` is what stamps the version below, the AAR's
 # coordinate in `platforms/android/build.gradle.kts`, and drops
-# MarsRSXlog.xcframework into `ios/Frameworks`.
+# marsrs-xlog.xcframework into `ios/Frameworks`.
 #
 # Where the two halves get their native from, and why they differ:
 #
@@ -25,7 +25,7 @@
 #     that takes the AAR directly.
 #   * iOS carries the framework with it. CocoaPods cannot resolve the SwiftPM
 #     binary target of Package.swift, and there is no CocoaPods pod for it, so
-#     the release's `MarsRSXlog.xcframework` travels inside the plugin.
+#     the release's `marsrs-xlog.xcframework` travels inside the plugin.
 #
 # Take this one or `marsrs_xlog`, not both: both carry the same
 # `libmarsrsxlog.so`, and an app with two of it does not build.
@@ -34,7 +34,7 @@ name: marsrs
 description: >-
   Flutter plugin for mars-rs, a Rust implementation of Tencent/mars: the whole
   port, xlog today.
-version: 0.1.0-alpha.2
+version: 0.1.0-alpha.3
 homepage: https://github.com/orangeboyChen/mars-rs
 repository: https://github.com/orangeboyChen/mars-rs
 issue_tracker: https://github.com/orangeboyChen/mars-rs/issues

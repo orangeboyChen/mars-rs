@@ -13,7 +13,7 @@
 
 Pod::Spec.new do |s|
   s.name             = 'marsrs_xlog'
-  s.version          = '0.1.0-alpha.2'
+  s.version          = '0.1.0-alpha.3'
   s.summary          = 'Flutter plugin for xlog, the logging half of mars-rs.'
   s.homepage         = 'https://github.com/orangeboyChen/mars-rs'
   s.license          = { :type => 'MIT', :file => '../LICENSE' }

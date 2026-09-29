@@ -123,9 +123,11 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
 
 #pragma mark - The channel's methods
 
-/// `mars_xlog_new_instance`. `0` is the answer for a configuration the appender
-/// refused, and an instance the caller has no handle to is one every write
-/// would go to the process-wide appender instead of.
+/// `mars_xlog_new_instance`. A configuration the appender refuses is answered
+/// with a negative `MARS_XLOG_ERR_*` code, which the `FlutterError` below names
+/// in its message, and never with `0`: `0` is the process-wide appender, so an
+/// instance the caller has no handle to is one every write would go to instead
+/// of.
 - (void)open:(FlutterMethodCall *)call result:(FlutterResult)result {
   NSDictionary *arguments = call.arguments;
   NSString *logDir = XlogString(arguments, @"logDir");
@@ -150,10 +152,10 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
 
   long long handle =
       mars_xlog_new_instance(&config, XlogInt(arguments, @"level", MarsLevelInfo));
-  if (handle == 0) {
-    result([FlutterError errorWithCode:kXlogError
-                               message:@"the appender refused the configuration"
-                               details:nil]);
+  if (handle <= 0) {
+    NSString *message =
+        [NSString stringWithFormat:@"the appender refused the configuration (%lld)", handle];
+    result([FlutterError errorWithCode:kXlogError message:message details:nil]);
     return;
   }
   self.instances[namePrefix] = @(handle);
