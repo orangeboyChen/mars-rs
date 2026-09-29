@@ -70,7 +70,7 @@ enum CompressMode {
 class XlogConfig {
   const XlogConfig({
     required this.logDir,
-    this.namePrefix = 'xlog',
+    this.namePrefix = defaultNamePrefix,
     this.level = LogLevel.info,
     this.mode = AppenderMode.async,
     this.pubKey = '',
@@ -84,7 +84,26 @@ class XlogConfig {
   final String logDir;
 
   /// What every file starts with, and the name the appender is known by.
+  ///
+  /// A blank one is [defaultNamePrefix], which is what [effectiveNamePrefix]
+  /// answers and what the halves are given.
   final String namePrefix;
+
+  /// The prefix an appender opened with this is known by: [namePrefix], or
+  /// [defaultNamePrefix] when that one is blank.
+  ///
+  /// Both halves substitute the default when they open — the empty prefix is
+  /// the one the process-wide appender is known by, and the Kotlin refuses a
+  /// blank one — so an appender an app opened with a blank prefix is stored
+  /// under the default, and a call naming the blank one finds no appender at
+  /// all. Naming the default is what keeps the `Xlog` an app holds and the
+  /// appender the halves hold the same one.
+  String get effectiveNamePrefix =>
+      namePrefix.trim().isEmpty ? defaultNamePrefix : namePrefix;
+
+  /// What a blank [namePrefix] is opened as: the prefix the Kotlin and the
+  /// Objective-C halves substitute.
+  static const String defaultNamePrefix = 'xlog';
 
   /// The level a record has to reach.
   final LogLevel level;
@@ -111,7 +130,7 @@ class XlogConfig {
   Map<String, Object?> toMap() {
     return <String, Object?>{
       'logDir': logDir,
-      'namePrefix': namePrefix,
+      'namePrefix': effectiveNamePrefix,
       'level': level.value,
       'mode': mode.value,
       'pubKey': pubKey,
@@ -160,7 +179,7 @@ class Xlog {
   /// `logDir is empty` when [XlogConfig.logDir] is.
   static Future<Xlog> open(XlogConfig config) async {
     await _channel.invokeMethod<void>('open', config.toMap());
-    return Xlog._(config.namePrefix, config.level, config.mode);
+    return Xlog._(config.effectiveNamePrefix, config.level, config.mode);
   }
 
   /// The level a record has to reach: what this was last set to, and what the
