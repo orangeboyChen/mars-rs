@@ -36,6 +36,34 @@ mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK，或负的错�
 能给出这个路径的就是这三个包。其余平台要 App 自己拼出文件名，拼的时候用的还是交给
 配置的那两样：目录和前缀，中间夹着当天日期。
 
+一整**天**的文件是另一件事，要上传昨天日志的 App 问的就是它。这里有两个调用：一个是
+确实存在的那些文件，一个是这一天会写进哪几个名字 —— 不管文件在不在：
+
+::: code-group
+
+```rust [Rust]
+appender_getfilepath_from_timespan(1, "marsrs", Path::new(log_dir))  // 昨天的、确实存在的
+appender_make_logfile_name(1, "marsrs", Path::new(log_dir))          // 名字，不管在不在
+```
+
+```swift [Swift]
+Xlog.logFiles(daysAgo: 1, prefix: "marsrs", logDirectory: logDir)
+Xlog.logFileNames(daysAgo: 1, prefix: "marsrs", logDirectory: logDir)
+```
+
+```c [C]
+char path[512];
+// 下标 0、1、2 ……；负的错误码 —— MARS_XLOG_ERR_NO_PATH —— 表示后面没有了
+mars_xlog_getfilepath_from_timespan(1, "marsrs", log_dir, 0, path, sizeof path);
+mars_xlog_make_logfile_name(1, "marsrs", log_dir, 0, path, sizeof path);
+```
+
+:::
+
+`0` 是今天，`1` 是昨天。Rust 和 Swift 一次给出这一天的全部；C ABI 一次只给一个下标，
+Swift 那两个调用做的就是一趟走完它的事。配了缓存目录、而且文件确实存在时，“名字”
+会比“文件”多出一个：日志目录里那个，和它在缓存目录里的孪生文件。
+
 ## 异步：记录可能还在缓存里
 
 默认模式下记录先落进一个 mmap 缓存文件，再由写线程搬进日志文件，所以 `write` 返回的时候
