@@ -195,33 +195,39 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
 /// `mars_xlog_getfilepath_from_timespan_instance` — the day's files that are
 /// there.
 - (void)logFiles:(FlutterMethodCall *)call result:(FlutterResult)result {
-  result([self dayPaths:call
-                   with:^int(long long instance, int timespan, unsigned int index, char *out,
-                             unsigned int len) {
-                     return mars_xlog_getfilepath_from_timespan_instance(instance, timespan, index, out, len);
-                   }]);
+  long long instance = [self instanceForCall:call result:result];
+  if (instance == 0) {
+    return;
+  }
+  result([self dayPathsOfInstance:instance
+                         daysAgo:XlogInt(call.arguments, @"daysAgo", 0)
+                            with:^int(long long instance, int timespan, unsigned int index, char *out,
+                                      unsigned int len) {
+                              return mars_xlog_getfilepath_from_timespan_instance(instance, timespan, index, out, len);
+                            }]);
 }
 
 /// `mars_xlog_make_logfile_name_instance` — the day's names, whether or not the
 /// files are there yet.
 - (void)logFileNames:(FlutterMethodCall *)call result:(FlutterResult)result {
-  result([self dayPaths:call
-                   with:^int(long long instance, int timespan, unsigned int index, char *out,
-                             unsigned int len) {
-                     return mars_xlog_make_logfile_name_instance(instance, timespan, index, out, len);
-                   }]);
+  long long instance = [self instanceForCall:call result:result];
+  if (instance == 0) {
+    return;
+  }
+  result([self dayPathsOfInstance:instance
+                         daysAgo:XlogInt(call.arguments, @"daysAgo", 0)
+                            with:^int(long long instance, int timespan, unsigned int index, char *out,
+                                      unsigned int len) {
+                              return mars_xlog_make_logfile_name_instance(instance, timespan, index, out, len);
+                            }]);
 }
 
 /// A day of paths, walked index by index until the symbol answers that there is
 /// nothing at that index — the list the C++ fills a `std::vector` with, asked
 /// one at a time.
-- (NSArray<NSString *> *)dayPaths:(FlutterMethodCall *)call
-                             with:(int (^)(long long, int, unsigned int, char *, unsigned int))pathAt {
-  long long instance = [self instanceForCall:call result:nil];
-  if (instance == 0) {
-    return @[];
-  }
-  int timespan = XlogInt(call.arguments, @"daysAgo", 0);
+- (NSArray<NSString *> *)dayPathsOfInstance:(long long)instance
+                                    daysAgo:(int)timespan
+                                       with:(int (^)(long long, int, unsigned int, char *, unsigned int))pathAt {
   NSMutableArray<NSString *> *walked = [NSMutableArray array];
   for (unsigned int index = 0;; index++) {
     NSString *found = XlogPath(^(char *out, uint32_t len) {
@@ -377,10 +383,15 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   NSString *namePrefix = XlogString(call.arguments, @"namePrefix");
   NSNumber *handle = self.instances[namePrefix];
   if (handle == nil) {
-    result([FlutterError errorWithCode:kXlogError
-                               message:[NSString stringWithFormat:
-                                                     @"no appender of '%@' is open", namePrefix]
-                               details:nil]);
+    // `FlutterResult` is a block and not a message send: invoking a nil one
+    // dereferences a null function pointer, so a caller that has no result to
+    // answer with gets nothing at all.
+    if (result != nil) {
+      result([FlutterError errorWithCode:kXlogError
+                                 message:[NSString stringWithFormat:
+                                                       @"no appender of '%@' is open", namePrefix]
+                                 details:nil]);
+    }
     return 0;
   }
   return handle.longLongValue;

@@ -207,6 +207,31 @@ class Xlog(config: XlogConfig, context: Context? = null) {
      */
     fun isLoggable(level: LogLevel): Boolean = isOpen && LogLevel.of(getLogLevel(handle)).isEnabledFor(level)
 
+    /**
+     * The file this appender is writing to, or `null` before the day's first
+     * record opens one.
+     */
+    val currentLogPath: String?
+        get() = if (isOpen) getCurrentLogPath(handle) else null
+
+    /**
+     * The log files of the day `daysAgo` days ago that are *there* — what an app
+     * that uploads yesterday's opens. Empty when the directory holds none of that
+     * day's. `0` is today, `1` is yesterday, and so on.
+     *
+     * This is a day of files and not the file being written: what
+     * [currentLogPath] answers is the directory, and this names the day's file in
+     * it.
+     */
+    fun logFiles(daysAgo: Long): List<String> = if (isOpen) logFiles(handle, daysAgo).toList() else emptyList()
+
+    /**
+     * The names of the log files of the day `daysAgo` days ago, whether or not
+     * they are there yet — the name an app that is about to write, or that is
+     * naming a file to someone else, asks for.
+     */
+    fun logFileNames(daysAgo: Long): List<String> = if (isOpen) logFileNames(handle, daysAgo).toList() else emptyList()
+
     /** Writes a record of [level]. */
     fun log(level: LogLevel, tag: String, message: String) {
         if (isOpen) {

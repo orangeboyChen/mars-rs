@@ -124,12 +124,12 @@ class XlogPlugin :
 
     /** The day's files that are there — `0` is today, `1` is yesterday. */
     private fun logFiles(call: MethodCall, result: Result) {
-        result.success(call.appender().logFiles(call.long("daysAgo")))
+        result.success(call.appender().logFiles(call.long("daysAgo", 0)))
     }
 
     /** The day's names, whether or not the files are there yet. */
     private fun logFileNames(call: MethodCall, result: Result) {
-        result.success(call.appender().logFileNames(call.long("daysAgo")))
+        result.success(call.appender().logFileNames(call.long("daysAgo", 0)))
     }
 
     /**

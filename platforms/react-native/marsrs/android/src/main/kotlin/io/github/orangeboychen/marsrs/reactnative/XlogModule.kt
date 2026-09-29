@@ -116,11 +116,11 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
 
     /** `Xlog.logFiles`: the day's files that are there. */
     override fun logFiles(namePrefix: String, daysAgo: Double): ReadableArray? =
-        appender(namePrefix)?.logFiles(daysAgo.toLong())?.let { Arguments.fromList(it) }
+        appender(namePrefix)?.logFiles(daysAgo.toLong())?.let { Arguments.fromList(it) } ?: Arguments.createArray()
 
     /** `Xlog.logFileNames`: the day's names, whether or not they are there yet. */
     override fun logFileNames(namePrefix: String, daysAgo: Double): ReadableArray? =
-        appender(namePrefix)?.logFileNames(daysAgo.toLong())?.let { Arguments.fromList(it) }
+        appender(namePrefix)?.logFileNames(daysAgo.toLong())?.let { Arguments.fromList(it) } ?: Arguments.createArray()
 
     /** `Xlog.isLoggable`: whether a record of the level would be written. */
     override fun isLoggable(namePrefix: String, level: Double): Boolean =
