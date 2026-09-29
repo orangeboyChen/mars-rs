@@ -146,7 +146,9 @@ pub enum MarsStnAnswerKind {
     Ended = 6,
     /// `IdentifyCheckBuffer` — `mode`, `bytes`, `hash` and `cmdid`.
     Identified = 7,
-    /// `ReportTaskLimited` — `limit` is what the limit is; `0` is "go ahead".
+    /// `ReportTaskLimited` — `limit` is the number the gate refused with, and
+    /// what an app puts back is the out-value of the C++'s `unsigned int&`.
+    /// Nobody reads it: a task a gate refused stays refused.
     Limit = 8,
 }
 
@@ -468,8 +470,9 @@ pub struct MarsStnQuestion {
     pub task: *const MarsStnTask,
     /// `ReportTaskLimited` — the number the gate answered with: how long ago
     /// the same body went out, or how many bytes the funnel refused. Answer
-    /// [`MarsStnAnswer::limit`] and it is the limit the app asks for; `0` is
-    /// "go ahead".
+    /// [`MarsStnAnswer::limit`] and that is what goes back, which is the C++'s
+    /// `unsigned int&`, in and out — and which nothing reads, so a task a gate
+    /// refused stays refused.
     pub limit: c_uint,
 }
 
@@ -552,7 +555,9 @@ pub struct MarsStnAnswer {
     pub hash_count: c_uint,
     /// `Identified` — the cmdid the buffer goes out with.
     pub cmdid: u32,
-    /// `Limit` — what the limit is; `0` is "go ahead".
+    /// `Limit` — the number the gate refused with, handed back unchanged by an
+    /// app that says nothing. Nothing reads it: it is the C++'s `unsigned int&`
+    /// out-value, and `AntiAvalanche::Check` answers `false` either way.
     pub limit: u32,
 }
 

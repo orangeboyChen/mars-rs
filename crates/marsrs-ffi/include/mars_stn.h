@@ -108,7 +108,7 @@ typedef enum {
     MarsStnAnswerDecoded = 5,   /* `error_code` and `handle`                  */
     MarsStnAnswerEnded = 6,     /* `error_code`                               */
     MarsStnAnswerIdentified = 7, /* `mode`, `bytes`, `hash`, `cmdid`          */
-    MarsStnAnswerLimit = 8      /* `limit`; 0 is "go ahead"                   */
+    MarsStnAnswerLimit = 8      /* `limit`: the gate's number, in and out    */
 } MarsStnAnswerKind;
 
 /** One header of a task. */
