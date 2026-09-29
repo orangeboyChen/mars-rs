@@ -107,9 +107,10 @@ xlog.log_with_info(
 `Log.openLogInstance(level, mode, cacheDir, logDir, nameprefix, cacheDays)` 开第二个，
 然后把它返回的 handle 一路传下去；这里你拿着一个 appender 就*是*拿到一个实例，所以第
 二个就是自己的另一个前缀的第二个 `Xlog` —— 再 `Xlog::open(config, level)` 一次，用
-第二个的前缀。Rust 还留着 handle 那套 `*_instance` 一族
-（`appender_open_instance(config)` 返回 id），为的是对象表达不了的那一种形状：一个
-进程里同一个前缀的两个 appender，也就是两份库并排链进来时那样。
+第二个的前缀；而对象表达不了的那一种形状 —— 一个进程里同一个前缀的两个 appender，也就
+是两份库并排链进来时那样 —— 用 `Xlog::open_unregistered(config, level)`。它不登记在那个
+前缀名下，所以在 `Xlog::open` 会还给你第一个的地方，它是第二个 writer；它自己拿着一份级
+别，因为没有 category 可以跟别人共用。
 
 ### 从 C++ 项目的 Java 来
 

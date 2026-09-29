@@ -32,6 +32,9 @@ use marsrs_core::PtrBuffer;
 #[test]
 fn the_object_is_the_api_an_app_takes() {
     let _: fn(XLogConfig, LogLevel) -> Result<Xlog, AppenderError> = Xlog::open;
+    // The second writer over one prefix: the appender layer, which the
+    // `*_instance` family used to be the public face of.
+    let _: fn(XLogConfig, LogLevel) -> Result<Xlog, AppenderError> = Xlog::open_unregistered;
     let _: fn(&Xlog) -> &str = Xlog::name_prefix;
     let _: fn(&Xlog) -> bool = Xlog::is_open;
     let _: fn(&Xlog) -> Option<LogLevel> = Xlog::level;

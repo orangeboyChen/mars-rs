@@ -127,10 +127,12 @@ one with `Log.openLogInstance(level, mode, cacheDir, logDir, nameprefix,
 cacheDays)` and threaded the handle it answered through every call after it;
 here an appender you hold *is* the instance, so a second one is a second `Xlog`
 of a prefix of its own — `Xlog::open(config, level)` again, with the prefix the
-second one is known by. What Rust keeps of the handle is the `*_instance` family
-(`appender_open_instance(config)` answers an id) for the one shape an object
-cannot express: two appenders of one prefix in one process, which is what two
-copies of the library linked side by side are.
+second one is known by — and `Xlog::open_unregistered(config, level)` for the
+one shape a prefix of its own cannot express: two appenders of one prefix in one
+process, which is what two copies of the library linked side by side are. That
+one is *not* registered under the prefix, so it is a second writer where
+`Xlog::open` would hand back the first, and it keeps a level of its own, because
+it has no category to share one with.
 
 ### From the C++ project's Java
 

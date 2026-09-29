@@ -51,11 +51,12 @@
 //! * [`category`] is the handle table the C ABI (`marsrs-ffi`) and the JNI
 //!   bridge (`marsrs-jni`) are written over — a handle and not an object,
 //!   because neither of the two has one to hold.
-//! * `appender_open_instance` and its `*_instance` family open an appender
-//!   that no prefix is registered for: a prefix is one appender to
-//!   [`category`], and two copies of the library linked into one process —
-//!   a React Native module beside the Kotlin one — are two writers over one
-//!   prefix, which is the one shape [`Xlog::open`] cannot answer.
+//! * [`Xlog::open_unregistered`] opens an appender that no prefix is
+//!   registered for: a prefix is one appender to [`category`], and two copies
+//!   of the library linked into one process — a React Native module beside the
+//!   Kotlin one — are two writers over one prefix, which is the one shape
+//!   [`Xlog::open`] cannot answer. The `*_instance` family it is written over
+//!   is `pub(crate)` for the same reason the process-wide one is.
 //! # Not ported (out of the contract's scope)
 //!
 //! * `appender.cc`'s `g_log_write_callback` hook, the per-record mirror a host
@@ -196,7 +197,8 @@ fn current() -> Option<Arc<Appender>> {
 /// what `appender_open` creates and what handle `0` writes through.
 static INSTANCES: OnceLock<Mutex<Instances>> = OnceLock::new();
 
-/// Opaque id of an appender created by [`appender_open_instance`].
+/// Opaque id of an appender created by `appender_open_instance` — the one
+/// [`Xlog::open_unregistered`] holds, and the one the `*_instance` calls take.
 pub type AppenderId = u64;
 
 struct Instances {
@@ -249,7 +251,7 @@ fn instance_cache_path(id: AppenderId) -> Option<PathBuf> {
 ///
 /// Propagates [`AppenderError`] when the directory cannot be created or
 /// the appender cannot be opened.
-pub fn appender_open_instance(config: XLogConfig) -> Result<AppenderId, AppenderError> {
+pub(crate) fn appender_open_instance(config: XLogConfig) -> Result<AppenderId, AppenderError> {
     if config.logdir.as_os_str().is_empty() {
         return Err(AppenderError(
             "appender_open_instance: logdir is empty".to_owned(),
@@ -268,7 +270,7 @@ pub fn appender_open_instance(config: XLogConfig) -> Result<AppenderId, Appender
 }
 
 /// Closes and drops the instance; unknown ids are ignored.
-pub fn appender_close_instance(id: AppenderId) {
+pub(crate) fn appender_close_instance(id: AppenderId) {
     if let Some(appender) = lock_instances().map.remove(&id) {
         appender.close();
     }
@@ -276,7 +278,11 @@ pub fn appender_close_instance(id: AppenderId) {
 
 /// Writes through a specific instance. `false` when the id is unknown or the
 /// appender is closed.
-pub fn appender_write_instance(id: AppenderId, info: Option<&XLoggerInfo>, logbody: &str) -> bool {
+pub(crate) fn appender_write_instance(
+    id: AppenderId,
+    info: Option<&XLoggerInfo>,
+    logbody: &str,
+) -> bool {
     // Like [`current`]: take a clone and write outside the table's lock.
     let Some(appender) = instance(id) else {
         return false;
@@ -290,7 +296,7 @@ pub fn appender_write_instance(id: AppenderId, info: Option<&XLoggerInfo>, logbo
 ///
 /// `appender_signal_flush` for one instance: the drain is the writer
 /// thread's, and nothing here says when it is over. Unknown ids are ignored.
-pub fn appender_signal_flush_instance(id: AppenderId) {
+pub(crate) fn appender_signal_flush_instance(id: AppenderId) {
     if let Some(appender) = instance(id) {
         appender.flush();
     }
@@ -300,7 +306,7 @@ pub fn appender_signal_flush_instance(id: AppenderId) {
 ///
 /// `appender_flush_now` for one instance: the records are on the disk when
 /// this returns. Unknown ids are ignored.
-pub fn appender_flush_now_instance(id: AppenderId) {
+pub(crate) fn appender_flush_now_instance(id: AppenderId) {
     if let Some(appender) = instance(id) {
         appender.flush_sync();
     }
@@ -313,7 +319,7 @@ pub fn appender_flush_now_instance(id: AppenderId) {
 /// `appender_flush` for one instance, and with the same two caveats: nothing
 /// drains until the future is polled, and dropping it does not stop a drain
 /// that has started. A future that drains nothing when the id is unknown.
-pub fn appender_flush_instance(id: AppenderId) -> Flush {
+pub(crate) fn appender_flush_instance(id: AppenderId) -> Flush {
     let appender = instance(id);
     Flush::new(move || {
         if let Some(appender) = appender {
@@ -323,35 +329,35 @@ pub fn appender_flush_instance(id: AppenderId) -> Flush {
 }
 
 /// Sets the mode of a specific instance.
-pub fn appender_set_mode_instance(id: AppenderId, mode: AppenderMode) {
+pub(crate) fn appender_set_mode_instance(id: AppenderId, mode: AppenderMode) {
     if let Some(appender) = instance(id) {
         let _ = appender.set_mode(mode);
     }
 }
 
 /// Sets console logging for a specific instance.
-pub fn appender_set_console_log_instance(id: AppenderId, open: bool) {
+pub(crate) fn appender_set_console_log_instance(id: AppenderId, open: bool) {
     if let Some(appender) = instance(id) {
         appender.set_console_log(open);
     }
 }
 
 /// Sets the split size for a specific instance.
-pub fn appender_set_max_file_size_instance(id: AppenderId, bytes: u64) {
+pub(crate) fn appender_set_max_file_size_instance(id: AppenderId, bytes: u64) {
     if let Some(appender) = instance(id) {
         appender.set_max_file_size(bytes);
     }
 }
 
 /// Sets the expiry for a specific instance (values below one day are ignored).
-pub fn appender_set_max_alive_duration_instance(id: AppenderId, secs: u64) {
+pub(crate) fn appender_set_max_alive_duration_instance(id: AppenderId, secs: u64) {
     if let Some(appender) = instance(id) {
         appender.set_max_alive_duration(secs);
     }
 }
 
 /// The log directory of a specific instance; `None` for an unknown id.
-pub fn appender_get_current_log_path_instance(id: AppenderId) -> Option<PathBuf> {
+pub(crate) fn appender_get_current_log_path_instance(id: AppenderId) -> Option<PathBuf> {
     instance(id).and_then(|appender| appender.current_log_path())
 }
 
