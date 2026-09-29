@@ -1831,19 +1831,18 @@ impl Appender {
         // held across it: the records go into a log file another writer may be
         // appending to, and every step between them — the buffer, the file, the
         // cache file's removal — has to look like one step to that writer.
+        //
+        // `log_close` is left alone, and it is `true` for every appender that
+        // gets here: this is the one-shot appender [`crate::appender_oneshot_flush`]
+        // makes, whose records go out through the inner appender —
+        // `flush_buffer`, `log2file`, `flush_pending` — and not through
+        // [`Appender::write`], which is the only thing that asks the flag. So
+        // there is no window to open: what `appender_oneshot_flush` calls when
+        // this returns is `close`, and a closed appender answers that with
+        // nothing at all — no `$$$$$` banner of its own behind the block this
+        // just wrote, which is what a second banner there would be.
         let mut guard = self.lock();
-        // Only now may records be written through it.
-        self.shared.flags.log_close.store(false, Ordering::Release);
-        let action = guard.with_dir_lock(|me| me.drain_dead_cache_slot(path, data));
-        // ... and not after. `appender_oneshot_flush` closes the appender the
-        // moment this returns, and a `close` that found it open writes its
-        // `$$$$$` banner and drains — behind the block this just wrote, under
-        // the one header the block has, so the decoder's raw inflate of that
-        // body fails and the whole block is unreadable. What a one-shot
-        // appender writes is the records it recovered and nothing else (see
-        // [`Appender::oneshot`]), which is what `log_close` says.
-        self.shared.flags.log_close.store(true, Ordering::Release);
-        action
+        guard.with_dir_lock(|me| me.drain_dead_cache_slot(path, data))
     }
 
     /// `thread_async_.start()` / `SetMode(kAppenderAsync)`.
