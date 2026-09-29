@@ -53,6 +53,8 @@ fn header_declares_every_exported_symbol() {
         "mars_stn_gen_task_id",
         "mars_stn_gen_sequence_id",
         "mars_stn_trig_nooping",
+        "mars_stn_on_foreground",
+        "mars_stn_on_network_change",
     ] {
         assert!(
             header.contains(symbol),

@@ -27,6 +27,10 @@ marsrs-buffer = { workspace = true }
 marsrs-sdt = { workspace = true, optional = true }
 # The task pipeline, behind a feature of its own, for the same reason.
 marsrs-stn = { workspace = true, optional = true }
+# The clock the two foreground readings are taken on: `gettickcount()`, which is
+# the one reading `marsrs-stn` counts its windows from, so a host of this ABI
+# and the task pipeline are reading the same clock.
+marsrs-comm = { workspace = true, optional = true }
 
 # What the C ABI carries, named: the Apple artifact is built `--no-default-features
 # --features xlog`, so it is xlog by construction and not by the accident of what
@@ -51,7 +55,7 @@ xlog = ["dep:marsrs-appender"]
 sdt = ["dep:marsrs-sdt"]
 # The task pipeline's entry points: the same panic barrier, spelled out the same
 # way.
-stn = ["dep:marsrs-stn"]
+stn = ["dep:marsrs-stn", "dep:marsrs-comm"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

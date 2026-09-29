@@ -34,6 +34,7 @@ use std::ffi::{c_char, c_int, c_uint, c_void, CString};
 use std::ptr::addr_of;
 use std::sync::{Mutex, OnceLock};
 
+use marsrs_comm::tickcount::gettickcount;
 use marsrs_stn::{
     gen_sequence_id, gen_task_id, task_profile_json, App as StnApp, CgiProfile, DnsProfile,
     ErrCmdType, ExtraInfo, HostRedirectType, IdentifyBuffer, LongLinkStatus, LonglinkConfig,
@@ -60,6 +61,13 @@ pub const MARS_STN_ERR_REFUSED: c_int = -3;
 pub const MARS_STN_ERR_NO_DUE: i64 = -4;
 /// `mars_stn_create_longlink` was handed no config.
 pub const MARS_STN_ERR_NULL_CONFIG: c_int = -5;
+
+/// `ActiveLogic::INACTIVE_TIMEOUT` — ten minutes in the background is what
+/// makes an app inactive, which is what slows the anti-avalanche funnel down
+/// and what the timing sync waits longer for. The C++ counts them on an alarm
+/// of its own; here they are counted by the host's loop, in
+/// [`mars_stn_run_pending`].
+const INACTIVE_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 
 /// Which of the eighteen questions STN asked.
 ///
@@ -580,6 +588,74 @@ impl Default for MarsStnAnswer {
 pub type MarsStnAsk =
     Option<extern "C" fn(*mut c_void, *const MarsStnQuestion, *mut MarsStnAnswer)>;
 
+/// `ActiveLogic` — whether the app is in front, and when that last changed.
+///
+/// The C++'s is one object for the process (`ActiveLogic::Instance()`) that
+/// `mars::baseevent` moves; a host of this ABI has no `BaseEvent`, so the state
+/// lives here and [`mars_stn_on_foreground`] is what moves it. Both readings
+/// are handed to the net core as the two hooks it asks them with —
+/// [`marsrs_stn::NetCore::set_is_foreground`] and
+/// [`NetCore::set_last_foreground_change_time`] — because what the core does
+/// with them is a question it asks and not a reading a host pushes: whether a
+/// task wakes a long link that is down turns on both.
+///
+/// What is not here is the C++'s `alarm_`: upstream keeps an app *active* for
+/// ten minutes after it leaves the foreground and lets that alarm end it. This
+/// ABI has no queue of its own to dispatch one on — [`mars_stn_run_pending`] is
+/// the host's loop — so the ten minutes are counted there instead.
+///
+/// [`marsrs_stn::NetCore::set_is_foreground`]: marsrs_stn::NetCore::set_is_foreground
+/// [`NetCore::set_last_foreground_change_time`]: marsrs_stn::NetCore::set_last_foreground_change_time
+#[derive(Debug)]
+struct Foreground {
+    /// `isforeground_` — `false` until the host says otherwise, like the C++.
+    is_foreground: bool,
+    /// `isactive_` — `true` until ten minutes in the background end it, like
+    /// the C++.
+    is_active: bool,
+    /// `lastforegroundchangetime_`.
+    last_change_time: u64,
+}
+
+impl Foreground {
+    /// `ActiveLogic::ActiveLogic()` — not in front, but active, and the clock
+    /// read at the moment it was made, which is what the C++'s
+    /// `lastforegroundchangetime_` starts at and what its inactivity alarm
+    /// counts the ten minutes from.
+    fn new() -> Self {
+        Self {
+            is_foreground: false,
+            is_active: true,
+            last_change_time: gettickcount(),
+        }
+    }
+}
+
+fn foreground() -> &'static Mutex<Foreground> {
+    static FOREGROUND: OnceLock<Mutex<Foreground>> = OnceLock::new();
+    FOREGROUND.get_or_init(|| Mutex::new(Foreground::new()))
+}
+
+/// Runs `f` on the state. A poisoned lock keeps what a panic left behind, the
+/// way [`with_logic`] does.
+fn with_foreground<R>(f: impl FnOnce(&mut Foreground) -> R) -> R {
+    let mut state = foreground()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    f(&mut state)
+}
+
+/// `ActiveLogic::Instance()->IsForeground()` — the reading
+/// [`mars_stn_on_foreground`] left.
+fn is_foreground() -> bool {
+    with_foreground(|state| state.is_foreground)
+}
+
+/// `ActiveLogic::Instance()->LastForegroundChangeTime()`.
+fn last_foreground_change_time() -> u64 {
+    with_foreground(|state| state.last_change_time)
+}
+
 /// The STN of the process: the counterpart of the `StnLogic` singleton the C++'s
 /// Java2C calls reach, and of the `LOGIC` `marsrs-jni` keeps. A net core is made
 /// with it, the way `OnCreate` makes one.
@@ -587,6 +663,12 @@ fn logic() -> &'static Mutex<StnLogic> {
     static LOGIC: OnceLock<Mutex<StnLogic>> = OnceLock::new();
     LOGIC.get_or_init(|| {
         let mut logic = StnLogic::new();
+        // `ActiveLogic::Instance()`, which the C++'s `stn_logic` asks for the
+        // two readings of: what a host here moves with
+        // [`mars_stn_on_foreground`]. A core made by a reset is handed them
+        // again, because they are the logic's and not the core's.
+        logic.set_is_foreground(is_foreground);
+        logic.set_last_foreground_change_time(last_foreground_change_time);
         logic.create();
         Mutex::new(logic)
     })
@@ -1064,10 +1146,84 @@ pub extern "C" fn mars_stn_due_time() -> i64 {
 ///
 /// The C++ runs this on threads of its own; this port has none, so it is the
 /// host's loop that calls it — [`mars_stn_due_time`] is how long it may
-/// wait.
+/// wait — which is also what runs the ten minutes
+/// [`mars_stn_on_foreground`] starts: the C++'s is an alarm of its own.
 #[no_mangle]
 pub extern "C" fn mars_stn_run_pending() {
-    guard((), || with_logic(StnLogic::run_pending));
+    guard((), || {
+        end_inactive_grace();
+        with_logic(StnLogic::run_pending);
+    })
+}
+
+/// `ActiveLogic::OnForeground(_isforeground)` — the app came to the front, or
+/// left it, which is what a task asks before it wakes a long link that is down
+/// and what the anti-avalanche check and the timing sync are told about.
+///
+/// A change moves three things, the way the C++'s moves them: the app is
+/// active *again* whichever way it went, the time of the change is what the
+/// net core's `LONG_LINK_FOREGROUND_WINDOW` — the quarter of an hour in which a
+/// task still wakes a link that is down — is counted from, and the signal
+/// reaches the funnel and the sync. A call that says what the state already
+/// says does nothing — the C++'s `if (_isforeground == isforeground_) return;`.
+///
+/// Ten minutes in the background then end the grace, which is
+/// [`mars_stn_run_pending`]'s to notice: upstream's is `alarm_`, and this ABI
+/// has no queue the host's loop does not drive.
+///
+/// @param is_foreground `0` for the background, anything else for the front.
+#[no_mangle]
+pub extern "C" fn mars_stn_on_foreground(is_foreground: c_int) {
+    let is_foreground = is_foreground != 0;
+    guard((), || {
+        let moved = with_foreground(|state| {
+            if state.is_foreground == is_foreground {
+                return false;
+            }
+            state.is_foreground = is_foreground;
+            state.last_change_time = gettickcount();
+            state.is_active = true;
+            true
+        });
+        if moved {
+            // `ActiveLogic::SignalActive` — a change makes the app active
+            // again, whichever way it went
+            with_logic(|logic| logic.set_active(true));
+        }
+    })
+}
+
+/// `ActiveLogic::__OnInActive()` — ten minutes in the background is what ends
+/// the grace [`mars_stn_on_foreground`] started: the C++'s runs on `alarm_`,
+/// and this one on the host's loop, at the head of [`mars_stn_run_pending`].
+fn end_inactive_grace() {
+    let ended = with_foreground(|state| {
+        if state.is_foreground || !state.is_active {
+            return false;
+        }
+        if gettickcount().saturating_sub(state.last_change_time) < INACTIVE_TIMEOUT_MS {
+            return false;
+        }
+        state.is_active = false;
+        true
+    });
+    if ended {
+        with_logic(|logic| logic.set_active(false));
+    }
+}
+
+/// `mars::baseevent::GetSignalOnNetworkChange()` — the network under the app
+/// changed, which is `BaseEvent.onNetworkChange` on Android and one call of
+/// `mars::baseevent::OnNetworkChange` everywhere else: every long link is taken
+/// down and made again and dns is asked afresh, because the ip the last connect
+/// landed on is one the new network may not route to.
+///
+/// The C++ runs `OnPlatformNetworkChange()` first, which is how it throws the
+/// network information it cached away; this port reads the network on every
+/// ask, so there is nothing to throw away and nothing runs before the change.
+#[no_mangle]
+pub extern "C" fn mars_stn_on_network_change() {
+    guard((), || with_logic(|logic| logic.on_network_change(|| {})));
 }
 
 /// `TrigNooping` — `SmartHeartbeat::SetHeartBeat(0)` and a noop on the default
@@ -2285,5 +2441,79 @@ mod tests {
         );
         assert_eq!(mars_stn_longlink_is_connected(), 0);
         assert_eq!(mars_stn_noop_task_id(), Task::NOOP_TASK_ID);
+    }
+
+    /// The foreground is the process-wide state the two hooks hand to the net
+    /// core, so this one moves it under no lock of its own and leaves it as it
+    /// found it: nothing else in the crate reads it.
+    #[test]
+    fn the_foreground_the_host_names_is_what_the_core_is_asked() {
+        let before = with_foreground(|state| {
+            state.is_foreground = false;
+            state.is_active = true;
+            state.last_change_time = gettickcount();
+            state.last_change_time
+        });
+
+        mars_stn_on_foreground(1);
+        assert!(is_foreground(), "an app that came forward is in front");
+        let changed = last_foreground_change_time();
+        assert!(
+            changed >= before,
+            "the window a task wakes a link in is counted from the change"
+        );
+
+        // a call that says what the state already says moves nothing, the way
+        // the C++'s `if (_isforeground == isforeground_) return;` does not
+        mars_stn_on_foreground(1);
+        assert_eq!(
+            last_foreground_change_time(),
+            changed,
+            "a change that did not happen is not a change"
+        );
+
+        mars_stn_on_foreground(0);
+        assert!(!is_foreground());
+        assert!(last_foreground_change_time() >= changed);
+    }
+
+    #[test]
+    fn ten_minutes_in_the_background_end_the_grace_the_cpp_counts_on_an_alarm() {
+        // `ActiveLogic::__OnInActive`: the C++'s is `alarm_`; this ABI has no
+        // queue but the host's loop, so [`mars_stn_run_pending`] is what counts
+        // the ten minutes.
+        with_foreground(|state| {
+            state.is_foreground = false;
+            state.is_active = true;
+            state.last_change_time = gettickcount() - INACTIVE_TIMEOUT_MS - 1;
+        });
+
+        mars_stn_run_pending();
+        assert!(
+            !with_foreground(|state| state.is_active),
+            "ten minutes in the background make the app inactive"
+        );
+
+        // ... and an app that is in front never goes inactive, however long ago
+        // it came forward
+        with_foreground(|state| {
+            state.is_foreground = true;
+            state.is_active = true;
+            state.last_change_time = gettickcount() - INACTIVE_TIMEOUT_MS - 1;
+        });
+        mars_stn_run_pending();
+        assert!(
+            with_foreground(|state| state.is_active),
+            "the grace has no end while the app is in front"
+        );
+    }
+
+    #[test]
+    fn a_network_change_is_one_the_pipeline_survives() {
+        // `mars::baseevent::GetSignalOnNetworkChange()`: every long link is
+        // taken down, so what there was to connect is gone and a link nobody
+        // made is still not one that is up
+        mars_stn_on_network_change();
+        assert_eq!(mars_stn_longlink_is_connected(), 0);
     }
 }
