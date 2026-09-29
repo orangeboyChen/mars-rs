@@ -838,10 +838,7 @@ impl Parser {
     /// an end.
     pub fn recv(&mut self, bytes: &[u8]) -> RecvStatus {
         if bytes.is_empty() {
-            if self.fields.is_connection_close() && self.status == RecvStatus::Body {
-                self.status = RecvStatus::End;
-            }
-            return self.status;
+            return self.empty();
         }
         self.buffer.extend_from_slice(bytes);
         self.run(false)
@@ -851,10 +848,20 @@ impl Parser {
     /// as the head is whole.
     pub fn recv_header_only(&mut self, bytes: &[u8]) -> RecvStatus {
         if bytes.is_empty() {
-            return self.status;
+            return self.empty();
         }
         self.buffer.extend_from_slice(bytes);
         self.run(true)
+    }
+
+    /// What a read of no bytes is: the peer closed the socket, which is the
+    /// end of a body that has no length to end it — and the C++ answers for
+    /// it before it looks at whether the head was all the caller wanted.
+    fn empty(&mut self) -> RecvStatus {
+        if self.fields.is_connection_close() && self.status == RecvStatus::Body {
+            self.status = RecvStatus::End;
+        }
+        self.status
     }
 
     /// `RecvStatus()`.
@@ -1691,6 +1698,22 @@ mod tests {
         assert!(parser.body().is_empty(), "the body was not read");
         assert_eq!(parser.buffered(), b"hello");
         assert_eq!(parser.recv_header_only(b""), RecvStatus::Body);
+    }
+
+    #[test]
+    fn a_read_of_nothing_ends_the_body_a_close_left_without_a_length() {
+        let mut parser = Parser::new();
+        assert_eq!(
+            parser.recv_header_only(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nhello"),
+            RecvStatus::Body
+        );
+        assert!(
+            parser.body().is_empty(),
+            "a caller that asked for the head did not get the body"
+        );
+        // and the close is the end of it, whether the caller wanted the body
+        // or not
+        assert_eq!(parser.recv_header_only(b""), RecvStatus::End);
     }
 
     #[test]
