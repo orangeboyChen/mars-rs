@@ -55,7 +55,8 @@ use crate::file_util::now_timeval;
 use crate::flush::Flush;
 use crate::{
     appender_close_instance, appender_flush_instance, appender_flush_now_instance,
-    appender_get_current_log_path_instance, appender_open_instance,
+    appender_get_current_log_path_instance, appender_getfilepath_from_timespan,
+    appender_make_logfile_name,
     appender_request_flush_instance, appender_set_console_log_instance,
     appender_set_max_alive_duration_instance, appender_set_max_file_size_instance,
     appender_set_mode_instance, appender_write_instance, AppenderId,
@@ -95,6 +96,10 @@ pub struct Xlog {
     /// that already has one. `0` for every other `Xlog`.
     appender: AtomicU64,
     name_prefix: String,
+    /// The directory this appender writes into: what [`Xlog::log_files`] and
+    /// [`Xlog::log_file_names`] name a day out of, which is the prefix's other
+    /// half and not something an app should have to hand them twice.
+    log_dir: std::path::PathBuf,
     /// The level of an unregistered `Xlog`, which has no category to keep one:
     /// a category is what a prefix is registered under, and this one has no
     /// prefix. Every other `Xlog` reads its level from the category instead.
@@ -153,7 +158,8 @@ impl Xlog {
         Ok(Self {
             handle: AtomicU64::new(handle),
             appender: AtomicU64::new(0),
-            name_prefix: config.nameprefix,
+            name_prefix: config.nameprefix.clone(),
+            log_dir: config.logdir.clone(),
             level: AtomicU8::new(level as u8),
             mode: AtomicU8::new(config.mode as u8),
             console_log_enabled: AtomicBool::new(false),
@@ -179,32 +185,7 @@ impl Xlog {
     /// # Errors
     ///
     /// The same two as [`Xlog::open`], plus whatever the appender refuses.
-    pub fn open_unregistered(config: XLogConfig, level: LogLevel) -> Result<Self, AppenderError> {
-        if config.logdir.as_os_str().is_empty() {
-            return Err(AppenderError(
-                "Xlog::open_unregistered: logdir is empty".to_owned(),
-            ));
-        }
-        if config.nameprefix.is_empty() {
-            return Err(AppenderError(
-                "Xlog::open_unregistered: nameprefix is empty".to_owned(),
-            ));
-        }
-
-        let id = appender_open_instance(config.clone())?;
-        Ok(Self {
-            handle: AtomicU64::new(DEFAULT_HANDLE),
-            appender: AtomicU64::new(id),
-            name_prefix: config.nameprefix,
-            level: AtomicU8::new(level as u8),
-            mode: AtomicU8::new(config.mode as u8),
-            console_log_enabled: AtomicBool::new(false),
-            max_file_size_bytes: AtomicU64::new(0),
-            max_alive_time_seconds: AtomicU64::new(0),
-        })
-    }
-
-    /// What every file of this appender starts with, and what it is known by.
+     /// What every file of this appender starts with, and what it is known by.
     pub fn name_prefix(&self) -> &str {
         &self.name_prefix
     }
@@ -322,55 +303,32 @@ impl Xlog {
     /// Writes a record of `level`; `false` when this `Xlog` is closed or the
     /// level is below [`Xlog::level`].
     pub fn log(&self, level: LogLevel, tag: &str, message: &str) -> bool {
-        self.log_with_info(
-            Some(&XLoggerInfo {
-                level,
-                tag: Some(Cow::Borrowed(tag)),
-                ..XLoggerInfo::default()
-            }),
-            message,
-        )
-    }
-
-    /// [`Xlog::log`] with the record spelled out: the file, the function and
-    /// the line of the call site go in the `XLoggerInfo`, which is what a
-    /// caller that wants them in the record — and not only in the message —
-    /// hands in. `None` is the default record, and it is the one
-    /// [`Xlog::log`] hands in with a level and a tag on it.
-    pub fn log_with_info(&self, info: Option<&XLoggerInfo<'_>>, message: &str) -> bool {
         let Some(target) = self.target() else {
             return false;
         };
-        let mut info = match info {
-            Some(info) => info.clone(),
-            None => XLoggerInfo::default(),
+        // `-1` in the three is what asks the appender to fill the pid, the tid
+        // and the main tid in from the OS, which is a truer tid than anything
+        // this crate could gather and needs no `Looper`.
+        let info = XLoggerInfo {
+            level,
+            tag: Some(Cow::Borrowed(tag)),
+            pid: -1,
+            tid: -1,
+            maintid: -1,
+            timeval: now_timeval(),
+            ..XLoggerInfo::default()
         };
-        // `-1` in all three is what asks the appender to fill the pid, the tid
-        // and the main tid in from the OS, and `-1` is what a caller that set
-        // them itself does not get overwritten with. `Default` answers `0` for
-        // them, which is a record that then carries three wrong fields.
-        if info.pid == 0 && info.tid == 0 && info.maintid == 0 {
-            info.pid = -1;
-            info.tid = -1;
-            info.maintid = -1;
-        }
-        if info.timeval == (0, 0) {
-            info.timeval = now_timeval();
-        }
         match target {
             Target::Category(handle) => xlogger_write(handle, Some(&info), Some(message)),
             Target::Appender(id) => {
-                // The gate a category would have run: an unregistered appender
-                // has no level of its own, so this object keeps one.
-                if (self.mirrored_level() as i32) > (info.level as i32) {
+                if (self.mirrored_level() as i32) > (level as i32) {
                     return false;
                 }
                 appender_write_instance(id, Some(&info), message)
             }
         }
     }
-
-    /// [`Xlog::log`] at [`LogLevel::Verbose`].
+     /// [`Xlog::log`] at [`LogLevel::Verbose`].
     pub fn v(&self, tag: &str, message: &str) -> bool {
         self.log(LogLevel::Verbose, tag, message)
     }
@@ -510,6 +468,28 @@ impl Xlog {
             Target::Category(handle) => category_current_log_path(handle),
             Target::Appender(id) => appender_get_current_log_path_instance(id),
         }
+    }
+
+    /// The log files of the day `days_ago` days ago that are *there* — what an
+    /// app that uploads yesterday's opens. `[]` when the directory holds none
+    /// of that day's. `0` is today, `1` is yesterday, and so on.
+    ///
+    /// This is a day of files and not the file being written: what
+    /// [`Xlog::current_log_path`] answers is one, and this is this appender's
+    /// own prefix and its own directory.
+    pub fn log_files(&self, days_ago: i64) -> Vec<std::path::PathBuf> {
+        appender_getfilepath_from_timespan(days_ago, &self.name_prefix, &self.log_dir)
+    }
+
+    /// The names of the log files of the day `days_ago` days ago, whether or
+    /// not they are *there yet* — the name an app that is about to write, or
+    /// that is naming a file to someone else, asks for.
+    ///
+    /// A day's answer is the log-dir file and, when a cache dir is configured
+    /// and the file exists, its cache-dir twin, so this can answer two where
+    /// [`Xlog::log_files`] answers one.
+    pub fn log_file_names(&self, days_ago: i64) -> Vec<std::path::PathBuf> {
+        appender_make_logfile_name(days_ago, &self.name_prefix, &self.log_dir)
     }
 }
 

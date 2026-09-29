@@ -32,9 +32,6 @@ use marsrs_core::PtrBuffer;
 #[test]
 fn the_object_is_the_api_an_app_takes() {
     let _: fn(XLogConfig, LogLevel) -> Result<Xlog, AppenderError> = Xlog::open;
-    // The second writer over one prefix: the appender layer, which the
-    // `*_instance` family used to be the public face of.
-    let _: fn(XLogConfig, LogLevel) -> Result<Xlog, AppenderError> = Xlog::open_unregistered;
     let _: fn(&Xlog) -> &str = Xlog::name_prefix;
     let _: fn(&Xlog) -> bool = Xlog::is_open;
     let _: fn(&Xlog) -> Option<LogLevel> = Xlog::level;
@@ -49,14 +46,15 @@ fn the_object_is_the_api_an_app_takes() {
     let _: fn(&Xlog, u64) = Xlog::set_max_alive_time_seconds;
     let _: fn(&Xlog, LogLevel) -> bool = Xlog::is_loggable;
     let _: for<'a, 'b> fn(&Xlog, LogLevel, &'a str, &'b str) -> bool = Xlog::log;
-    let _: for<'a, 'b, 'c> fn(&Xlog, Option<&'a XLoggerInfo<'b>>, &'c str) -> bool =
-        Xlog::log_with_info;
     let _: for<'a, 'b> fn(&Xlog, &'a str, &'b str) -> bool = Xlog::v;
     let _: for<'a, 'b> fn(&Xlog, &'a str, &'b str) -> bool = Xlog::d;
     let _: for<'a, 'b> fn(&Xlog, &'a str, &'b str) -> bool = Xlog::i;
     let _: for<'a, 'b> fn(&Xlog, &'a str, &'b str) -> bool = Xlog::w;
     let _: for<'a, 'b> fn(&Xlog, &'a str, &'b str) -> bool = Xlog::e;
     let _: for<'a, 'b> fn(&Xlog, &'a str, &'b str) -> bool = Xlog::f;
+    let _: fn(&Xlog, i64) -> Vec<std::path::PathBuf> = Xlog::log_files;
+    let _: fn(&Xlog, i64) -> Vec<std::path::PathBuf> = Xlog::log_file_names;
+    let _: fn(&Xlog) -> Option<std::path::PathBuf> = Xlog::current_log_path;
     let _: fn(&Xlog) = Xlog::request_flush;
     let _: fn(&Xlog) = Xlog::flush_now;
     let _: fn(&Xlog) -> Flush = Xlog::flush;

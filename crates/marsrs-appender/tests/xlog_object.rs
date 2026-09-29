@@ -179,61 +179,6 @@ fn a_second_open_of_one_prefix_answers_the_first_appender() {
     assert!(files_first(second_dir.path()).is_none());
 }
 
-/// `Xlog::open_unregistered`: the second writer over a prefix that already has
-/// one, which is the one shape `Xlog::open` cannot answer — it hands back the
-/// appender that is open.
-#[test]
-fn an_unregistered_open_is_a_second_writer_over_one_prefix() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut cfg = config(dir.path(), "twowriters");
-    // Async, because it is the mode that keeps records in a cache file at all,
-    // and the cache file is what the two writers must not share.
-    cfg.mode = AppenderMode::Async;
-
-    let one = Xlog::open_unregistered(cfg.clone(), LogLevel::Info).unwrap();
-    let two = Xlog::open_unregistered(cfg.clone(), LogLevel::Info).unwrap();
-    assert!(one.is_open() && two.is_open());
-    assert!(dir.path().join("twowriters.mmap3").exists());
-    assert!(
-        dir.path().join("twowriters_1.mmap3").exists(),
-        "the second writer mmapped the first one's cache file"
-    );
-
-    // The registered open of the same prefix is a third appender, and not one
-    // of these two: the prefix nothing is registered for is theirs alone.
-    let three = Xlog::open(cfg, LogLevel::Info).unwrap();
-
-    assert!(one.i("first", "through the first"));
-    assert!(two.i("second", "through the second"));
-    assert!(three.i("third", "through the third"));
-    one.flush_now();
-    two.flush_now();
-    three.flush_now();
-
-    // One log file, and every writer's records in it — the completeness of a
-    // log three writers share is `tests/cross_writer.rs`'s to prove, with the
-    // framing and the inflate it has the machinery for.
-    assert!(
-        wrote(dir.path()).is_some(),
-        "no .xlog in {}",
-        dir.path().display()
-    );
-
-    // No category, so each unregistered `Xlog` keeps a level of its own, and
-    // moving one does not move the other — which is the one thing they do not
-    // share that two `Xlog`s of a *registered* prefix do.
-    one.set_level(LogLevel::Error);
-    assert_eq!(one.level(), Some(LogLevel::Error));
-    assert_eq!(two.level(), Some(LogLevel::Info));
-    assert!(!one.i("first", "dropped: this object's level moved"));
-    assert!(two.i("second", "kept: the other one's did not"));
-
-    one.close();
-    two.close();
-    three.close();
-    assert!(!one.is_open());
-}
-
 #[test]
 fn a_config_the_appender_refuses_is_an_error() {
     let xlog = Xlog::open(
