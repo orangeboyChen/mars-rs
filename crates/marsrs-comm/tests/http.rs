@@ -236,6 +236,25 @@ fn a_trailer_that_never_ends_is_an_error() {
     assert_eq!(parser.recv(field.as_bytes()), RecvStatus::BodyError);
 }
 
+/// The head of a `Connection: close` answer and its body are two reads, and
+/// that is the ordinary case on a socket. The parser used to end the answer
+/// at the head — a `Content-Length` of nothing is satisfied by no bytes — and
+/// the body that came after it stayed in the buffer for ever, so the caller
+/// was handed an empty answer.
+#[test]
+fn a_close_terminated_answer_ends_at_the_socket_and_not_at_its_head() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n"),
+        RecvStatus::Body,
+        "the head alone is not the answer"
+    );
+    assert_eq!(parser.recv(b"hello"), RecvStatus::Body);
+    assert_eq!(parser.recv(b""), RecvStatus::End, "the peer hung up");
+    assert_eq!(parser.body(), b"hello");
+    assert!(parser.is_success());
+}
+
 /// A parser that is done takes no more bytes: `run` has no state left that
 /// could use them, so what it was given would sit in `buffered()` and grow
 /// for as long as the caller kept handing over what the socket gave it.

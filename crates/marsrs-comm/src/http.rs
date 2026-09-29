@@ -1164,7 +1164,9 @@ impl Parser {
 
         let buffered = self.buffer.len() as u64;
         let have = self.body.len() as u64;
-        let append = if self.fields.is_connection_close() && content_length == 0 {
+        // a body the peer closes the socket at the end of has no length
+        let close_terminated = self.fields.is_connection_close() && content_length == 0;
+        let append = if close_terminated {
             // a body the peer closes the socket at the end of has no length
             buffered
         } else if buffered + have <= content_length {
@@ -1196,6 +1198,17 @@ impl Parser {
 
         self.body.extend_from_slice(&self.buffer[..append]);
         self.consume(append);
+        // A body the peer closes the socket at the end of has no length for
+        // the bytes so far to satisfy: `content_length` is 0, so
+        // `have + append` is 0 the moment the head is whole and nothing else
+        // came with it — which is every head that arrives in a read of its
+        // own, and that is how a socket hands one over. Ending there is an
+        // empty answer with the body stranded in the buffer, and what can
+        // end such an answer — [`Parser::peer_hung_up`] — never runs. The
+        // socket is the length, so this waits for bytes like any other body.
+        if close_terminated {
+            return self.buffer.is_empty();
+        }
         if have + append as u64 == content_length {
             self.status = RecvStatus::End;
             return true;
