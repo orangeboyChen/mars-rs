@@ -77,6 +77,9 @@ class XlogPlugin :
                 "setConsoleLogEnabled" -> setConsoleLogEnabled(call, result)
                 "setMaxFileSize" -> setMaxFileSize(call, result)
                 "setMaxAliveTime" -> setMaxAliveTime(call, result)
+                "currentLogPath" -> currentLogPath(call, result)
+                "logFiles" -> logFiles(call, result)
+                "logFileNames" -> logFileNames(call, result)
                 "close" -> close(call, result)
                 else -> result.notImplemented()
             }
@@ -95,6 +98,24 @@ class XlogPlugin :
      * is answered with, rather than a handle it would write through the
      * process-wide appender with.
      */
+    /**
+     * The file the appender of `namePrefix` is writing to, or `null` before the
+     * first record of the day opens one.
+     */
+    private fun currentLogPath(call: MethodCall, result: Result) {
+        result.success(call.appender().currentLogPath)
+    }
+
+    /** The day's files that are there — `0` is today, `1` is yesterday. */
+    private fun logFiles(call: MethodCall, result: Result) {
+        result.success(call.appender().logFiles(call.long("daysAgo")))
+    }
+
+    /** The day's names, whether or not the files are there yet. */
+    private fun logFileNames(call: MethodCall, result: Result) {
+        result.success(call.appender().logFileNames(call.long("daysAgo")))
+    }
+
     private fun open(call: MethodCall, result: Result) {
         val config = XlogConfig(
             logDir = call.string("logDir"),

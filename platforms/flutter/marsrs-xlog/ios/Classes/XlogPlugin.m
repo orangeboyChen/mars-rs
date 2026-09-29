@@ -30,6 +30,21 @@ static NSString *const kXlogDefaultNamePrefix = @"xlog";
 
 /// The number sent for `key`, or `fallback` when none was sent. A Dart `null`
 /// arrives as `NSNull`, which answers no `intValue`.
+/// What `read` writes into the buffer it is handed, as a string; `nil` when it
+/// wrote nothing — a negative code, or a path of no length. A path never fills
+/// the buffer, and a symbol that answers a length rather than a pointer is the
+/// C ABI's way of saying the caller decides how much it can hold.
+static NSString *XlogPath(int (^read)(char *, uint32_t)) {
+  char buffer[1024];
+  int written = read(buffer, (uint32_t)sizeof(buffer));
+  if (written <= 0) {
+    return nil;
+  }
+  return [[NSString alloc] initWithBytes:buffer
+                                  length:(NSUInteger)written
+                                encoding:NSUTF8StringEncoding];
+}
+
 static int XlogInt(NSDictionary *arguments, NSString *key, int fallback) {
   NSNumber *value = arguments[key];
   return [value isKindOfClass:NSNumber.class] ? value.intValue : fallback;
@@ -114,6 +129,12 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
     [self setMaxFileSize:call result:result];
   } else if ([call.method isEqualToString:@"setMaxAliveTime"]) {
     [self setMaxAliveTime:call result:result];
+  } else if ([call.method isEqualToString:@"currentLogPath"]) {
+    [self currentLogPath:call result:result];
+  } else if ([call.method isEqualToString:@"logFiles"]) {
+    [self logFiles:call result:result];
+  } else if ([call.method isEqualToString:@"logFileNames"]) {
+    [self logFileNames:call result:result];
   } else if ([call.method isEqualToString:@"close"]) {
     [self close:call result:result];
   } else {
@@ -158,6 +179,60 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   }
   self.instances[namePrefix] = @(handle);
   result(nil);
+}
+
+/// `mars_xlog_current_log_path_instance` — the file this appender is writing to.
+- (void)currentLogPath:(FlutterMethodCall *)call result:(FlutterResult)result {
+  long long instance = [self instanceForCall:call result:result];
+  if (instance == 0) {
+    return;
+  }
+  result(XlogPath(^(char *out, uint32_t len) {
+    return mars_xlog_current_log_path_instance(instance, out, len);
+  }));
+}
+
+/// `mars_xlog_getfilepath_from_timespan_instance` — the day's files that are
+/// there.
+- (void)logFiles:(FlutterMethodCall *)call result:(FlutterResult)result {
+  result([self dayPaths:call
+                   with:^int(long long instance, int timespan, unsigned int index, char *out,
+                             unsigned int len) {
+                     return mars_xlog_getfilepath_from_timespan_instance(instance, timespan, index, out, len);
+                   }]);
+}
+
+/// `mars_xlog_make_logfile_name_instance` — the day's names, whether or not the
+/// files are there yet.
+- (void)logFileNames:(FlutterMethodCall *)call result:(FlutterResult)result {
+  result([self dayPaths:call
+                   with:^int(long long instance, int timespan, unsigned int index, char *out,
+                             unsigned int len) {
+                     return mars_xlog_make_logfile_name_instance(instance, timespan, index, out, len);
+                   }]);
+}
+
+/// A day of paths, walked index by index until the symbol answers that there is
+/// nothing at that index — the list the C++ fills a `std::vector` with, asked
+/// one at a time.
+- (NSArray<NSString *> *)dayPaths:(FlutterMethodCall *)call
+                             with:(int (^)(long long, int, unsigned int, char *, unsigned int))pathAt {
+  long long instance = [self instanceForCall:call result:nil];
+  if (instance == 0) {
+    return @[];
+  }
+  int timespan = XlogInt(call.arguments, @"daysAgo", 0);
+  NSMutableArray<NSString *> *walked = [NSMutableArray array];
+  for (unsigned int index = 0;; index++) {
+    NSString *found = XlogPath(^(char *out, uint32_t len) {
+      return pathAt(instance, timespan, index, out, len);
+    });
+    if (found == nil) {
+      break;
+    }
+    [walked addObject:found];
+  }
+  return walked;
 }
 
 /// `mars_xlog_write_instance`. The file, the function and the line are left

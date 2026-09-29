@@ -291,6 +291,33 @@ class Xlog {
   /// method channel is a message and an answer, and there is no blocking on
   /// this side of one. What a caller that wants the drain and cannot hold a
   /// thread calls is this.
+  /// The file this appender is writing to, or `null` when it has none open yet
+  /// — the first record of the day is what opens one.
+  Future<String?> currentLogPath() => _invoke<String?>(
+        'currentLogPath',
+        {'namePrefix': namePrefix},
+      );
+
+  /// The log files of the day `daysAgo` days ago that are *there* — `0` is
+  /// today, `1` is yesterday.
+  Future<List<String>> logFiles(int daysAgo) async {
+    final found = await _invoke<List<dynamic>>(
+      'logFiles',
+      {'namePrefix': namePrefix, 'daysAgo': daysAgo},
+    );
+    return found?.cast<String>() ?? const [];
+  }
+
+  /// The names of the log files of the day `daysAgo` days ago, whether or not
+  /// they are there yet.
+  Future<List<String>> logFileNames(int daysAgo) async {
+    final found = await _invoke<List<dynamic>>(
+      'logFileNames',
+      {'namePrefix': namePrefix, 'daysAgo': daysAgo},
+    );
+    return found?.cast<String>() ?? const [];
+  }
+
   Future<void> flush() async {
     if (_closing != null) {
       return;
