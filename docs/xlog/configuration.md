@@ -13,7 +13,7 @@ one with no default — the appender is not opened without somewhere to write.
 | where the async cache file goes | `cachedir` | `cacheDirectory` | `cacheDir` | `cacheDir` | `cacheDir` | `cache_dir` | `cacheDir` | `cacheDir` | next to the log files |
 | how many days a cache file is kept | `cache_days` | `cacheDays` | `cacheDays` | `cacheDays` | `cacheDays` | `cache_days` | `cacheDays` | `cacheDays` | `0` — every file is kept |
 | what a closed file is compressed with | `compress_mode` | `compression` | `compressMode` | `compressMode` | `compressMode` | `compress_mode` | `compressMode` | `compressMode` | zlib |
-| how hard the compressor tries | `compress_level` | `compressionLevel` | `compressLevel` | `compressLevel` | `compressLevel` | `compress_level` | `compressLevel` | `compressLevel` | `0` — the compressor's own (zlib: 6) |
+| how hard the compressor tries | `compress_level` | `compressionLevel` | `compressLevel` | `compressLevel` | `compressLevel` | `compress_level` | `compressLevel` | `compressLevel` | `0` — the appender's own, which is `6`; Rust names it and starts at `6` |
 | the public key a record is encrypted with | `pub_key` | `publicKey` | `pubKey` | `pubKey` | `pubKey` | `pub_key` | `pubKey` | `pubKey` | empty — no encryption |
 
 A config the appender cannot honour is refused where you build it and not
@@ -130,8 +130,11 @@ thing an exit needs a call for.
 ## Compression and encryption
 
 `zlib` is the default and `zstd` compresses harder; both are per file, applied
-when the file is closed. The level is the compressor's own knob: `0` keeps the
-default (6 for zlib), `9` is the zlib ceiling and `22` the zstd one.
+when the file is closed. The level is a `zstd` knob and nothing else: zlib
+compresses at the one setting the C++ uses whatever the level says, and `0` asks
+for the appender's own, `6` — which is what Rust's config carries, so an app that
+names no level gets the same file on every platform. The ceiling is the
+compressor's: `9` for zlib, `22` for zstd.
 
 A `pubKey` encrypts each record's body with ECDH + TEA — the cipher the C++
 implementation uses, over a key the writer and the reader agree on. What you put there is

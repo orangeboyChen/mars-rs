@@ -12,7 +12,7 @@
 | 异步缓存文件放哪 | `cachedir` | `cacheDirectory` | `cacheDir` | `cacheDir` | `cacheDir` | `cache_dir` | `cacheDir` | `cacheDir` | 和日志文件同一个目录 |
 | 缓存文件保留几天 | `cache_days` | `cacheDays` | `cacheDays` | `cacheDays` | `cacheDays` | `cache_days` | `cacheDays` | `cacheDays` | `0` —— 都留着 |
 | 关闭的文件用什么压缩 | `compress_mode` | `compression` | `compressMode` | `compressMode` | `compressMode` | `compress_mode` | `compressMode` | `compressMode` | zlib |
-| 压缩到什么程度 | `compress_level` | `compressionLevel` | `compressLevel` | `compressLevel` | `compressLevel` | `compress_level` | `compressLevel` | `compressLevel` | `0` —— 用压缩器自己的（zlib 是 6） |
+| 压缩到什么程度 | `compress_level` | `compressionLevel` | `compressLevel` | `compressLevel` | `compressLevel` | `compress_level` | `compressLevel` | `compressLevel` | `0` —— 用 appender 自己的，也就是 `6`；Rust 直接写成 `6` |
 | 加密用的公钥 | `pub_key` | `publicKey` | `pubKey` | `pubKey` | `pubKey` | `pub_key` | `pubKey` | `pubKey` | 空 —— 不加密 |
 
 appender 接受不了的配置，在构造它的地方就被拒绝，而不是被库悄悄吞掉：
@@ -117,8 +117,10 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 
 ## 压缩与加密
 
-默认 `zlib`，`zstd` 压得更紧；两者都是按文件、在文件关闭时生效。级别是压缩器自己的旋钮：
-`0` 用默认值（zlib 是 6），zlib 的上限是 `9`，zstd 是 `22`。
+默认 `zlib`，`zstd` 压得更紧；两者都是按文件、在文件关闭时生效。级别只是 `zstd` 的旋钮：
+zlib 不管级别是多少，都用 C++ 的那一个设置；`0` 是要 appender 自己的，也就是 `6` ——
+Rust 的配置写的就是这个值，所以不写级别的应用在每个平台上拿到的文件都一样。上限是
+压缩器自己的：zlib 是 `9`，zstd 是 `22`。
 
 给了 `pubKey`，每条记录的正文会用 ECDH + TEA 加密 —— 也就是 C++ 实现用的那个算法，
 密钥由写方和读方协商出来。这里填的是**公**钥，
