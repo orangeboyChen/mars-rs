@@ -41,5 +41,12 @@ path = "src/bin/stn.rs"
 name = "sdt-compat"
 path = "src/bin/sdt.rs"
 
+# The wire half: `comm-compat` is the Rust of `mars/comm/basepacker.cc` and of
+# `mars/comm/adler32.c` — the long link's package before `longlink_packer.cc`
+# took it over, and the hash over it.
+[[bin]]
+name = "comm-compat"
+path = "src/bin/comm.rs"
+
 [lints]
 workspace = true
