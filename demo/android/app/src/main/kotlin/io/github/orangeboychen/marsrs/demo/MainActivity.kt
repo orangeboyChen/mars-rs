@@ -21,7 +21,7 @@ import java.io.File
  * 1. describe the files — [XlogConfig];
  * 2. open the appender and keep the handle — [Xlog.open];
  * 3. write — `xlog.i(tag, message)` and the five beside it;
- * 4. drain it before anything reads the file — [Xlog.flush];
+ * 4. drain it before anything reads the file — [Xlog.flushNow];
  * 5. close it when the app goes away — [Xlog.close].
  *
  * Nothing here loads a library: the AAR carries `libmarsrsxlog.so` for
@@ -65,10 +65,11 @@ class MainActivity : Activity() {
         // about to read the file or upload it, one flush.
         findViewById<Button>(R.id.write).setOnClickListener {
             xlog.i("button", "a record written at ${System.currentTimeMillis()}")
-            // `flushNow` waits for the write, so the record is on disk when
-            // the click handler returns. `flush()` is the same drain as a
-            // `suspend` call, and `signalFlush()` only signals the writer
-            // thread and comes straight back.
+            // `flushNow` drains on this thread, so the record is on disk when
+            // the click handler returns. `flush()` hands the drain to a thread
+            // of the I/O pool and resumes when it is over, and
+            // `requestFlush()` asks for the same drain and comes straight back
+            // without ever saying when it finished.
             xlog.flushNow()
             status.text = statusText()
         }

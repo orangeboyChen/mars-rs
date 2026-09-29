@@ -146,9 +146,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // -- 4. flush ------------------------------------------------------------
     //
-    // [`Xlog::signal_flush`] only asks the writer thread and returns; this one
-    // waits, so every record above is on disk before the next line runs. An app
-    // calls it before it reads the files, uploads them, or exits.
+    // [`Xlog::request_flush`] asks the writer thread for the drain and returns
+    // at once, and nothing ever answers when it is over; [`Xlog::flush`] hands
+    // the drain to a thread of its own and is `Ready` once the records are on
+    // the disk. This one drains on the calling thread, so every record above is
+    // on disk before the next line runs. An app calls it before it reads the
+    // files, uploads them, or exits.
     xlog.flush_now();
 
     // -- 5. read back --------------------------------------------------------

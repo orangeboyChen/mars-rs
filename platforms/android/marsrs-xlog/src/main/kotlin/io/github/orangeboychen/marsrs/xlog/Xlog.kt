@@ -277,9 +277,9 @@ class Xlog : Log.LogImp {
      * wait for — a record still in the cache sits in a file the kernel holds, so
      * nothing is lost by a drain that has not happened yet.
      */
-    fun signalFlush() {
+    fun requestFlush() {
         if (isOpen) {
-            appenderSignalFlush(handle)
+            appenderRequestFlush(handle)
         }
     }
 
@@ -366,7 +366,7 @@ class Xlog : Log.LogImp {
 
     /**
      * What an [Xlog] built with a `Context` registers: [flushNow] on the moment
-     * the app's UI is no longer on screen — and not [signalFlush], which only wakes
+     * the app's UI is no longer on screen — and not [requestFlush], which only wakes
      * the writer: the process can be ended the moment this returns, so a drain
      * nobody has waited for is a drain that may not have happened.
      *
@@ -566,7 +566,7 @@ class Xlog : Log.LogImp {
     external override fun appenderClose()
 
     /** Tells the writer thread it may drain, and returns at once. */
-    external override fun appenderSignalFlush(logInstancePtr: Long)
+    external override fun appenderRequestFlush(logInstancePtr: Long)
 
     /** Drains on the calling thread: the records are on disk when it returns. */
     external override fun appenderFlushNow(logInstancePtr: Long)

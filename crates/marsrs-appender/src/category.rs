@@ -32,12 +32,12 @@ use std::time::Instant;
 use crate::{
     appender_close_instance, appender_flush, appender_flush_instance, appender_flush_now,
     appender_flush_now_instance, appender_get_current_log_path_instance, appender_open_instance,
-    appender_set_console_log, appender_set_console_log_instance, appender_set_max_alive_duration,
+    appender_request_flush, appender_request_flush_instance, appender_set_console_log,
+    appender_set_console_log_instance, appender_set_max_alive_duration,
     appender_set_max_alive_duration_instance, appender_set_max_file_size,
     appender_set_max_file_size_instance, appender_set_mode, appender_set_mode_instance,
-    appender_signal_flush, appender_signal_flush_instance, appender_write, appender_write_instance,
-    current, instance, Appender, AppenderId, AppenderMode, Flush, LogLevel, XLogConfig,
-    XLoggerInfo,
+    appender_write, appender_write_instance, current, instance, Appender, AppenderId, AppenderMode,
+    Flush, LogLevel, XLogConfig, XLoggerInfo,
 };
 
 /// Opaque id of a [`XloggerCategory`]; `0` is the default logger.
@@ -702,15 +702,15 @@ pub fn set_max_alive_duration(handle: XloggerHandle, secs: u64) {
 /// records on the disk, and [`flush`] is the one an async caller awaits.
 ///
 /// A no-op for a handle whose instance was released — see `Target::Gone`.
-pub fn signal_flush(handle: XloggerHandle) {
+pub fn request_flush(handle: XloggerHandle) {
     match target(handle) {
-        Target::Instance(id) => appender_signal_flush_instance(id),
-        Target::Default => appender_signal_flush(),
+        Target::Instance(id) => appender_request_flush_instance(id),
+        Target::Default => appender_request_flush(),
         Target::Gone => {}
     }
 }
 
-/// [`signal_flush`] drained on the calling thread: the records are on the disk
+/// [`request_flush`] drained on the calling thread: the records are on the disk
 /// when this returns.
 ///
 /// A no-op for a handle whose instance was released — see `Target::Gone`.
@@ -738,7 +738,7 @@ pub fn flush(handle: XloggerHandle) -> Flush {
 }
 
 /// The default appender and every instance's, as `Arc` clones taken here and
-/// not on the draining thread: what [`signal_flush_all`], [`flush_now_all`]
+/// not on the draining thread: what [`request_flush_all`], [`flush_now_all`]
 /// and [`flush_all`] are about.
 ///
 /// Every registered instance has an appender of its own, so the C++'s "flush
@@ -759,13 +759,13 @@ fn every_appender() -> Vec<Arc<Appender>> {
 
 /// `mars::xlog::FlushAll` — asks every writer thread to drain, and returns at
 /// once.
-pub fn signal_flush_all() {
+pub fn request_flush_all() {
     for appender in every_appender() {
-        appender.flush();
+        appender.wake_writer();
     }
 }
 
-/// [`signal_flush_all`] drained on the calling thread: every record of every
+/// [`request_flush_all`] drained on the calling thread: every record of every
 /// appender is on the disk when this returns.
 pub fn flush_now_all() {
     for appender in every_appender() {

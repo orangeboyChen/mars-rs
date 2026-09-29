@@ -14,7 +14,7 @@ use marsrs_appender::{
     appender_close, appender_get_current_log_cache_path, appender_get_current_log_path,
     appender_getfilepath_from_timespan, appender_make_logfile_name, appender_oneshot_flush,
     appender_open, category_set_max_alive_duration, category_set_max_file_size, flush, flush_now,
-    set_appender_mode, set_console_log_open, signal_flush, xlogger_write, AppenderMode,
+    request_flush, set_appender_mode, set_console_log_open, xlogger_write, AppenderMode,
     FileIoAction, LogLevel, XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
 };
 use marsrs_crypt::{magic, LogCrypt, HEADER_LEN, TAILER_LEN};
@@ -105,7 +105,7 @@ fn open_write_flush_close_roundtrip() {
         Some(&info(LogLevel::Info)),
         Some("singleton roundtrip")
     ));
-    signal_flush(DEFAULT_HANDLE);
+    request_flush(DEFAULT_HANDLE);
     flush_now(DEFAULT_HANDLE);
     appender_close();
 

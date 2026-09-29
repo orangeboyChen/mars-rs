@@ -460,20 +460,20 @@ static napi_value Log(napi_env env, napi_callback_info info) {
     return Undefined(env);
 }
 
-// `mars_xlog_signal_flush_instance` and `mars_xlog_flush_now_instance`, as two
+// `mars_xlog_request_flush_instance` and `mars_xlog_flush_now_instance`, as two
 // methods and not as one carrying a `sync`: whether the caller waits is not a
 // detail a call site can be trusted to spell, and it is the whole of the
-// difference between the two — `SignalFlush` tells the writer thread it may
+// difference between the two — `RequestFlush` tells the writer thread it may
 // drain and returns at once, `FlushNow` drains on the calling thread and is
 // over when it returns.
-static napi_value SignalFlush(napi_env env, napi_callback_info info) {
+static napi_value RequestFlush(napi_env env, napi_callback_info info) {
     char* namePrefix = ArgString(env, info, 0);
     long long handle = HandleOf(namePrefix);
     free(namePrefix);
     if (handle == 0) {
         return Undefined(env);
     }
-    mars_xlog_signal_flush_instance(handle);
+    mars_xlog_request_flush_instance(handle);
     return Undefined(env);
 }
 
@@ -512,7 +512,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setMaxAliveTime", NULL, SetMaxAliveTime, NULL, NULL, NULL, napi_default, NULL},
         {"isLoggable", NULL, IsLoggable, NULL, NULL, NULL, napi_default, NULL},
         {"log", NULL, Log, NULL, NULL, NULL, napi_default, NULL},
-        {"signalFlush", NULL, SignalFlush, NULL, NULL, NULL, napi_default, NULL},
+        {"requestFlush", NULL, RequestFlush, NULL, NULL, NULL, napi_default, NULL},
         {"flushNow", NULL, FlushNow, NULL, NULL, NULL, napi_default, NULL},
         {"close", NULL, Close, NULL, NULL, NULL, napi_default, NULL},
     };

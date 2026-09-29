@@ -15,7 +15,7 @@ use std::sync::{Mutex, RwLock};
 use marsrs_appender::{
     appender_get_current_log_path, category_set_max_alive_duration as set_max_alive_duration,
     category_set_max_file_size as set_max_file_size, current_log_path, flush_now, flush_now_all,
-    set_console_fun, set_console_log_open, set_level, signal_flush, signal_flush_all,
+    request_flush, request_flush_all, set_console_fun, set_console_log_open, set_level,
     xlogger_assert, AppenderMode, ConsoleFun, LogLevel, XLogConfig, XLoggerInfo,
 };
 use marsrs_buffer::CompressMode;
@@ -669,15 +669,15 @@ pub extern "C" fn mars_xlog_set_mode_instance(instance: c_longlong, mode: c_int)
 /// that asks the process-wide appender alone misses their records. `0` is the
 /// process-wide appender, and a handle that is not one drains nothing.
 #[no_mangle]
-pub extern "C" fn mars_xlog_signal_flush_instance(instance: c_longlong) {
+pub extern "C" fn mars_xlog_request_flush_instance(instance: c_longlong) {
     let _ = guard(0, || {
-        signal_flush(instance as u64);
+        request_flush(instance as u64);
         0
     });
 }
 
 /// Drains one instance on the calling thread: that instance's records are on
-/// the disk when this returns, which [`mars_xlog_signal_flush_instance`] does
+/// the disk when this returns, which [`mars_xlog_request_flush_instance`] does
 /// not promise. `0` is the process-wide appender.
 #[no_mangle]
 pub extern "C" fn mars_xlog_flush_now_instance(instance: c_longlong) {
@@ -690,8 +690,8 @@ pub extern "C" fn mars_xlog_flush_now_instance(instance: c_longlong) {
 /// `mars::xlog::FlushAll`, signalled: the process-wide appender *and* every
 /// instance is told its writer thread may drain, and this returns at once.
 #[no_mangle]
-pub extern "C" fn mars_xlog_signal_flush_all() {
-    guard((), signal_flush_all);
+pub extern "C" fn mars_xlog_request_flush_all() {
+    guard((), request_flush_all);
 }
 
 /// `mars::xlog::FlushAll` on the calling thread: every appender of this process

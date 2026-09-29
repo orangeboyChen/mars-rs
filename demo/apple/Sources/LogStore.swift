@@ -113,11 +113,12 @@ final class LogStore: ObservableObject {
             log.debug(message: "the appender is \(log.namePrefix)", tag: "startup")
         }
 
-        // `flushNow` waits for the write, so every record above is on disk
-        // when this returns; `signalFlush` is the one that asks the writer
-        // thread and does not wait, and `flush()` is the `async` spelling of
-        // the same drain. The port flushes for the app when iOS backgrounds
-        // it; an app calls this before it reads the files or uploads them.
+        // `flushNow` drains on this thread, so every record above is on disk
+        // when this returns. `flush()` hands the drain to another thread and
+        // answers when it is over, and `requestFlush()` asks for the same drain
+        // and returns at once without ever saying when it finished. The port
+        // flushes for the app when iOS backgrounds it; an app calls this before
+        // it reads the files or uploads them.
         log.flushNow()
     }
 

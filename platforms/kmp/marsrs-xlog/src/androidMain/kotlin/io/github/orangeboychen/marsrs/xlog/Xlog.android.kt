@@ -95,9 +95,9 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
     public actual fun f(tag: String, message: String) = log(LogLevel.FATAL, tag, message)
 
-    public actual fun signalFlush() {
+    public actual fun requestFlush() {
         if (isOpen) {
-            appenderSignalFlush(handle)
+            appenderRequestFlush(handle)
         }
     }
 
@@ -148,7 +148,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
     private external fun releaseXlogInstance(namePrefix: String)
 
-    private external fun appenderSignalFlush(handle: Long)
+    private external fun appenderRequestFlush(handle: Long)
 
     private external fun appenderFlushNow(handle: Long)
 

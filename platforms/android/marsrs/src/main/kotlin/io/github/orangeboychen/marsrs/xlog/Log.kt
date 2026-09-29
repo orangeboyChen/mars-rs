@@ -132,7 +132,7 @@ object Log {
 
         fun appenderClose()
 
-        fun appenderSignalFlush(logInstancePtr: Long)
+        fun appenderRequestFlush(logInstancePtr: Long)
 
         fun appenderFlushNow(logInstancePtr: Long)
 
@@ -277,7 +277,7 @@ object Log {
 
         override fun appenderClose() {}
 
-        override fun appenderSignalFlush(logInstancePtr: Long) {}
+        override fun appenderRequestFlush(logInstancePtr: Long) {}
 
         override fun appenderFlushNow(logInstancePtr: Long) {}
 
@@ -318,7 +318,7 @@ object Log {
     @JvmStatic
     fun appenderFlush() {
         logImp?.let { imp ->
-            imp.appenderSignalFlush(0L)
+            imp.appenderRequestFlush(0L)
             for (instance in sLogInstanceMap.values.toList()) {
                 instance.appenderFlush()
             }
@@ -684,7 +684,7 @@ object Log {
         fun appenderFlush() {
             logImp?.let { imp ->
                 if (mLogInstancePtr != 0L) {
-                    imp.appenderSignalFlush(mLogInstancePtr)
+                    imp.appenderRequestFlush(mLogInstancePtr)
                 }
             }
         }

@@ -45,10 +45,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use crate::category::{
     current_log_path as category_current_log_path, flush as category_flush,
     flush_now as category_flush_now, get_level, get_xlogger_instance, is_enabled_for,
-    new_xlogger_instance, release_xlogger_instance, set_appender_mode, set_console_log_open,
-    set_level, set_max_alive_duration as category_set_max_alive_duration,
-    set_max_file_size as category_set_max_file_size, signal_flush as category_signal_flush,
-    xlogger_write, XloggerHandle, DEFAULT_HANDLE,
+    new_xlogger_instance, release_xlogger_instance, request_flush as category_request_flush,
+    set_appender_mode, set_console_log_open, set_level,
+    set_max_alive_duration as category_set_max_alive_duration,
+    set_max_file_size as category_set_max_file_size, xlogger_write, XloggerHandle, DEFAULT_HANDLE,
 };
 use crate::config::{AppenderError, AppenderMode, LogLevel, XLogConfig, XLoggerInfo};
 use crate::file_util::now_timeval;
@@ -56,9 +56,9 @@ use crate::flush::Flush;
 use crate::{
     appender_close_instance, appender_flush_instance, appender_flush_now_instance,
     appender_get_current_log_path_instance, appender_open_instance,
-    appender_set_console_log_instance, appender_set_max_alive_duration_instance,
-    appender_set_max_file_size_instance, appender_set_mode_instance,
-    appender_signal_flush_instance, appender_write_instance, AppenderId,
+    appender_request_flush_instance, appender_set_console_log_instance,
+    appender_set_max_alive_duration_instance, appender_set_max_file_size_instance,
+    appender_set_mode_instance, appender_write_instance, AppenderId,
 };
 
 /// An appender of an app's own: build one when the app starts, then write
@@ -405,10 +405,10 @@ impl Xlog {
     /// for is a drain an app wants soon and does not want to wait for — a
     /// record still in the cache sits in a file the kernel holds, so a drain
     /// that has not happened yet loses nothing.
-    pub fn signal_flush(&self) {
+    pub fn request_flush(&self) {
         match self.target() {
-            Some(Target::Category(handle)) => category_signal_flush(handle),
-            Some(Target::Appender(id)) => appender_signal_flush_instance(id),
+            Some(Target::Category(handle)) => category_request_flush(handle),
+            Some(Target::Appender(id)) => appender_request_flush_instance(id),
             None => {}
         }
     }

@@ -105,11 +105,11 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 pub use category::{
     current_log_path, flush, flush_all, flush_now, flush_now_all, get_filter, get_level,
     get_xlogger_instance, is_enabled_for, new_xlogger_instance, release_xlogger_instance,
-    set_appender_mode, set_console_log_open, set_filter, set_level,
-    set_max_alive_duration as category_set_max_alive_duration,
-    set_max_file_size as category_set_max_file_size, signal_flush, signal_flush_all,
-    xlogger_assert, xlogger_assert_p, xlogger_write, XloggerCategory, XloggerFilter, XloggerHandle,
-    XloggerScopeTracer, DEFAULT_HANDLE,
+    request_flush, request_flush_all, set_appender_mode, set_console_log_open, set_filter,
+    set_level, set_max_alive_duration as category_set_max_alive_duration,
+    set_max_file_size as category_set_max_file_size, xlogger_assert, xlogger_assert_p,
+    xlogger_write, XloggerCategory, XloggerFilter, XloggerHandle, XloggerScopeTracer,
+    DEFAULT_HANDLE,
 };
 pub use config::{AppenderError, AppenderMode, FileIoAction, LogLevel, XLogConfig, XLoggerInfo};
 pub use console::{get_console_fun, set_console_fun, ConsoleFun};
@@ -294,11 +294,11 @@ pub(crate) fn appender_write_instance(
 
 /// Asks the writer thread to drain one instance, and returns at once.
 ///
-/// `appender_signal_flush` for one instance: the drain is the writer
+/// `appender_request_flush` for one instance: the drain is the writer
 /// thread's, and nothing here says when it is over. Unknown ids are ignored.
-pub(crate) fn appender_signal_flush_instance(id: AppenderId) {
+pub(crate) fn appender_request_flush_instance(id: AppenderId) {
     if let Some(appender) = instance(id) {
-        appender.flush();
+        appender.wake_writer();
     }
 }
 
@@ -415,9 +415,9 @@ pub fn appender_open(config: XLogConfig) -> Result<(), AppenderError> {
 /// disk, and `appender_flush` is the one an async caller awaits.
 ///
 /// A no-op when no appender is open.
-pub(crate) fn appender_signal_flush() {
+pub(crate) fn appender_request_flush() {
     if let Some(appender) = current() {
-        appender.flush();
+        appender.wake_writer();
     }
 }
 
@@ -803,7 +803,7 @@ mod tests {
         assert!(appender_get_current_log_path().is_none());
         assert!(appender_get_current_log_cache_path().is_none());
         // Harmless no-ops.
-        appender_signal_flush();
+        appender_request_flush();
         appender_flush_now();
         appender_close();
     }

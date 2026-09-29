@@ -278,11 +278,11 @@ class Xlog {
   /// for — a record still in the cache is in a file the kernel holds, so a
   /// drain that has not happened yet is nothing lost. An app that reads or
   /// uploads the files wants [flush].
-  void signalFlush() {
+  void requestFlush() {
     if (_closing != null) {
       return;
     }
-    _send('signalFlush');
+    _send('requestFlush');
   }
 
   /// Takes what is in the cache to the log file, and answers that it has: the

@@ -59,7 +59,7 @@ void surface(const std::string& logDirectory) {
     log.f("startup", "fatal");
     log.log(LogLevel::Info, "startup", "with a call site", __FILE__, __PRETTY_FUNCTION__, __LINE__);
 
-    log.signalFlush();
+    log.requestFlush();
     log.flushNow();
     log.flush().get();
 

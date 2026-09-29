@@ -18,10 +18,11 @@ use mars_ffi::abi::{
 };
 use mars_ffi::{
     mars_xlog_assert, mars_xlog_current_log_path, mars_xlog_flush_now_instance,
-    mars_xlog_set_console_fun, mars_xlog_set_console_log_instance, mars_xlog_set_level_instance,
+    mars_xlog_request_flush_instance, mars_xlog_set_console_fun,
+    mars_xlog_set_console_log_instance, mars_xlog_set_level_instance,
     mars_xlog_set_max_alive_duration_instance, mars_xlog_set_max_file_size_instance,
-    mars_xlog_signal_flush_instance, mars_xlog_write_instance, MarsXLogConfig,
-    MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_OUT,
+    mars_xlog_write_instance, MarsXLogConfig, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE,
+    MARS_XLOG_ERR_NULL_OUT,
 };
 
 /// Closes the appender when the test ends, even if it failed.
@@ -266,7 +267,7 @@ fn open_write_flush_close_lands_on_disk() {
     let log = open_sync(dir.path());
     write(log, 2, "smoke", "hello-from-the-c-abi");
     write(log, 4, "smoke", "second-record-42");
-    mars_xlog_signal_flush_instance(log);
+    mars_xlog_request_flush_instance(log);
     mars_xlog_flush_now_instance(log);
 
     let path = log_file(dir.path());
@@ -561,7 +562,7 @@ fn null_pointers_are_never_dereferenced() {
 
     close();
     // Closing twice, flushing while closed: none of it may abort the process.
-    mars_xlog_signal_flush_instance(0);
+    mars_xlog_request_flush_instance(0);
     mars_xlog_flush_now_instance(0);
     close();
 }
@@ -677,7 +678,7 @@ fn c_types_line_up_with_the_header() {
         c_int,
         *const c_char,
     ) = mars_xlog_write_instance;
-    let _f: extern "C" fn(c_longlong) = mars_xlog_signal_flush_instance;
+    let _f: extern "C" fn(c_longlong) = mars_xlog_request_flush_instance;
     let _f: extern "C" fn(c_longlong) = mars_xlog_flush_now_instance;
     let _f: unsafe extern "C" fn(*const c_char) = mars_xlog_release_instance;
     let _f: extern "C" fn(c_longlong, c_int) = mars_xlog_set_level_instance;

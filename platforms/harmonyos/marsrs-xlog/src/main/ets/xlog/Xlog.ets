@@ -21,7 +21,7 @@ import { XlogConfig } from './XlogConfig';
 // an awaited drain is an async work item and a promise, and every method of the
 // NAPI module behind this file is synchronous — so a caller that wants the drain
 // off its own thread gives `flushNow()` a thread of its own, and one that wants
-// it off the writer's and off no thread of the app's calls `signalFlush()`.
+// it off the writer's and off no thread of the app's calls `requestFlush()`.
 //
 // Five settings are properties and not `setLevel` / `getLevel` pairs, because a
 // property is the Kotlin and the Swift spelling. `xlog.level` reads the
@@ -230,7 +230,7 @@ export class Xlog {
     this.log(LogLevel.Fatal, tag, message);
   }
 
-  /** `mars_xlog_signal_flush_instance`: tells the writer thread it may take
+  /** `mars_xlog_request_flush_instance`: tells the writer thread it may take
    * what is in the cache to the log file, and returns at once.
    *
    * It guarantees nothing. The drain is the writer thread's, it has not
@@ -240,11 +240,11 @@ export class Xlog {
    * an app wants soon and does not want to wait for: what is in the cache is
    * in a file the kernel holds, so a drain that has not happened yet has lost
    * nothing. */
-  signalFlush(): void {
+  requestFlush(): void {
     if (!this.opened) {
       return;
     }
-    xlogNapi.signalFlush(this.namePrefix);
+    xlogNapi.requestFlush(this.namePrefix);
   }
 
   /** `mars_xlog_flush_now_instance`: takes what is in the cache to the

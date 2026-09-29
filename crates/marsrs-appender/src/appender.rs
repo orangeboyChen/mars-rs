@@ -1934,8 +1934,11 @@ impl Appender {
         self.lock().write_tips2file(tips);
     }
 
-    /// `XloggerAppender::Flush` — wake the writer thread.
-    pub(crate) fn flush(&self) {
+    /// `XloggerAppender::Flush` — wake the writer thread, and nothing else: no
+    /// record is on the disk because this returned, and the caller is given no
+    /// way to find out when it is. `request_flush` is this, and `flush_sync`
+    /// is the drain that answers when it is over.
+    pub(crate) fn wake_writer(&self) {
         self.lock().notify();
     }
 
@@ -2402,7 +2405,7 @@ mod tests {
         // the writer thread got there first the bytes are on their way to the
         // file rather than in it, so the file is given a moment to catch up.
         for _ in 0..100 {
-            appender.flush();
+            appender.wake_writer();
             appender.flush_sync();
             bytes = fs::read(&path).unwrap_or_default();
             if !bytes.is_empty() {

@@ -5,7 +5,7 @@
 // Multiplatform app and `platforms/apple/MarsRSXlog/Xlog.swift` to a Swift
 // one. So what this file is is a channel over an API that already exists, and
 // nothing of the API is invented here: `Xlog.open(XlogConfig(...))`, `log`,
-// `isLoggable`, `signalFlush`, `flush`, `close`, and the five settings, under
+// `isLoggable`, `requestFlush`, `flush`, `close`, and the five settings, under
 // the names every other platform of the port gives them.
 //
 // The xlog-only plugin is `marsrs_xlog`, and this file is its Kotlin
@@ -69,7 +69,7 @@ class XlogPlugin :
                 "log" -> log(call, result)
                 "isLoggable" -> isLoggable(call, result)
                 "flush" -> flush(call, result)
-                "signalFlush" -> signalFlush(call, result)
+                "requestFlush" -> requestFlush(call, result)
                 "setLevel" -> setLevel(call, result)
                 "getLevel" -> getLevel(call, result)
                 "setMode" -> setMode(call, result)
@@ -141,9 +141,9 @@ class XlogPlugin :
         result.success(null)
     }
 
-    /** `Xlog.signalFlush`: the signal the writer thread is told to drain by. */
-    private fun signalFlush(call: MethodCall, result: Result) {
-        call.appender().signalFlush()
+    /** `Xlog.requestFlush`: asks the writer thread to drain, answers nothing. */
+    private fun requestFlush(call: MethodCall, result: Result) {
+        call.appender().requestFlush()
         result.success(null)
     }
 

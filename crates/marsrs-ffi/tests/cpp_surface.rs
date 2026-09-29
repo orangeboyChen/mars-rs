@@ -27,7 +27,7 @@ const SYMBOLS: [&str; 14] = [
     "mars_xlog_set_max_alive_duration_instance",
     "mars_xlog_is_enabled_for",
     "mars_xlog_write_instance",
-    "mars_xlog_signal_flush_instance",
+    "mars_xlog_request_flush_instance",
     "mars_xlog_flush_now_instance",
     "mars_xlog_set_console_fun",
 ];

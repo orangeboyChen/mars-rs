@@ -90,7 +90,7 @@ public expect class Xlog(config: XlogConfig) {
      * wait for — a record still in the cache sits in a file the kernel holds, so
      * nothing is lost by a drain that has not happened yet.
      */
-    public fun signalFlush()
+    public fun requestFlush()
 
     /**
      * Takes what is in the cache to the log file on the calling thread, and
