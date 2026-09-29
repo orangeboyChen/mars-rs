@@ -59,12 +59,15 @@ object Mars {
      * rather than inside one.
      *
      * Those two are the entry points of this object, and the ones its own
-     * `external`s are behind. `StnLogic`, `SdtLogic` and the `BaseEvent` a
-     * broadcast reaches are not guarded this way — their `init` has to log a
-     * failed load and go on, because an exception out of it is a class the app
-     * can never touch again — so a call of theirs with the library missing is
-     * still an `UnsatisfiedLinkError` naming the symbol. [libraryLoaded] is
-     * what an app asks when it wants that answer before it makes one.
+     * `external`s are behind. `StnLogic` and `SdtLogic` are not guarded this
+     * way — their `init` calls [loadDefaultMarsLibrary], which has to log a
+     * failed load and go on, because an exception out of the `init` of a class
+     * is a class the app can never touch again — so a call of theirs with the
+     * library missing is still an `UnsatisfiedLinkError` naming the symbol.
+     * `BaseEvent` has no `init` of its own at all: what its receiver calls is
+     * reached on a library whichever of those the app touched first already
+     * loaded, and when none did it fails the same way. [libraryLoaded] is what
+     * an app asks when it wants that answer before it makes one.
      */
     private fun requireLibrary() {
         if (!libraryLoaded) {
