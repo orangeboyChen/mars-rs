@@ -470,7 +470,14 @@ static napi_value Log(napi_env env, napi_callback_info info) {
         return Undefined(env);
     }
     int32_t level = MarsLevelInfo;
-    napi_get_value_int32(env, argv[1], &level);
+    // A level this module cannot read is a record it does not write: the C ABI
+    // drops a level that is not one of the six, so writing the default would be
+    // a record at a level the caller did not ask for — the same answer
+    // `IsLoggable` gives a level it cannot read, and the one every other
+    // method here gives an argument it cannot read.
+    if (napi_get_value_int32(env, argv[1], &level) != napi_ok) {
+        return Undefined(env);
+    }
     char* tag = CopyString(env, argv[2]);
     char* message = CopyString(env, argv[3]);
     mars_xlog_write_instance(handle, level, tag == NULL ? "" : tag, "", "", 0,
