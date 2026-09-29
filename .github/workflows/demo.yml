@@ -377,6 +377,31 @@ jobs:
           echo "sdk.dir=$android_home" > platforms/kmp/local.properties
       - name: Build the Apple archives
         run: scripts/build_kmp_native.sh platforms/kmp/native
+      # The other half of `platforms/kmp/native`, and the one this job cannot
+      # build: `:marsrs-xlog` configures an Android target whatever task it is
+      # asked for — `macosArm64Test` included — and a `native/android` with no
+      # `.so` in it is a configuration failure before any task runs. It is the
+      # asset the `android` job of release.yml uploads, taken from the newest
+      # tag that has one the way jitpack.yml takes it, and resolved off origin
+      # rather than written here: a version in this file is a version that goes
+      # stale, and the archive is a JNI bridge no Kotlin of this tree calls.
+      - name: Unpack the Android natives of the newest release
+        run: |
+          set -euo pipefail
+          # Sorted by git and not by `sort -V`, which is GNU's: this runner is
+          # macOS, whose `sort` has no `-V`, and a step that dies of it takes
+          # the whole job down before a byte is downloaded.
+          tag="$(git ls-remote --tags --refs --sort=-v:refname origin \
+            | awk -F/ '{ t = $NF
+                         if (t ~ /^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$/) print t }' \
+            | head -1)"
+          [ -n "$tag" ] || { echo "::error::origin has no release tag"; exit 1; }
+          echo "the Android natives of $tag"
+          curl -sSfL -o marsrs-android-native.zip \
+            "https://github.com/orangeboyChen/mars-rs/releases/download/$tag/marsrs-android-native.zip"
+          mkdir -p platforms/kmp/native/android
+          unzip -q -o marsrs-android-native.zip -d platforms/kmp/native/android
+          find platforms/kmp/native/android -name '*.so' | sort
       - name: Test marsrs-xlog on macosArm64
         working-directory: platforms/kmp
         run: ./gradlew :marsrs-xlog:macosArm64Test
