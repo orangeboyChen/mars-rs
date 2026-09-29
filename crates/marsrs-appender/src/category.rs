@@ -26,7 +26,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
+use std::sync::{Condvar, Mutex, OnceLock, RwLock};
 use std::time::Instant;
 
 use crate::{
@@ -36,7 +36,7 @@ use crate::{
     appender_set_console_log_instance, appender_set_max_alive_duration,
     appender_set_max_alive_duration_instance, appender_set_max_file_size,
     appender_set_max_file_size_instance, appender_set_mode, appender_set_mode_instance,
-    appender_write, appender_write_instance, current, instance, Appender, AppenderId, AppenderMode,
+    appender_write, appender_write_instance, AppenderId, AppenderMode,
     Flush, LogLevel, XLogConfig, XLoggerInfo,
 };
 
@@ -737,52 +737,6 @@ pub fn flush(handle: XloggerHandle) -> Flush {
     }
 }
 
-/// The default appender and every instance's, as `Arc` clones taken here and
-/// not on the draining thread: what [`request_flush_all`], [`flush_now_all`]
-/// and [`flush_all`] are about.
-///
-/// Every registered instance has an appender of its own, so the C++'s "flush
-/// everything" has to drain those too — a caller that flushes before
-/// collecting logs or suspending would otherwise miss their records.
-fn every_appender() -> Vec<Arc<Appender>> {
-    let mut appenders: Vec<Arc<Appender>> = current().into_iter().collect();
-    let ids: Vec<AppenderId> = registry()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .categories
-        .values()
-        .filter_map(|category| category.appender)
-        .collect();
-    appenders.extend(ids.into_iter().filter_map(instance));
-    appenders
-}
-
-/// `mars::xlog::FlushAll` — asks every writer thread to drain, and returns at
-/// once.
-pub fn request_flush_all() {
-    for appender in every_appender() {
-        appender.wake_writer();
-    }
-}
-
-/// [`request_flush_all`] drained on the calling thread: every record of every
-/// appender is on the disk when this returns.
-pub fn flush_now_all() {
-    for appender in every_appender() {
-        appender.flush_sync();
-    }
-}
-
-/// [`flush_now_all`] for a caller that can wait without holding a thread.
-pub fn flush_all() -> Flush {
-    let appenders = every_appender();
-    Flush::new(move || {
-        for appender in appenders {
-            appender.flush_sync();
-        }
-    })
-}
-
 /// `mars::xlog::SetConsoleLogOpen` — per instance.
 pub fn set_console_log_open(handle: XloggerHandle, open: bool) {
     match target(handle) {
@@ -795,16 +749,13 @@ pub fn set_console_log_open(handle: XloggerHandle, open: bool) {
 /// The directory the appender of `handle` writes its files to, or `None` when
 /// there is none — an appender with no log dir was never opened.
 ///
-/// `appender_get_current_log_path` is the process-wide appender's and takes no
-/// handle, because the C++ has no instance of the question; this is the same
-/// one about any handle, `DEFAULT_HANDLE` included, which is that appender and
-/// answers the same path. The name is the C++'s, and so is what it answers:
+/// The name is the C++'s, and so is what it answers:
 /// the directory and not a file — the same question `Xlog::current_log_path`
 /// asks of an object.
 pub fn current_log_path(handle: XloggerHandle) -> Option<PathBuf> {
     match target(handle) {
         Target::Instance(id) => appender_get_current_log_path_instance(id),
-        Target::Default => crate::appender_get_current_log_path(),
+        Target::Default => None,
         Target::Gone => None,
     }
 }
@@ -821,28 +772,6 @@ mod tests {
             nameprefix: prefix.to_owned(),
             ..XLogConfig::default()
         }
-    }
-
-    #[test]
-    fn instance_table_is_keyed_by_prefix() {
-        let _guard = serial();
-        let dir = tempfile::tempdir().unwrap();
-        let first = new_xlogger_instance(&config("p", dir.path()), LogLevel::Info);
-        assert_ne!(first, DEFAULT_HANDLE);
-        assert_eq!(get_xlogger_instance("p"), first);
-        // A second call with the same prefix returns the existing handle.
-        assert_eq!(
-            new_xlogger_instance(&config("p", dir.path()), LogLevel::Info),
-            first
-        );
-        assert_eq!(get_xlogger_instance("missing"), DEFAULT_HANDLE);
-
-        release_xlogger_instance("p");
-        assert_eq!(get_xlogger_instance("p"), DEFAULT_HANDLE);
-
-        // The appender is a process-wide singleton and the other tests in this
-        // crate assume it is closed, so put it back.
-        crate::appender_close();
     }
 
     #[test]
@@ -885,40 +814,6 @@ mod tests {
             DEFAULT_HANDLE
         );
         assert_eq!(get_xlogger_instance("blocked"), DEFAULT_HANDLE);
-    }
-
-    /// Two threads asking for the same prefix at once must open **one**
-    /// appender between them: a second one over the same `<prefix>.mmap3` would
-    /// be closed again, and `close` clears the cache file the first one is
-    /// still writing through — which is why the C++ holds its mutex across
-    /// `XloggerAppender::NewInstance`.
-    #[test]
-    fn threads_asking_for_the_same_prefix_at_once_open_one_appender() {
-        let _guard = serial();
-        let dir = tempfile::tempdir().unwrap();
-        let config = config("race", dir.path());
-
-        let handles: Vec<XloggerHandle> = std::thread::scope(|scope| {
-            let threads: Vec<_> = (0..8)
-                .map(|_| scope.spawn(|| new_xlogger_instance(&config, LogLevel::Verbose)))
-                .collect();
-            threads
-                .into_iter()
-                .map(|thread| thread.join().unwrap())
-                .collect()
-        });
-        assert!(handles.iter().all(|handle| *handle == handles[0]));
-        assert_ne!(handles[0], DEFAULT_HANDLE);
-
-        // one category, and the cache it writes through is the one it opened
-        set_appender_mode(handles[0], AppenderMode::Sync);
-        assert!(xlogger_write(handles[0], None, Some("REC-AFTER-THE-RACE")));
-        flush_now(handles[0]);
-        let text = log_text(dir.path());
-        assert!(text.contains("REC-AFTER-THE-RACE"), "{text}");
-
-        release_xlogger_instance("race");
-        crate::appender_close();
     }
 
     #[test]
@@ -1018,48 +913,6 @@ mod tests {
         release_xlogger_instance("loud");
     }
 
-    /// `xlogger_Assert` writes a `kLevelFatal` record whose body is the
-    /// expression in `[ASSERT(...)]` and the message behind it, and no
-    /// instance's level filter is asked: the C++ writes it with
-    /// `xlogger_Write`, i.e. through the process-wide appender.
-    #[test]
-    fn an_assert_is_a_fatal_record_that_names_the_expression() {
-        let _guard = serial();
-        let dir = tempfile::tempdir().unwrap();
-        crate::appender_open(config("assert", dir.path())).unwrap();
-        set_appender_mode(DEFAULT_HANDLE, AppenderMode::Sync);
-        // A level no record of a lower one would survive.
-        set_level(DEFAULT_HANDLE, LogLevel::None);
-
-        let info = XLoggerInfo {
-            level: LogLevel::Verbose,
-            ..XLoggerInfo::default()
-        };
-        assert!(xlogger_assert(
-            Some(&info),
-            "x == y",
-            "the two are not equal"
-        ));
-        assert!(xlogger_assert_p(
-            Some(&info),
-            "x == y",
-            format_args!("{} is not {}", 1, 2)
-        ));
-        flush_now(DEFAULT_HANDLE);
-
-        let text = log_text(dir.path());
-        // `[F]` is the level string of `kLevelFatal` in the record header.
-        assert!(text.contains("[F]"), "the record is not fatal: {text}");
-        assert!(
-            text.contains("[ASSERT(x == y)]the two are not equal"),
-            "{text}"
-        );
-        assert!(text.contains("[ASSERT(x == y)]1 is not 2"), "{text}");
-
-        crate::appender_close();
-        set_level(DEFAULT_HANDLE, LogLevel::None);
-    }
-
     /// Takes the filter away again when the test is over — including when it
     /// panicked: it is one process-wide static, and a filter left behind
     /// answers for the records of every test that runs after it.
@@ -1069,50 +922,6 @@ mod tests {
         fn drop(&mut self) {
             set_filter(None);
         }
-    }
-
-    /// `xlogger_filter_t` — what the C++ asks from inside
-    /// `XLogger::~XLogger`, before it writes: a record the filter answers `0`
-    /// or less for never reaches the file, and one it answers more than `0`
-    /// for goes out the way the filter left it, level included.
-    #[test]
-    fn a_filter_the_app_set_is_asked_about_every_record() {
-        let _guard = serial();
-        let _no_filter = NoFilter;
-        set_filter(Some(|info, log| {
-            if log.contains("drop") {
-                return 0;
-            }
-            // `XLoggerInfo*` is not const: what the filter does to the record
-            // is what gets written.
-            info.level = LogLevel::Fatal;
-            1
-        }));
-
-        let dir = tempfile::tempdir().unwrap();
-        crate::appender_open(config("filter", dir.path())).unwrap();
-        set_appender_mode(DEFAULT_HANDLE, AppenderMode::Sync);
-
-        let info = XLoggerInfo {
-            level: LogLevel::Verbose,
-            ..XLoggerInfo::default()
-        };
-        assert!(
-            !xlogger_write(DEFAULT_HANDLE, Some(&info), Some("drop this one")),
-            "a record the filter refused is one that was written"
-        );
-        assert!(xlogger_write(DEFAULT_HANDLE, Some(&info), Some("kept")));
-        flush_now(DEFAULT_HANDLE);
-
-        let text = log_text(dir.path());
-        assert!(!text.contains("drop this one"), "{text}");
-        // `[F]` — the level the filter raised the record to, in its header.
-        let kept = text.find("kept").expect("the record was not written");
-        assert!(text[..kept].contains("[F]"), "the rewrite was lost: {text}");
-
-        crate::appender_close();
-        set_filter(None);
-        assert!(get_filter().is_none(), "the filter was not taken away");
     }
 
     /// The same filter, on the path of a handle that names an **instance**:
@@ -1144,68 +953,6 @@ mod tests {
 
         release_xlogger_instance("filtered");
         set_filter(None);
-    }
-
-    /// `XScopeTracer` — the entry record on the way in, the exit record with
-    /// the span on the way out.
-    #[test]
-    fn a_scope_is_bracketed_by_two_records() {
-        let _guard = serial();
-        let dir = tempfile::tempdir().unwrap();
-        crate::appender_open(config("scope", dir.path())).unwrap();
-        set_appender_mode(DEFAULT_HANDLE, AppenderMode::Sync);
-        set_level(DEFAULT_HANDLE, LogLevel::Verbose);
-
-        let info = XLoggerInfo {
-            level: LogLevel::Info,
-            ..XLoggerInfo::default()
-        };
-        let mut scope = XloggerScopeTracer::new(info, "connect", Some("to the long link"));
-        scope.exit("timed out");
-        drop(scope);
-        flush_now(DEFAULT_HANDLE);
-
-        let text = log_text(dir.path());
-        assert!(text.contains("-> connect to the long link"), "{text}");
-        let exit = text
-            .find("<- connect +")
-            .unwrap_or_else(|| panic!("no exit record: {text}"));
-        assert!(text[exit..].contains("timed out"), "{text}");
-        // The span is milliseconds, and it is in the record behind the `+`.
-        let span = text[exit + "<- connect +".len()..]
-            .split(',')
-            .next()
-            .unwrap_or_default();
-        assert!(span.chars().all(|c| c.is_ascii_digit()), "{span}");
-
-        crate::appender_close();
-        set_level(DEFAULT_HANDLE, LogLevel::None);
-    }
-
-    /// The level is asked **once**, where the C++ asks it — in the
-    /// constructor — so a scope a level refused writes neither of its two
-    /// records.
-    #[test]
-    fn a_scope_the_level_refused_writes_nothing() {
-        let _guard = serial();
-        let dir = tempfile::tempdir().unwrap();
-        crate::appender_open(config("silent-scope", dir.path())).unwrap();
-        set_appender_mode(DEFAULT_HANDLE, AppenderMode::Sync);
-        set_level(DEFAULT_HANDLE, LogLevel::Error);
-
-        let info = XLoggerInfo {
-            level: LogLevel::Info,
-            ..XLoggerInfo::default()
-        };
-        let scope = XloggerScopeTracer::new(info, "silent", None);
-        drop(scope);
-        flush_now(DEFAULT_HANDLE);
-
-        let text = log_text(dir.path());
-        assert!(!text.contains("silent"), "{text}");
-
-        crate::appender_close();
-        set_level(DEFAULT_HANDLE, LogLevel::None);
     }
 
     /// A scope the level refused owns nothing — neither the name nor what
@@ -1241,88 +988,6 @@ mod tests {
     }
 
     #[test]
-    fn flush_all_drains_the_instances_as_well() {
-        let _guard = serial();
-        let first = tempfile::tempdir().unwrap();
-        let second = tempfile::tempdir().unwrap();
-        let one = new_xlogger_instance(&config("all-one", first.path()), LogLevel::Verbose);
-        let two = new_xlogger_instance(&config("all-two", second.path()), LogLevel::Verbose);
-        set_appender_mode(one, AppenderMode::Sync);
-        set_appender_mode(two, AppenderMode::Sync);
-        assert!(xlogger_write(one, None, Some("ALL-ONE")));
-        assert!(xlogger_write(two, None, Some("ALL-TWO")));
-
-        // Not one per-instance `flush`: `flush_all` has to reach both.
-        flush_now_all();
-
-        assert!(log_text(first.path()).contains("ALL-ONE"));
-        assert!(log_text(second.path()).contains("ALL-TWO"));
-
-        release_xlogger_instance("all-one");
-        release_xlogger_instance("all-two");
-    }
-
-    #[test]
-    fn a_stale_handle_leaves_the_default_appender_alone() {
-        let _guard = serial();
-        const STALE: XloggerHandle = 999;
-
-        // Only handle `0` names the process-wide appender, so none of these
-        // may reach it: a one byte file size would rotate on every record.
-        crate::appender_close();
-        set_appender_mode(STALE, AppenderMode::Async);
-        set_max_file_size(STALE, 1);
-        set_max_alive_duration(STALE, 1);
-        set_console_log_open(STALE, true);
-        flush_now(STALE);
-
-        let dir = tempfile::tempdir().unwrap();
-        crate::appender_open(config("default", dir.path())).unwrap();
-        crate::appender_write(None, "first record");
-        crate::appender_write(None, "second record");
-        crate::appender_close();
-
-        let files: Vec<_> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.ends_with(".xlog"))
-            .collect();
-        assert_eq!(
-            files.len(),
-            1,
-            "the default appender was resized: {files:?}"
-        );
-
-        // Put the process-wide settings back.
-        set_max_file_size(DEFAULT_HANDLE, 0);
-        set_console_log_open(DEFAULT_HANDLE, false);
-    }
-
-    #[test]
-    fn one_shot_recovery_stays_away_from_an_instance_cache() {
-        let _guard = serial();
-        crate::appender_close();
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = config("owned", dir.path());
-        let handle = new_xlogger_instance(&cfg, LogLevel::Verbose);
-        assert_ne!(handle, DEFAULT_HANDLE);
-
-        // The instance owns `<prefix>.mmap3`: recovery must not read and
-        // unlink it underneath a live appender.
-        let mmap_path = crate::appender::mmap_file_path(&cfg);
-        assert!(instance_owns_mmap_path(&mmap_path));
-        assert_eq!(
-            crate::appender_oneshot_flush(&cfg),
-            crate::config::FileIoAction::Unnecessary
-        );
-
-        release_xlogger_instance("owned");
-        assert!(!instance_owns_mmap_path(&mmap_path));
-        crate::appender_close();
-    }
-
-    #[test]
     fn the_default_handle_has_its_own_level() {
         let _guard = serial();
         set_level(DEFAULT_HANDLE, LogLevel::Error);
@@ -1350,37 +1015,4 @@ mod tests {
         assert_eq!(get_level(12345), None, "unknown handle");
     }
 
-    /// `xlogger_Write` has no level filter: the record goes out through handle
-    /// `0` whatever `SetLevel(0, …)` says, because the level is only what
-    /// `IsEnabledFor` answers from.
-    #[test]
-    fn a_record_through_the_default_logger_ignores_the_level() {
-        let _guard = serial();
-        let dir = tempfile::tempdir().unwrap();
-        crate::appender_open(config("gate", dir.path())).unwrap();
-        set_appender_mode(DEFAULT_HANDLE, AppenderMode::Sync);
-        set_level(DEFAULT_HANDLE, LogLevel::Error);
-
-        let info = XLoggerInfo {
-            level: LogLevel::Verbose,
-            ..XLoggerInfo::default()
-        };
-        assert!(!is_enabled_for(DEFAULT_HANDLE, LogLevel::Verbose));
-        assert!(xlogger_write(
-            DEFAULT_HANDLE,
-            Some(&info),
-            Some("WRITTEN-ANYWAY")
-        ));
-        flush_now(DEFAULT_HANDLE);
-
-        assert!(
-            log_text(dir.path()).contains("WRITTEN-ANYWAY"),
-            "the record was filtered out: {}",
-            log_text(dir.path())
-        );
-
-        crate::appender_close();
-        // `kLevelNone`, the level a fresh process starts with.
-        set_level(DEFAULT_HANDLE, LogLevel::None);
-    }
 }

@@ -56,7 +56,7 @@
 //!   to rather than trusting a lock that locks nobody.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
@@ -363,12 +363,6 @@ pub(crate) fn cache_dir(config: &XLogConfig) -> &Path {
         .unwrap_or(config.logdir.as_path())
 }
 
-/// `<dir>/<prefix>.mmap3` — what `appender.cc` calls `mmap_file_path`, i.e.
-/// the first of the slots `claim_cache_slot` hands out.
-pub(crate) fn mmap_file_path(config: &XLogConfig) -> PathBuf {
-    cache_slot_path(cache_dir(config), &config.nameprefix, 0)
-}
-
 /// `<dir>/<prefix>.lock`.
 ///
 /// Two different locks of that shape are taken, each in the directory of the
@@ -502,16 +496,6 @@ fn claim_cache_slot(dir: &Path, prefix: &str, locking: bool) -> Option<CacheSlot
         }
     }
     None
-}
-
-/// Opens `path` and takes its lock, which is what proves the slot belongs to a
-/// writer that is gone.
-///
-/// `None` when a live writer still holds it — and, just as much, when this
-/// filesystem's locking excludes nobody, where the answer would be a guess.
-pub(crate) fn claim_dead_cache_slot(path: &Path) -> Option<File> {
-    let file = File::options().read(true).write(true).open(path).ok()?;
-    sys::try_lock_exclusive(&file).then_some(file)
 }
 
 /// The OS thread id of the calling thread (`sys::thread_id`).
@@ -1239,58 +1223,6 @@ impl AppenderInner {
         }
     }
 
-    /// Writes the records of one dead writer's cache file into the log and
-    /// unlinks it.
-    ///
-    /// `data` is the file's bytes, read by
-    /// [`Appender::treat_mapping_as_file_and_flush`], which calls this with the
-    /// log's lock held: the drain, the append and the removal are one step as
-    /// far as every other writer of the log is concerned.
-    fn drain_dead_cache_slot(&mut self, path: &Path, data: Vec<u8>) -> crate::config::FileIoAction {
-        use crate::config::FileIoAction;
-
-        let mut buff = LogBuffer::new(
-            true,
-            Some(self.config.pub_key.as_str()),
-            self.config.compress_mode,
-            self.config.compress_level,
-        );
-        self.region = Region::Heap(data);
-        buff.attach(self.region.as_mut_slice());
-        self.buff = buff;
-
-        let mut buffer = AutoBuffer::new();
-        self.flush_buffer(&mut buffer);
-
-        if buffer.is_empty() {
-            return FileIoAction::Unnecessary;
-        }
-
-        let mark = mark_info();
-        self.write_tips2file("~~~~~ begin of mmap from other process ~~~~~\n");
-        let written = self.log2file(buffer.as_slice(), false);
-        self.write_tips2file(&format!(
-            "~~~~~ end of mmap from other process ~~~~~{mark}\n"
-        ));
-
-        // The cache is the only copy of these records: keep it when the write
-        // failed, so the next recovery can try again instead of losing them.
-        // `flush_pending` is part of the write — bytes this process is still
-        // holding are not "reached a file" yet.
-        if !written || !self.flush_pending() {
-            return FileIoAction::WriteFailed;
-        }
-        // The heap region this drain read is a copy of a file that is about to
-        // be unlinked, so giving it up here changes nothing on disk — but it is
-        // what leaves `self.buff` able to start a block of its own.
-        self.buffer_drained();
-
-        match fs::remove_file(path) {
-            Ok(()) => FileIoAction::Success,
-            Err(_) => FileIoAction::RemoveFailed,
-        }
-    }
-
     /// Gives `Self::pending` up, or one more attempt first: see
     /// [`Self::pending_refused`]. Answers `false`, whatever it decided.
     fn refuse_pending(&mut self) -> bool {
@@ -1621,144 +1553,6 @@ impl Appender {
         }
 
         Ok(appender)
-    }
-
-    /// `XloggerAppender::NewInstance(_config, _max_byte_size, true)` — the
-    /// one-shot appender used by [`crate::appender_oneshot_flush`]: config
-    /// only, no mmap, no thread.
-    pub(crate) fn oneshot(
-        config: &XLogConfig,
-        max_file_size: u64,
-        max_alive_time: i64,
-    ) -> Result<Self, crate::config::AppenderError> {
-        use crate::config::AppenderError;
-
-        if config.logdir.as_os_str().is_empty() {
-            return Err(AppenderError(
-                "appender_oneshot_flush: logdir is empty".to_owned(),
-            ));
-        }
-        if let Some(dir) = &config.cachedir {
-            fs::create_dir_all(dir)
-                .map_err(|e| AppenderError(format!("create cache dir {}: {e}", dir.display())))?;
-        }
-        fs::create_dir_all(&config.logdir).map_err(|e| {
-            AppenderError(format!("create log dir {}: {e}", config.logdir.display()))
-        })?;
-
-        // The same lock a live writer of this log takes, opened here for the
-        // same reason: what recovery persists goes into a log file another
-        // writer may be appending to at that very moment, and the sections that
-        // move more than one file are the ones that lock is for. Without it a
-        // live writer's multi-write cache-file move and this drain — or this
-        // drain and that writer's I/O-error rollback — interleave.
-        let dir_lock = open_dir_lock(Some(&output_lock_path(config)));
-
-        let alive_time = if max_alive_time >= MIN_LOG_ALIVE_TIME {
-            max_alive_time
-        } else {
-            DEFAULT_MAX_ALIVE_TIME
-        };
-
-        let inner = AppenderInner {
-            config: config.clone(),
-            region: Region::heap(),
-            scratch: AutoBuffer::new(),
-            buff: LogBuffer::new(
-                true,
-                Some(config.pub_key.as_str()),
-                config.compress_mode,
-                config.compress_level,
-            ),
-            log_file: None,
-            pending: Vec::with_capacity(PENDING_CAPACITY),
-            flushed_len: 0,
-            pending_refused: false,
-            open_file_time: 0,
-            open_file_day: NO_DAY,
-            last_time: 0,
-            write_sec: None,
-            last_tick: 0,
-            last_file_path: PathBuf::new(),
-            max_file_size,
-            max_alive_time: alive_time,
-            tx: None,
-            use_mmap: false,
-            cache: None,
-            dir_lock,
-            dir_lock_held: false,
-        };
-
-        Ok(Appender {
-            shared: Arc::new(Shared {
-                // `log_close = true`: a one-shot appender writes the records it
-                // recovered and nothing else.
-                flags: Flags {
-                    log_close: AtomicBool::new(true),
-                    console_log_open: AtomicBool::new(false),
-                },
-                state: Mutex::new(inner),
-            }),
-            thread: Mutex::new(None),
-        })
-    }
-
-    /// `XloggerAppender::TreatMappingAsFileAndFlush` of one cache file.
-    ///
-    /// `path` is a slot a dead writer left behind: [`crate::appender_oneshot_flush`]
-    /// only calls this for one whose lock nobody holds. The slot's lock says
-    /// the file is a dead writer's; the log's own lock, taken here for the
-    /// whole drain, says nobody else is writing to the log while it is appended
-    /// to.
-    ///
-    /// `slot` is that very lock's handle, and it is the one the records are
-    /// read through — not a second `open` of `path`. A range locked with
-    /// `LockFileEx` is not the advisory `flock` it is on unix: Windows denies
-    /// every *other* handle access to it, including handles opened afterwards
-    /// in the process that took it, so a drain that reopened the slot to read
-    /// it got `ERROR_LOCK_VIOLATION` and reported `ReadFailed` on every cache
-    /// file it was given. The handle that holds a lock is the only one the
-    /// bytes are readable through.
-    pub(crate) fn treat_mapping_as_file_and_flush(
-        &self,
-        path: &Path,
-        slot: &mut File,
-    ) -> crate::config::FileIoAction {
-        use crate::config::FileIoAction;
-
-        if !path.exists() {
-            return FileIoAction::Unnecessary;
-        }
-
-        // A slot with no bytes in it holds no records, and it is a state the
-        // C++ has no file for: a writer whose region is a heap one keeps no
-        // cache file at all, so `appender.cc` never gets as far as reading
-        // one. This port empties the file instead (`clear_cache_file`) so that
-        // the next start re-arms the pre-allocation, and what the C++ answers
-        // for a buffer that flushes to nothing is what this answers for it:
-        // `kActionUnnecessary`. `read_exact` would call it a read that failed,
-        // and a caller that flushes until the code says there is nothing left
-        // would never stop.
-        if slot.metadata().is_ok_and(|meta| meta.len() == 0) {
-            return FileIoAction::Unnecessary;
-        }
-
-        // Read the whole cache file into a heap region. A file that is there
-        // and is shorter than a region is what a truncated or half-written one
-        // looks like: the C++'s `kActionReadFailed`.
-        let mut data = vec![0u8; BUFFER_BLOCK_LENGTH];
-        if slot.read_exact(&mut data).is_err() {
-            return FileIoAction::ReadFailed;
-        }
-
-        // One guard for the whole drain, write and unlink, and the log's lock
-        // held across it: the records go into a log file another writer may be
-        // appending to, and every step between them — the buffer, the file, the
-        // cache file's removal — has to look like one step to that writer.
-        let mut guard = self.lock();
-        // Only now may records be written through it.
-        self.shared.flags.log_close.store(false, Ordering::Release);
-        guard.with_dir_lock(|me| me.drain_dead_cache_slot(path, data))
     }
 
     /// `thread_async_.start()` / `SetMode(kAppenderAsync)`.
@@ -2101,11 +1895,6 @@ impl Appender {
         } else {
             Some(logdir)
         }
-    }
-
-    /// `XloggerAppender::GetCurrentLogCachePath`.
-    pub(crate) fn current_log_cache_path(&self) -> Option<PathBuf> {
-        self.lock().config.cachedir.clone()
     }
 
     /// The cache file this appender claimed — see `CacheSlot`. `None` when it
@@ -3158,28 +2947,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn one_shot_recovery_keeps_the_cache_when_the_write_fails() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mmap_path = records_in_cache(tmp.path());
-
-        // Today's log file is a directory, so every write into it fails — what
-        // a full or read-only file system looks like from here.
-        let log_file = today_name(tmp.path());
-        let _ = fs::remove_file(&log_file);
-        fs::create_dir(&log_file).unwrap();
-
-        let appender = Appender::oneshot(&config(tmp.path(), AppenderMode::Sync), 0, 0).unwrap();
-        // The handle the drain reads the records through, which is the one a
-        // real recovery claims the slot with.
-        let mut mmap = fs::File::open(&mmap_path).unwrap();
-        let action = appender.treat_mapping_as_file_and_flush(&mmap_path, &mut mmap);
-        appender.close();
-
-        assert_eq!(action, FileIoAction::WriteFailed);
-        assert!(mmap_path.exists(), "the cache is the only copy left");
-    }
-
     /// The lock the sections are taken under is the log's: writers that name
     /// one `logdir` and prefix append to one `.xlog` wherever each of them
     /// keeps its cache, so a lock named after the cache directory would be a
@@ -3198,74 +2965,6 @@ mod tests {
             output_lock_path(&with_cache),
             "one cache dir and none must not mean two locks"
         );
-    }
-
-    /// Recovery writes into a log file a live writer may be appending to, so it
-    /// has to wait for the same lock: this holds the lock the way a live
-    /// writer's flush section does and watches recovery wait for it, then lets
-    /// it through and checks the records arrived.
-    #[test]
-    fn one_shot_recovery_waits_for_the_log_lock() {
-        let tmp = tempfile::tempdir().unwrap();
-        let log = tmp.path().join("log");
-        let cache = tmp.path().join("cache");
-        let mut cfg = config(&log, AppenderMode::Sync);
-        cfg.cachedir = Some(cache.clone());
-
-        // The log's lock, held here — which is where a live writer is while it
-        // moves a cache file into the log.
-        fs::create_dir_all(&log).unwrap();
-        let lock_path = output_lock_path(&cfg);
-        let held = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-            .unwrap();
-        assert!(sys::lock_exclusive(&held));
-
-        // A dead writer's slot: one record in it, and a lock nobody holds.
-        fs::create_dir_all(&cache).unwrap();
-        let dead_slot = cache_slot_path(&cache, &cfg.nameprefix, 1);
-        let mut region = vec![0u8; BUFFER_BLOCK_LENGTH];
-        let mut buffer = LogBuffer::new(true, Some(""), CompressMode::Zlib, 6);
-        buffer.attach(&mut region);
-        assert!(buffer.write(&mut region, b"recovered while the log is locked"));
-        fs::write(&dead_slot, &region).unwrap();
-
-        // Recovery runs on another thread: it is the only way to see it wait.
-        let marker = Arc::new(AtomicBool::new(false));
-        let done = Arc::clone(&marker);
-        let recovery = {
-            let cfg = cfg.clone();
-            thread::spawn(move || {
-                let action = crate::appender_oneshot_flush(&cfg);
-                done.store(true, Ordering::Release);
-                action
-            })
-        };
-
-        thread::sleep(Duration::from_millis(200));
-        assert!(
-            !marker.load(Ordering::Acquire),
-            "recovery appended to the log while another writer held its lock"
-        );
-        assert!(dead_slot.exists(), "the slot must not be drained yet");
-
-        // Hand the lock over: recovery may now finish.
-        assert!(sys::unlock(&held));
-        drop(held);
-
-        let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        while !marker.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(5));
-        }
-        let action = recovery.join().expect("recovery panicked");
-        assert_eq!(action, FileIoAction::Success);
-        assert!(!dead_slot.exists(), "the recovered slot must be gone");
-        let text = decoded_text(&fs::read(today_name(&log)).unwrap());
-        assert!(text.contains("recovered while the log is locked"), "{text}");
     }
 
     /// Two writers of one prefix in one directory: what two processes — or two
@@ -3333,21 +3032,6 @@ mod tests {
         assert!(text.contains("no cache of my own"), "{text}");
     }
 
-    #[test]
-    fn current_paths_reflect_the_config() {
-        let tmp = tempfile::tempdir().unwrap();
-        let cache = tmp.path().join("cache");
-        let mut cfg = config(tmp.path(), AppenderMode::Sync);
-        cfg.cachedir = Some(cache.clone());
-        let appender = Appender::open(cfg, 0, 0).unwrap();
-
-        assert_eq!(appender.current_log_path().as_deref(), Some(tmp.path()));
-        assert_eq!(
-            appender.current_log_cache_path().as_deref(),
-            Some(cache.as_path())
-        );
-    }
-
     /// What a record costs the allocator.
     ///
     /// The C++ formats into stack arrays (`char temp[16*1024]`,
@@ -3400,74 +3084,6 @@ mod tests {
                 "{mode:?}: 3 console records allocated {console_count} times"
             );
         }
-    }
-
-    /// A sink of the app's own is not handed a record the sink itself wrote.
-    ///
-    /// An adapter that routes everything back through xlog is the ordinary
-    /// shape of one, and the path it takes is short: `Appender::write` echoes
-    /// a record to the console *before* it puts its own recursion counter up,
-    /// so a sink that logs is running again before there is anything to stop
-    /// it, and the two of them call one another until the stack goes. What a
-    /// record from inside the sink comes to now is the built-in line, and
-    /// then the one recursive-call diagnostic.
-    #[test]
-    fn a_sink_that_logs_from_inside_itself_is_not_asked_again() {
-        let _guard = crate::test_lock::serial();
-        let tmp = tempfile::tempdir().unwrap();
-        // An appender of this test's own, and not the process-wide one. The
-        // sink is one process-wide static, so what any test of this binary
-        // echoes to a console reaches it: a record another test is writing
-        // through the default appender is counted here as well, and the
-        // count this test asserts is then not the count of its own records.
-        // Only this test knows the id of this instance, so only this test
-        // puts a record in front of the sink.
-        static ID: AtomicU64 = AtomicU64::new(0);
-        let id = crate::appender_open_instance(config(tmp.path(), AppenderMode::Sync)).unwrap();
-        ID.store(id, Ordering::Relaxed);
-        crate::appender_set_console_log_instance(id, true);
-
-        struct NoSink;
-        impl Drop for NoSink {
-            fn drop(&mut self) {
-                crate::set_console_fun(None);
-                crate::appender_close_instance(ID.load(Ordering::Relaxed));
-            }
-        }
-        let _no_sink = NoSink;
-
-        static ASKED: AtomicUsize = AtomicUsize::new(0);
-        fn log_from_inside(_info: &XLoggerInfo, log: &str) {
-            // The sink is installed process-wide, and not every record that
-            // reaches it was written through an open console switch: a
-            // diagnostic of the appender's own — an `open file error` of a
-            // file another test pointed at a directory — is put to the
-            // console whatever the switch says. Only the two records this
-            // test writes are what it counts.
-            let ours = matches!(log, "from the app" | "from the sink");
-            if !ours {
-                return;
-            }
-            ASKED.fetch_add(1, Ordering::Relaxed);
-            if log == "from the app" {
-                crate::appender_write_instance(
-                    ID.load(Ordering::Relaxed),
-                    Some(&info(LogLevel::Info)),
-                    "from the sink",
-                );
-            }
-        }
-        crate::set_console_fun(Some(log_from_inside));
-
-        crate::appender_write_instance(
-            ID.load(Ordering::Relaxed),
-            Some(&info(LogLevel::Info)),
-            "from the app",
-        );
-
-        // Asked once and not twice: the record the sink wrote reached the
-        // console on its way through and was not handed back to the sink.
-        assert_eq!(ASKED.load(Ordering::Relaxed), 1);
     }
 
     #[test]

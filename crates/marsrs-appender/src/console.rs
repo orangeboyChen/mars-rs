@@ -4,7 +4,6 @@
 //! mix with a program's normal output (the record format is unchanged).
 
 use std::io::Write;
-use std::sync::RwLock;
 
 use crate::config::XLoggerInfo;
 use crate::formater::{extract_file_name, extract_function_name, LEVEL_STRINGS};
@@ -27,26 +26,6 @@ use crate::formater::{extract_file_name, extract_function_name, LEVEL_STRINGS};
 /// it the one recursive-call diagnostic, so the two of them do not call one
 /// another until the stack goes.
 pub type ConsoleFun = fn(&XLoggerInfo, &str);
-
-/// `sg_console_fun` of `mars/xlog/objc/objc_console.mm` — the sink every
-/// console record is handed to, `None` until an app sets one.
-static CONSOLE_FUN: RwLock<Option<ConsoleFun>> = RwLock::new(None);
-
-/// `appender_set_console_fun` — takes the sink every console record is handed
-/// to, or takes it away again with `None`.
-///
-/// The C++ declares it under `#ifdef __APPLE__`, which is where its own
-/// default sink is one an app wants to replace; the port's default sink is
-/// stderr on every platform, so there is no platform on which an app has more
-/// reason to replace it than on another.
-///
-/// A sink is not handed a record the sink itself wrote: a record it logs on
-/// the way through takes the built-in stderr line instead. See [`ConsoleFun`].
-pub fn set_console_fun(fun: Option<ConsoleFun>) {
-    *CONSOLE_FUN
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = fun;
-}
 
 // Whether this thread is inside the sink already: a record logged from inside
 // it is not the sink's to have, so [`enter_sink`] answers [`None`] for one.
@@ -77,30 +56,20 @@ fn enter_sink() -> Option<InSink> {
     })
 }
 
-/// The sink [`set_console_fun`] was last given, if it was given one.
-pub fn get_console_fun() -> Option<ConsoleFun> {
-    *CONSOLE_FUN
-        .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 /// `mars::xlog::ConsoleLog`.
 ///
 /// Does nothing when `_info` is `None` (the C++ returns early on
-/// `NULL == _info`). A sink an app set takes the record from here, unformatted:
-/// the built-in stderr line is only the default, and it is the one a record
-/// written *from inside* the sink gets, whether a sink was set or not.
+/// `NULL == _info`). What it writes is the built-in stderr line, and only that
+/// one: the sink an app could set was process-wide, and the port has no
+/// process-wide surface left.
 pub(crate) fn console_log(info: Option<&XLoggerInfo>, log: &str) {
     let Some(info) = info else {
         return;
     };
 
-    if let Some(_in_sink) = enter_sink() {
-        if let Some(fun) = get_console_fun() {
-            fun(info, log);
-            return;
-        }
-    }
+    // A record written *from inside* a sink still gets the built-in line,
+    // which is what kept a sink that logs from recursing.
+    let _in_sink = enter_sink();
 
     let level = LEVEL_STRINGS[info.level as usize];
     let tag = info.tag.as_deref().unwrap_or("");
@@ -158,46 +127,4 @@ mod tests {
         console_log(Some(&info), "message");
     }
 
-    /// A sink an app set is handed the record instead of the built-in stderr
-    /// line, and it is handed everything that line would have said.
-    #[test]
-    fn a_sink_an_app_set_is_handed_the_record() {
-        let _guard = crate::test_lock::serial();
-        // The sink is one process-wide static, so it has to be taken away
-        // again — including when this test panicked, or every other test
-        // writing with the console open would write through it.
-        struct NoSink;
-        impl Drop for NoSink {
-            fn drop(&mut self) {
-                set_console_fun(None);
-            }
-        }
-        let _no_sink = NoSink;
-
-        static SEEN: std::sync::OnceLock<Mutex<String>> = std::sync::OnceLock::new();
-        fn remember(info: &XLoggerInfo, log: &str) {
-            *SEEN
-                .get_or_init(|| Mutex::new(String::new()))
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-                format!("{}:{log}", info.level as i32);
-        }
-
-        set_console_fun(Some(remember));
-        let info = XLoggerInfo {
-            level: LogLevel::Error,
-            ..Default::default()
-        };
-        console_log(Some(&info), "to-the-app");
-        // A record with no info does not reach a sink either, in the C++ as
-        // here: `ConsoleLog` returns before it is asked.
-        console_log(None, "no-info");
-
-        let seen = SEEN
-            .get_or_init(|| Mutex::new(String::new()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
-        assert_eq!(seen, "4:to-the-app");
-    }
 }

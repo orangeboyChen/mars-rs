@@ -13,18 +13,15 @@
 //! defaults name, and the rows that ask for zstd or async would only re-run
 //! sync/zlib.
 //!
-//! The file that comes out is what an app would ship to a server: the
-//! process-wide `XloggerAppender` over its mmap'd cache file, with a
+//! The file that comes out is what an app would ship to a server: one
+//! `Xlog` of the port's own over its mmap'd cache file, with a
 //! `<prefix>_YYYYMMDD.xlog` at the other end. `scripts/compat/cross.sh` hands it
 //! to upstream's own decoder.
 
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use marsrs_appender::{
-    appender_close, appender_open, flush_now, xlogger_write, AppenderMode, CompressMode, LogLevel,
-    XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
-};
+use marsrs_appender::{AppenderMode, CompressMode, LogLevel, XLogConfig, Xlog};
 
 fn main() {
     // The flags first: `--mode` picks `CompressMode`, `--sync` `AppenderMode`.
@@ -91,33 +88,16 @@ fn main() {
         cachedir: None,
         cache_days: 0,
     };
-    appender_open(config).expect("appender_open");
+    let xlog = Xlog::open(config, LogLevel::Info).expect("Xlog::open");
 
-    // Handle `0`, and not an `Xlog`: the process-wide appender is the one the
-    // C++ side of `cross.sh` opens, so what the two halves compare is what one
-    // appender of each writes — and the handle is how the port asks for it now
-    // that the process-wide free functions are the plumbing and not the API.
-    for (index, record) in records.iter().enumerate() {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO);
-        let info = XLoggerInfo {
-            level: LogLevel::Info,
-            tag: Some("cross".into()),
-            filename: Some("xlog_file.rs".into()),
-            func_name: Some("main".into()),
-            line: i32::try_from(index).unwrap_or(0),
-            timeval: (
-                i64::try_from(now.as_secs()).unwrap_or(0),
-                i64::from(now.subsec_micros()),
-            ),
-            ..Default::default()
-        };
-        xlogger_write(DEFAULT_HANDLE, Some(&info), Some(record));
+    // One `Xlog`, and not the process-wide appender: an appender of an app's
+    // own is what the port opens now, so what the two halves of `cross.sh`
+    // compare is what one appender of each writes.
+    for record in &records {
+        xlog.i("cross", record);
     }
 
-    flush_now(DEFAULT_HANDLE);
-    appender_close();
+    xlog.flush_now();
 
     let mut found = 0;
     for entry in std::fs::read_dir(dir).expect("read_dir") {

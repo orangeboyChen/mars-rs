@@ -103,16 +103,15 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 pub use category::{
-    current_log_path, flush, flush_all, flush_now, flush_now_all, get_filter, get_level,
-    get_xlogger_instance, is_enabled_for, new_xlogger_instance, release_xlogger_instance,
-    request_flush, request_flush_all, set_appender_mode, set_console_log_open, set_filter,
-    set_level, set_max_alive_duration as category_set_max_alive_duration,
-    set_max_file_size as category_set_max_file_size, xlogger_assert, xlogger_assert_p,
-    xlogger_write, XloggerCategory, XloggerFilter, XloggerHandle, XloggerScopeTracer,
-    DEFAULT_HANDLE,
+    current_log_path, flush, flush_now, get_filter, get_level, get_xlogger_instance,
+    is_enabled_for, new_xlogger_instance, release_xlogger_instance, request_flush,
+    set_appender_mode, set_console_log_open, set_filter, set_level,
+    set_max_alive_duration as category_set_max_alive_duration,
+    set_max_file_size as category_set_max_file_size, xlogger_write, XloggerCategory,
+    XloggerFilter, XloggerHandle, XloggerScopeTracer, DEFAULT_HANDLE,
 };
 pub use config::{AppenderError, AppenderMode, FileIoAction, LogLevel, XLogConfig, XLoggerInfo};
-pub use console::{get_console_fun, set_console_fun, ConsoleFun};
+pub use console::ConsoleFun;
 pub use dump::xlogger_memory_dump;
 pub use flush::Flush;
 pub use formater::log_formater;
@@ -361,50 +360,6 @@ pub(crate) fn appender_get_current_log_path_instance(id: AppenderId) -> Option<P
     instance(id).and_then(|appender| appender.current_log_path())
 }
 
-fn lock_slot() -> MutexGuard<'static, Option<Arc<Appender>>> {
-    slot()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// `mars::xlog::appender_open`.
-///
-/// Creates the process-wide appender. Unlike the C++ (which silently returns
-/// when an appender already exists) the port reports that as an error.
-///
-/// # Errors
-///
-/// * `logdir` is empty;
-/// * the log (or cache) directory cannot be created;
-/// * an appender is already open — call [`appender_close`] first.
-pub fn appender_open(config: XLogConfig) -> Result<(), AppenderError> {
-    if config.logdir.as_os_str().is_empty() {
-        return Err(AppenderError("appender_open: logdir is empty".to_owned()));
-    }
-
-    let mut slot = lock_slot();
-    if slot.is_some() {
-        return Err(AppenderError(format!(
-            "appender has already been opened. _dir:{} _nameprefix:{}",
-            config.logdir.display(),
-            config.nameprefix
-        )));
-    }
-
-    let appender = Appender::open(
-        config,
-        MAX_FILE_SIZE.load(Ordering::Relaxed),
-        MAX_ALIVE_TIME.load(Ordering::Relaxed) as i64,
-    )?;
-    appender.set_console_log(CONSOLE_LOG_OPEN.load(Ordering::Relaxed));
-    *slot = Some(Arc::new(appender));
-    // After the slot, so that a thread that sees the new generation also sees
-    // the appender that came with it — and one that does not yet keeps using
-    // whatever it had, which is still a perfectly good appender.
-    GENERATION.fetch_add(1, Ordering::AcqRel);
-    Ok(())
-}
-
 /// Asks the writer thread to drain the cache, and returns at once.
 ///
 /// The drain is the writer thread's, and nothing here says when it is over:
@@ -472,21 +427,6 @@ pub(crate) fn appender_flush() -> Flush {
     })
 }
 
-/// `mars::xlog::appender_close`.
-///
-/// Writes the closing banner, drains whatever is left in the cache, stops the
-/// writer thread and drops the appender. Safe to call when nothing is open.
-pub fn appender_close() {
-    // Taken out of the slot first, so the close does not run under the slot's
-    // lock: a write that is already under way keeps its own Arc and finds the
-    // appender closed instead of finding it gone.
-    let Some(appender) = lock_slot().take() else {
-        return;
-    };
-    GENERATION.fetch_add(1, Ordering::AcqRel);
-    appender.close();
-}
-
 /// `mars::xlog::appender_setmode`.
 pub(crate) fn appender_set_mode(mode: AppenderMode) {
     if let Some(appender) = current() {
@@ -526,111 +466,6 @@ pub(crate) fn appender_set_max_alive_duration(secs: u64) {
     }
 }
 
-/// `mars::xlog::appender_get_current_log_path` — the log directory.
-///
-/// `None` when no appender is open.
-pub fn appender_get_current_log_path() -> Option<PathBuf> {
-    current().and_then(|appender| appender.current_log_path())
-}
-
-/// `mars::xlog::appender_get_current_log_cache_path` — the cache directory.
-///
-/// `None` when no appender is open or when no `cachedir` is configured.
-pub fn appender_get_current_log_cache_path() -> Option<PathBuf> {
-    current().and_then(|appender| appender.current_log_cache_path())
-}
-
-/// `mars::xlog::appender_oneshot_flush`.
-///
-/// Drains the cache files no writer owns any more into the log file without
-/// starting the appender — the "another process died with a full cache"
-/// recovery path.
-///
-/// Which ones those are is the whole difficulty: a process that was killed
-/// leaves exactly the file a running one has, and the C++ cannot tell them
-/// apart, so it drains `<prefix>.mmap3` whatever else is doing — including a
-/// second process that is mid-write, whose every later record then lands in an
-/// unlinked inode. The port gives each writer a slot of its own and holds an
-/// advisory lock on it for as long as the writer lives, so "no writer owns it"
-/// is something that can actually be answered — by trying to take that lock.
-pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
-    use crate::appender::{
-        cache_dir, cache_slot_path, dir_lock_path, mmap_file_path, MAX_CACHE_SLOTS,
-    };
-
-    if config.logdir.as_os_str().is_empty() {
-        return FileIoAction::OpenFailed;
-    }
-
-    let dir = cache_dir(config).to_path_buf();
-    // Whether a slot a dead writer left behind can be told from one a live
-    // writer is using — which is asked of the cache directory, because that is
-    // where the slots are. (The lock the drain itself is taken under is the
-    // log's: see `appender::output_lock_path`.)
-    let slot_lock_path = dir_lock_path(&dir, &config.nameprefix);
-    let Ok(appender) = Appender::oneshot(
-        config,
-        MAX_FILE_SIZE.load(Ordering::Relaxed),
-        MAX_ALIVE_TIME.load(Ordering::Relaxed) as i64,
-    ) else {
-        return FileIoAction::OpenFailed;
-    };
-
-    // Without a lock a live cache file cannot be told from a dead one, so all
-    // that is left is the C++'s own behaviour: the single fixed name, drained
-    // only when no appender of this process is using it.
-    if !crate::sys::lock_excludes(&slot_lock_path) {
-        if appender_get_current_log_path().is_some()
-            || crate::category::instance_owns_mmap_path(&mmap_file_path(config))
-        {
-            return FileIoAction::Unnecessary;
-        }
-        // A lock nobody on this platform can take is not a reason not to read
-        // the file: the drain reads it through this handle either way.
-        let path = mmap_file_path(config);
-        let Ok(mut file) = std::fs::File::open(&path) else {
-            appender.close();
-            return FileIoAction::OpenFailed;
-        };
-        let action = appender.treat_mapping_as_file_and_flush(&path, &mut file);
-        appender.close();
-        return action;
-    }
-
-    let mut action = FileIoAction::Unnecessary;
-    // A failure is remembered on its own: one slot that recovers does not make
-    // a later one that does not a success, and the caller — which is what
-    // decides whether to try again — has to be able to see it.
-    let mut failed: Option<FileIoAction> = None;
-    for slot in 0..MAX_CACHE_SLOTS {
-        let path = cache_slot_path(&dir, &config.nameprefix, slot);
-        if !path.exists() {
-            continue;
-        }
-        // Held for the whole drain and the unlink that follows it: the lock is
-        // what says the slot is a dead writer's, and it has to still be ours
-        // when the file goes away — and it is the handle the drain reads the
-        // records through, for the reason `treat_mapping_as_file_and_flush`
-        // gives.
-        // A live writer still owns it — in another process, or in another
-        // copy of this crate in this one.
-        let Some(mut claim) = crate::appender::claim_dead_cache_slot(&path) else {
-            continue;
-        };
-        match appender.treat_mapping_as_file_and_flush(&path, &mut claim) {
-            FileIoAction::Success => action = FileIoAction::Success,
-            FileIoAction::Unnecessary => {}
-            // Every slot is tried, so any one of them says the same thing to
-            // the caller: something is still unrecovered.
-            other => {
-                failed.get_or_insert(other);
-            }
-        }
-    }
-    appender.close();
-    failed.unwrap_or(action)
-}
-
 /// `mars::xlog::xlogger_appender` / `XloggerAppender::Write`.
 ///
 /// Returns `false` when no appender is open (or it is already closed).
@@ -650,28 +485,11 @@ pub(crate) fn appender_write(info: Option<&XLoggerInfo>, logbody: &str) -> bool 
     !closed
 }
 
-/// `mars::xlog::xlogger_dump` — the dump that also leaves a file behind.
-///
-/// The blob is written to `<logdir>/<YYYYMMDD>/<YYYYMMDDHHMMSS>_<len>.dump`
-/// and the returned report is what the C++ hands back to the caller:
-/// `"\n dump file to <path> :\n"` plus up to 32 lines of 16 bytes. Empty when
-/// no appender is open (`sg_release_guard`) or the file cannot be written, as
-/// in the C++.
-///
-/// The `YYYYMMDD` directory is the same one [`appender_open`]'s expiry sweeps,
-/// so a dump is kept no longer than the logs around it.
-pub fn xlogger_dump(bytes: &[u8]) -> String {
-    match current().and_then(|appender| appender.current_log_path()) {
-        Some(logdir) => dump::dump_to_logdir(bytes, &logdir),
-        None => String::new(),
-    }
-}
-
 /// `mars::xlog::appender_make_logfile_name`.
 ///
 /// The log file names for the day `timespan` days ago (0 = today). Uses the
 /// process-wide max file size set by `appender_set_max_file_size`.
-pub fn appender_make_logfile_name(timespan: i64, prefix: &str, logdir: &Path) -> Vec<PathBuf> {
+pub(crate) fn appender_make_logfile_name(timespan: i64, prefix: &str, logdir: &Path) -> Vec<PathBuf> {
     // When an appender is open for exactly this directory its own lookup is
     // used, which (like the C++) also reports the matching cache-dir files.
     let appender = current();
@@ -697,7 +515,7 @@ pub fn appender_make_logfile_name(timespan: i64, prefix: &str, logdir: &Path) ->
 /// `mars::xlog::appender_getfilepath_from_timespan`.
 ///
 /// The *existing* log files whose name covers the day `timespan` days ago.
-pub fn appender_getfilepath_from_timespan(
+pub(crate) fn appender_getfilepath_from_timespan(
     timespan: i64,
     prefix: &str,
     logdir: &Path,
@@ -794,61 +612,6 @@ static COUNTER: test_alloc::Counter = test_alloc::Counter;
 mod tests {
     use super::*;
 
-    #[test]
-    fn write_without_open_reports_false() {
-        let _guard = crate::test_lock::serial();
-        // Nothing else may hold the singleton while this runs, so the call
-        // must fail.
-        assert!(!appender_write(None, "nothing"));
-        assert!(appender_get_current_log_path().is_none());
-        assert!(appender_get_current_log_cache_path().is_none());
-        // Harmless no-ops.
-        appender_request_flush();
-        appender_flush_now();
-        appender_close();
-    }
-
-    #[test]
-    fn make_logfile_name_is_deterministic() {
-        let _guard = crate::test_lock::serial();
-        let dir = Path::new("/tmp/mars-xlog-name-test");
-        let paths = appender_make_logfile_name(0, "Mars", dir);
-        assert_eq!(paths.len(), 1);
-        let name = paths[0].file_name().unwrap().to_str().unwrap();
-        assert!(name.starts_with("Mars_"), "{name}");
-        assert!(name.ends_with(".xlog"), "{name}");
-        assert_eq!(paths[0].parent(), Some(dir));
-
-        assert!(appender_make_logfile_name(0, "Mars", Path::new("")).is_empty());
-        assert!(appender_getfilepath_from_timespan(0, "Mars", Path::new("")).is_empty());
-    }
-
-    #[test]
-    fn getfilepath_from_timespan_lists_existing_files() {
-        let _guard = crate::test_lock::serial();
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-        let expected = appender_make_logfile_name(0, "Mars", dir).remove(0);
-        std::fs::write(dir.join("Mars_19700101.xlog"), b"x").unwrap();
-
-        assert!(appender_getfilepath_from_timespan(0, "Mars", dir).is_empty());
-        assert!(appender_getfilepath_from_timespan(20_000, "Mars", dir).is_empty());
-
-        std::fs::write(&expected, b"x").unwrap();
-        let found = appender_getfilepath_from_timespan(0, "Mars", dir);
-        assert_eq!(found, vec![expected.clone()]);
-
-        std::fs::write(
-            dir.join(format!(
-                "{}_1.xlog",
-                expected.file_stem().unwrap().to_str().unwrap()
-            )),
-            b"x",
-        )
-        .unwrap();
-        // A second file for the same day is reported too.
-        assert_eq!(appender_getfilepath_from_timespan(0, "Mars", dir).len(), 2);
-    }
 
     #[test]
     fn setters_are_sticky_before_open() {

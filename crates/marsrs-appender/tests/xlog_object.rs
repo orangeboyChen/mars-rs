@@ -10,8 +10,15 @@
 use std::path::PathBuf;
 
 use marsrs_appender::{
-    appender_close, appender_open, flush_now, get_xlogger_instance, xlogger_write, AppenderError,
-    AppenderMode, LogLevel, XLogConfig, Xlog, DEFAULT_HANDLE,
+    flush_now,
+    get_xlogger_instance,
+    xlogger_write,
+    AppenderError,
+    AppenderMode,
+    LogLevel,
+    XLogConfig,
+    Xlog,
+    DEFAULT_HANDLE,
 };
 use marsrs_crypt::magic;
 
@@ -198,30 +205,4 @@ fn a_config_the_appender_refuses_is_an_error() {
         LogLevel::Info,
     );
     assert!(matches!(xlog, Err(AppenderError(_))));
-}
-
-/// The process-wide appender is the C ABI's and the JNI bridge's, not an app's,
-/// but it is still there for them: what it answers to is `DEFAULT_HANDLE`, and
-/// an `Xlog` of a prefix of its own is untouched by it.
-#[test]
-fn the_object_and_the_process_wide_appender_do_not_share_a_handle() {
-    let dir = tempfile::tempdir().unwrap();
-    let process_wide = XLogConfig {
-        nameprefix: "process".to_owned(),
-        ..config(dir.path(), "process")
-    };
-    appender_open(process_wide).unwrap();
-
-    let xlog = Xlog::open(config(dir.path(), "object"), LogLevel::Info).unwrap();
-    assert_ne!(get_xlogger_instance("object"), DEFAULT_HANDLE);
-    assert!(xlogger_write(
-        DEFAULT_HANDLE,
-        None,
-        Some("through handle 0")
-    ));
-
-    flush_now(DEFAULT_HANDLE);
-    appender_close();
-    // The object's appender is its own and is still open.
-    assert!(xlog.i("startup", "still open"));
 }

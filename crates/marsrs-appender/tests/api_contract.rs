@@ -17,14 +17,35 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use marsrs_appender::{
-    appender_close, appender_get_current_log_cache_path, appender_get_current_log_path,
-    appender_getfilepath_from_timespan, appender_make_logfile_name, appender_oneshot_flush,
-    appender_open, category_set_max_alive_duration, category_set_max_file_size, current_log_path,
-    flush, flush_all, flush_now, flush_now_all, get_filter, get_level, get_xlogger_instance,
-    is_enabled_for, log_formater, new_xlogger_instance, release_xlogger_instance, request_flush,
-    request_flush_all, set_appender_mode, set_console_log_open, set_filter, set_level,
-    xlogger_assert, xlogger_assert_p, xlogger_write, AppenderError, AppenderMode, FileIoAction,
-    Flush, LogLevel, XLogConfig, XLoggerInfo, Xlog, XloggerFilter, XloggerHandle, DEFAULT_HANDLE,
+    category_set_max_alive_duration,
+    category_set_max_file_size,
+    current_log_path,
+    flush,
+    flush_now,
+    get_filter,
+    get_level,
+    get_xlogger_instance,
+    is_enabled_for,
+    log_formater,
+    new_xlogger_instance,
+    release_xlogger_instance,
+    request_flush,
+    set_appender_mode,
+    set_console_log_open,
+    set_filter,
+    set_level,
+    xlogger_write,
+    AppenderError,
+    AppenderMode,
+    FileIoAction,
+    Flush,
+    LogLevel,
+    XLogConfig,
+    XLoggerInfo,
+    Xlog,
+    XloggerFilter,
+    XloggerHandle,
+    DEFAULT_HANDLE,
 };
 use marsrs_buffer::CompressMode;
 use marsrs_core::PtrBuffer;
@@ -60,50 +81,6 @@ fn the_object_is_the_api_an_app_takes() {
     let _: fn(&Xlog) -> Flush = Xlog::flush;
     let _: fn(&Xlog) -> Option<PathBuf> = Xlog::current_log_path;
     let _: fn(&Xlog) = Xlog::close;
-}
-
-#[test]
-fn function_signatures_match_the_contract() {
-    // The process-wide appender the C ABI and JNI install and drop. Its write,
-    // its drain and its four setters are `category`'s at `DEFAULT_HANDLE`.
-    let _: fn(XLogConfig) -> Result<(), AppenderError> = appender_open;
-    let _: fn() = appender_close;
-    let _: fn() -> Option<PathBuf> = appender_get_current_log_path;
-    let _: fn() -> Option<PathBuf> = appender_get_current_log_cache_path;
-    let _: for<'a> fn(&'a XLogConfig) -> FileIoAction = appender_oneshot_flush;
-    let _: for<'a> fn(i64, &'a str, &'a Path) -> Vec<PathBuf> = appender_make_logfile_name;
-    let _: for<'a> fn(i64, &'a str, &'a Path) -> Vec<PathBuf> = appender_getfilepath_from_timespan;
-    let _: for<'a, 'b, 'c, 'd> fn(Option<&'a XLoggerInfo>, Option<&'b str>, &'c mut PtrBuffer<'d>) =
-        log_formater;
-
-    // The handle: what the C ABI and the JNI bridge are written over.
-    let _: for<'a> fn(&'a XLogConfig, LogLevel) -> XloggerHandle = new_xlogger_instance;
-    let _: for<'a> fn(&'a str) -> XloggerHandle = get_xlogger_instance;
-    let _: for<'a> fn(&'a str) = release_xlogger_instance;
-    let _: for<'a, 'b, 'c> fn(XloggerHandle, Option<&'a XLoggerInfo<'b>>, Option<&'c str>) -> bool =
-        xlogger_write;
-    let _: for<'a> fn(Option<&'a XLoggerInfo>, &'a str, &'a str) -> bool = xlogger_assert;
-    let _: for<'a> fn(Option<&'a XLoggerInfo>, &'a str, std::fmt::Arguments<'a>) -> bool =
-        xlogger_assert_p;
-    let _: fn(XloggerHandle, LogLevel) -> bool = is_enabled_for;
-    let _: fn(XloggerHandle) -> Option<LogLevel> = get_level;
-    let _: fn(XloggerHandle, LogLevel) = set_level;
-    let _: fn(XloggerHandle, AppenderMode) = set_appender_mode;
-    let _: fn(XloggerHandle, bool) = set_console_log_open;
-    let _: fn(XloggerHandle, u64) = category_set_max_file_size;
-    let _: fn(XloggerHandle, u64) = category_set_max_alive_duration;
-    let _: fn(XloggerHandle) = request_flush;
-    let _: fn(XloggerHandle) = flush_now;
-    let _: fn(XloggerHandle) -> Flush = flush;
-    let _: fn() = request_flush_all;
-    let _: fn() = flush_now_all;
-    let _: fn() -> Flush = flush_all;
-    let _: fn(XloggerHandle) -> Option<PathBuf> = current_log_path;
-    let _: fn(Option<XloggerFilter>) = set_filter;
-    let _: fn() -> Option<XloggerFilter> = get_filter;
-
-    // `DEFAULT_HANDLE` is what the process-wide appender answers to.
-    let _: fn() -> XloggerHandle = || DEFAULT_HANDLE;
 }
 
 #[test]
