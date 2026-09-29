@@ -257,12 +257,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # The three targets the script builds on this host want linkers `apt`
       # carries and the image does not: linuxArm64 and mingwX64 cross-compile,
-      # and `zstd-sys` compiles C through cc-rs, so it is the C compiler of
-      # each triple that has to be there and not only the Rust target.
+      # and `zstd-sys` compiles C through cc-rs, so it is the C compiler *and
+      # the libc headers* of each triple that have to be there — `gcc-aarch64-
+      # linux-gnu` alone compiles a C file that includes <stdint.h> into a
+      # `bits/libc-header-start.h: No such file or directory`.
       - name: Install the cross toolchains
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu mingw-w64
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross mingw-w64
       # `libmars_ffi.a` per Kotlin/Native target, which cinterop embeds into
       # the klib. `platforms/kmp` does not compile them — the release builds
       # them once per host — so without this the composite build below has
