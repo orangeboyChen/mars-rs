@@ -111,6 +111,17 @@ kotlin {
     }
 
     sourceSets {
+        commonMain.dependencies {
+            // The one dependency this module has, and only because
+            // `flush()` waits for the drain off the calling thread: a
+            // `suspend` function and `Continuation` are in the standard library,
+            // but what parks the caller and what runs the drain somewhere else
+            // are not — and Kotlin/Native has no thread of its own at all.
+            // `implementation` and not `api`: nothing of kotlinx-coroutines is in
+            // the API these sources publish.
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+        }
+
         commonTest.dependencies {
             implementation(kotlin("test"))
         }

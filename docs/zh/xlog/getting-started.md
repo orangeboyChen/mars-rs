@@ -1,7 +1,9 @@
 # 快速开始
 
 每个平台都是三步：App 或进程启动时**打开**一个 appender，往里**写**记录，读文件或
-上传之前**flush**。
+上传之前**排空**它。排空是三个调用，不是每个平台三个都有：`signalFlush()` 请写线程去
+排空、自己立刻返回，`flushNow()` 在调用方线程上排空，`await flush()` 等的是同一次排
+空，但不占着一个线程。
 
 ## 它在哪里
 
@@ -15,6 +17,7 @@
 | Flutter | `marsrs_xlog`，或 `marsrs` | `package:marsrs_xlog/marsrs_xlog.dart` |
 | React Native | `marsrs-react-native-xlog`，或 `marsrs-react-native` | `marsrs-react-native-xlog` |
 | 有 C FFI 的任何东西 | `include/mars_xlog.h` | `mars_xlog_*` |
+| C++ | `include/mars_xlog.hpp` | `marsrs::xlog::Xlog` |
 | HarmonyOS | `marsrs-harmonyos-xlog` | HAR 里的 `Xlog` |
 
 **`xlog` 是只有日志，`marsrs` 是整个移植** —— 日志加上[任务链路](/zh/stn/getting-started)和
@@ -41,7 +44,7 @@ marsrs = { version = "0.1", default-features = false, features = ["xlog"] }
 ```
 
 ```rust
-use marsrs::xlog::{appender_close, appender_flush_sync, appender_open, appender_write, XLogConfig};
+use marsrs::xlog::{appender_close, appender_flush_now, appender_open, appender_write, XLogConfig};
 
 let mut config = XLogConfig::default();
 config.logdir = std::path::PathBuf::from("/tmp/mars-log");
@@ -50,7 +53,8 @@ appender_open(config)?;
 
 appender_write(None, "hello from mars");
 
-appender_flush_sync();   // 返回时记录已经在磁盘上
+appender_flush_now();    // 返回时记录已经在磁盘上
+// appender_flush().await 是同一场排空，只是不在本线程上
 appender_close();
 ```
 
@@ -60,7 +64,9 @@ appender_close();
 行号，`None` 是默认的那个。要把一部分日志分开读的 App，给那部分自己开一个
 appender，用 `*_instance` 这一族 —— `appender_open_instance(config)` 回答一个
 handle，`appender_write_instance`、`appender_flush_instance` 和
-`appender_close_instance` 收下它。
+`appender_close_instance` 收下它 —— flush 也是同样的三种形态：
+`appender_signal_flush_instance`、`appender_flush_now_instance`，以及
+`appender_flush_instance(id).await`。
 
 ## SwiftPM
 
@@ -95,7 +101,7 @@ log.isConsoleLogEnabled = true
 
 log.info(message: "hello from mars", tag: "startup")
 
-log.flush(sync: true)    // 返回时记录已经在磁盘上
+log.flushNow()    // 返回时记录已经在磁盘上
 ```
 
 `XlogConfig(logDirectory:)` 是简写形式 —— 其余字段之后在它上面设，每个都在
@@ -136,7 +142,7 @@ log.isConsoleLogEnabled = YES;
 
 [log writeWithLevel:LogLevelInfo message:@"hello from mars" tag:@"startup"];
 
-[log flushWithSync:YES];   // 在 App 读文件或上传之前
+[log flushNow];   // 在 App 读文件或上传之前
 ```
 
 Objective-C 没有 `#file` 可填，所以这里写的记录带的是空文件名和行号 0，除非用长形
@@ -172,7 +178,7 @@ xlog.consoleLogEnabled = BuildConfig.DEBUG
 
 xlog.i("startup", "hello from mars")
 
-xlog.flush(sync = true)  // 返回时记录已经在磁盘上
+xlog.flushNow()  // 返回时记录已经在磁盘上
 ```
 
 写是 `android.util.Log` 的形状 —— `xlog.v`、`d`、`i`、`w`、`e`、`f`，每个都是一个
@@ -212,7 +218,7 @@ xlog.consoleLogEnabled = isDebug
 
 xlog.i("startup", "hello from mars")
 
-xlog.flush(sync = true)  // 返回时记录已经在磁盘上
+xlog.flushNow()  // 返回时记录已经在磁盘上
 xlog.close()
 ```
 
@@ -246,14 +252,16 @@ xlog.consoleLogEnabled = kDebugMode;
 
 xlog.i('startup', 'hello from mars');
 
-await xlog.flush(sync: true);  // 返回时记录已经在磁盘上
+await xlog.flush();      // 等它返回时记录已经在磁盘上
 await xlog.close();
 ```
 
 这个插件是 method channel 而不是 `dart:ffi`，所以过到平台线程上的是一条消息而不是
-一次调用：写和一个设置把消息递过去就返回，只有四个回答
+一次调用：写、一个设置和 `signalFlush()` 都是把消息递过去就返回，只有四个回答
 `Future`，也只有它们有 App 要等的东西 —— `Xlog.open` 打开的那个
-appender，`flush` 和 `close` 等的那个 drain，以及 `isLoggable` 给的答案。
+appender，`await flush()` 和 `close()` 等的那个 drain，以及 `isLoggable` 给的答案。
+Dart 这边没有阻塞式排空的那个面：channel 阻塞不了 Dart 这一侧，所以不等的那一下是
+`signalFlush()`，要等的那一下是 `await xlog.flush()`。
 [任务链路](/zh/stn/getting-started)和
 [网络诊断](/zh/sdt/getting-started)都还没进 Dart：这个插件是日志，在它的两个包里都
 是。
@@ -280,13 +288,15 @@ xlog.consoleLogEnabled = __DEV__;
 
 xlog.i('startup', 'hello from mars');
 
-xlog.flush(true);        // 返回时记录已经在磁盘上
+xlog.flushNow();        // 返回时记录已经在磁盘上
 xlog.close();
 ```
 
-模块的方法都在 JS 线程上调用，也从那里返回，所以没有一个回答 `Promise`：
-`Xlog.open(config)` 直接回答那个 appender，`xlog.i(tag, message)` 在它返回时就已经
-落地了。[任务链路](/zh/stn/getting-started)和[网络诊断](/zh/sdt/getting-started)都
+模块的方法都在 JS 线程上调用，也从那里返回，所以 App 调的没有哪个会长时间堵住它：
+`Xlog.open(config)` 直接回答那个 appender，`xlog.i(tag, message)` 在它返回时就已经落地
+了。排空是唯一可能比 JS 线程该等的时间更长的那件事，所以它有三个写法 ——
+`xlog.signalFlush()` 通知一声就返回，`xlog.flushNow()` 在当前线程上排空，
+`await xlog.flush()` 把它交给模块自己的线程，排空结束时才落地。[任务链路](/zh/stn/getting-started)和[网络诊断](/zh/sdt/getting-started)都
 还没进 TypeScript。
 
 ## The C ABI {#c-abi}
@@ -295,6 +305,7 @@ xlog.close();
 marsrs-<version>-<host>.tar.gz   （Linux、macOS）
 marsrs-<version>-<host>.zip      （Windows）
     include/mars_xlog.h     日志
+    include/mars_xlog.hpp   日志的 C++ 写法
     include/mars_sdt.h      网络诊断
     include/mars_stn.h      任务链路
     libmars_ffi.a / libmars_ffi.so（.dylib、.dll）
@@ -316,7 +327,7 @@ if (mars_xlog_open(&config) != MARS_XLOG_OK) { /* 看返回码 */ }
 
 mars_xlog_write(MarsLevelInfo, "startup", __FILE__, __func__, __LINE__, "hello from mars");
 
-mars_xlog_flush_sync();  /* 返回时记录已经在磁盘上 */
+mars_xlog_flush_now_instance(0);  /* 返回时记录已经在磁盘上 */
 mars_xlog_close();
 ```
 
@@ -333,6 +344,48 @@ cc -I include -o app app.c -L. -lmars_ffi                  # 动态
 
 每个返回 `int` 的调用回答 `MARS_XLOG_OK`（0）或一个负的 `MARS_XLOG_ERR_*`，C ABI
 里没有任何东西会把栈展开到 C 里。
+
+## C++
+
+```cpp
+#include <mars_xlog.hpp>
+
+marsrs::xlog::XlogConfig config;
+config.logDir = "/tmp/mars-log";
+config.namePrefix = "marsrs";
+
+auto log = marsrs::xlog::Xlog::open(config);   // 抛出 marsrs::xlog::XlogError
+log.setConsoleLogEnabled(true);
+
+log.i("startup", "hello from mars");
+
+log.flushNow();     // 返回时记录已经在磁盘上
+log.close();
+```
+
+`mars_xlog.hpp` 是 C ABI 的 C++ 写法：一个头文件，架在同一个库上，所以 App 要链
+的东西和上面 C 那一节是同一个。`Xlog::open(config)` 就是 Kotlin、Dart 和
+TypeScript 的 `Xlog.open(config)`，成员也是同一批成员 —— `v`、`d`、`i`、`w`、
+`e`、`f` 收一个 tag 和一条消息，`level`、`mode`、`consoleLogEnabled`、
+`maxFileSizeBytes` 和 `maxAliveTimeSeconds` 既能设也能读回来，`isLoggable` 是那
+句在拼一条很贵的消息之前该问的问题，而落盘还是那三个调用：`signalFlush()` 通知
+写线程然后立刻返回，`flushNow()` 在这个线程上做，`flush()` 回答一个
+`std::future<void>`，把同一次落盘交给别的线程。
+
+有两样是 C++ 自己的。`Xlog` 只能移动不能复制 —— 一个 prefix 就是一个 appender，
+一个 handle 的两份副本会是同一次关闭的两个主人 —— 而它的析构函数会关掉这个
+appender，所以一个自动存储期的 `Xlog` 在作用域末尾不需要 `close()`。还有：记录
+里的文件、函数和行号是空的，除非那个长的 `log` 把它们写出来，Kotlin 写的也是这
+样 —— C++ 没有 `#file` 可以填进去，所以调用点的 `__FILE__`、
+`__PRETTY_FUNCTION__` 和 `__LINE__` 交给
+`log(level, tag, message, file, function, line)`。
+
+这个头文件要 C++17：`Xlog::setConsoleSink` 的控制台 sink 收到的是
+`std::string_view`，`flush()` 回答的是 `std::future`。
+
+```bash
+c++ -std=c++17 -I include -o app app.cpp libmars_ffi.a -lpthread -ldl
+```
 
 ## HarmonyOS
 
@@ -360,7 +413,7 @@ xlog.consoleLogEnabled = true;
 
 xlog.i('startup', 'hello from mars');
 
-xlog.flush(true);   // 返回时记录已经在磁盘上
+xlog.flushNow();   // 返回时记录已经在磁盘上
 xlog.close();
 ```
 

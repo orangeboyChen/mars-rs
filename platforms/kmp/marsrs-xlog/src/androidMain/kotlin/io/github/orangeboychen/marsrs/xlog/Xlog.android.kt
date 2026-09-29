@@ -1,6 +1,8 @@
 package io.github.orangeboychen.marsrs.xlog
 
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The Android `actual`: `libmarsrsxlog.so`, the JNI bridge of `crates/marsrs-jni`.
@@ -93,10 +95,20 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
     public actual fun f(tag: String, message: String) = log(LogLevel.FATAL, tag, message)
 
-    public actual fun flush(sync: Boolean) {
+    public actual fun signalFlush() {
         if (isOpen) {
-            appenderFlush(handle, sync)
+            appenderSignalFlush(handle)
         }
+    }
+
+    public actual fun flushNow() {
+        if (isOpen) {
+            appenderFlushNow(handle)
+        }
+    }
+
+    public actual suspend fun flush() = withContext(Dispatchers.IO) {
+        flushNow()
     }
 
     public actual fun close() {
@@ -136,7 +148,9 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
     private external fun releaseXlogInstance(namePrefix: String)
 
-    private external fun appenderFlush(handle: Long, sync: Boolean)
+    private external fun appenderSignalFlush(handle: Long)
+
+    private external fun appenderFlushNow(handle: Long)
 
     private external fun getLogLevel(handle: Long): Int
 

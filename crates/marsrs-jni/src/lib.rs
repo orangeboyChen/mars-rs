@@ -9,6 +9,8 @@
 //! | `appenderOpen`            | `Java_…_appenderOpen`                         |
 //! | `appenderClose`           | `Java_…_appenderClose`                        |
 //! | `appenderFlush`           | `Java_…_appenderFlush`                        |
+//! | `appenderSignalFlush`     | `Java_…_appenderSignalFlush`                  |
+//! | `appenderFlushNow`        | `Java_…_appenderFlushNow`                     |
 //! | `newXlogInstance`         | [`marsrs_appender::new_xlogger_instance`]  |
 //! | `getXlogInstance`         | [`marsrs_appender::get_xlogger_instance`]  |
 //! | `releaseXlogInstance`     | [`marsrs_appender::release_xlogger_instance`] |
@@ -38,10 +40,10 @@ use std::borrow::Cow;
 
 use marsrs_appender::{
     category_set_max_alive_duration as set_max_alive_duration,
-    category_set_max_file_size as set_max_file_size, flush, get_level, get_xlogger_instance,
+    category_set_max_file_size as set_max_file_size, flush_now, get_level, get_xlogger_instance,
     is_enabled_for, new_xlogger_instance, release_xlogger_instance, set_appender_mode,
-    set_console_log_open, set_level, xlogger_write, AppenderMode, LogLevel, XLogConfig,
-    XLoggerInfo, DEFAULT_HANDLE,
+    set_console_log_open, set_level, signal_flush, xlogger_write, AppenderMode, LogLevel,
+    XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
 };
 
 /// `gettimeofday(&info.timeval, NULL)` — seconds + microseconds since the
@@ -116,9 +118,27 @@ pub(crate) fn close_impl() {
     marsrs_appender::appender_close()
 }
 
-/// `Xlog.appenderFlush` body.
+/// `Xlog.appenderSignalFlush` body: the writer thread is told it may drain,
+/// and this returns at once.
+pub(crate) fn signal_flush_impl(instance: u64) {
+    signal_flush(instance);
+}
+
+/// `Xlog.appenderFlushNow` body: the drain is this thread's, so what was in the
+/// cache is on the disk when it returns.
+pub(crate) fn flush_now_impl(instance: u64) {
+    flush_now(instance);
+}
+
+/// `Xlog.appenderFlush` body — upstream's name, and the one call of the Java
+/// seam that still says which drain it means with a flag: the C++'s own
+/// `appenderFlush(long, boolean)`, which the deprecated `Log` facade calls.
 pub(crate) fn flush_impl(instance: u64, is_sync: bool) {
-    flush(instance, is_sync)
+    if is_sync {
+        flush_now(instance);
+    } else {
+        signal_flush(instance);
+    }
 }
 
 /// `Xlog.newXlogInstance` body — `0` is the "bad config" answer.

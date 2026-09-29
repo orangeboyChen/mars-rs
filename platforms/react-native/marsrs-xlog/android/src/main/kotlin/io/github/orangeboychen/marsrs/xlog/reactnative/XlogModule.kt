@@ -1,12 +1,12 @@
-// The Android half of `marsrs-react-native-xlog`: the eleven methods of the
-// `Xlog` native module, each of them a straight call of a member of `Xlog` — the
-// Kotlin face of `libmarsrsxlog.so` in the `marsrs-xlog` AAR, and the same
+// The Android half of `marsrs-react-native-xlog`: the thirteen methods of the
+// `Xlog` native module, each of them a straight call of a member of `Xlog` —
+// the Kotlin face of `libmarsrsxlog.so` in the `marsrs-xlog` AAR, and the same
 // class `platforms/kmp/marsrs-xlog` publishes to a Kotlin Multiplatform app
 // and `platforms/apple/MarsRSXlog/Xlog.swift` to a Swift one. So what this
 // file is is a native module over an API that already exists, and nothing of
 // the API is invented here: `Xlog.open(XlogConfig(...))`, `log`,
-// `isLoggable`, `flush`, `close`, and the five settings, under the names
-// every other platform of the port gives them.
+// `isLoggable`, `signalFlush`, `flushNow`, `flush`, `close`, and the five
+// settings, under the names every other platform of the port gives them.
 //
 // A TurboModule, and not a bridge module: `src/NativeXlog.ts` is the spec
 // codegen reads, and `NativeXlogSpec` — the abstract class it generates into
@@ -30,6 +30,7 @@
 
 package io.github.orangeboychen.marsrs.xlog.reactnative
 
+import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReadableMap
 import io.github.orangeboychen.marsrs.xlog.AppenderMode
@@ -38,6 +39,7 @@ import io.github.orangeboychen.marsrs.xlog.LogLevel
 import io.github.orangeboychen.marsrs.xlog.Xlog
 import io.github.orangeboychen.marsrs.xlog.XlogConfig
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
 /** The Android half of `Xlog`. */
 class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactContext) {
@@ -48,6 +50,12 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * `marsrs-jni` both answer an appender by the name it was opened with.
      */
     private val appenders = ConcurrentHashMap<String, Xlog>()
+
+    /**
+     * The one thread `flush` drains on: a drain blocks the thread it runs on,
+     * and the JS thread is not one to block.
+     */
+    private val flushQueue = Executors.newSingleThreadExecutor()
 
     /**
      * `Xlog.open(XlogConfig(...))`: opens the appender of the configuration
@@ -107,9 +115,29 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
     override fun getLevel(namePrefix: String): Double =
         appender(namePrefix)?.level?.ordinal?.toDouble() ?: LogLevel.NONE.ordinal.toDouble()
 
-    /** `Xlog.flush`. */
-    override fun flush(namePrefix: String, sync: Boolean) {
-        appender(namePrefix)?.flush(sync)
+    /** `Xlog.signalFlush`: the signal the writer thread is told to drain by. */
+    override fun signalFlush(namePrefix: String) {
+        appender(namePrefix)?.signalFlush()
+    }
+
+    /** `Xlog.flushNow`: the drain that is over, records on disk, when it returns. */
+    override fun flushNow(namePrefix: String) {
+        appender(namePrefix)?.flushNow()
+    }
+
+    /**
+     * `Xlog.flushNow` off the thread JS runs on: the same drain, on a thread of
+     * this module's own, and `promise` settled when it is over.
+     *
+     * A TurboModule method that answers a promise is the one codegen calls off
+     * the JS thread, which is the whole reason this one answers one: a drain
+     * blocks the thread it runs on, and the JS thread is not one to block.
+     */
+    override fun flush(namePrefix: String, promise: Promise) {
+        flushQueue.execute {
+            appender(namePrefix)?.flushNow()
+            promise.resolve(null)
+        }
     }
 
     /** `Xlog.level`. */

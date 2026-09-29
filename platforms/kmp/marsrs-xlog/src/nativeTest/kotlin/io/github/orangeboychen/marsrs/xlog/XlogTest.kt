@@ -41,7 +41,7 @@ class XlogTest {
             xlog.level = LogLevel.VERBOSE
 
             xlog.i("Net", "a record from a Kotlin Multiplatform test")
-            xlog.flush(sync = true)
+            xlog.flushNow()
 
             val path = logFilePath(dir)
             assertTrue(path.isNotEmpty(), "the appender opened no log file under $dir")

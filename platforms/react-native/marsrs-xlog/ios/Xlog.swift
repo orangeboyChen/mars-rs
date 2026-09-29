@@ -132,13 +132,56 @@ internal final class Xlog: NSObject {
         return Double(mars_xlog_get_level(handle))
     }
 
-    /// `mars_xlog_flush_instance`.
-    @objc(flush:sync:)
-    internal func flush(_ namePrefix: String, sync: Bool) {
+    /// `mars_xlog_signal_flush_instance`: tells the writer thread it may take what is
+    /// in the cache to the log file, and returns at once — nothing waits, and
+    /// nothing is in the file because this returned. A record still in the cache
+    /// is in a file the kernel holds, so one whose process dies keeps it; what
+    /// an app wants before it reads the file or uploads it is `flushNow` or
+    /// `flush`.
+    @objc(signalFlush:)
+    internal func signalFlush(_ namePrefix: String) {
         guard let handle = handles[namePrefix] else {
             return
         }
-        mars_xlog_flush_instance(handle, sync ? 1 : 0)
+        mars_xlog_signal_flush_instance(handle)
+    }
+
+    /// `mars_xlog_flush_now_instance`: the drain is this thread's, so the records are
+    /// in the log file — handed to the OS, and not left in the file's own
+    /// `FILE*` — when it returns, and what it costs is the time the drain takes,
+    /// on the JS thread and nowhere else.
+    @objc(flushNow:)
+    internal func flushNow(_ namePrefix: String) {
+        guard let handle = handles[namePrefix] else {
+            return
+        }
+        mars_xlog_flush_now_instance(handle)
+    }
+
+    /// `flushNow` off the JS thread: the same drain, on a queue of this
+    /// module's own, and `resolve` called when it is over.
+    ///
+    /// The handle and not `self`: the closure runs on another thread.
+    /// `resolve` and `reject` are `RCTPromiseResolveBlock` and
+    /// `RCTPromiseRejectBlock`, spelled out because the bridging header shows
+    /// this file the C ABI and nothing else — a TurboModule method codegen
+    /// answers a `Promise` from is given the two blocks and resolves one of
+    /// them, and there is nothing here that can fail, so `reject` is never
+    /// called.
+    @objc(flush:resolve:reject:)
+    internal func flush(
+        _ namePrefix: String,
+        resolve: @escaping (Any?) -> Void,
+        reject: @escaping (String?, String?, Error?) -> Void
+    ) {
+        guard let handle = handles[namePrefix] else {
+            resolve(nil)
+            return
+        }
+        Self.flushQueue.async {
+            mars_xlog_flush_now_instance(handle)
+            resolve(nil)
+        }
     }
 
     /// `mars_xlog_set_level_instance`.
@@ -213,6 +256,11 @@ internal final class Xlog: NSObject {
 
     /// What the C++ passes on, which is the appender's own 6.
     private static let defaultCompressLevel: Int32 = 0
+
+    /// The queue `flush` drains on, and why it is one queue and not the JS
+    /// thread: a drain blocks the thread it runs on, and serial is what keeps
+    /// two drains of one appender from being two writers in one file.
+    private static let flushQueue = DispatchQueue(label: "io.github.orangeboychen.marsrs.reactnative.xlog.flush")
 
     /// `0` keeps every cache file, which is what the C++'s default is.
     private static let keepEveryFile: Int32 = 0

@@ -26,16 +26,18 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Condvar, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
 use std::time::Instant;
 
 use crate::{
-    appender_close_instance, appender_flush, appender_flush_instance, appender_flush_sync,
-    appender_open_instance, appender_set_console_log, appender_set_console_log_instance,
-    appender_set_max_alive_duration, appender_set_max_alive_duration_instance,
-    appender_set_max_file_size, appender_set_max_file_size_instance, appender_set_mode,
-    appender_set_mode_instance, appender_write, appender_write_instance, AppenderId, AppenderMode,
-    LogLevel, XLogConfig, XLoggerInfo,
+    appender_close_instance, appender_flush, appender_flush_instance, appender_flush_now,
+    appender_flush_now_instance, appender_open_instance, appender_set_console_log,
+    appender_set_console_log_instance, appender_set_max_alive_duration,
+    appender_set_max_alive_duration_instance, appender_set_max_file_size,
+    appender_set_max_file_size_instance, appender_set_mode, appender_set_mode_instance,
+    appender_signal_flush, appender_signal_flush_instance, appender_write, appender_write_instance,
+    current, instance, Appender, AppenderId, AppenderMode, Flush, LogLevel, XLogConfig,
+    XLoggerInfo,
 };
 
 /// Opaque id of a [`XloggerCategory`]; `0` is the default logger.
@@ -694,39 +696,91 @@ pub fn set_max_alive_duration(handle: XloggerHandle, secs: u64) {
     }
 }
 
-/// `mars::xlog::Flush` — drains the instance's own appender.
-pub fn flush(handle: XloggerHandle, sync: bool) {
+/// `mars::xlog::Flush` — asks the writer thread of the handle's own appender
+/// to drain, and returns at once: the drain is the writer's, and nothing here
+/// says when it is over. [`flush_now`] is the call that comes back with the
+/// records on the disk, and [`flush`] is the one an async caller awaits.
+///
+/// A no-op for a handle whose instance was released — see `Target::Gone`.
+pub fn signal_flush(handle: XloggerHandle) {
     match target(handle) {
-        Target::Instance(id) => appender_flush_instance(id, sync),
-        Target::Default => {
-            if sync {
-                appender_flush_sync();
-            } else {
-                appender_flush();
-            }
-        }
+        Target::Instance(id) => appender_signal_flush_instance(id),
+        Target::Default => appender_signal_flush(),
         Target::Gone => {}
     }
 }
 
-/// `mars::xlog::FlushAll`.
+/// [`signal_flush`] drained on the calling thread: the records are on the disk
+/// when this returns.
 ///
-/// Every registered instance has an appender of its own, so the C++'s
-/// "flush everything" has to drain those too — a caller that flushes before
-/// collecting logs or suspending would otherwise miss their records.
-pub fn flush_all(sync: bool) {
-    flush(DEFAULT_HANDLE, sync);
+/// A no-op for a handle whose instance was released — see `Target::Gone`.
+pub fn flush_now(handle: XloggerHandle) {
+    match target(handle) {
+        Target::Instance(id) => appender_flush_now_instance(id),
+        Target::Default => appender_flush_now(),
+        Target::Gone => {}
+    }
+}
 
-    let instances: Vec<AppenderId> = registry()
+/// [`flush_now`] for a caller that can wait without holding a thread: the
+/// [`Flush`] this hands back drains on a thread of its own and is Ready when
+/// the records are on the disk.
+///
+/// Nothing drains until the future is polled, and dropping it does not stop a
+/// drain that has started. A future that drains nothing for a handle whose
+/// instance was released — see `Target::Gone`.
+pub fn flush(handle: XloggerHandle) -> Flush {
+    match target(handle) {
+        Target::Instance(id) => appender_flush_instance(id),
+        Target::Default => appender_flush(),
+        Target::Gone => Flush::noop(),
+    }
+}
+
+/// The default appender and every instance's, as `Arc` clones taken here and
+/// not on the draining thread: what [`signal_flush_all`], [`flush_now_all`]
+/// and [`flush_all`] are about.
+///
+/// Every registered instance has an appender of its own, so the C++'s "flush
+/// everything" has to drain those too — a caller that flushes before
+/// collecting logs or suspending would otherwise miss their records.
+fn every_appender() -> Vec<Arc<Appender>> {
+    let mut appenders: Vec<Arc<Appender>> = current().into_iter().collect();
+    let ids: Vec<AppenderId> = registry()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .categories
         .values()
         .filter_map(|category| category.appender)
         .collect();
-    for id in instances {
-        appender_flush_instance(id, sync);
+    appenders.extend(ids.into_iter().filter_map(instance));
+    appenders
+}
+
+/// `mars::xlog::FlushAll` — asks every writer thread to drain, and returns at
+/// once.
+pub fn signal_flush_all() {
+    for appender in every_appender() {
+        appender.flush();
     }
+}
+
+/// [`signal_flush_all`] drained on the calling thread: every record of every
+/// appender is on the disk when this returns.
+pub fn flush_now_all() {
+    for appender in every_appender() {
+        appender.flush_sync();
+    }
+}
+
+/// [`flush_now_all`] for a caller that can wait without holding a thread.
+pub fn flush_all() -> Flush {
+    let appenders = every_appender();
+    Flush::new(move || {
+        for appender in appenders {
+            appender.flush_sync();
+        }
+    })
 }
 
 /// `mars::xlog::SetConsoleLogOpen` — per instance.
@@ -842,7 +896,7 @@ mod tests {
         // one category, and the cache it writes through is the one it opened
         set_appender_mode(handles[0], AppenderMode::Sync);
         assert!(xlogger_write(handles[0], None, Some("REC-AFTER-THE-RACE")));
-        flush(handles[0], true);
+        flush_now(handles[0]);
         let text = log_text(dir.path());
         assert!(text.contains("REC-AFTER-THE-RACE"), "{text}");
 
@@ -902,8 +956,8 @@ mod tests {
         set_appender_mode(two, AppenderMode::Sync);
         assert!(xlogger_write(one, None, Some("REC-INTO-ONE")));
         assert!(xlogger_write(two, None, Some("REC-INTO-TWO")));
-        flush(one, true);
-        flush(two, true);
+        flush_now(one);
+        flush_now(two);
 
         let first_text = log_text(first.path());
         let second_text = log_text(second.path());
@@ -974,7 +1028,7 @@ mod tests {
             "x == y",
             format_args!("{} is not {}", 1, 2)
         ));
-        flush(DEFAULT_HANDLE, true);
+        flush_now(DEFAULT_HANDLE);
 
         let text = log_text(dir.path());
         // `[F]` is the level string of `kLevelFatal` in the record header.
@@ -1031,7 +1085,7 @@ mod tests {
             "a record the filter refused is one that was written"
         );
         assert!(xlogger_write(DEFAULT_HANDLE, Some(&info), Some("kept")));
-        flush(DEFAULT_HANDLE, true);
+        flush_now(DEFAULT_HANDLE);
 
         let text = log_text(dir.path());
         assert!(!text.contains("drop this one"), "{text}");
@@ -1065,7 +1119,7 @@ mod tests {
             Some("INSTANCE-DROPPED")
         ));
         assert!(xlogger_write(handle, Some(&info), Some("INSTANCE-KEPT")));
-        flush(handle, true);
+        flush_now(handle);
 
         let text = log_text(dir.path());
         assert!(text.contains("INSTANCE-KEPT"), "{text}");
@@ -1092,7 +1146,7 @@ mod tests {
         let mut scope = XloggerScopeTracer::new(info, "connect", Some("to the long link"));
         scope.exit("timed out");
         drop(scope);
-        flush(DEFAULT_HANDLE, true);
+        flush_now(DEFAULT_HANDLE);
 
         let text = log_text(dir.path());
         assert!(text.contains("-> connect to the long link"), "{text}");
@@ -1128,7 +1182,7 @@ mod tests {
         };
         let scope = XloggerScopeTracer::new(info, "silent", None);
         drop(scope);
-        flush(DEFAULT_HANDLE, true);
+        flush_now(DEFAULT_HANDLE);
 
         let text = log_text(dir.path());
         assert!(!text.contains("silent"), "{text}");
@@ -1182,7 +1236,7 @@ mod tests {
         assert!(xlogger_write(two, None, Some("ALL-TWO")));
 
         // Not one per-instance `flush`: `flush_all` has to reach both.
-        flush_all(true);
+        flush_now_all();
 
         assert!(log_text(first.path()).contains("ALL-ONE"));
         assert!(log_text(second.path()).contains("ALL-TWO"));
@@ -1203,7 +1257,7 @@ mod tests {
         set_max_file_size(STALE, 1);
         set_max_alive_duration(STALE, 1);
         set_console_log_open(STALE, true);
-        flush(STALE, true);
+        flush_now(STALE);
 
         let dir = tempfile::tempdir().unwrap();
         crate::appender_open(config("default", dir.path())).unwrap();
@@ -1300,7 +1354,7 @@ mod tests {
             Some(&info),
             Some("WRITTEN-ANYWAY")
         ));
-        flush(DEFAULT_HANDLE, true);
+        flush_now(DEFAULT_HANDLE);
 
         assert!(
             log_text(dir.path()).contains("WRITTEN-ANYWAY"),

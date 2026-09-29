@@ -1,7 +1,7 @@
 package io.github.orangeboychen.marsrs.xlog
 
 import io.github.orangeboychen.marsrs.xlog.ffi.MarsXLogConfig
-import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_flush_instance
+import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_flush_now_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_get_level
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_is_enabled_for
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_new_instance
@@ -11,12 +11,15 @@ import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_level_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_max_alive_duration_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_max_file_size_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_mode_instance
+import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_signal_flush_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_write_instance
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.cstr
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The Kotlin/Native `actual`: the C ABI of `crates/marsrs-ffi` (`mars_xlog.h`)
@@ -98,10 +101,20 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
     public actual fun f(tag: String, message: String) = log(LogLevel.FATAL, tag, message)
 
-    public actual fun flush(sync: Boolean) {
+    public actual fun signalFlush() {
         if (isOpen) {
-            mars_xlog_flush_instance(handle, if (sync) SYNC else ASYNC)
+            mars_xlog_signal_flush_instance(handle)
         }
+    }
+
+    public actual fun flushNow() {
+        if (isOpen) {
+            mars_xlog_flush_now_instance(handle)
+        }
+    }
+
+    public actual suspend fun flush() = withContext(Dispatchers.IO) {
+        flushNow()
     }
 
     public actual fun close() {
@@ -142,11 +155,6 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
         /** `mars_xlog_is_enabled_for` answers `0` for a level the appender drops. */
         const val DISABLED = 0
-
-        /** `mars_xlog_flush_instance` reads a non-zero `sync` as "wait for the write". */
-        const val SYNC = 1
-
-        const val ASYNC = 0
 
         /** The C ABI reads a max file size of `0` as "never split". */
         const val NO_FILE_SIZE_LIMIT = 0L

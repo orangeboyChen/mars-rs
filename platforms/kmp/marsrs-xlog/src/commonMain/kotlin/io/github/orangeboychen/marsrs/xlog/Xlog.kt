@@ -84,15 +84,30 @@ public expect class Xlog(config: XlogConfig) {
     public fun f(tag: String, message: String)
 
     /**
-     * Takes what is in the cache to the log file, and hands the file's own
-     * buffer to the OS — the last few KiB of a log file sit in a `FILE*` until
-     * this runs, so a reader in another process cannot see them yet.
-     *
-     * @param sync `true` drains on the calling thread, which is what an app
-     *             wants before it reads or uploads the files; `false` asks the
-     *             writer thread to do it and returns
+     * Tells the writer thread to take what is in the cache to the log file, and
+     * returns at once: the drain is the writer's, and nothing here says when it
+     * is over. What it is for is a drain an app wants soon and does not want to
+     * wait for — a record still in the cache sits in a file the kernel holds, so
+     * nothing is lost by a drain that has not happened yet.
      */
-    public fun flush(sync: Boolean = false)
+    public fun signalFlush()
+
+    /**
+     * Takes what is in the cache to the log file on the calling thread, and
+     * hands the file's own buffer to the OS — the last few KiB of a log file sit
+     * in a `FILE*` until this runs, so a reader in another process cannot see
+     * them yet. The records are on disk when it returns, and what it costs is
+     * the time the drain takes, on that thread.
+     */
+    public fun flushNow()
+
+    /**
+     * [flushNow] for a caller that can suspend and would rather not block the
+     * thread it is on: the records are on disk when this resumes, and what
+     * waited for them is a thread of the I/O pool. A drain blocks whatever
+     * thread it runs on, which is why this one is handed to another one.
+     */
+    public suspend fun flush()
 
     /**
      * Closes this appender: drains what is left and drops it. Writing through

@@ -26,10 +26,11 @@
 //
 // The class and every member an app reaches are `@objc`, and `Xlog` is an
 // `NSObject` — but for `setConsoleSink(_:)`, which takes a C function pointer
-// and so has no Objective-C spelling. An app written in Objective-C takes the
-// port through `[[Xlog alloc] initWithConfig:error:]`, and the `Xlog` it writes is the one
-// the compiler writes out of this file, into `MarsRSXlog-Swift.h`. There is no
-// Objective-C source in the port — the linkage is Swift's.
+// and so has no Objective-C spelling, and for the `async` `flush()`, which
+// no Objective-C caller can `await`. An app written in Objective-C takes the port
+// through `[[Xlog alloc] initWithConfig:error:]`, and the `Xlog` it writes is
+// the one the compiler writes out of this file, into `MarsRSXlog-Swift.h` —
+// there is no Objective-C source in the port, the linkage is Swift's own.
 
 import Foundation
 
@@ -271,19 +272,48 @@ public final class Xlog: NSObject {
         log(.fatal, message: message, tag: tag, file: file, function: function, line: line)
     }
 
-    /// Takes what is in the cache to the log file, and hands the file's own
-    /// buffer to the OS — the last few KiB of a log file are in a `FILE*` until
-    /// this runs, so a reader in another process cannot see them yet.
-    ///
-    /// - Parameter sync: `true` drains on the calling thread, which is what an
-    ///                   app wants before it reads or uploads the files;
-    ///                   `false` asks the writer thread to do it and returns.
+    /// Tells the writer thread to take what is in the cache to the log file,
+    /// and returns at once: the drain is the writer's, and nothing here says
+    /// when it is over. What it is for is a drain an app wants soon and does
+    /// not want to wait for — a record still in the cache is in a file the
+    /// kernel holds, so nothing is lost by a drain that has not happened yet.
     @objc
-    public func flush(sync: Bool = false) {
-        guard isOpen else {
+    public func signalFlush() {
+        withHandle { mars_xlog_signal_flush_instance($0) }
+    }
+
+    /// Takes what is in the cache to the log file on the calling thread, and
+    /// hands the file's own buffer to the OS — the last few KiB of a log file
+    /// are in a `FILE*` until this runs, so a reader in another process cannot
+    /// see them yet. The records are on disk when it returns, and what it
+    /// costs is the time the drain takes; `await flush()` waits for the
+    /// same thing off this thread.
+    @objc
+    public func flushNow() {
+        withHandle { mars_xlog_flush_now_instance($0) }
+    }
+
+    /// [flushNow()] for a caller that can wait without holding a thread: the
+    /// records are on disk when this returns, and what waited for them is a
+    /// parked queue thread.
+    ///
+    /// A drain blocks the thread it runs on, and blocking a thread of the
+    /// cooperative pool is what `async` asks a caller not to do — so this one
+    /// goes to a queue. It is not cancelled with the task that asked for it.
+    @available(iOS 13.0, macOS 10.15, *)
+    public func flush() async {
+        // The handle and not `self`: the closure runs on another thread, and
+        // `Xlog` is not `Sendable`, so strict concurrency refuses the capture.
+        let opened = self.handle
+        guard opened != Self.noHandle else {
             return
         }
-        mars_xlog_flush_instance(handle, sync ? 1 : 0)
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            Self.flushQueue.async {
+                mars_xlog_flush_now_instance(opened)
+                continuation.resume()
+            }
+        }
     }
 
     /// Closes this appender: drains what is left and drops it. Writing through
@@ -448,6 +478,10 @@ public final class Xlog: NSObject {
 
     /// What [mode] answers while this side is the only one that knows it.
     private var currentMode: AppenderMode
+
+    /// The queue an `await flush()` waits for the disk on: serial, because a
+    /// drain holds the appender's lock from the cache to the OS anyway.
+    private static let flushQueue = DispatchQueue(label: "io.github.orangeboychen.marsrs.xlog.flush")
 
     /// The handle the C ABI answers for an appender it did not open.
     private static let noHandle: Int64 = 0

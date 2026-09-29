@@ -39,6 +39,16 @@
 #ifndef MARS_XLOG_H_
 #define MARS_XLOG_H_
 
+/* The symbols this header declares are the ones `#[no_mangle]` exports: plain
+ * C names, and a C++ translation unit that includes this and calls
+ * `mars_xlog_open()` asks its linker for a mangled one that does not exist.
+ * `mars_stn.h` and `mars_sdt.h` carry the same guard, and `mars_xlog.hpp` —
+ * the C++ face of this seam — includes this one, so a C++ caller asks for the
+ * same names whichever of the two it takes. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* --- enums ------------------------------------------------------------- */
 
 /** Mirrors `mars::xlog::TAppenderMode` (appender.h). */
@@ -113,9 +123,10 @@ typedef struct {
 int mars_xlog_open(const MarsXLogConfig* config);
 
 /**
- * Replaces `mars::xlog::XloggerWrite(...)` / `appender_write`. The record is
- * dropped (cheaply, before any formatting) when `level` is below the level set
- * by `mars_xlog_set_level`.
+ * Replaces `mars::xlog::XloggerWrite(...)` / `appender_write`: the record goes
+ * to the process-wide appender `mars_xlog_open` opened. It is dropped (cheaply,
+ * before any formatting) when `level` is below the level set for handle `0` by
+ * `mars_xlog_set_level_instance`.
  *
  * `tag`, `filename`, `func_name` and `message` may be NULL; NULL and invalid
  * UTF-8 are treated as an empty string.
@@ -148,20 +159,8 @@ void mars_xlog_assert(const char* tag,
                       const char* expression,
                       const char* message);
 
-/** Replaces `mars::xlog::appender_flush()` — signals the writer thread. */
-void mars_xlog_flush(void);
-
-/** Replaces `mars::xlog::appender_flush_sync()` — flushes and waits. */
-void mars_xlog_flush_sync(void);
-
 /** Replaces `mars::xlog::appender_close()`. */
 void mars_xlog_close(void);
-
-/** Replaces `xlogger_SetLevel()`; `level` < 0 clamps to Verbose. */
-void mars_xlog_set_level(int level);
-
-/** Replaces `appender_set_console_log(bool)`; `open` != 0 means on. */
-void mars_xlog_set_console_log(int open);
 
 /**
  * Replaces `appender_set_console_fun(TConsoleFun)` of `mars/xlog/appender.h`
@@ -189,16 +188,13 @@ typedef void (*MarsXLogConsoleFun)(int level,
                                    int line,
                                    const char* log);
 
+/* The sink is process-wide, as it is in the C++ (`sg_console_fun`): there is no
+ * per-instance one to set it on. */
 void mars_xlog_set_console_fun(MarsXLogConsoleFun fun);
 
-/** Replaces `appender_set_max_file_size(uint64_t)`; 0 means "do not split". */
-void mars_xlog_set_max_file_size(unsigned long long bytes);
-
-/** Replaces `appender_set_max_alive_duration(long)`; negative clamps to 0. */
-void mars_xlog_set_max_alive_duration(long long seconds);
-
 /**
- * Replaces `appender_get_current_log_path(char*, unsigned int)`.
+ * Replaces `appender_get_current_log_path(char*, unsigned int)` — the file the
+ * process-wide appender is appending to.
  *
  * Writes the NUL-terminated path of the log file currently being appended to
  * into `out` (which must hold at least `len` bytes).
@@ -214,6 +210,12 @@ int mars_xlog_current_log_path(char* out, unsigned int len);
  * Each instance owns an appender: its own log directory, prefix, key, mode and
  * cache file. Handle 0 means "the process-wide appender opened by
  * mars_xlog_open".
+ *
+ * Every call that can be asked of an instance exists only in this spelling: the
+ * C++ has a free function for the process-wide appender and a handle-taking one
+ * beside it, and a second spelling of the same operation here would be two ways
+ * to say one thing. So the level, the mode, the console, the two sizes and the
+ * drain of the process-wide appender are all asked for with a handle of `0`.
  */
 
 /* Returns the instance handle, or 0 on a null/invalid config. */
@@ -240,20 +242,34 @@ int mars_xlog_is_enabled_for(long long instance, int level);
 /* The instance's level, or -1 for an unknown handle. */
 int mars_xlog_get_level(long long instance);
 
-/* SetLevel for an instance (0 = the default logger). */
+/* SetLevel for an instance; `0` is the process-wide appender, so this is also
+ * `xlogger_SetLevel` — the level `mars_xlog_get_level` and
+ * `mars_xlog_is_enabled_for` answer, and the one `mars_xlog_write` asks. */
 void mars_xlog_set_level_instance(long long instance, int level);
 
-/* appender_setmode: switches the process-wide appender between async/sync. */
-void mars_xlog_set_mode(int mode);
-
-/* SetAppenderMode for an instance. */
+/* appender_setmode / SetAppenderMode; `0` is the process-wide appender. */
 void mars_xlog_set_mode_instance(long long instance, int mode);
 
-/* Drains an instance; sync != 0 waits for the write to complete. */
-void mars_xlog_flush_instance(long long instance, int sync);
+/* Drains an instance (0 = the process-wide appender), signalled: the writer
+ * thread is told it may drain, and this returns at once. Nothing is in the file
+ * because this returned. The C++'s name for this call is `appender_flush`, and
+ * "flush" there said which mode the appender was opened in and not what the
+ * call does to the thread it was called on: the port names the two drains
+ * apart instead. */
+void mars_xlog_signal_flush_instance(long long instance);
 
-/* FlushAll: drains the process-wide appender *and* every instance. */
-void mars_xlog_flush_all(int sync);
+/* Drains an instance on the calling thread, which is what
+ * `appender_flush_sync` is: its records are on the disk when this returns, and
+ * that is a promise the signalled call above does not make. */
+void mars_xlog_flush_now_instance(long long instance);
+
+/* FlushAll, signalled: every appender is told its writer thread may drain. */
+void mars_xlog_signal_flush_all(void);
+
+/* FlushAll on the calling thread: drains the process-wide appender *and* every
+ * instance — each of which owns an appender of its own, so a caller that leaves
+ * them out misses their records. */
+void mars_xlog_flush_now_all(void);
 
 /* SetConsoleLogOpen for an instance (0 = the default logger). */
 void mars_xlog_set_console_log_instance(long long instance, int open);
@@ -310,5 +326,8 @@ int mars_xlog_getfilepath_from_timespan(int timespan,
 /* The cache directory, or a negative MARS_XLOG_ERR_* code. */
 int mars_xlog_current_log_cache_path(char* out, unsigned int len);
 
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 #endif /* MARS_XLOG_H_ */

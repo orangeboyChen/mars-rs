@@ -16,17 +16,22 @@ const xlog = Xlog.open({
 });
 xlog.i('Net', 'hello');
 xlog.log(LogLevel.Debug, 'Net', 'a debug line');
-xlog.flush(true);
+xlog.flushNow();
 xlog.close();
 ```
 
 `Xlog` is one appender: `Xlog.open(config)` opens it and `close()` closes it —
 the same class, under the same name, the Swift package,
-`platforms/kmp/marsrs-xlog` and the Android AAR publish. Nothing here answers
-a `Promise` and nothing needs an `await`: the module is a TurboModule, so a
-call is made on the JS thread and returned from, and the settings are the
+`platforms/kmp/marsrs-xlog` and the Android AAR publish. The settings are the
 properties they are in Kotlin and in Swift — `xlog.level = LogLevel.Debug` —
 and not `setLevel` / `getLevel` pairs.
+
+The drain is three calls and not one with a flag: `xlog.signalFlush()` tells
+the writer thread it may take the cache to the file and returns at once,
+`xlog.flushNow()` does the same on the calling thread and is over when it
+returns, and `await xlog.flush()` is `flushNow` off the JS thread — the one
+call here that answers a `Promise`, because a drain blocks the thread it runs
+on and the JS thread is not one to block.
 
 That is what the New Architecture buys, and it is the only thing asked for in
 return: a TurboModule is not a bridge module, so an app still on the old
@@ -54,7 +59,7 @@ compiles — there is no build step, and `npm run typecheck` is the only script.
 `src/NativeXlog.ts` is the spec React Native's codegen reads, and
 `codegenConfig` in `package.json` is what points it at `src`: `NativeXlogSpec`
 is generated into the app's `React-Codegen` pod and into the Android build, and
-neither half of the module has to be told the eleven signatures twice.
+neither half of the module has to be told the thirteen signatures twice.
 
 ## What each platform resolves
 

@@ -10,14 +10,13 @@ use std::os::raw::{c_char, c_int, c_uint};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_ffi::abi::{
-    mars_xlog_close, mars_xlog_current_log_cache_path, mars_xlog_current_log_path, mars_xlog_flush,
-    mars_xlog_flush_all, mars_xlog_flush_instance, mars_xlog_flush_sync, mars_xlog_get_instance,
+    mars_xlog_close, mars_xlog_current_log_cache_path, mars_xlog_current_log_path,
+    mars_xlog_flush_now_all, mars_xlog_flush_now_instance, mars_xlog_get_instance,
     mars_xlog_get_level, mars_xlog_getfilepath_from_timespan, mars_xlog_is_enabled_for,
     mars_xlog_make_logfile_name, mars_xlog_new_instance, mars_xlog_oneshot_flush, mars_xlog_open,
-    mars_xlog_release_instance, mars_xlog_set_console_log, mars_xlog_set_console_log_instance,
-    mars_xlog_set_level, mars_xlog_set_level_instance, mars_xlog_set_max_alive_duration,
-    mars_xlog_set_max_alive_duration_instance, mars_xlog_set_max_file_size,
-    mars_xlog_set_max_file_size_instance, mars_xlog_set_mode, mars_xlog_set_mode_instance,
+    mars_xlog_release_instance, mars_xlog_set_console_log_instance, mars_xlog_set_level_instance,
+    mars_xlog_set_max_alive_duration_instance, mars_xlog_set_max_file_size_instance,
+    mars_xlog_set_mode_instance, mars_xlog_signal_flush_all, mars_xlog_signal_flush_instance,
     mars_xlog_write, mars_xlog_write_instance, MarsXLogConfig, MARS_XLOG_ERR_APPENDER,
     MARS_XLOG_ERR_BAD_COMPRESS, MARS_XLOG_ERR_BAD_MODE, MARS_XLOG_ERR_EMPTY_LOG_DIR,
     MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_CONFIG,
@@ -102,10 +101,10 @@ fn open_rejects_a_bad_config_before_touching_the_disk() {
 fn the_level_is_one_store_whatever_the_question_is() {
     let _guard = serial();
 
-    // `mars_xlog_set_level` is the level of the default logger, which is the
+    // Handle `0` is the process-wide appender, whose level is the one the
     // store `get_level` / `is_enabled_for` / `write_instance` read. It used to
     // be kept beside them, in the seam, and the two answered differently.
-    mars_xlog_set_level(3);
+    mars_xlog_set_level_instance(0, 3);
     assert_eq!(mars_xlog_get_level(0), 3, "one level, two answers");
     assert_eq!(mars_xlog_is_enabled_for(0, 2), 0);
     assert_eq!(mars_xlog_is_enabled_for(0, 3), 1);
@@ -121,7 +120,7 @@ fn the_level_is_one_store_whatever_the_question_is() {
     assert_eq!(mars_xlog_get_level(0), 0);
     assert_eq!(mars_xlog_is_enabled_for(0, 0), 1);
 
-    mars_xlog_set_level(0);
+    mars_xlog_set_level_instance(0, 0);
 }
 
 #[test]
@@ -162,7 +161,7 @@ fn the_whole_abi_runs_over_one_appender() {
 
     // the exact level is asserted in the (single-threaded) JNI tests: another
     // test file can close the singleton appender under this one
-    mars_xlog_set_level(1);
+    mars_xlog_set_level_instance(0, 1);
     let level = mars_xlog_get_level(0);
     assert!((-1..=6).contains(&level), "unexpected level {level}");
     let _ = mars_xlog_is_enabled_for(0, 2);
@@ -171,16 +170,16 @@ fn the_whole_abi_runs_over_one_appender() {
     assert_eq!(mars_xlog_get_level(0xdead_beef), -1);
     assert_eq!(mars_xlog_is_enabled_for(0xdead_beef, 5), 0);
 
-    mars_xlog_set_console_log(1);
-    mars_xlog_set_console_log(0);
-    mars_xlog_set_max_file_size(0);
-    mars_xlog_set_max_file_size(1 << 20);
-    mars_xlog_set_max_alive_duration(-1);
-    mars_xlog_set_max_alive_duration(3600);
-    mars_xlog_set_mode(1);
-    mars_xlog_set_mode(0);
+    mars_xlog_set_console_log_instance(0, 1);
+    mars_xlog_set_console_log_instance(0, 0);
+    mars_xlog_set_max_file_size_instance(0, 0);
+    mars_xlog_set_max_file_size_instance(0, 1 << 20);
+    mars_xlog_set_max_alive_duration_instance(0, -1);
+    mars_xlog_set_max_alive_duration_instance(0, 3600);
+    mars_xlog_set_mode_instance(0, 1);
+    mars_xlog_set_mode_instance(0, 0);
     // an unknown mode is ignored
-    mars_xlog_set_mode(9);
+    mars_xlog_set_mode_instance(0, 9);
 
     let mut path = vec![0u8; 512];
     let written = unsafe {
@@ -207,10 +206,10 @@ fn the_whole_abi_runs_over_one_appender() {
         MARS_XLOG_ERR_NULL_OUT
     );
 
-    mars_xlog_flush();
-    mars_xlog_flush_sync();
-    mars_xlog_flush_instance(0, 0);
-    mars_xlog_flush_instance(0, 1);
+    mars_xlog_signal_flush_instance(0);
+    mars_xlog_flush_now_instance(0);
+    mars_xlog_signal_flush_instance(0);
+    mars_xlog_flush_now_instance(0);
     mars_xlog_close();
     // closed: there is no current file any more
     let mut path = vec![0u8; 512];
@@ -252,7 +251,7 @@ fn instances_are_created_addressed_and_released() {
     mars_xlog_set_level_instance(handle, 3);
     assert_eq!(mars_xlog_get_level(handle), 3);
     mars_xlog_set_mode_instance(handle, 0);
-    mars_xlog_flush_instance(handle, 1);
+    mars_xlog_flush_now_instance(handle);
     unsafe {
         mars_xlog_release_instance(prefix.as_ptr());
     }
@@ -296,22 +295,23 @@ fn the_void_symbols_survive_a_closed_appender() {
             std::ptr::null(),
         );
     }
-    mars_xlog_flush();
-    mars_xlog_flush_sync();
-    mars_xlog_flush_instance(0, 1);
+    mars_xlog_signal_flush_instance(0);
+    mars_xlog_flush_now_instance(0);
+    mars_xlog_flush_now_instance(0);
     mars_xlog_close();
-    mars_xlog_set_level(2);
     mars_xlog_set_level_instance(0, 2);
-    mars_xlog_set_console_log(0);
-    mars_xlog_set_max_file_size(0);
-    mars_xlog_set_max_alive_duration(0);
-    mars_xlog_set_mode(0);
+    mars_xlog_set_level_instance(0, 2);
+    mars_xlog_set_console_log_instance(0, 0);
+    mars_xlog_set_max_file_size_instance(0, 0);
+    mars_xlog_set_max_alive_duration_instance(0, 0);
+    mars_xlog_set_mode_instance(0, 0);
     mars_xlog_set_mode_instance(0, 0);
     unsafe {
         mars_xlog_release_instance(std::ptr::null());
     }
     // the void symbols added for the rest of the C++ surface
-    mars_xlog_flush_all(1);
+    mars_xlog_signal_flush_all();
+    mars_xlog_flush_now_all();
     mars_xlog_set_console_log_instance(0, 0);
     mars_xlog_set_max_file_size_instance(0, 0);
     mars_xlog_set_max_alive_duration_instance(0, 0);
@@ -324,19 +324,19 @@ fn the_void_symbols_survive_a_closed_appender() {
 #[test]
 fn is_enabled_for_compares_the_raw_level() {
     let _guard = serial();
-    mars_xlog_set_level(0); // Verbose: everything passes, 6 included
+    mars_xlog_set_level_instance(0, 0); // Verbose: everything passes, 6 included
     assert_eq!(mars_xlog_is_enabled_for(0, 6), 1);
     assert_eq!(mars_xlog_is_enabled_for(0, 5), 1);
     // A negative level is below Verbose, so nothing passes it.
     assert_eq!(mars_xlog_is_enabled_for(0, -1), 0);
 
-    mars_xlog_set_level(3); // Warn
+    mars_xlog_set_level_instance(0, 3); // Warn
     assert_eq!(mars_xlog_is_enabled_for(0, 2), 0);
     assert_eq!(mars_xlog_is_enabled_for(0, 3), 1);
     // A handle that is not one has no level to compare against.
     assert_eq!(mars_xlog_is_enabled_for(0xdead_beef, 6), 0);
 
-    mars_xlog_set_level(0);
+    mars_xlog_set_level_instance(0, 0);
 }
 
 /// `NewXloggerInstance(_config, (TLogLevel)_level)` casts the level: 6
@@ -358,7 +358,7 @@ fn an_instance_can_be_opened_at_the_level_that_logs_nothing() {
     mars_xlog_set_console_log_instance(handle, 0);
     mars_xlog_set_max_file_size_instance(handle, 0);
     mars_xlog_set_max_alive_duration_instance(handle, 0);
-    mars_xlog_flush_all(1);
+    mars_xlog_flush_now_all();
 
     let prefix = CString::new("Mars").unwrap();
     unsafe {

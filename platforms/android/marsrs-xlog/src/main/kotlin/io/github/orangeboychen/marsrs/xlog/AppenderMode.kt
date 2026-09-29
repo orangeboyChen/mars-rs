@@ -13,7 +13,7 @@ enum class AppenderMode(internal val native: Int) {
      * takes it to the log file. Cheap enough to log from anywhere, and the
      * only mode that keeps its ordering across threads; the last records of a
      * process that dies are in the cache and not in the file, which is what
-     * [Xlog.flush] is for.
+     * [Xlog.flushNow] is for.
      */
     ASYNC(0),
 

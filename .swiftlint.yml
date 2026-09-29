@@ -188,7 +188,10 @@ line_length:
 # calls a long link of the app's own is made, dropped and made the main one
 # with took it from 400 to 427, and the app's coming to the front and the
 # network's changing took it from 427 to 448. What took `Xlog` from 400 to 476
-# is a day of log files and the sink the console copy is handed to.
+# is a day of log files and the sink the console copy is handed to, and what
+# took it from 476 to 511 is the flush split in three — the signal that wakes
+# the writer, the drain that is the caller's own thread's, and the same drain
+# off it: three declarations and three doc comments where one took a `Bool`.
 file_length:
-  warning: 500
+  warning: 520
   error: 1000

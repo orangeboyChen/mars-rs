@@ -35,7 +35,7 @@ package carries the last two — [use it](#use-it) says which do.
 | Kotlin Multiplatform | `xlog-kmp` / `marsrs-kmp` | GitHub Packages, or the release's `marsrs-kmp-maven.zip` |
 | Flutter | `marsrs_xlog` / `marsrs` | [pub.dev](https://pub.dev), or the release's `marsrs-flutter-xlog-<version>.tar.gz` |
 | React Native 0.74+ | `marsrs-react-native-xlog` / `marsrs-react-native` | [npm](https://www.npmjs.com), or the release's `marsrs-react-native-xlog-<version>.tgz` |
-| anything with a C FFI | the `marsrs-<version>-<host>` archive | the release: Linux, macOS and Windows hosts |
+| anything with a C or C++ FFI | the `marsrs-<version>-<host>` archive | the release: Linux, macOS and Windows hosts |
 | HarmonyOS | `marsrs-harmonyos-xlog`, or the three `.so` of `marsrs-harmony-<version>.tar.gz` | the release — ohpm is not switched on yet |
 
 The Kotlin Multiplatform package is the widest of them: the same calls in shared
@@ -96,7 +96,7 @@ Then the same three steps on every platform: open an appender once when the app
 starts, write through it, and flush before you read or upload its files.
 
 ```rust
-use marsrs::xlog::{appender_close, appender_flush_sync, appender_open, appender_write, XLogConfig};
+use marsrs::xlog::{appender_close, appender_flush_now, appender_open, appender_write, XLogConfig};
 
 let mut config = XLogConfig::default();
 config.logdir = std::path::PathBuf::from("/tmp/mars-log");
@@ -119,7 +119,7 @@ val xlog = Xlog.open(
 )
 xlog.i("startup", "cold start in $elapsedMillis ms")
 
-xlog.flush(sync = true)  // before the app reads or uploads the files
+xlog.flushNow()  // before the app reads or uploads the files
 ```
 
 The file is `<logDir>/<namePrefix>_YYYYMMDD.xlog` — `marsrs_20260927.xlog` above.

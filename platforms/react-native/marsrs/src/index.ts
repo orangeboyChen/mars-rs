@@ -41,7 +41,8 @@ export type LogLevel = (typeof LogLevel)[keyof typeof LogLevel];
 /** `TAppenderMode`: whether a record reaches the file before the call returns. */
 export const AppenderMode = {
   /** The record goes into the memory-mapped cache and a writer thread takes it
-   * to the file — what the C++ opens with, and what `flush` drains. */
+   * to the file — what the C++ opens with, and what `flush` and
+   * `flushNow` drain. */
   async: 0,
   /** The record is in the file before the call returns, at a write and a lock
    * per line. */
@@ -292,14 +293,43 @@ export class Xlog {
     this.log(LogLevel.fatal, tag, message);
   }
 
-  /** `mars_xlog_flush_instance`: takes what is in the cache to the file. `sync`
-   * waits for the write, which is what an app wants before it reads the file,
-   * uploads it, or lets the process go. */
-  flush(sync = false): void {
+  /** `mars_xlog_signal_flush_instance`: tells the writer thread it may take what is in
+   * the cache to the file, and returns at once. Nothing waits, and nothing is
+   * in the file because this returned — a record still in the cache is in a file
+   * the kernel holds, so one whose process dies keeps it. What it is for is a
+   * drain an app wants soon and does not want to wait for; before the file is
+   * read, uploaded or left behind, it is `flushNow()` or `await flush()`
+   * that an app wants and not this. */
+  signalFlush(): void {
     if (!this.open) {
       return;
     }
-    NativeXlog.flush(this.namePrefix, sync);
+    NativeXlog.signalFlush(this.namePrefix);
+  }
+
+  /** `mars_xlog_flush_now_instance`: the drain is the calling thread's, so the
+   * records are in the log file — handed to the OS, and not left in the file's
+   * own `FILE*` — when it returns, and what that costs is the time the drain
+   * takes, on the thread that asked for it. It answers no `Promise` and takes
+   * no `await`, which is the point of it: the line after the call is a line
+   * that runs after the drain, and there is nothing to get wrong in between. */
+  flushNow(): void {
+    if (!this.open) {
+      return;
+    }
+    NativeXlog.flushNow(this.namePrefix);
+  }
+
+  /** `flushNow()` off the JS thread: the same drain, on a thread of the
+   * module's own, and a `Promise` that is settled when it is over. The records
+   * are on disk when it resolves, and what waited for them is that thread and
+   * not the one the app runs JS on — the call to make before reading or
+   * uploading a log file whose drain is longer than the app can sit through. */
+  async flush(): Promise<void> {
+    if (!this.open) {
+      return;
+    }
+    await NativeXlog.flush(this.namePrefix);
   }
 
   /** `mars_xlog_release_instance`: closes the appender `Xlog.open` made.

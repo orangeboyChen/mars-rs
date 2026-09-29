@@ -22,13 +22,13 @@
 //! the build an app that only logs gets.
 //!
 //! ```no_run
-//! use marsrs::xlog::{appender_close, appender_flush_sync, appender_open, appender_write, XLogConfig};
+//! use marsrs::xlog::{appender_close, appender_flush_now, appender_open, appender_write, XLogConfig};
 //!
 //! let mut config = XLogConfig::default();
 //! config.logdir = std::path::PathBuf::from("/tmp/mars-log");
 //! appender_open(config).unwrap();
 //! appender_write(None, "hello from mars");
-//! appender_flush_sync();
+//! appender_flush_now();
 //! appender_close();
 //! ```
 

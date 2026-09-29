@@ -10,8 +10,8 @@
 // call to the platform side and return, `xlog.i('net', '…')` the way it does in
 // Kotlin and in Swift, and the channel keeps the order the calls were handed
 // over in. Four of them answer a `Future`, because four of them have something
-// an app can act on: the appender [Xlog.open] opens, the drain [Xlog.flush] and
-// [Xlog.close] wait for, and the answer [Xlog.isLoggable] gives.
+// an app can act on: the appender [Xlog.open] opens, the drain [Xlog.flush]
+// and [Xlog.close] wait for, and the answer [Xlog.isLoggable] gives.
 //
 // The five settings are properties and not a `setLevel` / `getLevel` pair, which
 // is the spelling the Kotlin, the Swift and the TypeScript of the port give
@@ -267,15 +267,35 @@ class Xlog {
   /// [LogLevel.fatal].
   void f(String tag, String message) => log(LogLevel.fatal, tag, message);
 
-  /// Takes what is in the cache to the log file; [sync] waits for the write.
+  /// Tells the writer thread it may take what is in the cache to the log file,
+  /// and returns at once: nothing waits for the drain, and nothing is said
+  /// about when it is over.
   ///
-  /// Waiting is the platform side's: what this answers is that the drain has
-  /// happened, which is what an app wants before it reads or uploads the files.
-  Future<void> flush({bool sync = false}) async {
+  /// What it is for is a drain an app wants soon and does not want to wait
+  /// for — a record still in the cache is in a file the kernel holds, so a
+  /// drain that has not happened yet is nothing lost. An app that reads or
+  /// uploads the files wants [flush].
+  void signalFlush() {
     if (_closing != null) {
       return;
     }
-    await _invoke<void>('flush', <String, Object?>{'sync': sync});
+    _send('signalFlush');
+  }
+
+  /// Takes what is in the cache to the log file, and answers that it has: the
+  /// platform side waits for the drain, so the records are in the file when
+  /// this returns — what an app wants before it reads or uploads them.
+  ///
+  /// `flushNow`, the name the Kotlin and the Swift of the port give the
+  /// blocking drain, has no face here on purpose and not as a shortfall: a
+  /// method channel is a message and an answer, and there is no blocking on
+  /// this side of one. What a caller that wants the drain and cannot hold a
+  /// thread calls is this.
+  Future<void> flush() async {
+    if (_closing != null) {
+      return;
+    }
+    await _invoke<void>('flush');
   }
 
   /// Drains what is left and closes this appender. Writing through it afterwards

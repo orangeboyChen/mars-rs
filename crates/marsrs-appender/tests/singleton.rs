@@ -5,15 +5,18 @@
 //! appender per process: the tests here serialise themselves with a mutex and
 //! always `appender_close()` before the next one starts.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::task::{Context, Waker};
 
 use marsrs_appender::{
-    appender_close, appender_flush, appender_flush_sync, appender_get_current_log_cache_path,
+    appender_close, appender_flush, appender_flush_now, appender_get_current_log_cache_path,
     appender_get_current_log_path, appender_getfilepath_from_timespan, appender_make_logfile_name,
     appender_oneshot_flush, appender_open, appender_set_console_log,
-    appender_set_max_alive_duration, appender_set_max_file_size, appender_set_mode, appender_write,
-    AppenderMode, FileIoAction, LogLevel, XLogConfig, XLoggerInfo,
+    appender_set_max_alive_duration, appender_set_max_file_size, appender_set_mode,
+    appender_signal_flush, appender_write, AppenderMode, FileIoAction, LogLevel, XLogConfig,
+    XLoggerInfo,
 };
 use marsrs_crypt::{magic, LogCrypt, HEADER_LEN, TAILER_LEN};
 
@@ -102,8 +105,8 @@ fn open_write_flush_close_roundtrip() {
         Some(&info(LogLevel::Info)),
         "singleton roundtrip"
     ));
-    appender_flush();
-    appender_flush_sync();
+    appender_signal_flush();
+    appender_flush_now();
     appender_close();
 
     // After `close()` the appender is gone again.
@@ -128,13 +131,74 @@ fn async_mode_writes_through_the_writer_thread() {
             &format!("async line {i}")
         ));
     }
-    appender_flush_sync();
+    appender_flush_now();
     appender_close();
 
     let bytes = std::fs::read(today_log_file(tmp.path())).unwrap();
     let text = payload_text(&bytes);
     assert!(text.contains("async line 0"), "{text}");
     assert!(text.contains("async line 31"), "{text}");
+}
+
+/// Polls `future` here until it answers, or gives up: the port carries no
+/// runtime, so there is no `block_on` to borrow one from, and a test that
+/// hangs is worse than one that fails.
+///
+/// Bounded on purpose — the drain behind this is one lock, one write and one
+/// `fflush`, so a million yields is a generous answer and not a wait.
+fn poll(future: impl Future<Output = ()>) {
+    let mut future = std::pin::pin!(future);
+    let waker = Waker::noop();
+    let mut cx = Context::from_waker(waker);
+    for _ in 0..1_000_000 {
+        if future.as_mut().poll(&mut cx).is_ready() {
+            return;
+        }
+        std::thread::yield_now();
+    }
+    panic!("the flush never answered");
+}
+
+#[test]
+fn awaited_flush_drains_off_the_calling_thread() {
+    let _guard = singleton();
+    let tmp = tempfile::tempdir().unwrap();
+
+    appender_open(config(tmp.path(), AppenderMode::Async)).unwrap();
+    assert!(appender_write(Some(&info(LogLevel::Info)), "awaited flush"));
+
+    // Pending at least once, which is the whole point of the call: the drain
+    // is another thread's, and this one is not held while it runs.
+    let mut future = std::pin::pin!(appender_flush());
+    let waker = Waker::noop();
+    let mut cx = Context::from_waker(waker);
+    assert!(future.as_mut().poll(&mut cx).is_pending());
+    for _ in 0..1_000_000 {
+        if future.as_mut().poll(&mut cx).is_ready() {
+            break;
+        }
+        std::thread::yield_now();
+    }
+
+    // Dropped and never polled: the drain never runs, and nothing panics.
+    drop(appender_flush());
+
+    let bytes = std::fs::read(today_log_file(tmp.path())).unwrap();
+    assert!(
+        payload_text(&bytes).contains("awaited flush"),
+        "{}",
+        payload_text(&bytes)
+    );
+
+    // And the call the Rust API gives a caller with no executor: the same
+    // drain, waited for on this thread.
+    assert!(appender_write(Some(&info(LogLevel::Info)), "second record"));
+    poll(appender_flush());
+    appender_close();
+
+    let bytes = std::fs::read(today_log_file(tmp.path())).unwrap();
+    let text = payload_text(&bytes);
+    assert!(text.contains("second record"), "{text}");
 }
 
 #[test]

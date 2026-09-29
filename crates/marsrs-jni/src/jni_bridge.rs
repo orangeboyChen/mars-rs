@@ -55,10 +55,10 @@ use crate::stn::{
 };
 
 use crate::{
-    close_impl, flush_impl, get_instance_impl, get_level_impl, guard, level_from_java,
-    log_write_impl, new_instance_impl, now_timeval, open_appender, release_instance_impl,
-    set_appender_mode_impl, set_console_log_open_impl, set_level_impl, set_max_alive_time_impl,
-    set_max_file_size_impl, write_impl,
+    close_impl, flush_impl, flush_now_impl, get_instance_impl, get_level_impl, guard,
+    level_from_java, log_write_impl, new_instance_impl, now_timeval, open_appender,
+    release_instance_impl, set_appender_mode_impl, set_console_log_open_impl, set_level_impl,
+    set_max_alive_time_impl, set_max_file_size_impl, signal_flush_impl, write_impl,
 };
 
 /// Runs `f` with an [`Env`], which is what an entry point has to go through
@@ -296,7 +296,32 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderClo
     guard(close_impl)
 }
 
-/// `Xlog.appenderFlush`.
+/// `Xlog.appenderSignalFlush` — tells the writer thread it may drain and
+/// returns at once.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderSignalFlush<'local>(
+    _env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    instance: jlong,
+) {
+    guard(|| signal_flush_impl(instance as u64))
+}
+
+/// `Xlog.appenderFlushNow` — drains on the calling thread, so the records are
+/// on the disk when it returns.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderFlushNow<'local>(
+    _env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    instance: jlong,
+) {
+    guard(|| flush_now_impl(instance as u64))
+}
+
+/// `Xlog.appenderFlush` — upstream's name, and the one call of the Java seam
+/// that still asks for a `sync`: what the C++'s Java declared, and what the
+/// deprecated `Log` facade calls. `Xlog.signalFlush()` and `Xlog.flushNow()`
+/// name the drain instead.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderFlush<'local>(
     _env: EnvUnowned<'local>,

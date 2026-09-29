@@ -80,45 +80,57 @@ reads it while this one is still logging into it:
 ::: code-group
 
 ```rust [Rust]
-appender_flush_sync()                    // waits for the file
-appender_flush_instance(id, true)
+appender_flush_now()                     // waits for the file
+appender_flush_now_instance(id)
 ```
 
 ```swift [Swift]
-log.flush(sync: true)
+log.flushNow()
 ```
 
 ```kotlin [Android]
-xlog.flush(sync = true)
+xlog.flushNow()
 ```
 
 ```kotlin [Kotlin Multiplatform]
-Xlog.flush(sync = true)
+xlog.flushNow()
 ```
 
 ```typescript [HarmonyOS]
-xlog.flush(true)
+xlog.flushNow()
 ```
 
 ```dart [Flutter]
-await xlog.flush(sync: true)
+await xlog.flush()
 ```
 
 ```ts [React Native]
-xlog.flush(true)
+xlog.flushNow()
 ```
 
 ```c [C]
-mars_xlog_flush_sync();
+mars_xlog_flush_now_instance(0);
 ```
 
 :::
 
-`flush(sync = false)` — `appender_flush()`, `mars_xlog_flush()`, and the same
-call without the `true` above — only signals the writer thread and returns; it
-is the cheap one to call on a timer, and not the one to call before you upload.
-Flutter's answers a `Future` like every call of its that crosses to the native
-side, so `await` it.
+The drain is three calls and not one with a flag:
+
+| call | what it does |
+|---|---|
+| `signalFlush()` — `appender_signal_flush()`, `mars_xlog_signal_flush_instance(0)` | tells the writer thread it may drain, and returns at once: nothing is in the file because it returned |
+| `flushNow()` — `appender_flush_now()`, `mars_xlog_flush_now_instance(0)` | drains on the calling thread: the records are on disk when it returns |
+| `await flush()` — `appender_flush()`, `flush(handle)` | the same drain, off the calling thread |
+
+`signalFlush()` is the one a timer calls. It guarantees nothing about when the
+drain is over, and nothing is lost while it is not: a record still in the cache
+is in a file the kernel holds. `flushNow()` is the one to call before the file is
+read or uploaded, and `await flush()` is that same drain for a caller that would
+rather not hold a thread. Rust carries all three, and its `await flush()` is a
+`Future` written against `std::thread::spawn` — no runtime, and any executor
+waits on it. Dart has no `flushNow()`, because a method channel cannot block the
+Dart side of it, and HarmonyOS has no `await flush()`, because every method of
+its NAPI module is synchronous.
 
 ## When the app goes away
 
@@ -141,14 +153,14 @@ end the process without another word:
 | everywhere else | the next start, as above |
 
 `close()` drains too, so an app that closes its appender on the way out is
-covered by that as well. The two `flush` calls above are for the other case: a
-read or an upload that happens *while the app is still running*.
+covered by that as well. The flush above is for the other case: a read or an
+upload that happens *while the app is still running*.
 
 Sync mode is the one exception, and it is the one place the answer is not
 "nothing": there is no cache file behind its records, so the tail the process was
 still holding — up to about 4 KiB of it — dies with the process. An app that logs
-synchronously and wants that tail has to `close()` or `flush(sync: true)`; the
-two hooks above do it, and so does an app that closes its appender.
+synchronously and wants that tail has to `close()` or `flushNow()`; the two hooks
+above do it, and so does an app that closes its appender.
 
 ## Rotation and retention
 

@@ -25,7 +25,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use marsrs_appender::{
-    appender_close, appender_close_instance, appender_flush_instance, appender_oneshot_flush,
+    appender_close, appender_close_instance, appender_flush_now_instance, appender_oneshot_flush,
     appender_open, appender_open_instance, appender_write, appender_write_instance, AppenderMode,
     FileIoAction, LogLevel, XLogConfig, XLoggerInfo,
 };
@@ -158,8 +158,8 @@ fn two_instances_of_one_prefix_keep_every_record() {
             &format!("kotlin-{i:04}")
         ));
     }
-    appender_flush_instance(native, true);
-    appender_flush_instance(kotlin, true);
+    appender_flush_now_instance(native);
+    appender_flush_now_instance(kotlin);
     appender_close_instance(native);
     appender_close_instance(kotlin);
 
@@ -210,8 +210,8 @@ fn two_cache_directories_share_the_log_directories_lock() {
             &format!("cache-b-{i:04}")
         ));
     }
-    appender_flush_instance(first, true);
-    appender_flush_instance(second, true);
+    appender_flush_now_instance(first);
+    appender_flush_now_instance(second);
     appender_close_instance(first);
     appender_close_instance(second);
 

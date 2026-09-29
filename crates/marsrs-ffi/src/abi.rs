@@ -13,13 +13,11 @@ use std::path::Path;
 use std::sync::{Mutex, RwLock};
 
 use marsrs_appender::{
-    appender_close, appender_flush, appender_flush_sync, appender_get_current_log_path,
-    appender_open, appender_set_console_log, appender_set_max_alive_duration,
-    appender_set_max_file_size, appender_write,
+    appender_close, appender_get_current_log_path, appender_open, appender_write,
     category_set_max_alive_duration as set_max_alive_duration,
-    category_set_max_file_size as set_max_file_size, flush_all, set_console_fun,
-    set_console_log_open, set_level, xlogger_assert, AppenderMode, ConsoleFun, LogLevel,
-    XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
+    category_set_max_file_size as set_max_file_size, flush_now, flush_now_all, set_console_fun,
+    set_console_log_open, set_level, signal_flush, signal_flush_all, xlogger_assert, AppenderMode,
+    ConsoleFun, LogLevel, XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
 };
 use marsrs_buffer::CompressMode;
 
@@ -202,7 +200,7 @@ unsafe fn to_xlog_config(cfg: &MarsXLogConfig) -> Result<XLogConfig, c_int> {
 /// `tag`, `filename`, `func_name` and `message` may be null; null and invalid
 /// UTF-8 become an empty string. The record is dropped when `level` is outside
 /// `MarsLevelVerbose..=MarsLevelFatal` (that is what C++ `kLevelNone` means) or
-/// below the level set by [`mars_xlog_set_level`].
+/// below the level set for handle `0` by [`mars_xlog_set_level_instance`].
 ///
 /// # Safety
 ///
@@ -315,41 +313,10 @@ pub unsafe extern "C" fn mars_xlog_assert(
     });
 }
 
-/// `mars::xlog::appender_flush()` — asks the async writer thread to drain.
-#[no_mangle]
-pub extern "C" fn mars_xlog_flush() {
-    guard((), appender_flush);
-}
-
-/// `mars::xlog::appender_flush_sync()` — flushes and waits for the drain.
-#[no_mangle]
-pub extern "C" fn mars_xlog_flush_sync() {
-    guard((), appender_flush_sync);
-}
-
 /// `mars::xlog::appender_close()`.
 #[no_mangle]
 pub extern "C" fn mars_xlog_close() {
     guard((), appender_close);
-}
-
-/// `xlogger_SetLevel(TLogLevel)` — the minimum level a record must have to be
-/// written. `MARS_LEVEL_NONE` (6) or higher disables logging completely, and a
-/// negative value is "log everything", the way `(TLogLevel)-1` was in the C++.
-///
-/// It is the **default logger's** level: `0` is the process-wide appender, and
-/// [`mars_xlog_get_level`], [`mars_xlog_is_enabled_for`] and
-/// [`mars_xlog_write_instance`] all read that one. A level of its own here
-/// would have the ABI answer two different levels for the same logger.
-#[no_mangle]
-pub extern "C" fn mars_xlog_set_level(level: c_int) {
-    guard((), || set_level(DEFAULT_HANDLE, to_filter_level(level)));
-}
-
-/// `mars::xlog::appender_set_console_log(bool)`; any non-zero `open` is `true`.
-#[no_mangle]
-pub extern "C" fn mars_xlog_set_console_log(open: c_int) {
-    guard((), || appender_set_console_log(open != 0));
 }
 
 /// `mars::xlog::TConsoleFun` as a C callback — where a console record goes
@@ -443,21 +410,6 @@ pub extern "C" fn mars_xlog_set_console_fun(fun: Option<MarsXLogConsoleFun>) {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = fun;
         set_console_fun(fun.map(|_| console_fun as ConsoleFun));
     });
-}
-
-/// `mars::xlog::appender_set_max_file_size(uint64_t)`; 0 means "never split".
-#[no_mangle]
-pub extern "C" fn mars_xlog_set_max_file_size(bytes: c_ulonglong) {
-    guard((), || appender_set_max_file_size(bytes));
-}
-
-/// `mars::xlog::appender_set_max_alive_duration(long)`; negative clamps to 0.
-#[no_mangle]
-pub extern "C" fn mars_xlog_set_max_alive_duration(seconds: c_longlong) {
-    guard(
-        (),
-        || appender_set_max_alive_duration(seconds.max(0) as u64),
-    );
 }
 
 /// `mars::xlog::appender_get_current_log_path(char*, unsigned int)`.
@@ -661,7 +613,8 @@ pub unsafe extern "C" fn mars_xlog_release_instance(name_prefix: *const c_char) 
 ///
 /// A non-zero instance's own level decides: a record below it is dropped, and a
 /// handle that is not one writes nothing. `0` is the C++'s `xlogger_Write`,
-/// which filters nothing — the level [`mars_xlog_set_level`] set is the one
+/// which filters nothing — the level [`mars_xlog_set_level_instance`] set for
+/// `0` is the one
 /// [`mars_xlog_is_enabled_for`] answers from and [`mars_xlog_write`] asks.
 ///
 /// # Safety
@@ -752,7 +705,9 @@ pub extern "C" fn mars_xlog_get_level(instance: c_longlong) -> c_int {
     })
 }
 
-/// `mars::xlog::SetLevel` for an instance (`0` = the default logger).
+/// `mars::xlog::SetLevel` for an instance: `0` is the process-wide appender
+/// `mars_xlog_open` opened, so this is also how that one's level is set — and
+/// the level [`mars_xlog_get_level`] and [`mars_xlog_is_enabled_for`] answer.
 ///
 /// `kLevelNone` (6) and anything above it disables the instance, and a
 /// negative level logs everything: the C++ casts the value straight to
@@ -766,22 +721,8 @@ pub extern "C" fn mars_xlog_set_level_instance(instance: c_longlong, level: c_in
     });
 }
 
-/// `mars::xlog::appender_setmode` — switches the process-wide appender
-/// between async and sync.
-#[no_mangle]
-pub extern "C" fn mars_xlog_set_mode(mode: c_int) {
-    let _ = guard(0, || {
-        let mode = match mode {
-            x if x == MarsAppenderMode::Async as c_int => AppenderMode::Async,
-            x if x == MarsAppenderMode::Sync as c_int => AppenderMode::Sync,
-            _ => return 0,
-        };
-        marsrs_appender::appender_set_mode(mode);
-        0
-    });
-}
-
-/// `mars::xlog::SetAppenderMode` for an instance.
+/// `mars::xlog::SetAppenderMode` for an instance; `0` is the process-wide
+/// appender, so this is also how that one's mode is switched.
 #[no_mangle]
 pub extern "C" fn mars_xlog_set_mode_instance(instance: c_longlong, mode: c_int) {
     let _ = guard(0, || {
@@ -795,24 +736,43 @@ pub extern "C" fn mars_xlog_set_mode_instance(instance: c_longlong, mode: c_int)
     });
 }
 
-/// Drains an instance (`sync` non-zero waits for the write to complete).
+/// Drains one instance, signalled: the writer thread is told it may take what
+/// is in the cache to the file, and this returns at once.
+///
+/// The instances matter: each of them owns an appender of its own, so a caller
+/// that asks the process-wide appender alone misses their records. `0` is the
+/// process-wide appender, and a handle that is not one drains nothing.
 #[no_mangle]
-pub extern "C" fn mars_xlog_flush_instance(instance: c_longlong, sync: c_int) {
+pub extern "C" fn mars_xlog_signal_flush_instance(instance: c_longlong) {
     let _ = guard(0, || {
-        marsrs_appender::flush(instance as u64, sync != 0);
+        signal_flush(instance as u64);
         0
     });
 }
 
-/// `mars::xlog::FlushAll` — drains the process-wide appender *and* every
-/// instance (`sync` non-zero waits for the write to complete).
-///
-/// The instances matter: each of them owns an appender of its own, so a caller
-/// that flushes before collecting logs or suspending misses their records
-/// otherwise.
+/// Drains one instance on the calling thread: that instance's records are on
+/// the disk when this returns, which [`mars_xlog_signal_flush_instance`] does
+/// not promise. `0` is the process-wide appender.
 #[no_mangle]
-pub extern "C" fn mars_xlog_flush_all(sync: c_int) {
-    guard((), || flush_all(sync != 0));
+pub extern "C" fn mars_xlog_flush_now_instance(instance: c_longlong) {
+    let _ = guard(0, || {
+        flush_now(instance as u64);
+        0
+    });
+}
+
+/// `mars::xlog::FlushAll`, signalled: the process-wide appender *and* every
+/// instance is told its writer thread may drain, and this returns at once.
+#[no_mangle]
+pub extern "C" fn mars_xlog_signal_flush_all() {
+    guard((), signal_flush_all);
+}
+
+/// `mars::xlog::FlushAll` on the calling thread: every appender of this process
+/// has its records on the disk when this returns.
+#[no_mangle]
+pub extern "C" fn mars_xlog_flush_now_all() {
+    guard((), flush_now_all);
 }
 
 /// `mars::xlog::SetConsoleLogOpen` for an instance (`0` = the default logger).

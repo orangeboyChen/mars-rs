@@ -35,15 +35,27 @@ appender 在 `mars/xlog/appender.h` 里是一组选项构成的一个 struct 加
 |---|---|---|
 | `appender_open(const XLogConfig&)` | `appender_open(XLogConfig)` | `mars_xlog_open(&config)` |
 | `xlogger_Write(info, log)`，或 `xinfo2` 那一族 | `appender_write(info, message)` | `mars_xlog_write(...)` |
-| `appender_flush()` | `appender_flush()` | `mars_xlog_flush()` |
-| `appender_flush_sync()` | `appender_flush_sync()` | `mars_xlog_flush_sync()` |
+| `appender_flush()` | `appender_signal_flush()` | `mars_xlog_signal_flush_instance(0)` |
+| `appender_flush_sync()` | `appender_flush_now()` | `mars_xlog_flush_now_instance(0)` |
 | `appender_close()` | `appender_close()` | `mars_xlog_close()` |
-| `xlogger_SetLevel(level)` | `set_level(handle, level)` | `mars_xlog_set_level(level)` |
-| `appender_setmode(mode)` | `appender_set_mode(mode)` | `mars_xlog_set_mode(mode)` |
-| `appender_set_console_log(bool)` | `appender_set_console_log(bool)` | `mars_xlog_set_console_log(on)` |
-| `appender_set_max_file_size(bytes)` | `appender_set_max_file_size(bytes)` | `mars_xlog_set_max_file_size(bytes)` |
-| `appender_set_max_alive_duration(secs)` | `appender_set_max_alive_duration(secs)` | `mars_xlog_set_max_alive_duration(secs)` |
+| `xlogger_SetLevel(level)` | `set_level(handle, level)` | `mars_xlog_set_level_instance(0, level)` |
+| `appender_setmode(mode)` | `appender_set_mode(mode)` | `mars_xlog_set_mode_instance(0, mode)` |
+| `appender_set_console_log(bool)` | `appender_set_console_log(bool)` | `mars_xlog_set_console_log_instance(0, on)` |
+| `appender_set_max_file_size(bytes)` | `appender_set_max_file_size(bytes)` | `mars_xlog_set_max_file_size_instance(0, bytes)` |
+| `appender_set_max_alive_duration(secs)` | `appender_set_max_alive_duration(secs)` | `mars_xlog_set_max_alive_duration_instance(0, secs)` |
 | `appender_get_current_log_path(out, len)` | `appender_get_current_log_path()` | `mars_xlog_current_log_path(out, len)` |
+
+两行 flush 是 Rust 那一列唯一不沿用 C++ 名字的地方：C++ 的 `appender_flush` 在这里叫
+`appender_signal_flush`，因为 Rust 的 `appender_flush` 是调用方要 `await` 的那次排空
+—— 见[日志文件](/zh/xlog/log-files)。`appender_flush_sync` 仍然能编译，做的事和
+`appender_flush_now` 一样，只是标了 deprecated，好让照着 C++ 名字写的代码继续编过。
+C ABI 那一列是同一件事，而且整条缝都不收 `sync`：C++ 的 `appender_flush` 是
+`mars_xlog_signal_flush_instance(0)`，`appender_flush_sync` 是 `mars_xlog_flush_now_instance(0)`；instance
+那一对也拆成了两个 —— 以前写 `mars_xlog_flush_instance(handle, 0)` 或 `(handle, 1)`
+的地方，现在是 `mars_xlog_signal_flush_instance(handle)` 或
+`mars_xlog_flush_now_instance(handle)`。进程级那一对原来的两个名字直接删掉了，
+没有留 deprecated：它们是这套 C ABI 自己的写法，不是 C++ 的 —— C++ 没有
+`mars_xlog_*` 需要照着留。
 
 config 在三种写法里都是一个 struct，八个字段还是那八个：C++ 里是 `mode_`、
 `logdir_`、`nameprefix_`、`pub_key_`、`compress_mode_`、`compress_level_`、
@@ -51,6 +63,14 @@ config 在三种写法里都是一个 struct，八个字段还是那八个：C++
 `compress_mode`、`compress_level`、`cachedir`、`cache_days`。每一个都在
 [配置项](/zh/xlog/configuration)那页，按每个平台的写法列着。`TAppenderMode` 是
 `AppenderMode`，`TCompressMode` 是 `CompressMode`，`TLogLevel` 是 `LogLevel`。
+
+用 C++ 写的 App 可以走 `include/mars_xlog.hpp`，也就是 C ABI 的 C++ 写法：
+`marsrs::xlog::Xlog::open(config)` 就是 Kotlin、Dart 和 TypeScript 的
+`Xlog.open(config)`，它回答的那个 `Xlog` 的每个成员都是上面某个调用，只是没有那
+些 C 字符串。它不带的是 C++ 那一列的名字 —— `mars::xlog::appender_open` 和它旁边
+那批自由函数是“一个进程级 appender，后面没有对象”，而这个移植在每个平台上的形状
+都是一个 App 拿着的 appender，所以调用点搬一次，之后读起来就像下面
+[从 C++ 项目的 Java 来](#从-c-项目的-java-来)那一节。
 
 另一半要搬走的是宏。`XLOGGER_TAG` 和 `xverbose2` / `xdebug2` / `xinfo2` / `xwarn2` /
 `xerror2` / `xfatal2` 那一族，把级别、tag 和调用点塞在一行 C++ 里；取代它们的是每个
@@ -140,7 +160,7 @@ config.namePrefix = @"marsrs";
 NSError *error = nil;
 Xlog *log = [[Xlog alloc] initWithConfig:config error:&error];
 [log writeWithLevel:LogLevelInfo message:@"cold start" tag:@"startup"];
-[log flushWithSync:YES];        // 读文件或上传前
+[log flushNow];        // 读文件或上传前
 ```
 
 :::

@@ -3,7 +3,7 @@
 #import "mars_xlog.h"
 
 // The iOS half of the `marsrs_xlog` plugin: the C ABI of `mars_xlog.h`
-// (crate `marsrs-ffi`) behind the eleven methods of the plugin's channel.
+// (crate `marsrs-ffi`) behind the twelve methods of the plugin's channel.
 //
 // Objective-C, and not Swift: what the plugin carries is a static library with
 // a C header, and `MarsRSFFI` — the module SwiftPM makes of the two — is not
@@ -100,6 +100,8 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
     [self isLoggable:call result:result];
   } else if ([call.method isEqualToString:@"flush"]) {
     [self flush:call result:result];
+  } else if ([call.method isEqualToString:@"signalFlush"]) {
+    [self signalFlush:call result:result];
   } else if ([call.method isEqualToString:@"setLevel"]) {
     [self setLevel:call result:result];
   } else if ([call.method isEqualToString:@"getLevel"]) {
@@ -187,13 +189,32 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   result(@(mars_xlog_is_enabled_for(instance, level) != 0));
 }
 
-/// `mars_xlog_flush_instance`.
+/// `mars_xlog_flush_now_instance`: the drain is on the thread this is called
+/// on, which is what the Dart caller awaiting `flush()` is waiting for, and
+/// what the writer thread that `signalFlush:` only wakes is not.
 - (void)flush:(FlutterMethodCall *)call result:(FlutterResult)result {
   long long instance = [self instanceForCall:call result:result];
   if (instance == 0) {
     return;
   }
-  mars_xlog_flush_instance(instance, XlogInt(call.arguments, @"sync", 0));
+  // Off the thread the call came in on, and back to it for the answer: a
+  // platform channel is answered on the app's main thread, and a drain blocks
+  // the thread it runs on.
+  dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    mars_xlog_flush_now_instance(instance);
+    dispatch_async(dispatch_get_main_queue(), ^{
+      result(nil);
+    });
+  });
+}
+
+/// `mars_xlog_signal_flush_instance`: the drain is the writer thread's.
+- (void)signalFlush:(FlutterMethodCall *)call result:(FlutterResult)result {
+  long long instance = [self instanceForCall:call result:result];
+  if (instance == 0) {
+    return;
+  }
+  mars_xlog_signal_flush_instance(instance);
   result(nil);
 }
 

@@ -2,7 +2,10 @@
 
 Three steps on every platform: **open** an appender once, when the app or the
 process starts; **write** records through it; **flush** before its file is read
-or uploaded.
+or uploaded. The drain is three calls, and not every platform carries all three:
+`signalFlush()` asks the writer thread for it and returns at once, `flushNow()`
+drains on the calling thread, and `await flush()` waits for the same drain
+without holding one.
 
 ## Where it is
 
@@ -16,6 +19,7 @@ or uploaded.
 | Flutter | `marsrs_xlog`, or `marsrs` | `package:marsrs_xlog/marsrs_xlog.dart` |
 | React Native | `marsrs-react-native-xlog`, or `marsrs-react-native` | `marsrs-react-native-xlog` |
 | anything with a C FFI | `include/mars_xlog.h` | `mars_xlog_*` |
+| C++ | `include/mars_xlog.hpp` | `marsrs::xlog::Xlog` |
 | HarmonyOS | `marsrs-harmonyos-xlog` | the `Xlog` of the HAR |
 
 **`xlog` is the logger alone and `marsrs` is the whole port** — the logger plus
@@ -46,7 +50,7 @@ marsrs = { version = "0.1", default-features = false, features = ["xlog"] }
 ```
 
 ```rust
-use marsrs::xlog::{appender_close, appender_flush_sync, appender_open, appender_write, XLogConfig};
+use marsrs::xlog::{appender_close, appender_flush_now, appender_open, appender_write, XLogConfig};
 
 let mut config = XLogConfig::default();
 config.logdir = std::path::PathBuf::from("/tmp/mars-log");
@@ -55,7 +59,8 @@ appender_open(config)?;
 
 appender_write(None, "hello from mars");
 
-appender_flush_sync();   // the records are on disk when this returns
+appender_flush_now();    // the records are on disk when this returns
+// appender_flush().await is the same drain off this thread
 appender_close();
 ```
 
@@ -66,7 +71,9 @@ with the level, the tag and the file, function and line of the call site, and
 `None` is the default one. An app that reads one part of its logs apart from the
 rest gives that part an appender of its own, through the `*_instance` family —
 `appender_open_instance(config)` answers a handle, and `appender_write_instance`,
-`appender_flush_instance` and `appender_close_instance` take it.
+`appender_flush_instance` and `appender_close_instance` take it — the flush in
+the same three shapes: `appender_signal_flush_instance`,
+`appender_flush_now_instance` and `appender_flush_instance(id).await`.
 
 ## SwiftPM
 
@@ -101,7 +108,7 @@ log.isConsoleLogEnabled = true
 
 log.info(message: "hello from mars", tag: "startup")
 
-log.flush(sync: true)    // the records are on disk when this returns
+log.flushNow()    // the records are on disk when this returns
 ```
 
 `XlogConfig(logDirectory:)` is the short form — the other fields are set on it
@@ -146,7 +153,7 @@ log.isConsoleLogEnabled = YES;
 
 [log writeWithLevel:LogLevelInfo message:@"hello from mars" tag:@"startup"];
 
-[log flushWithSync:YES];   // before the app reads or uploads the files
+[log flushNow];   // before the app reads or uploads the files
 ```
 
 Objective-C has no `#file` to fill a call site with, so a record written here
@@ -184,7 +191,7 @@ xlog.consoleLogEnabled = BuildConfig.DEBUG
 
 xlog.i("startup", "hello from mars")
 
-xlog.flush(sync = true)  // the records are on disk when this returns
+xlog.flushNow()  // the records are on disk when this returns
 ```
 
 The write is `android.util.Log`'s shape — `xlog.v`, `d`, `i`, `w`, `e` and `f`,
@@ -226,7 +233,7 @@ xlog.consoleLogEnabled = isDebug
 
 xlog.i("startup", "hello from mars")
 
-xlog.flush(sync = true)  // the records are on disk when this returns
+xlog.flushNow()  // the records are on disk when this returns
 xlog.close()
 ```
 
@@ -262,15 +269,18 @@ xlog.consoleLogEnabled = kDebugMode;
 
 xlog.i('startup', 'hello from mars');
 
-await xlog.flush(sync: true);  // the records are on disk when this returns
+await xlog.flush();      // the records are on disk when this resolves
 await xlog.close();
 ```
 
 The plugin is a method channel and not `dart:ffi`, so what crosses to the
-platform thread is a message and not a call: a write and a setting hand the
-message over and return, and only the four that have something an app can act on
-answer a `Future` — the appender `Xlog.open` opens, the drain `flush` and
-`close` wait for, and the answer `isLoggable` gives. Neither
+platform thread is a message and not a call: a write, a setting and
+`signalFlush()` hand the message over and return, and only the four that have
+something an app can act on answer a `Future` — the appender `Xlog.open` opens,
+the drain `await flush()` waits for, `close()`, and the answer `isLoggable`
+gives. What Dart has no face for is the blocking drain: a channel cannot block
+this side of it, so `signalFlush()` is the one that does not wait and
+`await xlog.flush()` is the one that does. Neither
 [the task pipeline](/stn/getting-started) nor
 [the network diagnosis](/sdt/getting-started) is in the Dart yet: the plugin is
 the logger, in both of its packages.
@@ -299,13 +309,17 @@ xlog.consoleLogEnabled = __DEV__;
 
 xlog.i('startup', 'hello from mars');
 
-xlog.flush(true);        // the records are on disk when this returns
+xlog.flushNow();        // the records are on disk when this returns
 xlog.close();
 ```
 
-A method of the module is made on the JS thread and returns from there, so none
-of them answers a `Promise`: `Xlog.open(config)` answers the appender, and
-`xlog.i(tag, message)` has landed by the time it returns. Neither
+A method of the module is made on the JS thread and returns from there, so
+nothing the app calls blocks it for long: `Xlog.open(config)` answers the
+appender, and `xlog.i(tag, message)` has landed by the time it returns. The
+drain is the one that can take longer than the JS thread should sit through, so
+it is three calls — `xlog.signalFlush()` asks for it and returns,
+`xlog.flushNow()` does it on this thread, and `await xlog.flush()` hands it to a
+thread of the module's own and answers when it is over. Neither
 [the task pipeline](/stn/getting-started) nor
 [the network diagnosis](/sdt/getting-started) is in the TypeScript yet.
 
@@ -315,6 +329,7 @@ of them answers a `Promise`: `Xlog.open(config)` answers the appender, and
 marsrs-<version>-<host>.tar.gz   (Linux, macOS)
 marsrs-<version>-<host>.zip      (Windows)
     include/mars_xlog.h     the logger
+    include/mars_xlog.hpp   the logger in C++
     include/mars_sdt.h      the network diagnosis
     include/mars_stn.h      the task pipeline
     libmars_ffi.a / libmars_ffi.so (.dylib, .dll)
@@ -336,7 +351,7 @@ if (mars_xlog_open(&config) != MARS_XLOG_OK) { /* see the return code */ }
 
 mars_xlog_write(MarsLevelInfo, "startup", __FILE__, __func__, __LINE__, "hello from mars");
 
-mars_xlog_flush_sync();  /* the records are on disk when this returns */
+mars_xlog_flush_now_instance(0);  /* the records are on disk when this returns */
 mars_xlog_close();
 ```
 
@@ -353,6 +368,51 @@ cc -I include -o app app.c -L. -lmars_ffi                  # shared
 
 Every call that returns an `int` answers `MARS_XLOG_OK` (0) or a negative
 `MARS_XLOG_ERR_*`, and nothing in the C ABI unwinds into C.
+
+## C++
+
+```cpp
+#include <mars_xlog.hpp>
+
+marsrs::xlog::XlogConfig config;
+config.logDir = "/tmp/mars-log";
+config.namePrefix = "marsrs";
+
+auto log = marsrs::xlog::Xlog::open(config);   // throws marsrs::xlog::XlogError
+log.setConsoleLogEnabled(true);
+
+log.i("startup", "hello from mars");
+
+log.flushNow();     // the records are on disk when this returns
+log.close();
+```
+
+`mars_xlog.hpp` is the C ABI in C++: one header over the same library, so what
+an app links is what the C section above links. `Xlog::open(config)` is the
+`Xlog.open(config)` of Kotlin, of Dart and of TypeScript, and the members are
+the same members — `v`, `d`, `i`, `w`, `e` and `f` take a tag and a message,
+`level`, `mode`, `consoleLogEnabled`, `maxFileSizeBytes` and
+`maxAliveTimeSeconds` are set and read back, `isLoggable` is the question to ask
+before building a message that is expensive to build, and the drain is the same
+three calls: `signalFlush()` asks the writer thread for it and returns at once,
+`flushNow()` does it on this thread, and `flush()` answers a
+`std::future<void>` for the same drain off it.
+
+Two things are C++'s own. An `Xlog` is move-only — a prefix is one appender, and
+two copies of one handle would be two owners of one close — and its destructor
+closes the appender, so an `Xlog` of automatic storage needs no `close()` at the
+end of the scope. And a record carries an empty file, an empty function and the
+line 0 unless the long `log` names them, which is what Kotlin writes too: C++
+has no `#file` to fill one in with, so `__FILE__`, `__PRETTY_FUNCTION__` and
+`__LINE__` of the call site go to
+`log(level, tag, message, file, function, line)`.
+
+The header is C++17: `std::string_view` is what the console sink of
+`Xlog::setConsoleSink` is handed, and `std::future` is what `flush()` answers.
+
+```bash
+c++ -std=c++17 -I include -o app app.cpp libmars_ffi.a -lpthread -ldl
+```
 
 ## HarmonyOS
 
@@ -381,7 +441,7 @@ xlog.consoleLogEnabled = true;
 
 xlog.i('startup', 'hello from mars');
 
-xlog.flush(true);   // the records are on disk when this returns
+xlog.flushNow();   // the records are on disk when this returns
 xlog.close();
 ```
 
