@@ -55,9 +55,10 @@ use crate::stn::{
 };
 
 use crate::{
-    flush_impl, flush_now_impl, get_level_impl, guard, level_from_java, new_instance_impl,
-    release_instance_impl, request_flush_impl, set_appender_mode_impl, set_console_log_open_impl,
-    set_level_impl, set_max_alive_time_impl, set_max_file_size_impl, write_impl,
+    current_log_path_impl, flush_impl, flush_now_impl, get_level_impl, guard, level_from_java,
+    log_file_names_impl, log_files_impl, new_instance_impl, release_instance_impl,
+    request_flush_impl, set_appender_mode_impl, set_console_log_open_impl, set_level_impl,
+    set_max_alive_time_impl, set_max_file_size_impl, write_impl,
 };
 
 /// Runs `f` with an [`Env`], which is what an entry point has to go through
@@ -364,6 +365,68 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_getLogLevel
     instance: jlong,
 ) -> jint {
     guard(|| get_level_impl(instance as u64))
+}
+
+/// `Xlog.getCurrentLogPath` — the file the appender of `instance` is writing
+/// to, or `null` when it has none open yet.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_getCurrentLogPath<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    instance: jlong,
+) -> JObject<'local> {
+    guard_env(&mut env, |env| match current_log_path_impl(instance as u64) {
+        Some(path) => JObject::from(
+            env.new_string(path.to_string_lossy().as_ref())
+                .unwrap_or_else(|_| JString::default()),
+        ),
+        None => JObject::null(),
+    })
+}
+
+/// `Xlog.logFiles` — the log files of the day `timespan` days ago that are
+/// *there*, as a `String[]`.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logFiles<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    instance: jlong,
+    timespan: jlong,
+) -> JObject<'local> {
+    guard_env(&mut env, |env| {
+        paths_to_array(env, log_files_impl(instance as u64, timespan))
+    })
+}
+
+/// `Xlog.logFileNames` — the names of the day `timespan` days ago, whether or
+/// not they are there yet, as a `String[]`.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logFileNames<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    instance: jlong,
+    timespan: jlong,
+) -> JObject<'local> {
+    guard_env(&mut env, |env| {
+        paths_to_array(env, log_file_names_impl(instance as u64, timespan))
+    })
+}
+
+/// A day of paths, as a Java `String[]`.
+fn paths_to_array<'local>(env: &mut Env<'local>, paths: Vec<std::path::PathBuf>) -> JObject<'local> {
+    let Ok(class) = env.find_class(jni_str!("java/lang/String")) else {
+        return JObject::null();
+    };
+    let Ok(array) = env.new_object_array(paths.len() as i32, &class, &JObject::null()) else {
+        return JObject::null();
+    };
+    for (index, path) in paths.iter().enumerate() {
+        let Ok(value) = env.new_string(path.to_string_lossy().as_ref()) else {
+            continue;
+        };
+        let _ = env.set_object_array_element(&array, index, &value);
+    }
+    JObject::from(array)
 }
 
 /// `Xlog.setLogLevel`.

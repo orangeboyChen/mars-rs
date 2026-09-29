@@ -173,6 +173,22 @@ pub(crate) fn get_level_impl(instance: u64) -> jint {
     }
 }
 
+/// `Xlog.getCurrentLogPath` body: the file the appender of `instance` is
+/// writing to.
+pub(crate) fn current_log_path_impl(instance: u64) -> Option<std::path::PathBuf> {
+    marsrs_appender::current_log_path(instance)
+}
+
+/// `Xlog.logFiles` body: the day's files that are there.
+pub(crate) fn log_files_impl(instance: u64, timespan: i64) -> Vec<std::path::PathBuf> {
+    marsrs_appender::current_log_files(instance, timespan)
+}
+
+/// `Xlog.logFileNames` body: the day's names, whether or not they are there.
+pub(crate) fn log_file_names_impl(instance: u64, timespan: i64) -> Vec<std::path::PathBuf> {
+    marsrs_appender::current_log_file_names(instance, timespan)
+}
+
 /// `Xlog.setLogLevel` body.
 pub(crate) fn set_level_impl(instance: u64, level: jint) {
     set_level(instance, level_from_java(level))
