@@ -65,10 +65,11 @@ class MainActivity : Activity() {
         // about to read the file or upload it, one flush.
         findViewById<Button>(R.id.write).setOnClickListener {
             xlog.i("button", "a record written at ${System.currentTimeMillis()}")
-            // `sync = true` waits for the write, so the record is on disk when
-            // the click handler returns. `flush()` alone only signals the
-            // writer thread and comes straight back.
-            xlog.flush(sync = true)
+            // `flushNow` waits for the write, so the record is on disk when
+            // the click handler returns. `flush()` is the same drain as a
+            // `suspend` call, and `signalFlush()` only signals the writer
+            // thread and comes straight back.
+            xlog.flushNow()
             status.text = statusText()
         }
     }
@@ -162,7 +163,7 @@ class MainActivity : Activity() {
         }
 
         // Step 4: everything above is on disk before the next line runs.
-        xlog.flush(sync = true)
+        xlog.flushNow()
         status.text = statusText()
     }
 

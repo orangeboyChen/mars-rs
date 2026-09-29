@@ -113,10 +113,12 @@ final class LogStore: ObservableObject {
             log.debug(message: "the appender is \(log.namePrefix)", tag: "startup")
         }
 
-        // `sync: true` waits for the write, so every record above is on disk
-        // when this returns. The port flushes for the app when iOS backgrounds
+        // `flushNow` waits for the write, so every record above is on disk
+        // when this returns; `signalFlush` is the one that asks the writer
+        // thread and does not wait, and `flush()` is the `async` spelling of
+        // the same drain. The port flushes for the app when iOS backgrounds
         // it; an app calls this before it reads the files or uploads them.
-        log.flush(sync: true)
+        log.flushNow()
     }
 
     /// Closes the appender: drains what is left and drops it.

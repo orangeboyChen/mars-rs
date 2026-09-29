@@ -143,9 +143,15 @@ class _LogPageState extends State<LogPage> {
       xlog.d('startup', 'the appender is ${xlog.namePrefix}');
     }
 
-    // `sync: true` waits for the write, so every record above is on disk when
-    // this returns. An app calls it before it reads the files or uploads them.
-    await xlog.flush(sync: true);
+    // `flush` answers a future that is settled once the platform side has
+    // drained, so every record above is on disk when the `await` returns. An
+    // app calls it before it reads the files or uploads them.
+    //
+    // Dart is the one platform with no `flushNow` to call instead, and it is
+    // deliberate: a method channel is a message and an answer, and there is
+    // no blocking on this side of one. `signalFlush()` is the call that asks
+    // and does not wait.
+    await xlog.flush();
     setState(() => status = 'six records written and flushed');
   }
 

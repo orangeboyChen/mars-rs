@@ -29,10 +29,12 @@ whether the call is a future.
 2. **Write.** One record at each level — verbose, debug, info, warning, error
    and fatal — and one more behind an `isLoggable` check, which is the call an
    app makes before it builds a message that is expensive to build.
-3. **Flush.** `sync`, so that every record above is on disk when it returns.
-   The whole point of the appender is that a write does not block the thread
-   that made it, and the whole point of the flush is that the last records are
-   not lost when the process goes.
+3. **Flush.** `flushNow` — or `await flush()` in Dart, which has no blocking
+   drain to call because a method channel is a message and an answer — so that
+   every record above is on disk when it returns. The whole point of the
+   appender is that a write does not block the thread that made it, and the
+   whole point of the flush is that the last records are not lost when the
+   process goes. `signalFlush` is the other one, and it does not wait.
 4. **Close.** Which drains what is left.
 
 The file that comes out is `<prefix>_<YYYYMMDD>.xlog`, and
