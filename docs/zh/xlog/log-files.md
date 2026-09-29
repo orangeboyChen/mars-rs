@@ -111,13 +111,15 @@ mars_xlog_flush_now_instance(0);
 
 | 调用 | 做什么 |
 |---|---|
-| `signalFlush()` —— `xlog.signal_flush()`、`mars_xlog_signal_flush_instance(0)` | 通知写线程可以排空，然后立刻返回：它返回了，不代表记录已经在文件里 |
-| `flushNow()` —— `xlog.flush_now()`、`mars_xlog_flush_now_instance(0)` | 在调用方线程上排空：它返回时记录已经在磁盘上 |
-| `await flush()` —— `xlog.flush().await`、`flush(handle)` | 同一次排空，只是不在调用方线程上 |
+| `requestFlush()` —— `xlog.request_flush()`、`mars_xlog_request_flush_instance(0)` | 提出一次排空，然后立刻返回：它返回了，不代表记录已经在文件里，它也不说排空什么时候结束 |
+| `flushNow()` —— `xlog.flush_now()`、`mars_xlog_flush_now_instance(0)` | 占着调用方线程排空：它返回时记录已经在磁盘上 |
+| `await flush()` —— `xlog.flush().await`、`flush(handle)` | 同一次排空，交给别的线程：await 到它完成时，记录已经在磁盘上 |
 
-`signalFlush()` 是定时器该调的那个。它不保证排空什么时候结束，而没结束也不丢东西：
-还在缓存里的记录在一个内核手里的文件里。读文件或上传之前要调的是 `flushNow()`，
-`await flush()` 是同一次排空，给不想占着一个线程的调用方。Dart 没有 `flushNow()`
+三个调用的分别只在**谁等**，以及谁拿得到“排完了”这句话。`requestFlush()` 谁也不等
+—— 它是定时器该调的那个 —— 提出一次排空就走，剩下的是写线程的事；没排完也不丢东西：
+还在缓存里的记录在一个内核手里的文件里。读文件或上传之前要调的是 `flushNow()`，它
+占着调用方线程等到记录落盘；`await flush()` 是同一次排空，交给别的线程，给不想占着
+一个线程的调用方。Dart 没有 `flushNow()`
 —— method channel 阻塞不了 Dart 这一侧；HarmonyOS 没有 `await flush()` —— 它的
 NAPI 每个方法都是同步的。Rust 三个都有，它的 `await flush()` 是一个用
 `std::thread::spawn` 写出来的 `Future`：不需要 runtime，任何执行器都能等它。

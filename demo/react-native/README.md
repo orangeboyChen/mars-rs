@@ -22,8 +22,9 @@ still on the bridge has no module to `TurboModuleRegistry.getEnforcing`.
   `RCTJSThread`, so a call is made on the JS thread and returns from there: a
   call that answers a value answers it before the next line runs, and none of
   them answers a `Promise`.
-- `xlog.i(tag, message)` and `xlog.flush(true)` — the same, and the flush is
-  what waits for the write.
+- `xlog.i(tag, message)` and `xlog.flushNow()` — the same, and the flush is
+  what waits for the write. `xlog.flush()` is the drain as a `Promise` and
+  `xlog.requestFlush()` is the one that asks for it and returns at once.
 - `RNFS.DocumentDirectoryPath` — why the appender is opened in an effect rather
   than at module scope: JavaScript has no way to ask where an app may write
   until the native side answers, and `react-native-fs` is what asks.

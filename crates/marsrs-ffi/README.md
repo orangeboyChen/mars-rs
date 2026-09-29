@@ -8,7 +8,7 @@ layers of Mars talk to `marsrs-appender` **without** a big-bang rewrite.
 | -------------------------------- | -------------------------------------------------------------- |
 | `mars_xlog_new_instance`         | `mars::xlog::NewXloggerInstance(_config, (TLogLevel)_level)`    |
 | `mars_xlog_write_instance`       | `mars::xlog::XloggerWrite(...)` + `xlogger_IsEnabledFor`        |
-| `mars_xlog_signal_flush_instance` | `mars::xlog::appender_flush()`                                 |
+| `mars_xlog_request_flush_instance` | `mars::xlog::appender_flush()`                                 |
 | `mars_xlog_flush_now_instance`   | `mars::xlog::appender_flush_sync()`                            |
 | `mars_xlog_release_instance`     | `mars::xlog::appender_close()`                                 |
 | `mars_xlog_set_level_instance`   | `xlogger_SetLevel()` / `SetLevel` on an instance                |
@@ -19,9 +19,9 @@ layers of Mars talk to `marsrs-appender` **without** a big-bang rewrite.
 
 Handle `0` names the process-wide appender, which the JNI bridge installs from
 Rust and which no symbol of this ABI opens, so every instance symbol is also how
-that one is asked: `mars_xlog_signal_flush_instance(0)`
-tells the writer thread it may drain and returns at once, and
-`mars_xlog_flush_now_instance(0)` drains on the calling thread, so the records
+that one is asked: `mars_xlog_request_flush_instance(0)`
+asks for a drain and returns at once, answering nothing about when it is over,
+and `mars_xlog_flush_now_instance(0)` drains on the calling thread, so the records
 are on the disk when it returns. There is one spelling per operation and not
 two — the C++ has a free function for the process-wide appender beside each
 handle-taking one, and a second spelling here would be two ways to say one
@@ -29,7 +29,7 @@ thing, which is a thing the platforms avoid by keeping the handle in the object
 an app holds.
 
 Every drain is two calls and not one carrying a flag, and no symbol of the seam
-takes a `sync`: `mars_xlog_signal_flush_all()` / `mars_xlog_flush_now_all()` are
+takes a `sync`: `mars_xlog_request_flush_all()` / `mars_xlog_flush_now_all()` are
 the two that reach every appender of the process.
 
 The header is checked in at **`include/mars_xlog.h`** (hand written, no cbindgen

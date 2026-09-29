@@ -25,7 +25,7 @@ await xlog.close();
 the same class, under the same name, the Swift package,
 `platforms/kmp/marsrs-xlog` and the Android AAR publish. A write and a setting
 are calls and not `await`s, and the five settings are the properties they are in
-Kotlin and in Swift: the channel is crossed without the caller waiting for it. `signalFlush()` is a call
+Kotlin and in Swift: the channel is crossed without the caller waiting for it. `requestFlush()` is a call
 of that kind too — it tells the writer thread to drain and returns at once —
 and `flush()` is the drain an app waits for. What answers a `Future` is
 what an app can act on — the appender `open` opens, the drain `flush()`

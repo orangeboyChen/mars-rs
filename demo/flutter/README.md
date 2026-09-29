@@ -21,8 +21,8 @@ this README is the only thing it may overwrite.
   lives behind a method channel, so opening one is a round trip to the platform
   and `main` awaits it before the first frame.
 - `xlog.i(tag, message)` — *not* a future. A write hands the record to the
-  appender and returns, and the one call here that crosses the channel is the
-  flush.
+  appender and returns; `await xlog.flush()` is the call an app awaits before it
+  reads the files or uploads them.
 - `xlog.isLoggable(level)` — the one check that is a future, because it asks the
   appender itself rather than a field this side holds.
 - `getApplicationSupportDirectory()` — the directory the platform gives the app,
