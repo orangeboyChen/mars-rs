@@ -1,0 +1,7 @@
+// The pages of the module: what `router.pushUrl` may name, and the one the
+// ability loads first — `windowStage.loadContent('pages/Index')`.
+{
+  "src": [
+    "pages/Index"
+  ]
+}

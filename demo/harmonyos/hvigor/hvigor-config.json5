@@ -1,0 +1,10 @@
+// Hvigor's own configuration: the model version, again, and the one field it
+// will not start without.
+//
+// It is the same string as `modelVersion` of the project's `oh-package.json5`
+// because hvigor reads it out of both and compares: one of them missing, or the
+// two of them different, is refused before a single task runs.
+{
+  "modelVersion": "5.1.0",
+  "dependencies": {}
+}

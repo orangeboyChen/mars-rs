@@ -1,0 +1,47 @@
+// The module: one ability, the page it starts on, and the icon the launcher
+// shows.
+//
+// `type: "entry"` is what makes this the module a device launches, and not a
+// HAR an app compiles into itself. `mainElement` names the ability that starts,
+// and `pages` — `main_pages.json` under resources — is the list every
+// `router.pushUrl` is checked against.
+{
+  "module": {
+    "name": "entry",
+    "type": "entry",
+    "description": "$string:module_desc",
+    "mainElement": "EntryAbility",
+    "deviceTypes": [
+      "phone",
+      "tablet",
+      "2in1"
+    ],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "pages": "$profile:main_pages",
+    "abilities": [
+      {
+        "name": "EntryAbility",
+        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "description": "$string:EntryAbility_desc",
+        "icon": "$media:icon",
+        "label": "$string:EntryAbility_label",
+        "startWindowIcon": "$media:icon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": true,
+        "skills": [
+          {
+            // The home screen launches this: the one skill an app that is
+            // opened from a launcher declares.
+            "entities": [
+              "entity.system.home"
+            ],
+            "actions": [
+              "ohos.want.action.home"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

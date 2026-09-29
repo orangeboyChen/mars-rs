@@ -1,0 +1,17 @@
+// The app: what the HAP is called, and the icon and the name a device shows for
+// it. Every module of a project is built into one app, and this is the file that
+// says which app that is.
+//
+// `bundleName` is the one that has to be an app's own: it is what a device
+// installs under and what a signature is made for, so a demo that ships is a
+// demo that renames it.
+{
+  "app": {
+    "bundleName": "io.github.orangeboychen.marsrs.demo",
+    "vendor": "mars-rs",
+    "versionCode": 1000000,
+    "versionName": "1.0.0",
+    "icon": "$media:app_icon",
+    "label": "$string:app_name"
+  }
+}

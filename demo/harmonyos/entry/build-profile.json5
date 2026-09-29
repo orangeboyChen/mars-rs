@@ -1,0 +1,36 @@
+// What hvigor builds this module as: one HAP for HarmonyOS.
+//
+// There is no `externalNativeOptions` and no CMake project, and that is the
+// point of taking the HAR: `libmarsrs_xlog.so` is built by
+// `scripts/build_harmony_napi.sh` and is already inside the package, so an app
+// that takes it compiles ArkTS and nothing else.
+{
+  "apiType": "stageMode",
+  "buildOption": {},
+  "buildOptionSet": [
+    {
+      "name": "release",
+      // Open source, and nothing here is worth hiding: an obfuscated build of a
+      // demo whose source is in the repository next to it is a build nobody can
+      // read for no gain.
+      "arkOptions": {
+        "obfuscation": {
+          "ruleOptions": {
+            "enable": false,
+            "files": [
+              "./obfuscation-rules.txt"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "targets": [
+    {
+      "name": "default",
+      // HarmonyOS and not OpenHarmony: `context.filesDir` and the rest of the
+      // stage model below are APIs of the system's.
+      "runtimeOS": "HarmonyOS"
+    }
+  ]
+}
