@@ -7,7 +7,9 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use marsrs_comm::ipv6_address::{in6_set_addr_nat64, in6_set_addr_v4mapped, set_nat64_prefix};
+use marsrs_comm::ipv6_address::{
+    in6_set_addr_nat64, in6_set_addr_v4mapped, set_nat64_prefix, Nat64Prefix,
+};
 use marsrs_comm::{LocalIpStack, SocketAddress};
 
 /// The NAT64 prefix is process-wide, so the tests that set it take it in turn.
@@ -80,7 +82,7 @@ fn the_stack_decides_what_a_v4_address_becomes() {
         (LocalIpStack::Dual, "::ffff:8.8.8.8"),
     ];
     let guard = prefixes();
-    set_nat64_prefix(marsrs_comm::ipv6_address::NAT64_PREFIX);
+    set_nat64_prefix(Nat64Prefix::well_known());
     for (stack, expected) in stacks {
         let mut addr = SocketAddress::new("8.8.8.8", 53);
         addr.v4_to_v6_address(stack);
@@ -97,7 +99,10 @@ fn a_nat64_address_takes_the_prefix_the_network_handed_out() {
     let mut learned = marsrs_comm::ipv6_address::NAT64_PREFIX;
     learned[0] = 0x20;
     learned[1] = 0x01;
-    set_nat64_prefix(learned);
+    set_nat64_prefix(Nat64Prefix {
+        bytes: learned,
+        len: 96,
+    });
 
     // the well-known prefix is what an address starts with, and the fix moves
     // it under the one the network handed out
@@ -112,7 +117,7 @@ fn a_nat64_address_takes_the_prefix_the_network_handed_out() {
     assert!(!dual.fix_current_nat64_addr(LocalIpStack::Dual));
     assert_eq!(dual.ipv6(), "64:ff9b::8.8.8.8");
 
-    set_nat64_prefix(marsrs_comm::ipv6_address::NAT64_PREFIX);
+    set_nat64_prefix(Nat64Prefix::well_known());
     drop(guard);
 }
 
