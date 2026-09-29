@@ -13,10 +13,12 @@
 #   DEVECO_CLI_SHA256    its checksum
 #   DEVECO_CLI_PRUNE     set to 0 to unpack all of it
 #
-# The directory is a cache and not an install: the run that finds
-# `command-line-tools/bin/hvigorw` in it downloads nothing, which is the point —
-# scripts/assemble_harmony_har.sh takes `DEVECO_HOME` of its own for a DevEco
-# Studio that is already on the machine, and CI points that at this directory.
+# The directory is a cache and not an install: the run that finds an hvigor in
+# it — the same version, from the same URL, pruned the same way, which is what
+# the identity file written at the end of this script records — downloads
+# nothing, which is the point — scripts/assemble_harmony_har.sh takes
+# `DEVECO_HOME` of its own for a DevEco Studio that is already on the machine,
+# and CI points that at this directory.
 #
 # What is unpacked is the whole archive minus the innards of two components of
 # the SDK, and it is the same subtraction scripts/build_harmony.sh makes on the
@@ -57,7 +59,19 @@ esac
 # The cache's own test, and not `test -d`: a run interrupted between `mkdir`
 # and `unzip` leaves a directory that has no hvigor in it, and a download
 # skipped because of it is a build that cannot start.
-if [ -x "$dir/command-line-tools/bin/hvigorw" ]; then
+#
+# Nor is `hvigorw` on its own enough: what is in the directory is a function of
+# three things apart from the version — the URL it came from and whether it was
+# pruned — and the cache key a job writes is the version. So the identity of
+# what was unpacked is written beside `hvigorw` and read back: a directory
+# fetched by a job that asked for the pruned tools is a directory that cannot
+# answer a job that needs the C++ toolchain, and one fetched from a URL that
+# has moved is not the toolchain the checksum was published for, though both
+# look like a cache hit to `test -x`.
+identity="$dir/command-line-tools/.deveco-cli-identity"
+want="$version $url $prune"
+if [ -x "$dir/command-line-tools/bin/hvigorw" ] \
+    && [ "$(cat "$identity" 2>/dev/null)" = "$want" ]; then
     echo "the DevEco Command Line Tools $version are already in $dir"
     exit 0
 fi
@@ -109,4 +123,8 @@ test -x "$dir/command-line-tools/bin/hvigorw" || {
     echo "::error::no hvigorw under $dir — the archive is not the one this script expects"
     exit 1
 }
+# Written last, and only for a directory that has an hvigor in it: a run that
+# died between `unzip` and here leaves no identity behind, so the next one
+# downloads again instead of trusting a half-unpacked tree.
+printf '%s\n' "$want" > "$identity"
 du -sh "$dir/command-line-tools"

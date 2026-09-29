@@ -10,7 +10,9 @@
 # Needs the Android NDK (ANDROID_HOME / ANDROID_SDK_ROOT, default
 # ~/Library/Android/sdk on macOS, $ANDROID_HOME in CI) and the three Rust
 # targets; `rustup target add` is run for them. The 16 KiB page size comes from
-# .cargo/config.toml, which is why RUSTFLAGS must not be exported here.
+# .cargo/config.toml, and `RUSTFLAGS` is unset before every `cargo build` for
+# that reason: an exported one outranks `target.<triple>.rustflags`, and an
+# empty one does that as surely as a full one does.
 #
 # `zstd-sys` compiles C, so both cc-rs and rustc need the NDK clang, and they
 # spell the env var prefixes differently — see the comment above the exports.
@@ -60,6 +62,11 @@ for entry in "${abis[@]}"; do
     export PATH="$ndk_bin:$PATH"
 
     echo "building marsrs-jni for $target ($abi)"
+    # Unset and not empty: cargo ranks an exported `RUSTFLAGS` above
+    # `target.<triple>.rustflags`, and an *empty* one is still exported — it
+    # replaces the flags of .cargo/config.toml with nothing, and the 16 KiB
+    # page size Android 15 wants is gone from a `.so` that looks built.
+    unset RUSTFLAGS
     cargo build --release -p marsrs-jni --target "$target"
 
     mkdir -p "$out/$abi"

@@ -44,7 +44,11 @@ if [ -z "${OHOS_SDK_HOME:-}" ]; then
     # cmake are left in the archive and out of the cache, because the download
     # is 2.7 GB and the runner's disk is not.
     OHOS_SDK_HOME="$sdk_cache/ohos-sdk/linux"
-    if [ ! -d "$OHOS_SDK_HOME/native" ]; then
+    # The artifact of the component and not the directory of it: a download
+    # interrupted between `mkdir` and `unzip` leaves a `native/` that is there
+    # and empty, and a cache that looks warm is a build whose `clang` — the
+    # first thing the loop below asks for — is not.
+    if [ ! -x "$OHOS_SDK_HOME/native/llvm/bin/clang" ]; then
         command -v unzip > /dev/null || {
             echo "::error::unzip is needed to unpack the OHOS SDK"
             exit 1

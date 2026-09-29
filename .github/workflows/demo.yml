@@ -72,7 +72,15 @@ env:
   NODE_VERSION: '20.19'
   TYPESCRIPT_VERSION: '5.9.3'
   JAVA_VERSION: '17'
+  # DevEco Command Line Tools: the version, the archive it comes from and the
+  # checksum of it — the same three lint-harmony.yml pins. Only the version
+  # used to be set here, and scripts/fetch_deveco_cli.sh derived the URL from
+  # it, so the 2.1 GB this job downloads went unchecked: no DEVECO_CLI_SHA256
+  # is a `::warning::` and an unpack nobody verified.
   DEVECO_CLI_VERSION: '5.1.0.840'
+  DEVECO_CLI_URL: >-
+    https://repo.huaweicloud.com/openharmony/ohpm/5.1.0/commandline-tools-linux-x64-5.1.0.840.zip
+  DEVECO_CLI_SHA256: '1dcefa4741dc289277560b2802040e0c45b433898d8db453d711d5376e0478f1'
 
 jobs:
   # Which of the files each demo below reads this commit touched, and so which
@@ -207,14 +215,16 @@ jobs:
       # — so without this the composite build below assembles an AAR with no
       # native library in it.
       #
-      # `RUSTFLAGS` is empty on purpose: the 16 KiB page size an Android 15
-      # device wants comes from .cargo/config.toml, and an exported
-      # `RUSTFLAGS` replaces those target flags rather than adding to them.
+      # `RUSTFLAGS` is unset on purpose: the 16 KiB page size an Android 15
+      # device wants comes from .cargo/config.toml, and an exported `RUSTFLAGS`
+      # replaces those target flags rather than adding to them — including an
+      # empty one, which is why `env: RUSTFLAGS: ''` was the wrong shape for
+      # this and `unset` is the right one. scripts/build_android.sh does the
+      # same for the `cargo build` it runs per ABI.
       - name: Build libmarsrsxlog.so
-        env:
-          RUSTFLAGS: ''
         run: |
           set -euo pipefail
+          unset RUSTFLAGS
           scripts/build_android.sh target/android-native
           # Both modules, and not only the one the app takes: the composite
           # build configures `platforms/android` whole, and `:marsrs` — the
@@ -227,10 +237,25 @@ jobs:
           done
       # The plugin downloads the platform and the build tools `compileSdk`
       # names, and it asks only once the licences of the ones it wants are
-      # accepted. An image that already carries them answers nothing here, and
-      # the `|| true` is what keeps that from being a failure.
+      # accepted.
+      #
+      # No `|| true`: it hid the one failure this step can have, which is a
+      # `sdkmanager` that is not where the line below names it. Which
+      # directory of `cmdline-tools` holds it is the image's to choose — the
+      # way .github/scripts/install_android_ndk.sh resolves it — and an image
+      # that names another leaves `yes` piping into nothing, an `sdk.dir` no
+      # licence was accepted for, and a green run whose `assembleDebug` fails
+      # two steps later. The licences an image has already accepted make
+      # `sdkmanager` answer and exit 0, which is not a failure to swallow.
       - name: Accept the SDK licences
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+        run: |
+          set -euo pipefail
+          sdkmanager=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1 || true)
+          test -n "$sdkmanager" || { echo "::error::no cmdline-tools under $ANDROID_HOME"; exit 1; }
+          # `yes` is killed by SIGPIPE as soon as sdkmanager stops reading, and
+          # under `pipefail` that 141 would fail the job although sdkmanager
+          # itself succeeded.
+          { yes || true; } | "$sdkmanager" --licenses > /dev/null
       # `assembleDebug` and not `installDebug`: the second needs a device or an
       # emulator to install onto, and what this job asks is whether the app
       # still builds — the AAR it takes comes out of JitPack, which builds it
@@ -239,22 +264,16 @@ jobs:
         working-directory: demo/android
         run: ./gradlew assembleDebug
 
-  # No token on this job, and no fork gate, which is what the composite build
-  # buys: `demo/kmp/settings.gradle.kts` substitutes `platforms/kmp` for the
-  # published package, so GitHub Packages is never asked and a pull request
-  # from a fork reads this repository's packages no more than a push does.
-  # The one demo that takes the port from the registry and not from the tree,
-  # and why: `platforms/kmp` does not build on a Linux runner. Under its own
-  # Gradle and its own Kotlin it fails to compile its own source —
-  # `Cannot access 'val IO: CoroutineDispatcher': it is internal in
-  # 'kotlinx.coroutines.Dispatchers'` — and `release.yml` publishes it from
-  # `macos-15` for that reason. Building the module here would cost a macOS
-  # runner, the Android SDK and ten Kotlin/Native targets on every pull
-  # request, so the demo is checked against the package an app actually gets.
+  # The one demo that takes the port out of a registry and not out of the tree:
+  # `demo/kmp/build.gradle.kts` asks for `xlog-kmp`, and GitHub Packages is
+  # where it is. There is no composite build and no `includeBuild` in
+  # `demo/kmp/settings.gradle.kts`, so what this job compiles is a release of
+  # the module and not this checkout of it — which is also what an app outside
+  # this repository gets, and the reason the demo is written that way.
   #
-  # Which means it is also the one demo whose drain is spelled the way the
-  # newest tag spells it, and not `flushNow()`: a tag is a release behind the
-  # tree, and the demo is written against the tag.
+  # The module of this tree is compiled by the `kmp-module` job below: it needs
+  # `macos-15`, the Android SDK and ten Kotlin/Native targets, and a demo that
+  # is checked against a package is not asked to pay for them.
   #
   # It needs the token, and it is the one job here a fork cannot answer:
   # GitHub Packages answers nothing without one, not even a 404.
@@ -288,6 +307,80 @@ jobs:
         working-directory: demo/kmp
         run: ./gradlew linkDebugExecutableLinuxX64
 
+  # The module, and not the demo: `platforms/kmp` is compiled here and nowhere
+  # else outside release.yml, and a Kotlin Multiplatform module that is only
+  # ever compiled by the release is one that is found broken by the release —
+  # at the end of a run that has already built seven platforms, by a job whose
+  # only repair is a second release.
+  #
+  # `macos-15`, for the reason the release's own Kotlin job gives: it is the one
+  # runner that can build the Apple archives and execute a Kotlin/Native test of
+  # one of them. What is run is the test of `marsrs-xlog` on the host's own
+  # target, which is what links the cinterop definition against the archive
+  # `scripts/build_kmp_native.sh` writes — the one thing a klib does not prove,
+  # and the thing that fails a month later in an app instead.
+  #
+  # The demo beside it is the other half of the answer and cannot be this one:
+  # it takes `xlog-kmp` out of GitHub Packages, so what it compiles is a
+  # release and not this tree.
+  kmp-module:
+    name: kmp (module)
+    needs: changes
+    if: needs.changes.outputs.kmp == 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The two caches release.yml's Kotlin job has, for the same reason and in
+      # the same shape: Kotlin/Native's own toolchain, and the dependencies and
+      # compiled build scripts of Gradle's.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle/libs.versions.toml') }}
+          restore-keys: konan-${{ runner.os }}-
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle.properties', '**/gradle/libs.versions.toml', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+      - name: Install the Android SDK components
+        # The module declares an Android target, so every `./gradlew` of it —
+        # the test below as much as a publication — configures one and needs
+        # the SDK to do it. The macOS image ships it under the home directory,
+        # which is where Gradle looks once `local.properties` says so.
+        run: |
+          set -euo pipefail
+          android_home="$HOME/Library/Android/sdk"
+          echo "ANDROID_HOME=$android_home" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$android_home" >> "$GITHUB_ENV"
+          # Resolved and not named: which directory holds the command-line
+          # tools is the image's to choose, and `latest` is not a name every
+          # image gives it.
+          sdkmanager=$(ls -d "$android_home"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1 || true)
+          if [ -z "$sdkmanager" ]; then
+            echo "::error::no cmdline-tools under $android_home, and the Kotlin Multiplatform module needs the Android SDK"
+            exit 1
+          fi
+          # `yes` is killed by SIGPIPE as soon as sdkmanager stops reading, and
+          # under `pipefail` that 141 would fail the job although sdkmanager
+          # itself succeeded.
+          { yes || true; } | "$sdkmanager" --licenses > /dev/null
+          "$sdkmanager" --install "platforms;android-36" "build-tools;34.0.0"
+          echo "sdk.dir=$android_home" > platforms/kmp/local.properties
+      - name: Build the Apple archives
+        run: scripts/build_kmp_native.sh platforms/kmp/native
+      - name: Test marsrs-xlog on macosArm64
+        working-directory: platforms/kmp
+        run: ./gradlew :marsrs-xlog:macosArm64Test
+
   apple:
     name: demo (apple)
     needs: changes
@@ -309,10 +402,14 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-      # `flutter pub get` resolves `marsrs_xlog` out of pub.dev, which is what
-      # an app outside this repository does; `flutter analyze` is then the
-      # analyzer over `lib/`, and it needs no platform folder — which is the
-      # one thing `flutter create` writes that this demo does not carry.
+      # `flutter pub get` resolves `marsrs_xlog` out of pub.dev, at the version
+      # `pubspec.yaml` pins — so what is analyzed below is a released plugin
+      # and not this tree, the way the Kotlin Multiplatform demo is compiled
+      # against a released package and not against `platforms/kmp`.
+      #
+      # `flutter analyze` is then the analyzer over `lib/`: it needs no
+      # platform folder, and the platform folders are the one thing
+      # `flutter create` writes that this demo does not carry.
       - name: flutter pub get
         working-directory: demo/flutter
         run: flutter pub get
@@ -388,10 +485,12 @@ jobs:
       # and not the ArkTS of the newest tag, which is one release behind it.
       #
       # The rename is not decoration: `entry/oh-package.json5` names the file
-      # it depends on, and it names it `1.0.0` — the version the package will
-      # carry once it is on ohpm, and not the version this checkout builds.
-      # The manifest is the half an app outside this repository copies, so it
-      # is the manifest that is humoured.
+      # it depends on, and it names no version — `libs/marsrs-harmonyos-xlog.har`
+      # — because a release asset carries the version of its release and a
+      # `file:` dependency that named one is a dependency naming no file after
+      # the next release. `package_harmony.sh` is what puts the version on the
+      # asset, and this is what takes it off again for the half of the repository
+      # an app copies.
       - name: Assemble the HAR of the port
         env:
           DEVECO_HOME: ${{ github.workspace }}/.deveco-cli/command-line-tools
@@ -402,7 +501,7 @@ jobs:
           har="$(find dist -name '*.har' -print -quit)"
           test -n "$har" || { echo "::error::hvigor wrote no .har under dist"; exit 1; }
           mkdir -p demo/harmonyos/libs
-          mv "$har" demo/harmonyos/libs/marsrs-harmonyos-xlog-1.0.0.har
+          mv "$har" demo/harmonyos/libs/marsrs-harmonyos-xlog.har
       # `ohpm install`, which is what resolves the `file:` dependency above into
       # `oh_modules/`: hvigor does not read `oh-package.json5` for it. Where the
       # binary sits inside the archive is not the same in every release of the

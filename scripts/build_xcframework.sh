@@ -7,7 +7,7 @@
 #
 # Two artifacts and not one, because the feature set the library is built with
 # is what an app links and not what the crate happens to hold: `marsrs-xlog` is
-# `--no-default-features --features xlog`, so it is xlog's 28 `mars_xlog_*`
+# `--no-default-features --features xlog`, so it is xlog's 23 `mars_xlog_*`
 # symbols and nothing else, and `marsrs-net` is `--no-default-features --features
 # sdt,stn`, so it carries no `mars_xlog_*` at all. That is what lets an app that
 # only logs take the first and stop there, and an app that takes both link
@@ -84,6 +84,18 @@ slices=(
     ios-simulator:aarch64-apple-ios-sim:x86_64-apple-ios
     watchos-device:arm64_32-apple-watchos:aarch64-apple-watchos
     watchos-simulator:aarch64-apple-watchos-sim
+)
+
+# What `xcodebuild -create-xcframework` names the directory of each slice: the
+# sdk, then the architectures of the libraries it put in it, in its own order
+# and not the one above. Asserted after the framework is written, which is what
+# `slices` cannot be used for: a slice is named here by what it is built for
+# and there by what the objects in it turned out to be.
+slice_dirs=(
+    ios-arm64
+    ios-arm64_x86_64-simulator
+    watchos-arm64_arm64_32
+    watchos-arm64-simulator
 )
 
 # The tier 3 target, which is the one `rustup target add` has nothing to add
@@ -267,7 +279,7 @@ MAP
         # The other half of the same check, and the reason the two are not one:
         # `nm` prints what it can parse and an error for every object it cannot,
         # so an archive it read nothing from would come out clean above. A slice
-        # of either framework exports symbols of its own — 28 of them for xlog,
+        # of either framework exports symbols of its own — 23 of them for xlog,
         # 9 and 21 for the diagnosis and the pipeline — so none at all means the
         # check above asked nothing rather than that the answer is yes.
         own="$(nm -gU "$slice_lib" 2>/dev/null | grep -Ec " T $owns" || true)"
@@ -287,6 +299,19 @@ MAP
     # there, named the way a consumer's `xcodebuild` looks for it (ios-arm64,
     # ios-arm64_x86_64-simulator, watchos-arm64_arm64_32,
     # watchos-arm64-simulator).
+    #
+    # `ls` was not that check: it exits 0 of a directory whatever is in it, so
+    # a framework missing three of its four slices — one `xcodebuild` dropped
+    # because it could not tell two libraries of the same architecture apart,
+    # or because it derived another sdk from a build version — came out of it
+    # as green as a whole one. The four names are what is asked for, because
+    # they are what a consumer resolves the framework by.
+    for dir in "${slice_dirs[@]}"; do
+        if [ ! -d "$build/$name/$dir" ]; then
+            echo "::error::$build/$name holds no $dir slice: $(ls "$build/$name")"
+            exit 1
+        fi
+    done
     ls "$build/$name"
 
     (cd "$build" && zip -q -r "$out/$name.zip" "$name")

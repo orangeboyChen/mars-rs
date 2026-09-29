@@ -102,4 +102,13 @@ JSON
 # `--pretty false`: a red box of colour escapes is not what a run log wants.
 "$tsc" --pretty false -p "$work/tsconfig.json"
 
-echo "type-checked $(find "$work" -name '*.ts' -not -name 'napi_shim.ts' | wc -l | tr -d ' ') ArkTS file(s) of $types as TypeScript"
+# Counted as the program counts them and not as the directory holds them: six
+# `.ets` of the package — `Index.ets` and the five under
+# `src/main/ets/xlog/` — plus the `index.d.ts` of the NAPI module, which is the
+# file the shim above is written out of. Left out are the two that are not in
+# the program: `napi_shim.ts`, which this script wrote, and `hvigorfile.ts`,
+# which tsconfig excludes — hvigor's own build script, whose import of
+# `@ohos/hvigor-ohos-plugin` a runner does not have. Both are `.ts` in the same
+# tree, so a `find` for the extension counted eight files for a program of
+# seven.
+echo "type-checked $(find "$work" -name '*.ts' -not -name 'napi_shim.ts' -not -name 'hvigorfile.ts' | wc -l | tr -d ' ') ArkTS file(s) of $types as TypeScript"

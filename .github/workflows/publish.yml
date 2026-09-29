@@ -184,8 +184,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Publish the nine crates
+        id: publish
         run: .github/scripts/publish_crates.sh "${{ needs.resolve.outputs.version }}"
+      # Gated the way the one in release.yml is: a summary that hands the reader
+      # a coordinate crates.io does not have is what `published=false` is about.
       - name: Summary
+        if: steps.publish.outputs.published == 'true'
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
         run: |
