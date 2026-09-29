@@ -56,6 +56,11 @@ object NetworkSignalUtil {
     @JvmStatic
     @Suppress("DEPRECATION")
     fun initNetworkSignalUtil(ncontext: Context?) {
+        // What the call before this one put on the air, if there was one:
+        // `TelephonyManager` keeps every listener it is handed, so a second
+        // `init` that did not take the first one off is two of them reading
+        // the signal, and the first one's context held for the process.
+        release()
         context = ncontext?.applicationContext
         val mgr = context?.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager ?: return
         val signal = object : PhoneStateListener() {
@@ -132,17 +137,19 @@ object NetworkSignalUtil {
 
     @Suppress("DEPRECATION")
     private fun calSignalStrength(sig: SignalStrength) {
-        var nSig: Int = if (sig.isGsm) {
+        val nSig: Int = if (sig.isGsm) {
             sig.gsmSignalStrength
         } else {
             (sig.cdmaDbm + CDMA_DBM_OFFSET) / CDMA_DBM_DIVISOR
         }
-        if (sig.isGsm && nSig == GSM_UNKNOWN_SIGNAL) {
-            strength = 0
+        // One write, and a clamped one: [strength] is read on whatever thread
+        // `C2Java.getSignal` comes in on, and a CDMA reading below -113 dBm
+        // answers a negative percent for as long as the clamp is a second
+        // write of a field another thread is free to read between the two.
+        strength = if (sig.isGsm && nSig == GSM_UNKNOWN_SIGNAL) {
+            0
         } else {
-            strength = (nSig * (FULL_PERCENT_AS_FLOAT / GSM_LEVELS_AS_FLOAT)).toLong()
-            strength = if (strength > FULL_PERCENT) FULL_PERCENT else strength
-            strength = if (strength < 0) 0 else strength
+            (nSig * (FULL_PERCENT_AS_FLOAT / GSM_LEVELS_AS_FLOAT)).toLong().coerceIn(0, FULL_PERCENT)
         }
     }
 }
