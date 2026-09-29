@@ -46,43 +46,59 @@ else
 fi
 LIBS="$LIBS -lz -lzstd -lpthread"
 
+# The two lists are what `MARS_C_SRCS` and `MARS_SRCS` replace: a harness that
+# reaches into less of upstream than `appender.cc` does names its own — the
+# long-link one needs `autobuffer.cc` and `longlink_packer.cc` and nothing else,
+# and building the xlog half for it would be a minute of zlib, zstd and boost it
+# never calls.
+if [ -n "${MARS_C_SRCS:-}" ]; then
+    C_SRCS=$MARS_C_SRCS
+else
+    C_SRCS="$UP/mars/comm/time_utils.c
+            $UP/mars/comm/xlogger/xloggerbase.c
+            $UP/mars/comm/xlogger/loginfo_extract.c
+            $UP/mars/xlog/crypt/micro-ecc-master/uECC.c
+            $UP/mars/comm/assert/__assert.c"
+fi
+
+if [ -n "${MARS_SRCS:-}" ]; then
+    CXX_SRCS=$MARS_SRCS
+else
+    CXX_SRCS="$UP/mars/xlog/src/appender.cc
+              $UP/mars/xlog/src/formater.cc
+              $UP/mars/xlog/src/log_base_buffer.cc
+              $UP/mars/xlog/src/log_zlib_buffer.cc
+              $UP/mars/xlog/src/log_zstd_buffer.cc
+              $UP/mars/xlog/src/xlogger_interface.cc
+              $UP/mars/xlog/crypt/log_crypt.cc
+              $UP/mars/xlog/unix/ConsoleLog.cc
+              $UP/mars/comm/autobuffer.cc
+              $UP/mars/comm/ptrbuffer.cc
+              $UP/mars/comm/mmap_util.cc
+              $UP/mars/comm/strutil.cc
+              $UP/mars/comm/boost_exception.cc
+              $UP/mars/comm/xlogger/xlogger.cc
+              $UP/mars/comm/xlogger/xlogger_category.cc
+              $UP/mars/comm/unix/xlogger_threadinfo.cc
+              $UP/mars/comm/tickcount.cc
+              $UP/mars/boost/libs/filesystem/src/codecvt_error_category.cpp
+              $UP/mars/boost/libs/filesystem/src/operations.cpp
+              $UP/mars/boost/libs/filesystem/src/path.cpp
+              $UP/mars/boost/libs/filesystem/src/path_traits.cpp
+              $UP/mars/boost/libs/filesystem/src/portability.cpp
+              $UP/mars/boost/libs/filesystem/src/unique_path.cpp
+              $UP/mars/boost/libs/filesystem/src/utf8_codecvt_facet.cpp
+              $UP/mars/boost/libs/iostreams/src/mapped_file.cpp
+              $UP/mars/boost/libs/system/src/error_code.cpp"
+fi
+
 # C sources: the headers declare these `extern "C"`, so they have to be compiled
 # as C — compiling them as C++ mangles the definitions and the link fails.
-for f in "$UP"/mars/comm/time_utils.c \
-         "$UP"/mars/comm/xlogger/xloggerbase.c \
-         "$UP"/mars/comm/xlogger/loginfo_extract.c \
-         "$UP"/mars/xlog/crypt/micro-ecc-master/uECC.c \
-         "$UP"/mars/comm/assert/__assert.c; do
+for f in $C_SRCS; do
     cc -O2 -w $INC -c "$f" -o "$OBJ/c_$(basename "$f").o"
 done
 
-for f in "$UP"/mars/xlog/src/appender.cc \
-         "$UP"/mars/xlog/src/formater.cc \
-         "$UP"/mars/xlog/src/log_base_buffer.cc \
-         "$UP"/mars/xlog/src/log_zlib_buffer.cc \
-         "$UP"/mars/xlog/src/log_zstd_buffer.cc \
-         "$UP"/mars/xlog/src/xlogger_interface.cc \
-         "$UP"/mars/xlog/crypt/log_crypt.cc \
-         "$UP"/mars/xlog/unix/ConsoleLog.cc \
-         "$UP"/mars/comm/autobuffer.cc \
-         "$UP"/mars/comm/ptrbuffer.cc \
-         "$UP"/mars/comm/mmap_util.cc \
-         "$UP"/mars/comm/strutil.cc \
-         "$UP"/mars/comm/boost_exception.cc \
-         "$UP"/mars/comm/xlogger/xlogger.cc \
-         "$UP"/mars/comm/xlogger/xlogger_category.cc \
-         "$UP"/mars/comm/unix/xlogger_threadinfo.cc \
-         "$UP"/mars/comm/tickcount.cc \
-         "$UP"/mars/boost/libs/filesystem/src/codecvt_error_category.cpp \
-         "$UP"/mars/boost/libs/filesystem/src/operations.cpp \
-         "$UP"/mars/boost/libs/filesystem/src/path.cpp \
-         "$UP"/mars/boost/libs/filesystem/src/path_traits.cpp \
-         "$UP"/mars/boost/libs/filesystem/src/portability.cpp \
-         "$UP"/mars/boost/libs/filesystem/src/unique_path.cpp \
-         "$UP"/mars/boost/libs/filesystem/src/utf8_codecvt_facet.cpp \
-         "$UP"/mars/boost/libs/iostreams/src/mapped_file.cpp \
-         "$UP"/mars/boost/libs/system/src/error_code.cpp \
-         "$SRC"; do
+for f in $CXX_SRCS "$SRC"; do
     c++ -std=c++14 -O2 -w $INC -c "$f" -o "$OBJ/cxx_$(basename "$f").o"
 done
 
