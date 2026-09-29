@@ -44,8 +44,10 @@ public actual class Xlog actual constructor(config: XlogConfig) {
             field = seconds
         }
 
+    @Volatile
     private var handle: Long = NO_HANDLE
 
+    @Volatile
     private var currentMode: AppenderMode = config.mode
 
     init {
@@ -61,7 +63,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     }
 
     public actual val isOpen: Boolean
-        get() = handle != NO_HANDLE && handle == openHandles[namePrefix]
+        get() = openHandle() != NO_HANDLE
 
     public actual var level: LogLevel
         get() = LogLevel.of(getLogLevel(requireOpen()))
@@ -74,12 +76,15 @@ public actual class Xlog actual constructor(config: XlogConfig) {
             currentMode = value
         }
 
-    public actual fun isLoggable(level: LogLevel): Boolean =
-        isOpen && LogLevel.of(getLogLevel(handle)).isEnabledFor(level)
+    public actual fun isLoggable(level: LogLevel): Boolean {
+        val opened = openHandle()
+        return opened != NO_HANDLE && LogLevel.of(getLogLevel(opened)).isEnabledFor(level)
+    }
 
     public actual fun log(level: LogLevel, tag: String, message: String) {
-        if (isOpen) {
-            write(handle, level.ordinal, tag, message)
+        val opened = openHandle()
+        if (opened != NO_HANDLE) {
+            write(opened, level.ordinal, tag, message)
         }
     }
 
@@ -96,14 +101,16 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     public actual fun f(tag: String, message: String) = log(LogLevel.FATAL, tag, message)
 
     public actual fun requestFlush() {
-        if (isOpen) {
-            appenderRequestFlush(handle)
+        val opened = openHandle()
+        if (opened != NO_HANDLE) {
+            appenderRequestFlush(opened)
         }
     }
 
     public actual fun flushNow() {
-        if (isOpen) {
-            appenderFlushNow(handle)
+        val opened = openHandle()
+        if (opened != NO_HANDLE) {
+            appenderFlushNow(opened)
         }
     }
 
@@ -112,16 +119,31 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     }
 
     public actual fun close() {
-        if (!isOpen) {
+        // The appender is the prefix's and not this wrapper's: `marsrs-jni`
+        // answers an [Xlog] of the same prefix with the same handle, so every
+        // one of them is closed with this one. Taking the handle out of the map
+        // is what closes it, and it is what leaves a second close — another
+        // [Xlog]'s, or another thread's — nothing to take out.
+        val opened = handle
+        if (opened == NO_HANDLE || !openHandles.remove(namePrefix, opened)) {
             return
         }
         releaseXlogInstance(namePrefix)
-        // The appender is the prefix's and not this wrapper's: `marsrs-jni`
-        // answers an [Xlog] of the same prefix with the same handle, so every one
-        // of them is closed with this one.
-        openHandles.remove(namePrefix, handle)
         handle = NO_HANDLE
     }
+
+    /**
+     * The handle of this appender, [NO_HANDLE] when it is closed, read once:
+     * [handle] is what `marsrs-jni` was answered, and the map is what says the
+     * handle is still this [Xlog]'s — an [Xlog] of the same [namePrefix] is
+     * closed with this one, and the map is where that shows.
+     *
+     * One read and not two, because the two it replaces are not one answer:
+     * `isOpen` and then `handle` is a window a [close] on another thread lands
+     * in, and what comes out of it is the handle of an appender that is gone.
+     */
+    private fun openHandle(): Long =
+        handle.takeIf { it != NO_HANDLE && it == openHandles[namePrefix] } ?: NO_HANDLE
 
     /**
      * The handle of this appender, or [IllegalStateException] when there is none
@@ -130,10 +152,11 @@ public actual class Xlog actual constructor(config: XlogConfig) {
      * other part of the app writes through, and read a level that is not its own.
      */
     private fun requireOpen(): Long {
-        check(isOpen) {
+        val opened = openHandle()
+        check(opened != NO_HANDLE) {
             "no appender of this Xlog is open ('$namePrefix'): Xlog.open(XlogConfig(...)) another to log again"
         }
-        return handle
+        return opened
     }
 
     // The names `marsrs-jni` exports, and the signatures it reads them under.
