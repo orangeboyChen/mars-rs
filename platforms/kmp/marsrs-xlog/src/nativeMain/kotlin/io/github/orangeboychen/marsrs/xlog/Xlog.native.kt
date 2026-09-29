@@ -123,7 +123,11 @@ public actual class Xlog actual constructor(config: XlogConfig) {
         }
     }
 
-    public actual suspend fun flush() = withContext(Dispatchers.IO) {
+    // `Default` and not `IO`, which is `internal` in kotlinx.coroutines off
+    // the JVM: this target is Kotlin/Native, and `IO` is not a dispatcher its
+    // `Dispatchers` publishes. The drain blocks whatever thread it runs on
+    // either way, which is the whole reason it is not run on the caller's.
+    public actual suspend fun flush() = withContext(Dispatchers.Default) {
         flushNow()
     }
 
