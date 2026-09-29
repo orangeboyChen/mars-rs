@@ -48,9 +48,13 @@ struct ConfigBundle {
     raw: MarsXLogConfig,
 }
 
-fn make_config(dir: &std::path::Path, mode: c_int, compress: c_int) -> ConfigBundle {
+/// One prefix per test, and not one prefix for the file: a prefix is one
+/// appender for the whole process, so a test that opened `Mars` and did not
+/// release it hands the next one an appender of *its* directory — and a handle
+/// into a tree that test has since deleted.
+fn make_config(dir: &std::path::Path, prefix: &str, mode: c_int, compress: c_int) -> ConfigBundle {
     let log_dir = CString::new(dir.to_str().unwrap()).unwrap();
-    let prefix = CString::new("Mars").unwrap();
+    let prefix = CString::new(prefix).unwrap();
     let pub_key = CString::new("").unwrap();
     let raw = MarsXLogConfig {
         mode,
@@ -83,19 +87,19 @@ fn a_new_instance_refuses_a_bad_config_before_touching_the_disk() {
     );
 
     let dir = tempdir("bad");
-    let bad_mode = make_config(&dir, 7, 0);
+    let bad_mode = make_config(&dir, "bad", 7, 0);
     assert_eq!(
         unsafe { mars_xlog_new_instance(&bad_mode.raw, 0) },
         MARS_XLOG_ERR_BAD_MODE as c_longlong
     );
-    let bad_compress = make_config(&dir, 0, 9);
+    let bad_compress = make_config(&dir, "bad", 0, 9);
     assert_eq!(
         unsafe { mars_xlog_new_instance(&bad_compress.raw, 0) },
         MARS_XLOG_ERR_BAD_COMPRESS as c_longlong
     );
 
     let empty = CString::new("").unwrap();
-    let mut config = make_config(&dir, 0, 0);
+    let mut config = make_config(&dir, "bad", 0, 0);
     config.raw.log_dir = empty.as_ptr();
     assert_eq!(
         unsafe { mars_xlog_new_instance(&config.raw, 0) },
@@ -118,7 +122,7 @@ fn an_appender_that_will_not_open_is_reported_and_not_handed_out() {
     std::fs::write(&file, b"").unwrap();
 
     let log_dir = CString::new(file.to_str().unwrap()).unwrap();
-    let mut config = make_config(&dir, 0, 0);
+    let mut config = make_config(&dir, "refused", 0, 0);
     config.raw.log_dir = log_dir.as_ptr();
     assert_eq!(
         unsafe { mars_xlog_new_instance(&config.raw, 0) },
@@ -157,7 +161,7 @@ fn the_level_is_one_store_whatever_the_question_is() {
 fn the_whole_abi_runs_over_one_appender() {
     let _guard = serial();
     let dir = tempdir("surface");
-    let config = make_config(&dir, 0, 0);
+    let config = make_config(&dir, "surface", 0, 0);
     let handle = unsafe { mars_xlog_new_instance(&config.raw, 0) };
     assert_ne!(handle, 0);
     // a prefix is one appender, so a second open answers that one's handle
@@ -267,10 +271,10 @@ fn the_whole_abi_runs_over_one_appender() {
 fn instances_are_created_addressed_and_released() {
     let _guard = serial();
     let dir = tempdir("instances");
-    let config = make_config(&dir, 1, 1);
+    let config = make_config(&dir, "instances", 1, 1);
     let handle = unsafe { mars_xlog_new_instance(&config.raw, 2) };
     assert!(handle > 0);
-    let prefix = CString::new("Mars").unwrap();
+    let prefix = CString::new("instances").unwrap();
     assert_eq!(unsafe { mars_xlog_get_instance(prefix.as_ptr()) }, handle);
     assert_eq!(unsafe { mars_xlog_get_instance(std::ptr::null()) }, 0);
 
@@ -305,14 +309,14 @@ fn instances_are_created_addressed_and_released() {
     );
     // an empty log dir is refused
     let empty = CString::new("").unwrap();
-    let mut broken = make_config(&dir, 0, 0);
+    let mut broken = make_config(&dir, "instances", 0, 0);
     broken.raw.log_dir = empty.as_ptr();
     assert_eq!(
         unsafe { mars_xlog_new_instance(&broken.raw, 2) },
         MARS_XLOG_ERR_EMPTY_LOG_DIR as c_longlong
     );
     // and so is a bad mode
-    let broken_mode = make_config(&dir, 9, 0);
+    let broken_mode = make_config(&dir, "instances", 9, 0);
     assert_eq!(
         unsafe { mars_xlog_new_instance(&broken_mode.raw, 2) },
         MARS_XLOG_ERR_BAD_MODE as c_longlong
@@ -401,7 +405,7 @@ fn is_enabled_for_compares_the_raw_level() {
 fn an_instance_can_be_opened_at_the_level_that_logs_nothing() {
     let _guard = serial();
     let dir = tempdir("level-none");
-    let config = make_config(&dir, 1, 0);
+    let config = make_config(&dir, "level-none", 1, 0);
     let handle = unsafe { mars_xlog_new_instance(&config.raw, 6) };
     assert_ne!(handle, 0, "LEVEL_NONE collapsed onto the default logger");
     assert_eq!(mars_xlog_get_level(handle), 6);
@@ -414,7 +418,7 @@ fn an_instance_can_be_opened_at_the_level_that_logs_nothing() {
     mars_xlog_set_max_alive_duration_instance(handle, 0);
     mars_xlog_flush_now_all();
 
-    let prefix = CString::new("Mars").unwrap();
+    let prefix = CString::new("level-none").unwrap();
     unsafe {
         mars_xlog_release_instance(prefix.as_ptr());
     }
@@ -428,8 +432,8 @@ fn an_instance_can_be_opened_at_the_level_that_logs_nothing() {
 fn the_recovery_and_discovery_symbols_answer() {
     let _guard = serial();
     let dir = tempdir("discovery");
-    let config = make_config(&dir, 0, 0);
-    let prefix = CString::new("Mars").unwrap();
+    let config = make_config(&dir, "discovery", 0, 0);
+    let prefix = CString::new("discovery").unwrap();
     let log_dir = CString::new(dir.to_str().unwrap()).unwrap();
     let mut out = vec![0u8; 512];
 
@@ -455,7 +459,7 @@ fn the_recovery_and_discovery_symbols_answer() {
         .unwrap()
         .to_owned();
     assert!(name.ends_with(".xlog"), "{name}");
-    assert!(name.contains("Mars_"), "{name}");
+    assert!(name.contains("discovery_"), "{name}");
     // One name today, so index 1 is past the end of the list.
     assert_eq!(
         unsafe {
