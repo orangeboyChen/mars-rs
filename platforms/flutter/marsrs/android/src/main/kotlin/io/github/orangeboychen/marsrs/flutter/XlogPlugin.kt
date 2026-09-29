@@ -35,6 +35,7 @@ import io.github.orangeboychen.marsrs.xlog.LogLevel
 import io.github.orangeboychen.marsrs.xlog.Xlog
 import io.github.orangeboychen.marsrs.xlog.XlogConfig
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /** The Android half of `marsrs`: the whole port, which today is xlog. */
@@ -58,14 +59,26 @@ class XlogPlugin :
      * thread the UI draws on, and not one an app's `await xlog.flush()` may
      * hold up. Serial, so two drains of one appender are one drain after
      * another and not two writers in one file.
+     *
+     * A `var`, and rebuilt by [onAttachedToEngine], because [onDetachedFromEngine]
+     * shuts this one down: a detach is not always the last thing that happens
+     * to a plugin instance, and no drain can be put on an executor that is
+     * shut down, so the `flush` after one would be a `RejectedExecutionException`
+     * where a plugin that is attached again is a plugin that answers.
      */
-    private val flushQueue = Executors.newSingleThreadExecutor()
+    private var flushQueue: ExecutorService = Executors.newSingleThreadExecutor()
 
     /** What a drain is answered on: a `Result` is a reply on the channel, and
      * the channel is the main thread's. */
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        // What [onDetachedFromEngine] shut down, which nothing can be handed
+        // again: an attach after a detach is a plugin that answers `flush`
+        // again, and not one that throws on the first Dart caller to ask.
+        if (flushQueue.isShutdown) {
+            flushQueue = Executors.newSingleThreadExecutor()
+        }
         channel = MethodChannel(binding.binaryMessenger, CHANNEL).also {
             it.setMethodCallHandler(this)
         }
