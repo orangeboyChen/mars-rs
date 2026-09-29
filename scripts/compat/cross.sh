@@ -8,7 +8,10 @@
 #
 #   * the record layer — the 16 combinations of `fixtures/manifest.json`
 #     (zlib/zstd x sync/async x crypt on/off x flush policy), encoded by one
-#     side and decoded by the other, byte for byte.
+#     side and decoded by the other, byte for byte. The eight rows nothing
+#     encrypts are held to more than that: their two files have to be the same
+#     bytes, because upstream's zlib and zstd are the ones the C++ build links.
+#     A crypt row cannot be — its salt and its key are new every run.
 #   * the appender layer — the same matrix through the real `XloggerAppender`
 #     on the C++ side and `appender_open`/`appender_write` on the Rust one, so
 #     what is decoded is a `<prefix>_YYYYMMDD.xlog` and not just block bytes.
@@ -46,7 +49,7 @@ for case in manifest['cases']:
           case['crypt'], case['flush_every'], case['file'])" > "$WORK/cases.txt"
 
 FAILED=0
-printf '| case | rust -> cpp | cpp -> rust |\n|---|---|---|\n'
+printf '| case | rust -> cpp | cpp -> rust | bytes |\n|---|---|---|---|\n'
 
 while read -r name mode compress sync crypt flush_every file; do
     # `--pubkey` empty is "no server key", i.e. the no-crypt magics.
@@ -55,6 +58,12 @@ while read -r name mode compress sync crypt flush_every file; do
     else
         KEY="--pubkey="
     fi
+
+    # 0. The C++ encoder's file of the scenario, written first: it is both what
+    # the Rust decoder reads in step 2 and the control of step 1.
+    "$OUT/upstream_encode" --mode="$mode" --compress="$compress" \
+        --sync="$sync" --flush-every="$flush_every" $KEY \
+        --records="$FIX/inputs.bin" --out="$WORK/$name-cpp.xlog" > /dev/null
 
     # 1. the Rust encoder's file, decoded by upstream's own decoder.
     "$REPO/target/release/xlog-compat" encode --mode="$mode" --compress="$compress" \
@@ -65,15 +74,21 @@ while read -r name mode compress sync crypt flush_every file; do
         "$WORK/$name-rust.plain" > "$WORK/$name-rust.diff"; then
         RUST_CPP=ok
     else
-        # The control: the same scenario's golden file — written by the C++
-        # encoders — through the C++ decoder. Two things have to hold before
+        # The control: the C++ encoder's own file of the same scenario, written
+        # in step 0, through the C++ decoder. Two things have to hold before
         # "the decoder cannot read this shape" is a verdict and not an excuse:
-        # the golden file has to fail too, and the two wrong outputs have to be
-        # the *same* wrong bytes. Without the second one, a Rust file that
-        # decodes to something else — nothing at all, a prefix, differently
-        # corrupted bytes — is waved through on the strength of a case the
-        # decoder was already known to fail.
-        "$OUT/upstream_decode" "$FIX/$file" "$WORK/$name-control.plain"
+        # that file has to fail too, and the two wrong outputs have to be the
+        # *same* wrong bytes. Without the second one, a Rust file that decodes
+        # to something else — nothing at all, a prefix, differently corrupted
+        # bytes — is waved through on the strength of a case the decoder was
+        # already known to fail.
+        #
+        # The golden files of `fixtures/` are not the control: they are what
+        # `tests/golden.rs` reads, and they were written by an older upstream
+        # build — the zstd ones come out a byte longer than the one this script
+        # builds today — so a control built on them would hold the Rust encoder
+        # to a build it never had.
+        "$OUT/upstream_decode" "$WORK/$name-cpp.xlog" "$WORK/$name-control.plain"
         if python3 "$REPO/scripts/compat/check.py" exact "$FIX/expected.bin" \
             "$WORK/$name-control.plain" > /dev/null; then
             RUST_CPP=FAILED
@@ -94,9 +109,6 @@ while read -r name mode compress sync crypt flush_every file; do
     fi
 
     # 2. upstream's file, decoded by the Rust decoder.
-    "$OUT/upstream_encode" --mode="$mode" --compress="$compress" --sync="$sync" \
-        --flush-every="$flush_every" $KEY \
-        --records="$FIX/inputs.bin" --out="$WORK/$name-cpp.xlog" > /dev/null
     "$REPO/target/release/xlog-compat" decode --privkey="$PRIVKEY" \
         --in="$WORK/$name-cpp.xlog" --out="$WORK/$name-cpp.plain" > /dev/null
     if python3 "$REPO/scripts/compat/check.py" exact "$FIX/expected.bin" \
@@ -108,7 +120,25 @@ while read -r name mode compress sync crypt flush_every file; do
         cat "$WORK/$name-cpp.diff"
     fi
 
-    printf '| %s | %s | %s |\n' "$name" "$RUST_CPP" "$CPP_RUST"
+    # 3. The two files themselves, for the rows nothing encrypts: upstream's
+    # zlib and zstd are the very ones the C++ build links, so "the Rust encoder
+    # writes what the C++ writes" is a claim about bytes and not about
+    # plaintext. A crypt row is random per run — the salt and the key of every
+    # block — so there the two files cannot be the same bytes and the
+    # plaintext of step 2 is the whole of the answer.
+    if [ "$crypt" = 0 ]; then
+        if cmp -s "$WORK/$name-rust.xlog" "$WORK/$name-cpp.xlog"; then
+            BYTES=identical
+        else
+            BYTES=FAILED
+            FAILED=$((FAILED + 1))
+            cmp "$WORK/$name-rust.xlog" "$WORK/$name-cpp.xlog" || true
+        fi
+    else
+        BYTES="random"
+    fi
+
+    printf '| %s | %s | %s | %s |\n' "$name" "$RUST_CPP" "$CPP_RUST" "$BYTES"
 done < "$WORK/cases.txt"
 
 # The appender layer: the real thing, both directions.
