@@ -176,8 +176,11 @@ void mars_xlog_set_console_log(int open);
  * decision and not the port's.
  *
  * Pass NULL to take the callback away again. The callback may be called from
- * any thread, the writer thread of an async appender included; a panic inside
- * it is swallowed, and a NULL string is never handed to it.
+ * any thread, the writer thread of an async appender included, and it must not
+ * unwind: one written in Rust that panics aborts at the `extern "C"`
+ * boundary, before the `catch_unwind` every entry point of the port is wrapped
+ * in can see the panic at all, so what it ends is the process and not the
+ * record. A NULL string is never handed to it.
  */
 typedef void (*MarsXLogConsoleFun)(int level,
                                    const char* tag,

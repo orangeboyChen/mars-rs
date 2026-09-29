@@ -102,7 +102,11 @@ one `mars_xlog_write` (the level gate the JNI code performs with
 
 * **No panic ever unwinds into C.** Every entry point wraps its body in
   `catch_unwind`; a panic is reported as `MARS_XLOG_ERR_PANIC` (or swallowed for
-  the `void` symbols) and the message still reaches stderr.
+  the `void` symbols) and the message still reaches stderr. The one thing that
+  is the caller's and not an entry point is a callback it handed in — the
+  console sink of `mars_xlog_set_console_fun`: a panic inside one written in
+  Rust aborts at the `extern "C"` boundary, before any `catch_unwind` here can
+  see it.
 * **No null dereference.** Every incoming pointer is null-checked; null and
   invalid UTF-8 degrade to an empty string. `mars_xlog_open` returns
   `MARS_XLOG_ERR_NULL_CONFIG` / `MARS_XLOG_ERR_EMPTY_LOG_DIR` instead of failing
