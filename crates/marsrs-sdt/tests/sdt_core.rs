@@ -248,6 +248,46 @@ fn a_probe_that_panics_does_not_leave_the_core_checking() {
     assert_eq!(core.run_on(record).len(), 2);
 }
 
+/// The rest of what a run leaves behind: not just `checking_`, but the
+/// request it was running. `SdtLogic::run` takes no request of its own, so
+/// what a run that unwinds leaves in the core is what the next one starts
+/// from — a request already [`CheckStatus::CheckFinish`] stops it before its
+/// first check, and the results it did not record are the ones it answers
+/// with.
+#[test]
+fn a_run_that_panicked_leaves_no_request_behind() {
+    let longlink = hosts(&["long.weixin.qq.com"]);
+
+    let mut core = SdtCore::new();
+    core.start_check(
+        &longlink,
+        &CheckIPPorts::new(),
+        NET_CHECK_BASIC,
+        UNUSE_TIMEOUT,
+    );
+
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        core.run_on(|_, request| {
+            request
+                .checkresult_profiles
+                .push(CheckResultProfile::of(NetCheckType::PingCheck));
+            request.check_status = CheckStatus::CheckFinish;
+            panic!("a probe that fell over after finishing");
+        })
+    }));
+    assert!(panicked.is_err(), "the panic is not swallowed");
+
+    assert!(
+        core.request().checkresult_profiles.is_empty(),
+        "the results of the run that panicked are still there"
+    );
+    assert_ne!(
+        core.request().check_status,
+        CheckStatus::CheckFinish,
+        "the request the next run would start from is already finished"
+    );
+}
+
 #[test]
 fn a_cancel_handle_stays_usable_after_a_run() {
     let longlink = hosts(&["long.weixin.qq.com"]);

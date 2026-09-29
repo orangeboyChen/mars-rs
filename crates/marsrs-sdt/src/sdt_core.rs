@@ -62,17 +62,27 @@ impl Default for CancelHandle {
     }
 }
 
-/// `checking_`, for as long as one run is on the stack.
+/// One run of [`SdtCore::run_on`], and the whole of what its end leaves
+/// behind.
 ///
-/// Given back by [`Drop`] and not by the end of [`SdtCore::run_on`], which a
-/// probe that panics never reaches: the panic comes out of the closure the
-/// host handed in, and a core left `checking` would answer `false` to every
-/// `start_check` after it — a host's panic retiring the core for good.
-struct Checking<'a>(&'a mut NetCheckStatus);
+/// Given back by [`Drop`] and not by the end of the run, which a probe that
+/// panics never reaches: the panic comes out of the closure the host handed
+/// in. A core left `checking` would answer `false` to every `start_check`
+/// after it — a host's panic retiring the core for good — and a request left
+/// as it was would answer [`CheckStatus::CheckFinish`] to the next run, which
+/// stops before it starts and hands back the results of the run that panicked.
+struct RunOn<'a> {
+    checking: &'a mut NetCheckStatus,
+    check_list: &'a mut Vec<NetCheckType>,
+    request: &'a mut CheckRequestProfile,
+}
 
-impl Drop for Checking<'_> {
+impl Drop for RunOn<'_> {
+    /// `__RunOn` is over, panic or not.
     fn drop(&mut self) {
-        *self.0 = NetCheckStatus::CheckEnd;
+        *self.checking = NetCheckStatus::CheckEnd;
+        self.check_list.clear();
+        self.request.reset();
     }
 }
 
@@ -210,23 +220,21 @@ impl SdtCore {
         mut do_check: impl FnMut(NetCheckType, &mut CheckRequestProfile),
     ) -> Vec<CheckResultProfile> {
         let plan = self.check_list.clone();
-        // The borrow is the guard's and not a flag this sets at the end: a
-        // probe that panics unwinds past the end, and the core is given back
-        // by [`Drop`] instead.
-        let checking = Checking(&mut self.checking);
+        // The whole end of a run is the guard's and not three lines below the
+        // loop: a probe that panics unwinds past them, and the core, the plan
+        // and the request are given back by [`RunOn::drop`] instead.
+        let run = RunOn {
+            checking: &mut self.checking,
+            check_list: &mut self.check_list,
+            request: &mut self.check_request,
+        };
         for kind in plan {
-            if self.cancel.is_cancelled()
-                || self.check_request.check_status == CheckStatus::CheckFinish
-            {
+            if self.cancel.is_cancelled() || run.request.check_status == CheckStatus::CheckFinish {
                 break;
             }
-            do_check(kind, &mut self.check_request);
+            do_check(kind, run.request);
         }
-        drop(checking);
-
-        let results = std::mem::take(&mut self.check_request.checkresult_profiles);
-        self.reset();
-        results
+        std::mem::take(&mut run.request.checkresult_profiles)
     }
 
     /// `SdtCore::__RunOn()` with the port's own checkers — the four the C++
