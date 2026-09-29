@@ -164,8 +164,9 @@ as to the file, a record that carries an `XLoggerInfo` that is: a Rust
 `appender_write(None, …)` hands none in, and no copy is made of it.
 
 The built-in sink is standard error, on every platform and in every package —
-nothing here writes to `os_log` or to logcat. Where the system log is what an
-app wants, it is the app's own sink below that puts it there.
+nothing here writes to `os_log` or to logcat. On Apple the system log is one
+`Xlog.setConsoleSink` away, and it is the app's own code that calls `os_log` in
+it.
 
 An app that wants it somewhere else hands the logger a sink of its own, and
 what was going to the console goes to that instead:
@@ -177,6 +178,13 @@ use marsrs::xlog::set_console_fun;
 
 set_console_fun(Some(|info, log| println!("{:?}: {log}", info.level)));
 set_console_fun(None);   // the console has it again
+```
+
+```swift [Swift]
+Xlog.setConsoleSink { level, tag, file, function, line, log in
+    os_log(.default, "%{public}@", String(cString: log))
+}
+Xlog.setConsoleSink(nil)   // the console has it again
 ```
 
 ```c [C]
