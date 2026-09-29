@@ -2800,6 +2800,24 @@ mod tests {
         assert!(reported.lock().unwrap().is_empty());
     }
 
+    /// A `Connection: close` answer with no `Content-Length` — an HTTP/1.0
+    /// answer, and the one whose length is the socket. It ends at the hang-up
+    /// and not before: the head alone is not the answer, and a run that ended
+    /// there would strand the body in the parser and fail the task.
+    #[test]
+    fn a_close_terminated_answer_ends_at_the_hang_up() {
+        let seen = Seen::default();
+        let mut link = link(&seen);
+        let answer = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nhello";
+        let reads = vec![(Ok(answer.to_vec()), 1100u64), (Ok(Vec::new()), 1200u64)];
+
+        assert_eq!(
+            link.run_at(1000, b"hello", reads.into_iter()),
+            Some(Ok(b"hello".to_vec()))
+        );
+        assert_eq!(seen.closed().len(), 1, "the socket was not kept");
+    }
+
     #[test]
     fn a_server_that_said_close_is_not_one_that_is_kept() {
         let seen = Seen::default();
