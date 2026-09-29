@@ -521,6 +521,12 @@ impl HeaderFields {
     /// The timeout is read from `Keep-Alive`, and only when there is a
     /// `Connection` field at all. The C++ skips `sizeof(const char*)` — 8 —
     /// characters to get past `timeout=`, which is how long `timeout=` is.
+    ///
+    /// It skips them from the start of the token and not from where it
+    /// found `timeout=` in it, so upstream only reads a timeout that starts
+    /// a token: `max=100, timeout=15` is the default there and `15` here.
+    /// Reading it wherever it sits is the reading kept, since a peer that
+    /// wrote one there meant one.
     pub fn keep_alive_timeout(&self) -> u32 {
         if self.get(CONNECTION).is_none() {
             return DEFAULT_KEEP_ALIVE_TIMEOUT;
@@ -1454,6 +1460,11 @@ mod tests {
         assert_eq!(fields.keep_alive_timeout(), DEFAULT_KEEP_ALIVE_TIMEOUT);
         fields.set(KEEP_ALIVE, "");
         assert_eq!(fields.keep_alive_timeout(), DEFAULT_KEEP_ALIVE_TIMEOUT);
+
+        // a timeout that does not start its token: the C++ reads the
+        // default here, and the port reads the timeout
+        fields.set(KEEP_ALIVE, "max=100, timeout=15");
+        assert_eq!(fields.keep_alive_timeout(), 15);
     }
 
     #[test]
