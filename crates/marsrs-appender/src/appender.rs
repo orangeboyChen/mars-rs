@@ -321,6 +321,32 @@ fn clear_cache_file(path: &Path) {
     }
 }
 
+/// Whether the blocks of `file` do not cover its length: fewer than the length
+/// asks for, which is what `set_len` leaves behind and what turns the first
+/// store into a mapping of it into SIGBUS on a full disk.
+///
+/// The length is what the file claims, and this is what the disk gave it. A
+/// filesystem that reports no blocks at all is taken at its word: nothing is
+/// safer to assume about a file it will not account for than that it has to
+/// be written to before it is mapped.
+#[cfg(unix)]
+fn is_sparse(file: &File) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    // `blocks()` is a `u64` on Linux and an `i64` on macOS, so both are
+    // widened instead of cast: what this asks is a size in bytes that cannot
+    // come out negative whichever integer the platform counts blocks in.
+    file.metadata()
+        .map(|meta| i128::from(meta.blocks()) * 512 < i128::from(meta.len()))
+        .unwrap_or(true)
+}
+
+/// There is no block count to ask for off unix, so the length is all there is:
+/// see [`open_region`].
+#[cfg(not(unix))]
+fn is_sparse(_file: &File) -> bool {
+    false
+}
+
 /// Opens (creating if needed) and maps the claimed cache file; falls back to a
 /// heap region on any error. Returns `(region, use_mmap)`.
 ///
@@ -335,8 +361,19 @@ fn open_region(file: &mut File, path: &Path) -> (Region, bool) {
     // write fails; do the same.
     // What the file measured on entry: both whether it has to be
     // pre-allocated, and the length a failed pre-allocation puts it back to.
+    //
+    // Measuring the length is not enough on its own, though. A build before
+    // this one — and the C++ the port sits beside during a migration — made
+    // this file `BUFFER_BLOCK_LENGTH` long with `set_len` and wrote nothing
+    // into it, and that is a hole of exactly the length a later open would
+    // take for "already allocated". So the length says what the file claims
+    // and `st_blocks` says what the disk gave it, and a file whose blocks do
+    // not cover its length is a hole whatever it measures: pre-allocating
+    // over one costs a write of zeros that lands on bytes no record of ours
+    // is in — a hole holds nothing to lose — while mapping one is the SIGBUS
+    // above.
     let entry_len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
-    let needs_preallocation = entry_len < BUFFER_BLOCK_LENGTH as u64;
+    let needs_preallocation = entry_len < BUFFER_BLOCK_LENGTH as u64 || is_sparse(file);
     if file.set_len(BUFFER_BLOCK_LENGTH as u64).is_err() {
         return (Region::heap(), false);
     }
@@ -3230,6 +3267,38 @@ mod tests {
             "the file is a {BUFFER_BLOCK_LENGTH} byte hole otherwise, and the next open \
              maps it instead of pre-allocating it again"
         );
+    }
+
+    /// The other half of the same hole: a file that already measures the
+    /// block, which is what `set_len` of a build before this one left behind.
+    /// The length is what the file claims and the blocks are what it has, so
+    /// one that measures the whole block with nothing behind it is
+    /// pre-allocated like any other and not taken at its word.
+    #[cfg(unix)]
+    #[test]
+    fn a_cache_file_that_measures_the_block_but_holds_no_blocks_is_filled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("Mars.mmap3");
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        file.set_len(BUFFER_BLOCK_LENGTH as u64).unwrap();
+        assert!(is_sparse(&file), "a hole the length of the block");
+
+        let (region, use_mmap) = open_region(&mut file, &path);
+        drop(region);
+        assert!(!is_sparse(&file), "the hole got its blocks");
+        if use_mmap {
+            assert_eq!(
+                file.metadata().unwrap().len(),
+                BUFFER_BLOCK_LENGTH as u64,
+                "the pre-allocation writes the block and leaves it at the block"
+            );
+        }
     }
 
     #[test]
