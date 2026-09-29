@@ -999,8 +999,15 @@ impl ShortLink {
                 // quic has no hang-up to speak of: nothing came, so read again
                 return Read::Again;
             }
-            // the peer hung up, which a socket the pool handed out is not
-            // reported for: the C++ has already had its turn with that one
+            // A `Connection: close` answer with no `Content-Length` is ended
+            // *by* the hang-up — its body is however many bytes came before
+            // it — so the parser is asked before the run is called a failure.
+            // `Parser::peer_hung_up` is the only thing that ends one, and a
+            // read of nothing is the only thing that asks it.
+            if self.answer.recv(&[]) == RecvStatus::End {
+                return self.answered(socket);
+            } // the peer hung up, which a socket the pool handed out is not
+              // reported for: the C++ has already had its turn with that one
             let report = !self.profile.is_reused_fd;
             return self.over(
                 RunFail::Socket {
