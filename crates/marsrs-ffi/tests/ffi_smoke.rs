@@ -22,7 +22,7 @@ use mars_ffi::{
 /// Closes the appender when the test ends, even if it failed.
 ///
 /// The appender is a process-wide singleton that rejects a second
-/// `appender_open`, so a test that panics mid-way would otherwise poison every
+/// the open of an appender, so a test that panics mid-way would otherwise poison every
 /// test that runs after it.
 struct CloseOnDrop;
 impl Drop for CloseOnDrop {

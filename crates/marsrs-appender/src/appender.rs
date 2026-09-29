@@ -421,7 +421,7 @@ pub(crate) const MAX_CACHE_SLOTS: usize = 8;
 ///   copies of this crate in one process, which is the case the C++ cannot
 ///   tell apart either;
 /// * the lock held on it for the appender's lifetime is what a later
-///   [`crate::appender_oneshot_flush`] reads to tell a slot a *dead* process
+///   the recovery path that drains a dead process's cache reads to tell a slot a *dead* process
 ///   left behind from one a live writer is still using. Nothing else can: a
 ///   process that was killed leaves exactly the file a running one has.
 struct CacheSlot {

@@ -18,7 +18,7 @@
 //! | [`mars_xlog_set_console_log_instance`]  | `mars::xlog::appender_set_console_log(bool)`        |
 //! | [`mars_xlog_set_max_file_size_instance`]| `mars::xlog::appender_set_max_file_size(uint64_t)`  |
 //! | [`mars_xlog_set_max_alive_duration_instance`] | `mars::xlog::appender_set_max_alive_duration(long)` |
-//! | [`mars_xlog_current_log_path`]          | `mars::xlog::appender_get_current_log_path(char*,unsigned)` |
+//! | `mars_xlog_current_log_path_instance`  | the log directory of the appender of `instance`             |
 //!
 //! Every one of the instance symbols takes a handle, and `0` is the process-wide
 //! appender: the C++ it mirrors has a free function for that logger and a

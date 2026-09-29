@@ -5,7 +5,7 @@
 //! FFI crate downstream.
 //!
 //! What is checked is the shape an app sees, and it is three things: the
-//! [`Xlog`] an app holds, the process-wide `appender_open` / `appender_close`
+//! [`Xlog`] an app holds, the process-wide `appender_open` / the close of an appender
 //! the C ABI installs the default logger with, and the handle of
 //! [`marsrs_appender::category`] — a handle and not an object, because neither
 //! the C ABI nor JNI has one to hold. The write, the drain and the four setters

@@ -22,7 +22,7 @@
 //! Like the C++, every instance gets its own appender
 //! (`appender_open_instance`), so two prefixes can write to two directories
 //! with their own key, mode and cache file. Handle `0` keeps writing through
-//! the process-wide appender opened by `appender_open`.
+//! the process-wide appender opened by the open of an appender.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -185,7 +185,7 @@ impl XloggerCategory {
 /// the level does there is answer [`is_enabled_for`].
 ///
 /// `gs_level` also starts at `kLevelNone` and not at `kLevelVerbose`, so a
-/// process that only ever called `appender_open` answers `false` for
+/// process that only ever called the open of an appender answers `false` for
 /// [`LogLevel::Fatal`] and writes every record it is handed.
 fn write_default(info: Option<&XLoggerInfo>, log: Option<&str>) -> bool {
     let mut info = info.cloned();
@@ -307,7 +307,7 @@ pub(crate) fn target(handle: XloggerHandle) -> Target {
 
 /// Whether a live instance owns the cache file at `path`.
 ///
-/// `appender_oneshot_flush` asks this before it reads and unlinks
+/// the dead-cache recovery path asks this before it reads and unlinks
 /// `<prefix>.mmap3`: doing that to an instance that is mid-write loses
 /// everything the instance buffers afterwards.
 pub fn instance_owns_mmap_path(path: &std::path::Path) -> bool {

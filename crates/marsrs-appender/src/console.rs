@@ -9,7 +9,7 @@ use crate::config::XLoggerInfo;
 use crate::formater::{extract_file_name, extract_function_name, LEVEL_STRINGS};
 
 /// `mars::xlog::TConsoleFun` — where a console record goes instead of the
-/// built-in sink, handed to [`set_console_fun`].
+/// built-in sink, which is standard error on every platform.
 ///
 /// The C++ `TConsoleFun` is an Apple-only enum of three sinks of its own
 /// (`kConsolePrintf`, `kConsoleNSLog`, `kConsoleOSLog` — see

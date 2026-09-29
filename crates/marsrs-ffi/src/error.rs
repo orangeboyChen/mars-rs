@@ -1,7 +1,7 @@
 //! Return codes shared with `include/mars_xlog.h`.
 //!
 //! The C++ originals returned `void` for most of these calls and `bool` for
-//! `appender_get_current_log_path`; the C ABI needs a real error channel so a
+//! the current log path; the C ABI needs a real error channel so a
 //! host process can tell "not opened" from "success". The `#define`s in
 //! `mars_xlog.h` repeat these values verbatim, and `tests/header_sync.rs`
 //! asserts the pair stays in sync.

@@ -7,7 +7,7 @@
 //! family over an id of its own, and [`crate::category`] over a handle — and an
 //! app that wanted a second logger had to know which of the three to reach for.
 //! This is the one an app takes, and it covers all three: [`Xlog::open`] is the
-//! category's, registered under a prefix, and [`Xlog::open_unregistered`] is the
+//! category's, registered under a prefix, and an unregistered appender is the
 //! appender layer's, which is what a second writer over one prefix needs.
 //!
 //! ```no_run
@@ -28,7 +28,7 @@
 //! What is underneath is the plumbing and not the API: [`crate::category`] is
 //! the seam the C ABI and the JNI bridge are written over — a handle, because
 //! neither of the two has an object to hold — and the process-wide
-//! [`crate::appender_open`] is the one call that installs the appender handle
+//! the open of an appender is the one call that installs the appender handle
 //! `0` means. An app takes [`Xlog`] and has no reason to name either.
 //!
 //! Two things are the object's own. Every member is safe to call from any
@@ -90,7 +90,7 @@ pub struct Xlog {
     /// [`Xlog::close`] ran, which is the appender of every other `Xlog` of
     /// this prefix as well — and for an unregistered one from the start.
     handle: AtomicU64,
-    /// The appender of an [`Xlog::open_unregistered`]: an id no prefix is
+    /// The appender of an an unregistered appender: an id no prefix is
     /// registered for, which is what makes it a *second* writer over a prefix
     /// that already has one. `0` for every other `Xlog`.
     appender: AtomicU64,
@@ -200,7 +200,7 @@ impl Xlog {
     ///
     /// For an [`Xlog::open`] this is read from the category and not mirrored
     /// here, so a level another part of the app set is the one this answers
-    /// with. For an [`Xlog::open_unregistered`] there is no category to read,
+    /// with. For an an unregistered appender there is no category to read,
     /// so it is this object's own. `None` once this `Xlog` is closed.
     pub fn level(&self) -> Option<LogLevel> {
         match self.target()? {
@@ -460,7 +460,7 @@ impl Xlog {
     /// TypeScript answer no path at all, and the C++ only has the process-wide
     /// one. What wants it here is an upload path that reads the files back —
     /// `decode_log_file` and `marsrs-xlog`'s `xlog decode` both start from a
-    /// path, and `appender_getfilepath_from_timespan` is the one that names a
+    /// path, and a day's files is the one that names a
     /// day's.
     pub fn current_log_path(&self) -> Option<std::path::PathBuf> {
         match self.target()? {

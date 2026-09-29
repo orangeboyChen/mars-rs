@@ -49,7 +49,7 @@ pub enum LogLevel {
 
 /// `mars::xlog::TFileIOAction`.
 ///
-/// Reported by [`crate::appender_oneshot_flush`].
+/// Reported by the recovery path that drains a dead process's cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileIoAction {
     /// `kActionNone`
@@ -170,9 +170,9 @@ impl Default for XLoggerInfo<'_> {
     }
 }
 
-/// The error type of [`crate::appender_open`].
+/// The error type of the open of an appender.
 ///
-/// The C++ `appender_open` returns `void` and silently ignores failures; the
+/// The C++ the open of an appender returns `void` and silently ignores failures; the
 /// Rust port reports them instead.
 #[derive(Debug, Clone)]
 pub struct AppenderError(pub String);

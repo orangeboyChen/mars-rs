@@ -151,7 +151,7 @@ unsafe fn to_xlog_config(cfg: &MarsXLogConfig) -> Result<XLogConfig, c_int> {
     })
 }
 
-/// [`mars_xlog_current_log_path`] of one instance.
+/// The instance's spelling of the same question.
 ///
 /// The only spelling an app that holds an instance has: the process-wide
 /// question is about the appender the JNI bridge installs from Rust, and no
@@ -535,7 +535,7 @@ pub extern "C" fn mars_xlog_set_max_alive_duration_instance(
 /// [`MARS_XLOG_ERR_NO_PATH`].
 ///
 /// `prefix` and `log_dir` may be null (an empty `log_dir` yields no name at
-/// all). See [`mars_xlog_current_log_path`] for the `out` contract.
+/// all). See `mars_xlog_current_log_path_instance` for the `out` contract.
 ///
 /// # Safety
 ///
@@ -561,7 +561,7 @@ pub unsafe extern "C" fn mars_xlog_make_logfile_name_instance(
 /// `mars::xlog::appender_getfilepath_from_timespan` — the log files that
 /// *exist* for the day `timespan` days ago (0 = today).
 ///
-/// Same protocol as [`mars_xlog_make_logfile_name`]: walk `index` from `0`
+/// Same protocol as [`mars_xlog_make_logfile_name_instance`]: walk `index` from `0`
 /// until it answers [`MARS_XLOG_ERR_NO_PATH`].
 ///
 /// # Safety

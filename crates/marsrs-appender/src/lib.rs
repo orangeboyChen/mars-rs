@@ -22,7 +22,7 @@
 //! or writes, which is what the C++ does — `xlogger_appender` reads
 //! `sg_default_appender` without touching `sg_mutex`. Holding it across the
 //! write turned `N` logging threads into one; the clone cannot dangle, because
-//! a concurrent [`appender_close`] drops the slot's own reference and the
+//! a concurrent `close` drops the slot's own reference and the
 //! writer's keeps the appender (already closed, so the write is a no-op) alive.
 //! The C++ deletes the appender under a concurrent write instead.
 //!
@@ -43,7 +43,7 @@
 //! plumbing the other crates of the port are written over, and neither of them
 //! is an app's spelling of anything:
 //!
-//! * [`appender_open`] and [`appender_close`] install and drop the
+//! * the Rust `Xlog` installs and drops the
 //!   process-wide appender, which is what handle [`DEFAULT_HANDLE`] means. The
 //!   write, the drain and the four setters of that appender are *not* here:
 //!   they are [`category`]'s at [`DEFAULT_HANDLE`], which is one spelling and
@@ -51,7 +51,7 @@
 //! * [`category`] is the handle table the C ABI (`marsrs-ffi`) and the JNI
 //!   bridge (`marsrs-jni`) are written over — a handle and not an object,
 //!   because neither of the two has one to hold.
-//! * [`Xlog::open_unregistered`] opens an appender that no prefix is
+//! * an unregistered appender opens an appender that no prefix is
 //!   registered for: a prefix is one appender to [`category`], and two copies
 //!   of the library linked into one process — a React Native module beside the
 //!   Kotlin one — are two writers over one prefix, which is the one shape
@@ -79,7 +79,7 @@
 //!
 //! Everything else has a counterpart: the per-prefix instance table lives in
 //! [`category`], and the hex dump of a binary blob in [`xlogger_memory_dump`]
-//! (and its file-writing sibling [`xlogger_dump`]).
+//! (and its file-writing sibling, `xlogger_memory_dump`).
 
 // Only `appender::map_region` uses `unsafe` (memmap2 requires it); see the
 // SAFETY comment there. Everything else is safe Rust.
@@ -144,7 +144,7 @@ fn slot() -> &'static Mutex<Option<Arc<Appender>>> {
 
 /// How many times the slot has been filled or emptied.
 ///
-/// Bumped by `appender_open` / `appender_close`, so that [`current`] can tell
+/// Bumped by `appender_open` / the close of an appender, so that [`current`] can tell
 /// whether the appender it cached is still the open one with one shared atomic
 /// load instead of a turn through the slot's lock.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -193,11 +193,11 @@ fn current() -> Option<Arc<Appender>> {
 
 /// `XloggerAppender::NewInstance` — one appender per `XloggerCategory`, as in
 /// `mars/xlog/src/xlogger_interface.cc`. The process-wide default above stays
-/// what `appender_open` creates and what handle `0` writes through.
+/// what the open of an appender creates and what handle `0` writes through.
 static INSTANCES: OnceLock<Mutex<Instances>> = OnceLock::new();
 
 /// Opaque id of an appender created by `appender_open_instance` — the one
-/// [`Xlog::open_unregistered`] holds, and the one the `*_instance` calls take.
+/// an unregistered appender holds, and the one the `*_instance` calls take.
 pub type AppenderId = u64;
 
 struct Instances {
@@ -468,7 +468,7 @@ pub(crate) fn appender_set_mode(mode: AppenderMode) {
 
 /// `mars::xlog::appender_set_console_log`.
 ///
-/// Remembered even when no appender is open, so a later [`appender_open`]
+/// Remembered even when no appender is open, so a later one
 /// picks the setting up.
 pub(crate) fn appender_set_console_log(open: bool) {
     CONSOLE_LOG_OPEN.store(open, Ordering::Relaxed);
@@ -479,7 +479,7 @@ pub(crate) fn appender_set_console_log(open: bool) {
 
 /// `mars::xlog::appender_set_max_file_size`.
 ///
-/// Remembered for the next [`appender_open`] as well.
+/// Remembered for the next appender as well.
 pub(crate) fn appender_set_max_file_size(bytes: u64) {
     MAX_FILE_SIZE.store(bytes, Ordering::Relaxed);
     if let Some(appender) = current() {
