@@ -223,14 +223,16 @@ class Xlog(config: XlogConfig, context: Context? = null) {
      * [currentLogPath] answers is the directory, and this names the day's file in
      * it.
      */
-    fun logFiles(daysAgo: Long): List<String> = if (isOpen) logFiles(handle, daysAgo).toList() else emptyList()
+    fun logFiles(daysAgo: Long): List<String> =
+        if (isOpen) logFiles(handle, daysAgo).filterNotNull().toList() else emptyList()
 
     /**
      * The names of the log files of the day `daysAgo` days ago, whether or not
      * they are there yet — the name an app that is about to write, or that is
      * naming a file to someone else, asks for.
      */
-    fun logFileNames(daysAgo: Long): List<String> = if (isOpen) logFileNames(handle, daysAgo).toList() else emptyList()
+    fun logFileNames(daysAgo: Long): List<String> =
+        if (isOpen) logFileNames(handle, daysAgo).filterNotNull().toList() else emptyList()
 
     /** Writes a record of [level]. */
     fun log(level: LogLevel, tag: String, message: String) {
@@ -305,14 +307,18 @@ class Xlog(config: XlogConfig, context: Context? = null) {
      * of the app writes through, rather than its own.
      */
     fun close() {
-        if (!isOpen) {
-            return
-        }
-        // Before the handle goes: a callback left registered would be handed a
-        // closed [Xlog] by Android, and would find nothing to flush.
+        // The callback goes before the [isOpen] guard and not after it: `isOpen`
+        // is false once another `Xlog` of this prefix released the appender, and
+        // a callback left registered would be handed a closed one by Android, and
+        // would find nothing to flush. Two `Xlog`s of one prefix share the
+        // appender, so the second's `close` is the first's, and neither may keep
+        // a callback of their own.
         backgroundFlush?.let { registeredWith?.unregisterComponentCallbacks(it) }
         backgroundFlush = null
         registeredWith = null
+        if (!isOpen) {
+            return
+        }
         releaseXlogInstance(namePrefix)
         // The appender is the prefix's and not this wrapper's: `marsrs-jni`
         // answers an [Xlog] of the same prefix with the same handle, so every one

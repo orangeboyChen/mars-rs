@@ -5,15 +5,17 @@
 //! The appender they share is registered under one prefix, so the tests
 //! serialise on [`LOCK`].
 
-use std::ffi::CString;
+use std::ffi::{c_char, CString};
 use std::os::raw::c_int;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_ffi::abi::{
-    mars_xlog_flush_now_instance, mars_xlog_get_instance, mars_xlog_get_level,
-    mars_xlog_is_enabled_for, mars_xlog_new_instance, mars_xlog_release_instance,
-    mars_xlog_set_level_instance, mars_xlog_set_mode_instance, mars_xlog_write_instance,
-    MarsXLogConfig,
+    mars_xlog_current_log_path_instance, mars_xlog_flush_now_instance, mars_xlog_get_instance,
+    mars_xlog_get_level, mars_xlog_getfilepath_from_timespan_instance,
+    mars_xlog_is_enabled_for, mars_xlog_make_logfile_name_instance, mars_xlog_new_instance,
+    mars_xlog_release_instance, mars_xlog_set_level_instance, mars_xlog_set_mode_instance,
+    mars_xlog_write_instance, MarsXLogConfig, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE,
+    MARS_XLOG_ERR_NULL_OUT,
 };
 
 fn serial() -> MutexGuard<'static, ()> {
@@ -179,4 +181,95 @@ fn is_enabled_for_compares_the_raw_level() {
     assert_eq!(mars_xlog_is_enabled_for(0xdead_beef, 6), 0);
 
     mars_xlog_set_level_instance(0, 0);
+}
+
+/// The three questions about a file, asked of the instance that owns it: the
+/// directory it is writing into, and the day's files and names.
+///
+/// The walk is the C ABI's own protocol — one index at a time until it answers
+/// `MARS_XLOG_ERR_NO_PATH` — so it is pinned here too, along with the two
+/// buffer contracts: a null `out`, and one a path does not fit in.
+#[test]
+fn the_file_questions_are_answered_by_the_instance() {
+    let _guard = serial();
+    let dir = tempdir("files");
+    let config = make_config(&dir, 1, 1);   // sync, zstd: a record lands at once
+    let handle = unsafe { mars_xlog_new_instance(&config.raw, 2) };
+    assert!(handle > 0);
+
+    let tag = CString::new("Net").unwrap();
+    let message = CString::new("into the day's file").unwrap();
+    unsafe {
+        mars_xlog_write_instance(
+            handle,
+            2,
+            tag.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            message.as_ptr(),
+        );
+    }
+    mars_xlog_flush_now_instance(handle);
+
+    // The directory, and not the file: the C++'s `GetCurrentLogPath` hands back
+    // `sg_logdir`.
+    let mut buffer = [0u8; 1024];
+    let size = dir.to_str().unwrap().len();
+    let written = unsafe {
+        mars_xlog_current_log_path_instance(handle, buffer.as_mut_ptr().cast(), buffer.len() as u32)
+    };
+    assert_eq!(written as usize, size);
+    assert_eq!(&buffer[..size], dir.to_str().unwrap().as_bytes());
+
+    // Today's file, and nothing beside it.
+    let files = day_paths(handle, |instance, timespan, index, out, len| unsafe {
+        mars_xlog_getfilepath_from_timespan_instance(instance, timespan, index, out, len)
+    });
+    assert_eq!(files.len(), 1, "one record in one day is one file: {files:?}");
+    assert!(files[0].starts_with(&dir), "{files:?} is not in {dir:?}");
+
+    let names = day_paths(handle, |instance, timespan, index, out, len| unsafe {
+        mars_xlog_make_logfile_name_instance(instance, timespan, index, out, len)
+    });
+    assert_eq!(names, files, "a file that is there is its own name");
+
+    // A null `out`, and one a path does not fit in.
+    assert_eq!(
+        unsafe { mars_xlog_current_log_path_instance(handle, std::ptr::null_mut(), 1024) },
+        MARS_XLOG_ERR_NULL_OUT
+    );
+    assert_eq!(
+        unsafe { mars_xlog_current_log_path_instance(handle, buffer.as_mut_ptr().cast(), 3) },
+        MARS_XLOG_ERR_NO_SPACE
+    );
+
+    // A released appender answers nothing at all.
+    let mut after = [0u8; 1024];
+    unsafe { mars_xlog_release_instance(config.raw.name_prefix) };
+    let closed = unsafe {
+        mars_xlog_current_log_path_instance(handle, after.as_mut_ptr().cast(), after.len() as u32)
+    };
+    assert!(closed <= 0, "a released appender answered {closed}");
+}
+
+/// The index walk the two day-of-files symbols share: up to the first index
+/// they answer nothing for.
+fn day_paths(
+    handle: i64,
+    symbol: unsafe fn(i64, c_int, u32, *mut c_char, u32) -> c_int,
+) -> Vec<std::path::PathBuf> {
+    let mut walked = Vec::new();
+    let mut buffer = [0u8; 1024];
+    for index in 0..64u32 {
+        let written = unsafe { symbol(handle, 0, index, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
+        if written == MARS_XLOG_ERR_NO_PATH {
+            break;
+        }
+        assert!(written > 0, "index {index} answered {written}");
+        walked.push(std::path::PathBuf::from(
+            std::str::from_utf8(&buffer[..written as usize]).unwrap(),
+        ));
+    }
+    walked
 }

@@ -101,7 +101,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
      * there is nothing at that index: the list the C++ fills a `std::vector`
      * with, asked one at a time.
      */
-    private fun dayPaths(daysAgo: Long, read: (UInt, CPointer<ByteVar>, UInt) -> Int): List<String> {
+    private fun dayPaths(read: (UInt, CPointer<ByteVar>, UInt) -> Int): List<String> {
         val walked = mutableListOf<String>()
         var index = 0u
         while (true) {
@@ -122,7 +122,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
         }
 
     public actual fun logFiles(daysAgo: Long): List<String> = if (isOpen) {
-        dayPaths(daysAgo) { index, out, len ->
+        dayPaths { index, out, len ->
             mars_xlog_getfilepath_from_timespan_instance(handle, daysAgo.toInt(), index, out, len)
         }
     } else {
@@ -130,7 +130,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     }
 
     public actual fun logFileNames(daysAgo: Long): List<String> = if (isOpen) {
-        dayPaths(daysAgo) { index, out, len ->
+        dayPaths { index, out, len ->
             mars_xlog_make_logfile_name_instance(handle, daysAgo.toInt(), index, out, len)
         }
     } else {

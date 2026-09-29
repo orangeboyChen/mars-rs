@@ -35,6 +35,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReadableMap
+import com.facebook.react.bridge.WritableArray
 import io.github.orangeboychen.marsrs.xlog.AppenderMode
 import io.github.orangeboychen.marsrs.xlog.CompressMode
 import io.github.orangeboychen.marsrs.xlog.LogLevel
@@ -114,12 +115,14 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
     override fun currentLogPath(namePrefix: String): String? = appender(namePrefix)?.currentLogPath
 
     /** `Xlog.logFiles`: the day's files that are there. */
-    override fun logFiles(namePrefix: String, daysAgo: Double): ReadableArray? =
-        appender(namePrefix)?.logFiles(daysAgo.toLong())?.let { Arguments.fromList(it) } ?: Arguments.createArray()
+    override fun logFiles(namePrefix: String, daysAgo: Double): WritableArray? =
+        appender(namePrefix)?.logFiles(daysAgo.toLong())?.let { Arguments.fromList(it.filterNotNull()) }
+            ?: Arguments.createArray()
 
     /** `Xlog.logFileNames`: the day's names, whether or not they are there yet. */
-    override fun logFileNames(namePrefix: String, daysAgo: Double): ReadableArray? =
-        appender(namePrefix)?.logFileNames(daysAgo.toLong())?.let { Arguments.fromList(it) } ?: Arguments.createArray()
+    override fun logFileNames(namePrefix: String, daysAgo: Double): WritableArray? =
+        appender(namePrefix)?.logFileNames(daysAgo.toLong())?.let { Arguments.fromList(it.filterNotNull()) }
+            ?: Arguments.createArray()
 
     /** `Xlog.isLoggable`: whether a record of the level would be written. */
     override fun isLoggable(namePrefix: String, level: Double): Boolean =

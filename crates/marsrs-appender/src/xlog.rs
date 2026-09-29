@@ -55,10 +55,10 @@ use crate::file_util::now_timeval;
 use crate::flush::Flush;
 use crate::{
     appender_close_instance, appender_flush_instance, appender_flush_now_instance,
-    appender_get_current_log_path_instance, appender_getfilepath_from_timespan,
-    appender_make_logfile_name, appender_request_flush_instance, appender_set_console_log_instance,
-    appender_set_max_alive_duration_instance, appender_set_max_file_size_instance,
-    appender_set_mode_instance, appender_write_instance, AppenderId,
+    appender_get_current_log_path_instance, appender_request_flush_instance,
+    appender_set_console_log_instance, appender_set_max_alive_duration_instance,
+    appender_set_max_file_size_instance, appender_set_mode_instance, appender_write_instance,
+    current_log_file_names, current_log_files, AppenderId,
 };
 
 /// An appender of an app's own: build one when the app starts, then write
@@ -95,10 +95,6 @@ pub struct Xlog {
     /// that already has one. `0` for every other `Xlog`.
     appender: AtomicU64,
     name_prefix: String,
-    /// The directory this appender writes into: what [`Xlog::log_files`] and
-    /// [`Xlog::log_file_names`] name a day out of, which is the prefix's other
-    /// half and not something an app should have to hand them twice.
-    log_dir: std::path::PathBuf,
     /// The level of an unregistered `Xlog`, which has no category to keep one:
     /// a category is what a prefix is registered under, and this one has no
     /// prefix. Every other `Xlog` reads its level from the category instead.
@@ -158,7 +154,6 @@ impl Xlog {
             handle: AtomicU64::new(handle),
             appender: AtomicU64::new(0),
             name_prefix: config.nameprefix.clone(),
-            log_dir: config.logdir.clone(),
             level: AtomicU8::new(level as u8),
             mode: AtomicU8::new(config.mode as u8),
             console_log_enabled: AtomicBool::new(false),
@@ -167,23 +162,6 @@ impl Xlog {
         })
     }
 
-    /// Opens an appender that is *not* registered under `config.nameprefix`:
-    /// what [`Xlog::open`] cannot answer, because a prefix is one appender to
-    /// the registry and that call hands back the one that is already open.
-    ///
-    /// This is the second writer over one prefix — two copies of this library
-    /// linked into one process, a React Native module beside the Kotlin one, or
-    /// the JNI and the Kotlin side both opening. Each gets a cache file of its
-    /// own and both reach the same log file, which is what
-    /// `tests/cross_writer.rs` holds the line on.
-    ///
-    /// What it does not have is a category, and so no shared level: the level is
-    /// this object's own, the way a mode or a size is, and two writers of one
-    /// prefix answer [`Xlog::level`] differently.
-    ///
-    /// # Errors
-    ///
-    /// The same two as [`Xlog::open`], plus whatever the appender refuses.
     /// What every file of this appender starts with, and what it is known by.
     pub fn name_prefix(&self) -> &str {
         &self.name_prefix
@@ -477,7 +455,10 @@ impl Xlog {
     /// [`Xlog::current_log_path`] answers is one, and this is this appender's
     /// own prefix and its own directory.
     pub fn log_files(&self, days_ago: i64) -> Vec<std::path::PathBuf> {
-        appender_getfilepath_from_timespan(days_ago, &self.name_prefix, &self.log_dir)
+        match self.target() {
+            Some(Target::Category(handle)) => current_log_files(handle, days_ago),
+            Some(Target::Appender(_)) | None => Vec::new(),
+        }
     }
 
     /// The names of the log files of the day `days_ago` days ago, whether or
@@ -488,7 +469,10 @@ impl Xlog {
     /// and the file exists, its cache-dir twin, so this can answer two where
     /// [`Xlog::log_files`] answers one.
     pub fn log_file_names(&self, days_ago: i64) -> Vec<std::path::PathBuf> {
-        appender_make_logfile_name(days_ago, &self.name_prefix, &self.log_dir)
+        match self.target() {
+            Some(Target::Category(handle)) => current_log_file_names(handle, days_ago),
+            Some(Target::Appender(_)) | None => Vec::new(),
+        }
     }
 }
 
