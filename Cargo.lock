@@ -521,6 +521,7 @@ name = "marsrs-compat"
 version = "0.1.0"
 dependencies = [
  "marsrs-buffer",
+ "marsrs-comm",
  "marsrs-core",
  "marsrs-crypt",
  "marsrs-stn",
