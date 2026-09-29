@@ -59,7 +59,8 @@ pub const LONGLINKPACK_FALSE: i32 = 1;
 pub const HEAD_LEN: usize = 16;
 /// `ver` of every package, the only one there ever was.
 pub const VER: u8 = 0x1;
-/// `strnlen(_url, 128)` — a URL longer than this is packed without its tail.
+/// `strnlen(_url, 128)` — a URL longer than this is packed without its tail,
+/// and one with a NUL in it is packed up to it.
 pub const MAX_URL_LEN: usize = 128;
 /// A package bigger than this is refused — the C++'s `1024 * 1024`.
 pub const MAX_PACKAGE_LEN: usize = 1024 * 1024;
@@ -245,6 +246,17 @@ pub fn packer_pack(url: &str, sequence: u32, data: &[u8], do_hash: bool) -> Vec<
 /// long the whole package is, so a caller can wait for the rest of it; the
 /// bytes before [`HEAD_LEN`] are not a header yet and the ones after a whole
 /// package are the next one's.
+///
+/// Two readings are the port's and not the C++'s, and both are kept:
+///
+/// - A URL that is not UTF-8 is read with [`String::from_utf8_lossy`], where
+///   `std::string::assign` keeps the bytes it was given. A URL is a cgi path
+///   of ASCII, and a lossy one is a string a caller can put in a log.
+/// - A package that is refused answers [`PackerUnpacked::Refused`] with why
+///   and nothing else. The C++ has written the URL, the sequence and the
+///   length into the caller's variables long before it comes to the hash, so
+///   the one refusal it answers *with* them is the hash's — which is a
+///   caller reading fields out of a package it was told is no good.
 pub fn packer_unpack(raw: &[u8]) -> PackerUnpacked {
     if raw.len() < HEAD_LEN {
         return PackerUnpacked::Continue;
