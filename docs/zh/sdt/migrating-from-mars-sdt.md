@@ -3,7 +3,7 @@
 跑过 C++ 项目网络诊断的 App 有一件事要挪：什么是探测。一次诊断在 C++ 和这里是同样
 三步 —— 说出 hosts 和检查项、跑、取报告 —— 报告也是同一个 `{"details":[ … ]}` 文
 档，一项检查一个对象，里面是同样的 `detectType`、`errorCode` 和那些耗时，所以今天
-读报告的那个东西读得懂这份。
+已经在读报告的东西，这份也读得懂。
 
 | 你用的那一块 | 这里拿什么 | 写在哪一页 |
 |---|---|---|
@@ -27,7 +27,7 @@ mode 是同一套 bit —— 先 ping 和 DNS，再 TCP，再 net-check CGI 的�
 ## App 接过去的那两件事
 
 **探测是 App 的。** C++ 把自己的 socket 链进那些 checker，所以那边的一次诊断只能对
-着平台自己的网络跑。这里一项检查是这一趟问你的一個问题 —— 要解析的一个域名、要连的
+着平台自己的网络跑。这里一项检查是这一趟问你的一个问题 —— 要解析的一个域名、要连的
 一个 ip 和端口、要取的一个 URL、要 ping 的一个 host —— 你回答什么，报告就记下什么。
 在 Android 和共享 Kotlin 上，这是你交给 `runChecks` 的那个 `IProbe`；在 Rust 里是那
 个 `Ask`；在 Swift 和 C 里是那个闭包。见[探测](/zh/sdt/probes)。
@@ -42,7 +42,7 @@ mode 是同一套 bit —— 先 ping 和 DNS，再 TCP，再 net-check CGI 的�
 ## 接着看
 
 - [快速开始](/zh/sdt/getting-started) —— 每个带着 SDT 的平台上的依赖和一整趟诊断。
-- [从 mars-xlog 迁移](/zh/xlog/migrating-from-mars-xlog) —— 日志，给诊断不是它唯一
-  拿的那块的应用。
+- [从 mars-xlog 迁移](/zh/xlog/migrating-from-mars-xlog) —— 日志，给那些除了诊断
+  还拿了别的东西的应用。
 - [从 mars-stn 迁移](/zh/stn/migrating-from-mars-stn) —— 任务链路，和诊断在同一个
   包里。

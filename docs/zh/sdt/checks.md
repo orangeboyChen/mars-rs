@@ -12,14 +12,14 @@
 | 对着另一个服务器做的 dns，用来比 | `NetCheckType::NewDnsCheck` | `.newDns` | `Check.NewDns` | `2` | `MarsSdtCheckNewDns` |
 | tcp | `NetCheckType::TcpCheck` | `.tcp` | `Check.Tcp` | `3` | `MarsSdtCheckTcp` |
 | http | `NetCheckType::HttpCheck` | `.http` | `Check.Http` | `4` | `MarsSdtCheckHttp` |
-| traceroute —— 有计划，还没有问它的探测 | `NetCheckType::TracerouteCheck` | `.traceroute` | `Check.Traceroute` | `5` | `MarsSdtCheckTraceroute` |
+| traceroute —— 有计划，但还没有探测问它 | `NetCheckType::TracerouteCheck` | `.traceroute` | `Check.Traceroute` | `5` | `MarsSdtCheckTraceroute` |
 | 请求自己的 buffer —— 同上 | `NetCheckType::ReqBufCheck` | `.reqBuf` | `Check.ReqBuf` | `6` | `MarsSdtCheckReqBuf` |
 
 ## mode 由哪些 bit 组成
 
 | 那个 bit | Rust | 共享 Kotlin、Android | Swift、C | 它往计划里放什么 |
 |---|---|---|---|---|
-| `NET_CHECK_BASIC` | `NET_CHECK_BASIC` | `CheckMode.K_BASIC` | `1` | 一次 ping 和一次 dns —— C++ 开头跑的那两项 |
+| `NET_CHECK_BASIC` | `NET_CHECK_BASIC` | `CheckMode.K_BASIC` | `1` | 一次 ping 和一次 dns —— C++ 最先跑的就是这两项 |
 | `NET_CHECK_LONG` | `NET_CHECK_LONG` | `K_LONG` | `2` | 一次 tcp：往长连接的 hosts 发一个 noop |
 | `NET_CHECK_SHORT` | `NET_CHECK_SHORT` | `K_SHORT` | `4` | 一次 http：那个 net-check CGI，以及短连接的 hosts |
 
