@@ -353,19 +353,21 @@ MarsXLogConfig config = {
     .name_prefix = "marsrs",
     .compress_mode = MarsCompressZlib,
 };
-if (mars_xlog_open(&config) != MARS_XLOG_OK) { /* see the return code */ }
+long long xlog = mars_xlog_new_instance(&config, MarsLevelVerbose);
+if (xlog == 0) { /* the config was refused */ }
 
-mars_xlog_write(MarsLevelInfo, "startup", __FILE__, __func__, __LINE__, "hello from mars");
-
-mars_xlog_flush_now_instance(0);  /* the records are on disk when this returns */
-mars_xlog_close();
+mars_xlog_write_instance(xlog, MarsLevelInfo, "startup", __FILE__, __func__, __LINE__,
+                         "hello from mars");
+mars_xlog_flush_now_instance(xlog);  /* the records are on disk when this returns */
+mars_xlog_release_instance("marsrs");
 ```
 
 Every pointer in `MarsXLogConfig` has to be NUL-terminated UTF-8 or `NULL`;
-`NULL` is "empty", except for `log_dir`, which is mandatory. `mars_xlog_open`
-installs one process-wide appender, which `mars_xlog_write` writes through. A
-second one is `mars_xlog_new_instance(&config, level)`, which answers `0` when it
-refuses the config; the `*_instance` calls take the handle it answered.
+`NULL` is "empty", except for `log_dir`, which is mandatory. What an app holds
+is an **instance**: `mars_xlog_new_instance(&config, level)` answers its handle,
+or `0` when it refuses the config, and every `*_instance` call takes that
+handle. There is no process-wide appender to open from C — an app that wants a
+second logger gives it a second prefix.
 
 ```bash
 cc -I include -o app app.c libmars_ffi.a -lpthread -ldl     # static

@@ -22,9 +22,14 @@ Linux.
 
 - `MarsXLogConfig`, zeroed with `memset`: every default of the C++'s own struct
   is `0`, so a config is filled field by field and not built by a constructor.
-- `mars_xlog_write(level, tag, __FILE__, __func__, __LINE__, message)` — where a
-  record was written goes *in* the record, and C is the one language that has to
-  spell all three out.
-- `mars_xlog_current_log_path` — the directory the process-wide appender writes
-  into, which is what the C ABI's `mars_xlog_open` opened.
+- `mars_xlog_new_instance(&config, level)` — the appender this program holds,
+  and the handle every call below is asked of. There is no process-wide
+  appender to open from C: an app gets an instance, the way it gets an `Xlog`
+  in Rust and in Kotlin.
+- `mars_xlog_write_instance(handle, level, tag, __FILE__, __func__, __LINE__,
+  message)` — where a record was written goes *in* the record, and C is the one
+  language that has to spell all three out.
+- `mars_xlog_current_log_path_instance` — the directory that instance writes
+  into. It takes the handle, unlike `mars_xlog_current_log_path`, which can
+  only answer for a process-wide appender a C caller never opened.
 - `mars_xlog_getfilepath_from_timespan` — the file of one day.

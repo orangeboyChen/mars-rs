@@ -13,11 +13,10 @@ use std::path::Path;
 use std::sync::{Mutex, RwLock};
 
 use marsrs_appender::{
-    appender_close, appender_get_current_log_path, appender_open,
-    category_set_max_alive_duration as set_max_alive_duration,
+    appender_get_current_log_path, category_set_max_alive_duration as set_max_alive_duration,
     category_set_max_file_size as set_max_file_size, current_log_path, flush_now, flush_now_all,
     set_console_fun, set_console_log_open, set_level, signal_flush, signal_flush_all,
-    xlogger_assert, AppenderMode, ConsoleFun, LogLevel, XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
+    xlogger_assert, AppenderMode, ConsoleFun, LogLevel, XLogConfig, XLoggerInfo,
 };
 use marsrs_buffer::CompressMode;
 
@@ -89,46 +88,6 @@ pub struct MarsXLogConfig {
     pub cache_days: c_int,
 }
 
-/// `mars::xlog::appender_open(const XLogConfig&)`.
-///
-/// Opens the process-wide appender. `config` may be null (the call is then a
-/// no-op that reports [`MARS_XLOG_ERR_NULL_CONFIG`]); every string in it may
-/// also be null, in which case it is treated as empty.
-///
-/// @return [`MARS_XLOG_OK`] on success, otherwise a negative
-/// `MARS_XLOG_ERR_*` code.
-///
-/// # Safety
-///
-/// `config` must be null, or point to an initialised `MarsXLogConfig` that stays alive for the
-/// duration of the call; every `char*` in it must be null or a NUL-terminated string.
-#[no_mangle]
-pub unsafe extern "C" fn mars_xlog_open(config: *const MarsXLogConfig) -> c_int {
-    guard(MARS_XLOG_ERR_PANIC, || {
-        // SAFETY: `config` may be null (checked inside `ptr_to_ref`); otherwise
-        // the caller guarantees a valid, aligned, initialised `MarsXLogConfig`
-        // that stays alive for the duration of this call.
-        let Some(cfg) = (unsafe { cstr::ptr_to_ref(config) }) else {
-            return MARS_XLOG_ERR_NULL_CONFIG;
-        };
-        // SAFETY: `cfg` is the caller's valid config, as above.
-        let rust_config = match unsafe { to_xlog_config(cfg) } {
-            Ok(config) => config,
-            Err(code) => return code,
-        };
-
-        match appender_open(rust_config) {
-            Ok(()) => MARS_XLOG_OK,
-            Err(err) => {
-                // The C++ returned `void` here and silently did nothing; surfacing
-                // the reason on stderr is the only diagnostic a host process gets.
-                eprintln!("[marsrs-ffi] appender_open failed: {err}");
-                MARS_XLOG_ERR_APPENDER
-            }
-        }
-    })
-}
-
 /// The Rust config behind a C one, or the `MARS_XLOG_ERR_*` code that makes it
 /// unusable: a mode outside [`MarsAppenderMode`], a compress mode outside
 /// [`MarsCompressMode`], or an empty `log_dir`.
@@ -193,78 +152,9 @@ unsafe fn to_xlog_config(cfg: &MarsXLogConfig) -> Result<XLogConfig, c_int> {
     })
 }
 
-/// `mars::xlog::XloggerWrite(...)` (xlogger_interface.h) plus the
-/// `xlogger_IsEnabledFor` gate that `Java2C_Xlog.cc::logWrite` performs before
-/// it.
-///
-/// `tag`, `filename`, `func_name` and `message` may be null; null and invalid
-/// UTF-8 become an empty string. The record is dropped when `level` is outside
-/// `MarsLevelVerbose..=MarsLevelFatal` (that is what C++ `kLevelNone` means) or
-/// below the level set for handle `0` by [`mars_xlog_set_level_instance`].
-///
-/// # Safety
-///
-/// `tag`, `filename`, `func_name` and `message` must each be null, or a NUL-terminated C string
-/// that stays alive for the duration of the call.
-#[no_mangle]
-pub unsafe extern "C" fn mars_xlog_write(
-    level: c_int,
-    tag: *const c_char,
-    filename: *const c_char,
-    func_name: *const c_char,
-    line: c_int,
-    message: *const c_char,
-) {
-    guard((), || {
-        // A record of a level that is not `Verbose..=Fatal` — `kLevelNone`, or
-        // a negative one — is dropped, the way `xlogger_IsEnabledFor` answers
-        // for it.
-        let Some(level) = to_log_level(level) else {
-            return;
-        };
-        if !enabled_for(DEFAULT_HANDLE, level as c_int) {
-            return;
-        }
-
-        // SAFETY: each pointer is null-checked inside the helper and otherwise
-        // points to a caller-owned NUL-terminated string.
-        let (tag, filename, func_name, message) = unsafe {
-            (
-                cstr::ptr_to_str_or_empty(tag),
-                cstr::ptr_to_str_or_empty(filename),
-                cstr::ptr_to_str_or_empty(func_name),
-                cstr::ptr_to_str_or_empty(message),
-            )
-        };
-
-        let info = XLoggerInfo {
-            level,
-            tag: opt_string(tag),
-            filename: opt_string(filename),
-            func_name: opt_string(func_name),
-            line,
-            pid: state::pid(),
-            tid: state::tid(),
-            maintid: state::main_tid(),
-            timeval: state::now_timeval(),
-            trace_log: 0,
-        };
-
-        // The appender returns whether anything was written; a C caller has no
-        // channel for it (the C++ `xlogger_AssertP` family did not check either).
-        //
-        // Handle `0` and not `appender_write`: the process-wide appender's own
-        // free function is the plumbing this crate is one layer above, and what
-        // the C ABI says handle `0` is, is that appender — so this is the same
-        // write every `mars_xlog_write_instance(0, …)` does, and one spelling
-        // for it in the crate rather than two.
-        let _written = marsrs_appender::xlogger_write(DEFAULT_HANDLE, Some(&info), Some(message));
-    });
-}
-
 /// `xlogger_Assert` of `mars/comm/xlogger/xloggerbase.h` — the record an
-/// assert writes, with the flattened fields [`mars_xlog_write`] takes instead
-/// of an `XLoggerInfo`.
+/// assert writes, with the flattened fields [`mars_xlog_write_instance`] takes
+/// instead of an `XLoggerInfo`.
 ///
 /// The record is `kLevelFatal` and its body is `[ASSERT(<expression>)]`
 /// followed by `message`. No level is asked: `xloggerbase.h` writes "no level
@@ -319,16 +209,10 @@ pub unsafe extern "C" fn mars_xlog_assert(
     });
 }
 
-/// `mars::xlog::appender_close()`.
-#[no_mangle]
-pub extern "C" fn mars_xlog_close() {
-    guard((), appender_close);
-}
-
 /// `mars::xlog::TConsoleFun` as a C callback — where a console record goes
 /// instead of the built-in sink, which is stderr on every platform here.
 ///
-/// The fields are the ones [`mars_xlog_write`] takes, because that is all a C
+/// The fields are the ones [`mars_xlog_write_instance`] takes, because that is all a C
 /// caller has ever been handed: the C++ keeps an `XLoggerInfo` and the header
 /// keeps the same fields one by one. The record is handed over unformatted,
 /// so what a console record looks like on the platform is the callback's
@@ -584,8 +468,7 @@ fn path_to_bytes(path: &Path) -> Vec<u8> {
 
 /// Creates a logger instance with its own appender.
 ///
-/// This is the C counterpart of `mars::xlog::NewXloggerInstance`: unlike
-/// [`mars_xlog_open`], which configures the single process-wide appender, each
+/// This is the C counterpart of `mars::xlog::NewXloggerInstance`: each
 /// instance gets its own log directory, prefix, key, mode and cache file.
 ///
 /// Returns the instance handle, or `0` when `config` is null / invalid or the
@@ -657,8 +540,7 @@ pub unsafe extern "C" fn mars_xlog_release_instance(name_prefix: *const c_char) 
 /// A non-zero instance's own level decides: a record below it is dropped, and a
 /// handle that is not one writes nothing. `0` is the C++'s `xlogger_Write`,
 /// which filters nothing — the level [`mars_xlog_set_level_instance`] set for
-/// `0` is the one
-/// [`mars_xlog_is_enabled_for`] answers from and [`mars_xlog_write`] asks.
+/// `0` is the one [`mars_xlog_is_enabled_for`] answers from.
 ///
 /// # Safety
 ///
