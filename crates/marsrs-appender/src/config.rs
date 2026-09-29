@@ -28,9 +28,12 @@ pub enum AppenderMode {
     ///
     /// A sync record's body is stored **in the clear whatever `pub_key`
     /// says**: `LogCrypt::CryptSyncLog` has its TEA loop commented out in the
-    /// C++ and the port kept that, so a sync record is byte-identical to one
-    /// written with no key at all — header magic included. Opening in this
-    /// mode with a `pub_key` logs a line that says so at the top of the file.
+    /// C++ and the port kept that, so a sync record's body is byte-identical
+    /// to one written with no key at all. Its header is not — it goes out
+    /// under the "crypt" magic and carries the 64-byte client public key —
+    /// so what a reader without the key holds is a plaintext body under a
+    /// header that says it is encrypted. Opening in this mode with a
+    /// `pub_key` logs a line that says so at the top of the file.
     Sync,
 }
 

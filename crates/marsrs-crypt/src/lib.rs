@@ -405,7 +405,10 @@ impl LogCrypt {
     /// `out`, fills in header + payload + tailer and returns the total count.
     ///
     /// The body is always stored in the clear: the C++ has the TEA loop
-    /// commented out, so sync records are byte-identical to the no-crypt path.
+    /// commented out, so a sync record's body is byte-identical to the
+    /// no-crypt path. Its header is not — the record goes out under the
+    /// "crypt" magic and carries the client public key, which is what
+    /// [`Self::set_header_info`] writes whatever `is_async` is.
     pub fn crypt_sync_log(
         &mut self,
         log_data: &[u8],
