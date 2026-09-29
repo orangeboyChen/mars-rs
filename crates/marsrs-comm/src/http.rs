@@ -1156,15 +1156,40 @@ fn to_status_code(text: &str) -> i32 {
 
 /// What `strtol` reads out of a token: the number at the front of it, and
 /// `0` when there is none.
+///
+/// Two things the C++ gets from `strtol` and a plain parse does not, and
+/// both are reachable from a `Range` field — the whitespace `strtol` skips
+/// before the number (`bytes=0- 1024`) and the top of the `long` it answers
+/// when the number does not fit in one, which is `0` in a parse that fails.
 fn to_i64(text: &str) -> i64 {
+    let text = text.trim_start_matches([' ', '\t', '\n', '\x0b', '\x0c', '\r']);
     let (sign, rest) = match text.as_bytes().first() {
         Some(b'-') => (-1, &text[1..]),
         Some(b'+') => (1, &text[1..]),
         _ => (1, text),
     };
     let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    let value = digits.parse::<i64>().unwrap_or(0);
-    sign * value
+    if digits.is_empty() {
+        return 0;
+    }
+    match digits.parse::<i64>() {
+        Ok(value) => {
+            if sign < 0 {
+                -value
+            } else {
+                value
+            }
+        }
+        // `LONG_MAX` and `LONG_MIN`, and not `0`: a range the peer wrote
+        // past the end of a `long` is one it meant to reach the end with
+        Err(_) => {
+            if sign < 0 {
+                i64::MIN
+            } else {
+                i64::MAX
+            }
+        }
+    }
 }
 
 /// What `strtoull` reads out of a token: the digits at the front of it.
@@ -1442,6 +1467,14 @@ mod tests {
         assert_eq!(fields.range(), Some((0, 100)));
         fields.set(RANGE, "0-1024");
         assert_eq!(fields.range(), None, "not `bytes=`");
+
+        // what `strtol` reads, and a plain parse does not
+        fields.set(RANGE, "bytes=0- 1024");
+        assert_eq!(fields.range(), Some((0, 1024)));
+        fields.set(RANGE, "bytes=0-99999999999999999999");
+        assert_eq!(fields.range(), Some((0, i64::MAX)));
+        fields.set(RANGE, "bytes=0--99999999999999999999");
+        assert_eq!(fields.range(), Some((0, i64::MIN)));
 
         let content_range = ContentRange {
             start: 0,
