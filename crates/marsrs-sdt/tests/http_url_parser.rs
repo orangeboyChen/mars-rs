@@ -73,6 +73,23 @@ fn the_scheme_and_nothing_else_is_not_a_url() {
 }
 
 #[test]
+fn the_slash_the_search_starts_past_is_the_host() {
+    // `ci_find_substr(url_, "/", schema_start + 1)` starts one byte past the
+    // scheme, so the `/` standing right behind it is not the one it finds:
+    // `http:///x` reads the host as `/x`, and `http:////x` — one slash further
+    // on — reads it as `/`
+    let url = HttpUrlParser::new("http:///x");
+    assert_eq!(url.host(), "/x");
+    assert_eq!(url.port(), 80);
+    assert_eq!(url.path(), "/");
+
+    let url = HttpUrlParser::new("http:////x");
+    assert_eq!(url.host(), "/");
+    assert_eq!(url.port(), 80);
+    assert_eq!(url.path(), "/x");
+}
+
+#[test]
 fn the_user_info_of_a_url_is_not_the_host() {
     // `user:pwd@host` — the host is what comes after the `@`, and the port is
     // read after it, not after the colon of the password
@@ -80,6 +97,23 @@ fn the_user_info_of_a_url_is_not_the_host() {
     assert_eq!(url.host(), "1.2.3.4");
     assert_eq!(url.port(), 8080);
     assert_eq!(url.path(), "/x");
+}
+
+#[test]
+fn the_colons_of_an_ipv6_host_are_not_the_port() {
+    // `ci_find_substr(hoststr, ":", host_start)` finds the first colon, which
+    // in `[::1]:8080` is one of the address's — the C++ reads `[` as the host
+    // and leaves the port at 80, so a bracketed host is skipped here
+    let url = HttpUrlParser::new("http://[::1]:8080/x");
+    assert_eq!(url.host(), "[::1]");
+    assert_eq!(url.port(), 8080);
+    assert_eq!(url.path(), "/x");
+
+    // and an address that names no port is the default one, not the `1` of
+    // the address
+    let url = HttpUrlParser::new("http://[::1]/x");
+    assert_eq!(url.host(), "[::1]");
+    assert_eq!(url.port(), 80);
 }
 
 #[test]
@@ -127,6 +161,24 @@ fn the_url_and_the_host_it_was_read_from_are_trimmed() {
     // a URL of nothing but whitespace is one with no scheme
     assert_eq!(HttpUrlParser::new(" \t\r\n").host(), "");
     assert_eq!(HttpUrlParser::new("").host(), "");
+}
+
+#[test]
+fn a_host_that_is_not_ascii_is_read_all_the_same() {
+    // `ci_find_substr(url_, "/", schema_start + 1)` starts one byte past the
+    // scheme, and a host need not be ASCII: `é` is two bytes, so the byte the
+    // search starts at is in the middle of a character and not a boundary a
+    // slice may be taken at
+    let url = HttpUrlParser::new("http://éxample.com/x");
+    assert_eq!(url.host(), "éxample.com");
+    assert_eq!(url.port(), 80);
+    assert_eq!(url.path(), "/x");
+
+    // the port and the path are read out of it the same way
+    let url = HttpUrlParser::new("http://éxample.com:8080/x");
+    assert_eq!(url.host(), "éxample.com");
+    assert_eq!(url.port(), 8080);
+    assert_eq!(url.path(), "/x");
 }
 
 #[test]

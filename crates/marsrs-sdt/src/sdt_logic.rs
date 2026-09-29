@@ -7,7 +7,7 @@
 use crate::checkimpl::Ask;
 use crate::constants::{NET_CHECK_BASIC, NET_CHECK_LONG, NET_CHECK_SHORT};
 use crate::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
-use crate::sdt::{Callback, CheckIPPorts, NetCheckType};
+use crate::sdt::{Callback, CheckIPPorts, NetCheckStatus, NetCheckType};
 use crate::sdt_core::{CancelHandle, SdtCore};
 
 /// Which checks a diagnosis runs — the `mode` of the C++, named instead of
@@ -202,6 +202,27 @@ impl SdtLogic {
     /// Whether a check is in flight.
     pub fn is_checking(&self) -> bool {
         self.core.is_checking()
+    }
+
+    /// `netcheck_status_` — where the diagnosis as a whole is:
+    /// [`NetCheckStatus::Checking`] while a request is in flight,
+    /// [`NetCheckStatus::CheckEnd`] once a run is over, and
+    /// [`NetCheckStatus::None`] before the first one.
+    ///
+    /// A listener that was handed results asks for this and for
+    /// [`SdtLogic::is_cancelled`] together: `CheckEnd` of a cancelled run is a
+    /// diagnosis that was cut short, whose results are the ones the checks
+    /// before the cancel recorded — not one that ended on its own, and not
+    /// something the results themselves say.
+    pub fn status(&self) -> NetCheckStatus {
+        self.core.status()
+    }
+
+    /// Whether the request was cancelled: what makes
+    /// [`NetCheckStatus::CheckEnd`] a truncated diagnosis rather than a
+    /// finished one.
+    pub fn is_cancelled(&self) -> bool {
+        self.core.is_cancelled()
     }
 
     /// Runs the checks of the request — one `do_check` per planned check, in

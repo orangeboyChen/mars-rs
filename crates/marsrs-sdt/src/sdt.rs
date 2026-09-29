@@ -195,8 +195,20 @@ impl CollectingCallback {
     }
 
     /// Everything that was reported so far.
+    ///
+    /// The report is kept: a listener that asks twice is told the same
+    /// results twice. [`CollectingCallback::take`] is the one that empties it.
     pub fn results(&self) -> Vec<CheckResultProfile> {
         self.results.borrow().clone()
+    }
+
+    /// What was reported since the last take, and nothing left behind: a
+    /// listener that is asked for its results more than once — a seam that
+    /// hands a report over and then drops what it handed — would otherwise be
+    /// told the same results twice, and a long-lived one would keep every
+    /// result of every run it was told about.
+    pub fn take(&self) -> Vec<CheckResultProfile> {
+        self.results.take()
     }
 
     /// How many results were reported.

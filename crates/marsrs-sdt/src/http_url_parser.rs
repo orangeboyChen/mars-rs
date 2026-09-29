@@ -114,20 +114,38 @@ impl HttpUrlParser {
         }
 
         // `ci_find_substr(url_, "/", schema_start + 1)` — the first `/` after
-        // the scheme ends the host
-        let scheme_end = self.url[scheme_start + 1..]
-            .find('/')
+        // the scheme ends the host. It is looked for in the bytes and not in a
+        // slice of the URL: a host need not be ASCII, and the byte the C++
+        // starts searching at is not a boundary a slice may be taken at —
+        // `http://éxample.com/x` starts its host with two bytes.
+        let scheme_end = self.url.as_bytes()[scheme_start + 1..]
+            .iter()
+            .position(|byte| *byte == b'/')
             .map_or(self.url.len(), |at| scheme_start + 1 + at);
         let hoststr = trim(&self.url[scheme_start..scheme_end]);
 
         // `ci_find_substr(hoststr, "@", 0)` — `user:pwd@host`, and the host is
         // what comes after the `@`
         let host_start = hoststr.find('@').map_or(0, |at| at + 1);
+        let hoststr_rest = &hoststr[host_start..];
 
         // `ci_find_substr(hoststr, ":", host_start)` — a port, unless the URL
-        // ends in a colon and names none
-        let (host, port) = match hoststr[host_start..].find(':') {
-            None => (hoststr[host_start..].to_owned(), DEFAULT_PORT),
+        // ends in a colon and names none.
+        //
+        // A bracketed host is skipped: `[::1]:8080` is an address and a port,
+        // and the first colon the C++ finds is one of the address's, which is
+        // what reads `[` as the host and leaves the port at `80`.
+        let port_at = match hoststr_rest.strip_prefix('[') {
+            Some(after_bracket) => after_bracket.find(']').and_then(|close| {
+                // `close` is where the `]` is in `after_bracket`, which is one
+                // further on in `hoststr_rest`; the port's colon is the first
+                // one after it
+                hoststr_rest[close + 1..].find(':').map(|at| close + 1 + at)
+            }),
+            None => hoststr_rest.find(':'),
+        };
+        let (host, port) = match port_at {
+            None => (hoststr_rest.to_owned(), DEFAULT_PORT),
             Some(at) => {
                 let port_start = host_start + at;
                 let host = hoststr[host_start..port_start].to_owned();

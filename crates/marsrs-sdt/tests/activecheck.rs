@@ -56,12 +56,14 @@ fn slow(query: &Query) -> Answer {
         Query::Dns { .. } => Answer::Dns {
             error_code: 0,
             rtt: 100,
+            local_dns: "8.8.8.8".to_owned(),
             ips: vec!["1.1.1.1".to_owned(), "2.2.2.2".to_owned()],
         },
         Query::Tcp { .. } => Answer::Tcp {
             sent: 0,
             received: 0,
             is_noop_resp: true,
+            conntime: 40,
             rtt: 100,
         },
         Query::Http { .. } => Answer::Http {
@@ -128,6 +130,11 @@ fn a_host_that_cannot_probe_fails_every_check_it_runs() {
     // a request nobody sent, to the CGI the core was given
     assert_eq!(results[3].url, "http://short.host/netcheck");
     assert_eq!(results[3].status_code, 0);
+    // `error_code` is what the app reads for "how the probe went", and a
+    // profile that was never given one says `0`, which is "worked": a request
+    // nobody sent has to say so here, and not only in the status the run
+    // reports
+    assert_eq!(results[3].error_code, -1);
 
     assert_eq!(request.check_status, CheckStatus::CheckFinish);
     // a run without a timeout is never a run that ran out of one
@@ -221,6 +228,7 @@ fn the_dns_check_records_what_the_resolve_answered() {
         Query::Dns { .. } => Answer::Dns {
             error_code: 0,
             rtt: 7,
+            local_dns: "8.8.8.8".to_owned(),
             ips: vec![
                 "1.1.1.1".to_owned(),
                 "2.2.2.2".to_owned(),
@@ -237,6 +245,7 @@ fn the_dns_check_records_what_the_resolve_answered() {
     assert_eq!(profile.domain_name, "long.host");
     assert_eq!(profile.error_code, 0);
     assert_eq!(profile.rtt, 7);
+    assert_eq!(profile.local_dns, "8.8.8.8");
     assert_eq!(profile.ip1, "1.1.1.1");
     assert_eq!(profile.ip2, "2.2.2.2");
     assert_eq!(request.check_status, CheckStatus::CheckContinue);
@@ -266,6 +275,7 @@ fn a_resolve_that_failed_takes_no_address_from_the_answer() {
         Query::Dns { .. } => Answer::Dns {
             error_code: -1,
             rtt: 12,
+            local_dns: "8.8.8.8".to_owned(),
             ips: vec!["1.1.1.1".to_owned(), "2.2.2.2".to_owned()],
         },
         _ => Answer::Nothing,
@@ -277,6 +287,8 @@ fn a_resolve_that_failed_takes_no_address_from_the_answer() {
     let profile = &request.checkresult_profiles[0];
     assert_eq!(profile.error_code, -1);
     assert_eq!(profile.rtt, 12);
+    // the resolver that was asked is named whether or not it answered
+    assert_eq!(profile.local_dns, "8.8.8.8");
     assert!(profile.ip1.is_empty(), "ip1: {}", profile.ip1);
     assert!(profile.ip2.is_empty(), "ip2: {}", profile.ip2);
     assert_eq!(request.check_status, CheckStatus::CheckFinish);
@@ -296,6 +308,8 @@ fn the_tcp_check_records_the_noop_round_trip() {
     let profile = &request.checkresult_profiles[0];
     assert_eq!(profile.error_code, 0);
     assert_eq!(profile.rtt, 100);
+    // the connect is its own timing, and not the round trip the noop took
+    assert_eq!(profile.conntime, 40);
     assert_eq!(profile.ip, "1.2.3.4");
     assert_eq!(profile.port, 80);
     assert_eq!(
@@ -321,6 +335,7 @@ fn a_noop_that_did_not_go_out_is_a_send_error() {
             sent: -1,
             received: 0,
             is_noop_resp: false,
+            conntime: 9,
             rtt: 9,
         },
         _ => Answer::Nothing,
@@ -350,12 +365,14 @@ fn a_receive_that_failed_is_not_the_last_host_the_check_looks_at() {
             sent: 0,
             received: -1,
             is_noop_resp: false,
+            conntime: 0,
             rtt: 1200,
         },
         _ => Answer::Tcp {
             sent: 0,
             received: 0,
             is_noop_resp: true,
+            conntime: 0,
             rtt: 10,
         },
     });
@@ -388,6 +405,7 @@ fn an_answer_that_was_not_the_noops_is_a_response_error() {
             sent: 0,
             received: 0,
             is_noop_resp: false,
+            conntime: 0,
             rtt: 9,
         },
         _ => Answer::Nothing,
@@ -415,6 +433,8 @@ fn the_ping_check_records_the_status_of_a_run_that_came_back() {
     // `snprintf(loss_rate, 16, "%f", ...)`: six decimals, like `%f`
     assert_eq!(profile.loss_rate, "0.000000");
     assert_eq!(profile.rtt_str, "12.500000");
+    // and `rtt_str` is the `rtt` as a string, so the two are the same number
+    assert_eq!(profile.rtt, 12);
     // an item with no ip is pinged at `DEFAULT_PING_HOST`
     assert_eq!(profile.ip, DEFAULT_PING_HOST);
     // and the timeout the C++ hands `RunPingQuery` is in seconds
@@ -452,6 +472,8 @@ fn a_ping_that_did_not_come_back_has_no_status() {
     assert_eq!(profile.checkcount, DEFAULT_PING_COUNT);
     assert!(profile.loss_rate.is_empty());
     assert!(profile.rtt_str.is_empty());
+    // a run that came back failed has no status to take a round trip from
+    assert_eq!(profile.rtt, 0);
     // a run that was started without one asks for no timeout at all
     assert_eq!(profile.ip, "1.2.3.4");
 }

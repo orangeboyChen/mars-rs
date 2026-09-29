@@ -109,6 +109,13 @@ pub enum Answer {
         error_code: i32,
         /// `cost_time`.
         rtt: u64,
+        /// `profile.local_dns` — the resolver the addresses came from.
+        ///
+        /// Which resolver that is, is the platform's to know and not this
+        /// crate's: `mars/comm/dns` is not ported, so it is the host that
+        /// answers it — and a host with no name for it answers the empty one,
+        /// which is what the profile starts out as.
+        local_dns: String,
         /// The addresses, up to the two the profile has room for.
         ips: Vec<String>,
     },
@@ -129,6 +136,12 @@ pub enum Answer {
         /// `__NoopResp` — whether what came back was the answer to the noop
         /// that went out.
         is_noop_resp: bool,
+        /// `profile.conntime` — how long the connect took, which is not the
+        /// `rtt` beside it: the round trip is the noop's, and the connect is
+        /// only the first part of it. `tcpquery.cc` measures the two apart,
+        /// and neither is a socket this crate opens, so the host answers
+        /// both — `0` for a connect that never happened.
+        conntime: u64,
         /// `cost_time`, which the C++ takes only for a round trip that worked.
         rtt: u64,
     },
@@ -169,30 +182,32 @@ pub enum Answer {
 }
 
 impl Answer {
-    /// The resolve: `(-1, 0, [])` when this is not what was answered, which is
-    /// a host that could not be resolved.
-    pub fn dns(&self) -> (i32, u64, &[String]) {
+    /// The resolve: `(-1, 0, "", [])` when this is not what was answered, which
+    /// is a host that could not be resolved.
+    pub fn dns(&self) -> (i32, u64, &str, &[String]) {
         match self {
             Self::Dns {
                 error_code,
                 rtt,
+                local_dns,
                 ips,
-            } => (*error_code, *rtt, ips.as_slice()),
-            _ => (-1, 0, &[]),
+            } => (*error_code, *rtt, local_dns.as_str(), ips.as_slice()),
+            _ => (-1, 0, "", &[]),
         }
     }
 
-    /// The noop round trip: `(-1, 0, false, 0)` when this is not what was
+    /// The noop round trip: `(-1, 0, false, 0, 0)` when this is not what was
     /// answered, which is a send that failed.
-    pub fn tcp(&self) -> (i32, i32, bool, u64) {
+    pub fn tcp(&self) -> (i32, i32, bool, u64, u64) {
         match self {
             Self::Tcp {
                 sent,
                 received,
                 is_noop_resp,
+                conntime,
                 rtt,
-            } => (*sent, *received, *is_noop_resp, *rtt),
-            _ => (-1, 0, false, 0),
+            } => (*sent, *received, *is_noop_resp, *conntime, *rtt),
+            _ => (-1, 0, false, 0, 0),
         }
     }
 

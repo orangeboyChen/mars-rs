@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use marsrs_sdt::checkimpl::Ask;
 use marsrs_sdt::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
 use marsrs_sdt::{
-    Callback, CheckIPPort, CheckIPPorts, Mode, NetCheckType, SdtLogic, NET_CHECK_BASIC,
-    NET_CHECK_LONG, NET_CHECK_SHORT, UNUSE_TIMEOUT,
+    Callback, CheckIPPort, CheckIPPorts, Mode, NetCheckStatus, NetCheckType, SdtLogic,
+    NET_CHECK_BASIC, NET_CHECK_LONG, NET_CHECK_SHORT, UNUSE_TIMEOUT,
 };
 
 fn hosts(names: &[&str]) -> CheckIPPorts {
@@ -60,6 +60,32 @@ fn start_and_cancel_drive_the_core() {
 
     logic.cancel_active_check();
     assert!(logic.run(record).is_empty());
+}
+
+#[test]
+fn the_status_of_a_run_says_whether_it_ended_or_was_cut_short() {
+    let longlink = hosts(&["long.weixin.qq.com"]);
+    let shortlink = hosts(&["short.weixin.qq.com"]);
+
+    let mut logic = SdtLogic::new();
+    assert_eq!(logic.status(), NetCheckStatus::None);
+
+    // a run that ran to its end
+    assert!(logic.start_active_check(&longlink, &shortlink, NET_CHECK_BASIC, UNUSE_TIMEOUT));
+    assert_eq!(logic.status(), NetCheckStatus::Checking);
+    assert_eq!(logic.run(record).len(), 2);
+    assert_eq!(logic.status(), NetCheckStatus::CheckEnd);
+    assert!(!logic.is_cancelled(), "it ended on its own");
+
+    // the same run, cancelled before the first check: the results are the ones
+    // the checks before the cancel recorded, and that is all a listener has
+    // to tell the two apart
+    assert!(logic.start_active_check(&longlink, &shortlink, NET_CHECK_BASIC, UNUSE_TIMEOUT));
+    logic.cancel_active_check();
+    assert!(logic.run(record).is_empty());
+    assert_eq!(logic.status(), NetCheckStatus::CheckEnd);
+    assert!(logic.is_cancelled());
+    assert!(!logic.is_checking());
 }
 
 #[test]

@@ -121,6 +121,26 @@ fn the_callback_defaults_to_doing_nothing() {
 }
 
 #[test]
+fn what_a_collecting_callback_was_told_can_be_taken() {
+    let callback = CollectingCallback::new();
+    callback.report_net_check_result(&[
+        CheckResultProfile::of(NetCheckType::PingCheck),
+        CheckResultProfile::of(NetCheckType::DnsCheck),
+    ]);
+
+    // taken once: the results it had, and none of them left behind
+    let taken = callback.take();
+    assert_eq!(taken.len(), 2);
+    assert!(callback.is_empty());
+    assert_eq!(callback.results().len(), 0);
+
+    // taken again: only what was reported since
+    callback.report_net_check_result(&[CheckResultProfile::of(NetCheckType::HttpCheck)]);
+    assert_eq!(callback.take().len(), 1);
+    assert!(callback.take().is_empty());
+}
+
+#[test]
 fn a_collecting_callback_keeps_what_it_was_told() {
     let callback = CollectingCallback::new();
     assert!(callback.is_empty());

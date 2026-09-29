@@ -148,9 +148,10 @@ impl Check {
                 domain: domain.clone(),
                 timeout_ms,
             });
-            let (error_code, rtt, ips) = answer.dns();
+            let (error_code, rtt, local_dns, ips) = answer.dns();
             profile.error_code = error_code;
             profile.rtt = rtt;
+            profile.local_dns = local_dns.to_owned();
 
             // the C++'s `if (0 == ret)`, and its `ipinfo.size` inside it: a
             // resolve that failed takes no address from the answer, not even
@@ -221,7 +222,7 @@ impl Check {
                     port: port.port,
                     timeout_ms,
                 });
-                let (sent, received, is_noop_resp, rtt) = answer.tcp();
+                let (sent, received, is_noop_resp, conntime, rtt) = answer.tcp();
 
                 // `kSndRcvErr` for a noop that did not go out or that nothing
                 // came back from, `kTcpRespErr` for an answer that was not the
@@ -236,6 +237,7 @@ impl Check {
                     (0, rtt)
                 };
                 profile.error_code = error_code;
+                profile.conntime = conntime;
                 profile.rtt = rtt;
 
                 request.checkresult_profiles.push(profile);
@@ -321,6 +323,7 @@ impl Check {
                     timeout_ms: self.remaining,
                 });
                 let (error_code, status_code, rtt) = answer.http();
+                profile.error_code = error_code;
                 profile.status_code = status_code;
                 profile.rtt = rtt;
 
@@ -413,6 +416,12 @@ impl Check {
                     // `snprintf(loss_rate, 16, "%f", ...)` — six decimals, like `%f`
                     profile.loss_rate = format!("{:.6}", status.loss_rate);
                     profile.rtt_str = format!("{:.6}", status.avgrtt);
+                    // `rtt_str` is this number as a string, so the field the
+                    // report prints beside it carries it too. `avgrtt` is an
+                    // average of floats and the field is an integer, so the
+                    // cast truncates: the report reads `"rtt":12` next to
+                    // `"rttStr":"12.500000"`, and not `0` next to it.
+                    profile.rtt = status.avgrtt as u64;
                 }
 
                 request.checkresult_profiles.push(profile);

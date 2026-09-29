@@ -14,7 +14,7 @@ use crate::activecheck::Check;
 use crate::checkimpl::Ask;
 use crate::constants::{mode_basic, mode_long, mode_short};
 use crate::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
-use crate::sdt::{CheckIPPorts, CheckStatus, NetCheckType};
+use crate::sdt::{CheckIPPorts, CheckStatus, NetCheckStatus, NetCheckType};
 
 /// The `cancel_` of one [`SdtCore`], reachable from outside the core.
 ///
@@ -62,6 +62,20 @@ impl Default for CancelHandle {
     }
 }
 
+/// `checking_`, for as long as one run is on the stack.
+///
+/// Given back by [`Drop`] and not by the end of [`SdtCore::run_on`], which a
+/// probe that panics never reaches: the panic comes out of the closure the
+/// host handed in, and a core left `checking` would answer `false` to every
+/// `start_check` after it — a host's panic retiring the core for good.
+struct Checking<'a>(&'a mut NetCheckStatus);
+
+impl Drop for Checking<'_> {
+    fn drop(&mut self) {
+        *self.0 = NetCheckStatus::CheckEnd;
+    }
+}
+
 /// `SdtCore`.
 #[derive(Debug, Clone)]
 pub struct SdtCore {
@@ -71,8 +85,12 @@ pub struct SdtCore {
     check_request: CheckRequestProfile,
     /// `cancel_` — shared, so it can be set while a run borrows the core.
     cancel: CancelHandle,
-    /// `checking_`.
-    checking: bool,
+    /// `checking_`, and `netcheck_status_` behind it: [`NetCheckStatus::None`]
+    /// for a core nothing has been started on, [`NetCheckStatus::Checking`]
+    /// while a request is in flight, [`NetCheckStatus::CheckEnd`] once a run
+    /// is over — which is what a listener asks for to tell a diagnosis that
+    /// ran to its end from one that was cut short.
+    checking: NetCheckStatus,
     /// `netcheck_cgi_` — the URL the HTTP check goes to.
     ///
     /// The C++'s is a file-static `sg_netcheck_cgi` (`httpchecker.cc:31`) that
@@ -95,7 +113,7 @@ impl SdtCore {
             check_list: Vec::new(),
             check_request: CheckRequestProfile::new(),
             cancel: CancelHandle::new(),
-            checking: false,
+            checking: NetCheckStatus::None,
             netcheck_cgi: String::new(),
         }
     }
@@ -111,7 +129,7 @@ impl SdtCore {
         mode: i32,
         timeout: u32,
     ) -> bool {
-        if self.checking {
+        if self.is_checking() {
             return false;
         }
         self.init_check_request(longlink_items, shortlink_items, mode, timeout);
@@ -131,7 +149,7 @@ impl SdtCore {
         // request that is accepted here is a new one, and it is not the one
         // anybody cancelled.
         self.cancel.clear();
-        self.checking = true;
+        self.checking = NetCheckStatus::Checking;
 
         self.check_request.reset();
         self.check_request.longlink_items = longlink_items.clone();
@@ -179,7 +197,7 @@ impl SdtCore {
     /// what makes one core usable for more than one cancellation.
     pub fn reset(&mut self) {
         self.check_list.clear();
-        self.checking = false;
+        self.checking = NetCheckStatus::CheckEnd;
     }
 
     /// `SdtCore::__RunOn()` — one check after another, stopping at a cancel or
@@ -192,6 +210,10 @@ impl SdtCore {
         mut do_check: impl FnMut(NetCheckType, &mut CheckRequestProfile),
     ) -> Vec<CheckResultProfile> {
         let plan = self.check_list.clone();
+        // The borrow is the guard's and not a flag this sets at the end: a
+        // probe that panics unwinds past the end, and the core is given back
+        // by [`Drop`] instead.
+        let checking = Checking(&mut self.checking);
         for kind in plan {
             if self.cancel.is_cancelled()
                 || self.check_request.check_status == CheckStatus::CheckFinish
@@ -200,6 +222,7 @@ impl SdtCore {
             }
             do_check(kind, &mut self.check_request);
         }
+        drop(checking);
 
         let results = std::mem::take(&mut self.check_request.checkresult_profiles);
         self.reset();
@@ -230,8 +253,21 @@ impl SdtCore {
         &self.netcheck_cgi
     }
 
-    /// Whether a check is in flight.
+    /// Whether a check is in flight: the request was taken and its run has
+    /// not ended yet.
     pub fn is_checking(&self) -> bool {
+        self.checking == NetCheckStatus::Checking
+    }
+
+    /// `netcheck_status_` — where the diagnosis as a whole is.
+    ///
+    /// A caller that was handed results asks for this and for
+    /// [`SdtCore::is_cancelled`] together: [`NetCheckStatus::CheckEnd`] of a
+    /// cancelled run is a diagnosis that was cut short, and the results are
+    /// the ones the checks before the cancel recorded — which is not the same
+    /// thing as a run that finished on its own, and which nothing in the
+    /// results themselves says.
+    pub fn status(&self) -> NetCheckStatus {
         self.checking
     }
 
