@@ -104,8 +104,10 @@ public expect class Xlog(config: XlogConfig) {
     /**
      * [flushNow] for a caller that can suspend and would rather not block the
      * thread it is on: the records are on disk when this resumes, and what
-     * waited for them is a thread of the I/O pool. A drain blocks whatever
-     * thread it runs on, which is why this one is handed to another one.
+     * waited for them is another thread and not this one — the I/O pool of the
+     * JVM, and the pool Kotlin/Native hands a blocking call to, which is not
+     * the same pool and is not named `IO` there. A drain blocks whatever thread
+     * it runs on, which is why this one is handed to another one.
      */
     public suspend fun flush()
 
