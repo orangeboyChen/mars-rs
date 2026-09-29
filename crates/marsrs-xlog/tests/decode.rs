@@ -374,3 +374,38 @@ fn a_body_that_will_not_inflate_leaves_its_marker_behind() {
     assert!(text.contains("zstd decompress error"), "{text}");
     assert!(text.contains("after\n"), "{text}");
 }
+
+/// Damage all through a file — what a `.xlog` copied off a device by halves
+/// looks like — is a resync after every span, and a resync is a scan of
+/// everything behind the damage. Five hundred spans is what this asks the walk
+/// for, which is the shape a resync that starts over at the damage each time
+/// costs a file's length per span.
+///
+/// What is asserted is that the answer is unchanged by the bound: every record
+/// behind every span is still read, and every span is still marked with its
+/// length.
+#[test]
+fn damage_all_through_a_file_is_walked_in_one_pass() {
+    /// Bytes no record of any shape can start in: `0xff` is no magic of any of
+    /// the thirteen.
+    const JUNK: [u8; 64] = [0xff; 64];
+
+    let mut bytes = Vec::new();
+    let mut expected = String::new();
+    for index in 0..512 {
+        bytes.extend_from_slice(&JUNK);
+        let text = format!("record {index}\n");
+        bytes.extend_from_slice(&sync_record(text.as_bytes()));
+        expected.push_str(&format!("{DAMAGE_MARKER}{}\n", JUNK.len()));
+        expected.push_str(&text);
+    }
+
+    let plain = marsrs_xlog::decode_records(&bytes, None).expect("the walk went on");
+    let text = String::from_utf8_lossy(&plain);
+
+    assert_eq!(text, expected);
+}
+
+/// `decodeBuffer`'s marker for a span it skipped, which the test above spells
+/// out itself: the string a tool grep's the decoded text for.
+const DAMAGE_MARKER: &str = "[F]decode_log_file.py decode error len=";

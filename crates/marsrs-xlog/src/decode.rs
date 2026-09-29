@@ -67,6 +67,18 @@ const ZSTD_MARKER: &str = "zstd decompress error";
 /// finds the hole that no byte of the file mentions.
 const MISSING_SEQ_MARKER: &str = "[F]decode_log_file.py log seq:";
 
+/// The most one record's text may inflate to.
+///
+/// A record's body is at most the block it was written into — the appender's
+/// region, 150 KiB — so this is hundreds of times the largest record an
+/// appender can put in a file, and nothing one wrote is cut short. What it
+/// does cut short is the other thing a small body can ask for: a DEFLATE or
+/// zstd stream built to expand without bound, which is a bomb and not a
+/// record, and which `xlog decode` is handed by whoever pulled the file off a
+/// device. `decode_log_file.c` grows its output by doubling and stops when the
+/// decompressor stops, which is to say it never stops.
+const MAX_INFLATED_LEN: usize = 64 * 1024 * 1024;
+
 /// `MAGIC_CRYPT_START` — the oldest record start `decode_log_file.c` reads, and
 /// one no appender writes: its body is the log text, XORed and nothing more.
 const MAGIC_CRYPT_START: u8 = 0x01;
@@ -164,6 +176,10 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
     // `decode_log_file.c`'s file-static `int lastseq`, reset per file: a hole
     // is a hole in one file's own numbering, and not in the one read before it.
     let mut lastseq: u16 = 0;
+    // How far into the file the resync after damage has already looked: a byte
+    // one scan rejected is a byte no later scan looks at again, so the whole
+    // walk is one pass over the file and not one pass per span of damage.
+    let mut resync_from = 0;
 
     let stopped = loop {
         if !whole_record_fits(data, offset) {
@@ -178,15 +194,26 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
             }
             // `getLogStartPos(buffer + offset, …, 1)`, and the marker
             // `decodeBuffer` leaves for the span it skipped.
-            Err(Failure::Damaged(reason)) => match next_record_start(data, offset) {
+            //
+            // The scan starts where the last one stopped when that is the
+            // further of the two, and not at the damage every time: what
+            // stands between them was looked at and rejected by that scan, so a
+            // second look at it is work repeated once per span of damage.
+            // Bounded this way a byte of the file is examined once however much
+            // damage it holds — one pass over it, and not one pass per span.
+            Err(Failure::Damaged(reason)) => match next_record_start(data, resync_from.max(offset))
+            {
                 Some(next) => {
                     let skipped = next - offset;
                     plain.extend_from_slice(format!("{DAMAGE_MARKER}{skipped}\n").as_bytes());
                     offset = next;
+                    resync_from = next;
                 }
-                // Nothing past the damage is a record either, which is the one
-                // case the C's `parseFile` cannot go on from: the reason is
-                // what the caller is told.
+                // Nothing behind the damage is a record either — or nothing
+                // behind where the last scan stopped is, and going on from
+                // there would be scanning those same bytes again. The walk ends
+                // here, which is the one case the C's `parseFile` cannot go on
+                // from either, and the reason is what the caller is told.
                 None => break Some(reason),
             },
             // The record is whole, so the walk goes on at the one behind it —
@@ -410,6 +437,11 @@ fn record_text(
 /// One byte at a time, the way the C does it: the framing carries no length of
 /// its own to skip by, so a byte that looks like the start of a record is the
 /// only hint there is.
+///
+/// `from` is where the *last* scan stopped and not where the damage is — see
+/// [`decode_records`]. Everything before it has been looked at and rejected
+/// already, so scanning it again is work the walk would repeat once per span of
+/// damage, and a byte is worth one look and not one look per span.
 fn next_record_start(data: &[u8], from: usize) -> Option<usize> {
     (from + 1..data.len()).find(|offset| record_is_whole(data, *offset))
 }
@@ -586,7 +618,17 @@ fn inflate_zstd(body: &[u8]) -> Result<Vec<u8>, String> {
     loop {
         match decoder.read(&mut chunk) {
             Ok(0) => break,
-            Ok(n) => out.extend_from_slice(&chunk[..n]),
+            Ok(n) => {
+                out.extend_from_slice(&chunk[..n]);
+                // A frame that expands without bound is not a record: see
+                // [`MAX_INFLATED_LEN`]. Stopped here rather than grown into,
+                // so that the record's marker is what lands in the output.
+                if out.len() > MAX_INFLATED_LEN {
+                    return Err(format!(
+                        "{ZSTD_MARKER}: over {MAX_INFLATED_LEN} bytes of output"
+                    ));
+                }
+            }
             // The frame a flush never ended is expected to fail here, and what
             // it produced before failing is the record.
             Err(_) if !out.is_empty() => break,
@@ -619,6 +661,12 @@ fn inflate_raw(body: &[u8]) -> Result<Vec<u8>, String> {
         let advanced = (decoder.total_in() - before_in) as usize;
         output.extend_from_slice(&chunk[..produced]);
         consumed += advanced;
+
+        // A stream that expands without bound is not a record: see
+        // [`MAX_INFLATED_LEN`].
+        if output.len() > MAX_INFLATED_LEN {
+            return Err(format!("inflate: over {MAX_INFLATED_LEN} bytes of output"));
+        }
 
         // Keep calling after the input is exhausted: miniz_oxide holds the
         // rest of the output back when the chunk filled up.

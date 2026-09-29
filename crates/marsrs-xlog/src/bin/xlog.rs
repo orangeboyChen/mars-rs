@@ -315,7 +315,13 @@ impl Command {
             None | Some("-") => std::io::stdout()
                 .write_all(bytes)
                 .map_err(|e| format!("write standard output: {e}")),
-            Some(path) => fs::write(path, bytes).map_err(|e| format!("write {path}: {e}")),
+            // Created for its owner alone: what lands in `--out` is the log
+            // itself, and `fs::write` would leave it readable by every user of
+            // the machine — see [`create_key_file`].
+            Some(path) => create_output_file(path).and_then(|mut file| {
+                file.write_all(bytes)
+                    .map_err(|e| format!("write {path}: {e}"))
+            }),
         }
     }
 
@@ -600,6 +606,37 @@ fn create_key_file(path: &str) -> Result<std::fs::File, String> {
             format!("write {path}: {e}")
         }
     })
+}
+
+/// Creates the file `--out` names: for its owner alone, and over what is there.
+///
+/// The mode [`create_key_file`] uses, for one half of the same reason: what
+/// `decode` writes is the log text of an app, and `fs::write` creates with
+/// `0666 & umask`, which under the usual `022` is readable by every user of the
+/// machine. `encode` writes a `.xlog` through the same option, and a file of
+/// records is no more the machine's than the text they decode to. The other
+/// half — never over a file that is already there — is a key's alone: an output
+/// the caller named is theirs to replace.
+fn create_output_file(path: &str) -> Result<fs::File, String> {
+    #[cfg(unix)]
+    let opened = {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+    };
+    #[cfg(not(unix))]
+    let opened = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path);
+
+    opened.map_err(|e| format!("write {path}: {e}"))
 }
 
 /// The 32 bytes of a `--privkey`, which is 64 hex characters.

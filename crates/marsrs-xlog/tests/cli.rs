@@ -285,6 +285,51 @@ fn the_key_file_is_the_owners_alone_and_is_not_written_over() {
     );
 }
 
+/// `--out` of `decode` is the log text itself, so it is created the way the key
+/// file is — for its owner alone, and not for every user of the machine.
+#[test]
+fn the_decoded_log_goes_to_a_file_of_the_owners_alone() {
+    let dir = scratch("decode-out");
+    let input = write(&dir, "records.txt", RECORDS);
+    let file = dir.join("a.xlog");
+    let plain = dir.join("a.plain");
+
+    let (ok, _, err) = run(&[
+        "encode",
+        &input.display().to_string(),
+        "--out",
+        &file.display().to_string(),
+    ]);
+    assert!(ok, "encode failed: {err}");
+    let (ok, _, err) = run(&[
+        "decode",
+        &file.display().to_string(),
+        "--out",
+        &plain.display().to_string(),
+    ]);
+    assert!(ok, "decode failed: {err}");
+    assert_eq!(
+        std::fs::read(&plain).expect("read the decoded text"),
+        RECORDS,
+        "the records did not come back"
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = std::fs::metadata(&plain)
+            .expect("the decoded file")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "the decoded log is readable by more than its owner"
+        );
+    }
+}
+
 #[test]
 fn keygen_takes_no_other_option_and_no_input() {
     // An option of another subcommand: the answer names the one that takes it.
