@@ -1,9 +1,10 @@
 // The C++ half of the comm cross-read test: `mars/comm/basepacker.cc`,
-// `mars/comm/adler32.c`, `mars/comm/strutil.cc`, `mars/comm/http.cc` and
-// `mars/comm/socket/socket_address.cc`, driven the way
+// `mars/comm/adler32.c`, `mars/comm/crypt/ibase64.cc`, `mars/comm/strutil.cc`,
+// `mars/comm/http.cc` and `mars/comm/socket/socket_address.cc`, driven the way
 // `scripts/compat/comm.sh` drives the Rust of the same files.
 //
 //   upstream_comm adler32 --data=HEX [--seed=N]
+//   upstream_comm base64 --data=HEX
 //   upstream_comm http ACTION [--data=HEX] [--set=N:V|N:V] [--in=PATH]
 //   upstream_comm packer pack --url=U --seq=N --data=HEX [--hash=no] --out=PATH
 //   upstream_comm packer unpack --in=PATH
@@ -54,6 +55,7 @@
 #include "mars/comm/adler32.h"
 #include "mars/comm/autobuffer.h"
 #include "mars/comm/basepacker.h"
+#include "mars/comm/crypt/ibase64.h"
 #include "mars/comm/http.h"
 #include "mars/comm/socket/socket_address.h"
 #include "mars/comm/strutil.h"
@@ -640,6 +642,19 @@ int checksum(int argc, char** argv) {
     return 0;
 }
 
+// `EncodeBase64` — how many characters a caller got, and the characters,
+// which is the `Basic` of a `Proxy-Authorization`: `username:password`. The
+// buffer is the one `modp_b64_encode_len(A)` sizes for the caller, and the
+// C++ terminates it with a `\0` of its own.
+int base64(int argc, char** argv) {
+    const std::vector<unsigned char> data = unhex(opt(argc, argv, "data"));
+    std::vector<unsigned char> out(modp_b64_encode_len(data.size()));
+    const int wrote = mars::comm::EncodeBase64(bytes(data), out.data(), (int)data.size());
+    const std::string encoded((const char*)bytes(out), (size_t)(wrote < 0 ? 0 : wrote));
+    printf("%d %s\n", wrote, or_dash(encoded).c_str());
+    return 0;
+}
+
 // The string helpers of `mars/comm/strutil.cc`, named the way `comm-compat`
 // names them: `--data` is the string, `--arg` the second one and `--pos` where
 // a search starts. A helper that found nothing prints what the port prints —
@@ -710,6 +725,7 @@ int main(int argc, char** argv) {
     std::string command = (argc > 1) ? argv[1] : "";
 
     if (command == "adler32") return checksum(argc, argv);
+    if (command == "base64") return base64(argc, argv);
     if (command == "http") return http_command(argc, argv);
     if (command == "packer") return packer(argc, argv);
     if (command == "simple") return simple(argc, argv);
@@ -718,6 +734,7 @@ int main(int argc, char** argv) {
 
     fprintf(stderr,
             "usage: upstream_comm adler32 --data=HEX [--seed=N]\n"
+            "       upstream_comm base64 --data=HEX\n"
             "       upstream_comm http ACTION [--data=HEX] [--set=N:V|N:V] "
             "[--in=PATH]\n"
             "       upstream_comm packer pack --url=U --seq=N --data=HEX "

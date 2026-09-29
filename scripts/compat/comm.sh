@@ -118,6 +118,7 @@ if [ ! -x "$CPP" ]; then
                $UP/mars/comm/autobuffer.cc \
                $UP/mars/comm/ptrbuffer.cc \
                $UP/mars/comm/http.cc \
+               $UP/mars/comm/crypt/ibase64.cc \
                $UP/mars/comm/strutil.cc \
                $UP/mars/comm/unix/xlogger_threadinfo.cc \
                $UP/mars/comm/xlogger/xlogger.cc \
@@ -346,6 +347,51 @@ row("seeded-with-a-checksum", "6d617273", adler32(0, b"/cgi-bin"))
 expect("seeded-with-a-checksum", str(adler32(adler32(0, b"/cgi-bin"), b"mars")))
 
 with open(os.path.join(work, "adler32.txt"), "w") as f:
+    f.write("\n".join(rows) + "\n")
+
+# --- base64: the account a proxy is logged in with. ---------------------------
+# `EncodeBase64`, which is the one of the two mars calls: `username:password`
+# into the `Basic` of a `Proxy-Authorization`. `DecodeBase64` is the other and
+# nothing in mars asks for it, so the port does not have one.
+ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+
+def base64_of(data):
+    # three bytes into four characters, and a last group of one or two is
+    # padded out to four with `=`
+    out = ""
+    for at in range(0, len(data), 3):
+        group = data[at:at + 3]
+        first = group[0]
+        second = group[1] if len(group) > 1 else 0
+        third = group[2] if len(group) > 2 else 0
+        out += ALPHABET[first >> 2]
+        out += ALPHABET[((first & 0x03) << 4) | (second >> 4)]
+        if len(group) > 1:
+            out += ALPHABET[((second & 0x0F) << 2) | (third >> 6)]
+        else:
+            out += "="
+        out += ALPHABET[third & 0x3F] if len(group) > 2 else "="
+    return out
+
+
+rows = []
+for name, data in [
+    ("nothing", b""),
+    ("one-byte", b"f"),
+    ("two-bytes", b"fo"),
+    ("three-bytes", b"foo"),
+    ("four-bytes", b"foob"),
+    ("a-byte-of-every-value", bytes(range(256))),
+    ("the-highest-bytes", bytes([0xFF]) * 5),
+    ("the-account-of-a-proxy", b"mars:secret"),
+    ("an-empty-password", b"mars:"),
+]:
+    row(name, data.hex())
+    encoded = base64_of(data)
+    expect_of("base64", name, "%d %s" % (len(encoded), encoded or "-"))
+
+with open(os.path.join(work, "base64.txt"), "w") as f:
     f.write("\n".join(rows) + "\n")
 
 # --- packer pack: a whole package, written by both sides. ---------------------
@@ -1164,6 +1210,17 @@ while read -r name data seed; do
 
     printf '| %s | %s | %s |\n' "$name" "$CROSS" "$EXPECTED"
 done < "$WORK/adler32.txt"
+
+# --- base64 -------------------------------------------------------------------
+printf '\n### base64\n\n| case | cross-read | expected |\n|---|---|---|\n'
+while read -r name data; do
+    if [ "$data" = "-" ]; then data=""; fi
+
+    "$RUST" base64 --data="$data" > "$WORK/$name-rust-base64.txt"
+    "$CPP" base64 --data="$data" > "$WORK/$name-cpp-base64.txt"
+    compare_answer "$name" base64
+    printf '| %s | %s | %s |\n' "$name" "$CROSS" "$EXPECTED"
+done < "$WORK/base64.txt"
 
 # --- packer pack -------------------------------------------------------------
 printf '\n### packer pack\n\n| case | bytes | cross-read | expected |\n|---|---|---|---|\n'
