@@ -311,13 +311,13 @@ public final class Xlog: NSObject {
         handle = Self.noHandle
     }
 
-    /// `mars_xlog_current_log_path_instance`: the file this appender is writing
-    /// to, or `nil` when it has none open yet — the first record of a day is what
-    /// opens one (or the buffer was too small, which 1024 bytes never is).
+    /// `mars_xlog_current_log_path_instance`: the directory this appender writes
+    /// its files into, or `nil` once it is closed (or the buffer was too small,
+    /// which 1024 bytes never is).
     ///
-    /// A day is one file, so this is the path an app hands to something that reads
-    /// the log while it is being written. What an app that uploads a whole day
-    /// asks for is [`logFiles(daysAgo:)`].
+    /// It is a directory and not a file, because that is what the C++ answers
+    /// (`XloggerAppender::GetCurrentLogPath` hands back `sg_logdir`); the day's
+    /// file is what [`logFiles(daysAgo:)`] names.
     @objc public var currentLogPath: String? {
         guard isOpen else {
             return nil
@@ -325,7 +325,7 @@ public final class Xlog: NSObject {
         return path { out, len in mars_xlog_current_log_path_instance(handle, out, len) }
     }
 
-    /// `mars_xlog_getfilepath_from_timespan`: the log files of `daysAgo` days ago
+    /// `mars_xlog_getfilepath_from_timespan_instance`: the log files of `daysAgo` days ago
     /// that are *there* — what an app that uploads yesterday's opens. `[]` when
     /// the directory holds none of that day's. `0` is today, `1` is yesterday,
     /// and so on.
@@ -335,12 +335,15 @@ public final class Xlog: NSObject {
     /// — its own prefix, and the directory it writes into.
     @objc
     public func logFiles(daysAgo: Int) -> [String] {
-        paths { index, out, len in
+        guard isOpen else {
+            return []
+        }
+        return paths { index, out, len in
             mars_xlog_getfilepath_from_timespan_instance(handle, Int32(daysAgo), index, out, len)
         }
     }
 
-    /// `mars_xlog_make_logfile_name`: the paths of the log files of `daysAgo` days
+    /// `mars_xlog_make_logfile_name_instance`: the paths of the log files of `daysAgo` days
     /// ago whether or not they are *there yet* — the name an app that is about to
     /// write, or that is naming a file to someone else, asks for.
     ///
@@ -349,7 +352,10 @@ public final class Xlog: NSObject {
     /// [`logFiles(daysAgo:)`] answers one.
     @objc
     public func logFileNames(daysAgo: Int) -> [String] {
-        paths { index, out, len in
+        guard isOpen else {
+            return []
+        }
+        return paths { index, out, len in
             mars_xlog_make_logfile_name_instance(handle, Int32(daysAgo), index, out, len)
         }
     }

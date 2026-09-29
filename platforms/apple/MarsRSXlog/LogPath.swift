@@ -1,17 +1,17 @@
 // The path symbols of the C ABI, read back as a `String`.
 //
-// `mars_xlog_current_log_path` and `mars_xlog_current_log_cache_path` answer no
-// pointer: they write into a buffer the caller owns and answer how many bytes
-// they wrote, which is what [path(of:)] takes and turns into a string. The
+// `mars_xlog_current_log_path_instance` answers no pointer: it writes into a
+// buffer the caller owns and answers how many bytes it wrote, which is what
+// [path(of:)] takes and turns into a string. The
 // buffer is ours and 1,024 bytes long because a path never fills it — a symbol
 // that answers a length rather than a pointer is the C ABI's way of saying the
 // caller decides how much it can hold.
 //
-// `mars_xlog_getfilepath_from_timespan` and `mars_xlog_make_logfile_name` are
-// the same two arguments over again, but they stand for a list the C++ fills a
-// `std::vector` with and a C caller asks for one index of at a time, so
-// [paths(of:)] is that walk: index after index until a symbol answers that
-// there is nothing at that index.
+// `mars_xlog_getfilepath_from_timespan_instance` and
+// `mars_xlog_make_logfile_name_instance` are the same two arguments over again,
+// but they stand for a list the C++ fills a `std::vector` with and a C caller
+// asks for one index of at a time, so [paths(of:)] is that walk: index after
+// index until a symbol answers that there is nothing at that index.
 //
 // It is here and not in [Xlog] because `platforms/apple/MarsRSXlog/Xlog.swift`
 // class an app is given, and [path(of:)] is the seam it reads a path through —
