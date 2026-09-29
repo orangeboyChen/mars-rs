@@ -497,7 +497,12 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .deveco-cli
-          key: deveco-cli-full-${{ env.DEVECO_CLI_VERSION }}
+          # The version and the workflow file, and not the version alone: the
+          # archive's URL and the prune flag both live in this file, and a key
+          # that already exists is a key `actions/cache` never saves under
+          # again — so a URL edited under one version would download 2.1 GB on
+          # every run from then on, and never get to keep what it fetched.
+          key: deveco-cli-full-${{ env.DEVECO_CLI_VERSION }}-${{ hashFiles('.github/workflows/demo.yml') }}
       - name: Fetch the DevEco Command Line Tools ${{ env.DEVECO_CLI_VERSION }}
         env:
           DEVECO_CLI_PRUNE: '0'
