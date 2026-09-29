@@ -152,12 +152,32 @@ jobs:
       # runner image ships the SDK.
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      # The NDK scripts/build_android.sh builds `libmarsrsxlog.so` with; the
+      # same version rust.yml's android job pins.
+      NDK_VERSION: 27.1.12297006
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
+      - uses: dtolnay/rust-toolchain@stable
+      # `android-actions/setup-android` is intentionally not used, and why is
+      # written down in .github/scripts/install_android_ndk.sh.
+      - name: Install the Android NDK
+        run: .github/scripts/install_android_ndk.sh
+      # The `.so` the AAR carries, out of this checkout: `platforms/android`
+      # does not compile it — JitPack does, when it builds the AAR from a tag
+      # — so without this the composite build below assembles an AAR with no
+      # native library in it.
+      #
+      # `RUSTFLAGS` is empty on purpose: the 16 KiB page size an Android 15
+      # device wants comes from .cargo/config.toml, and an exported
+      # `RUSTFLAGS` replaces those target flags rather than adding to them.
+      - name: Build libmarsrsxlog.so
+        env:
+          RUSTFLAGS: ''
+        run: scripts/build_android.sh platforms/android/marsrs-xlog/libs
       # The plugin downloads the platform and the build tools `compileSdk`
       # names, and it asks only once the licences of the ones it wants are
       # accepted. An image that already carries them answers nothing here, and
@@ -172,32 +192,29 @@ jobs:
         working-directory: demo/android
         run: ./gradlew assembleDebug
 
+  # No token on this job, and no fork gate, which is what the composite build
+  # buys: `demo/kmp/settings.gradle.kts` substitutes `platforms/kmp` for the
+  # published package, so GitHub Packages is never asked and a pull request
+  # from a fork reads this repository's packages no more than a push does.
   kmp:
     name: demo (kmp)
     needs: changes
-    # The Kotlin Multiplatform packages are published to GitHub Packages, which
-    # answers nothing without a token — not even a 404 — and a pull request
-    # from a fork carries no token that reads this repository's packages. So
-    # this job answers on a push, on a dispatch and on a pull request of this
-    # repository's own, and says nothing about a fork's.
-    if: >-
-      needs.changes.outputs.needed == 'true' &&
-      (github.event_name != 'pull_request' ||
-       github.event.pull_request.head.repo.full_name == github.repository)
+    if: needs.changes.outputs.needed == 'true'
     runs-on: ubuntu-latest
-    env:
-      # What `demo/kmp/settings.gradle.kts` reads. It takes the credentials out
-      # of the environment and not out of `gradle.properties`, because a token
-      # written into a file is one `git add -A` away from the remote; the
-      # comment there says so. `GITHUB_ACTOR` is already in the environment of
-      # every step, and this is the one that is not.
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
+      - uses: dtolnay/rust-toolchain@stable
+      # `libmars_ffi.a` per Kotlin/Native target, which cinterop embeds into
+      # the klib. `platforms/kmp` does not compile them — the release builds
+      # them once per host — so without this the composite build below has
+      # nothing to link the demo's executable against. What it builds is what
+      # this host can: Linux, and not the Apple targets.
+      - name: Build the native archives
+        run: scripts/build_kmp_native.sh platforms/kmp/native
       # The Linux half of the two targets the build declares, and not `build`:
       # `macosArm64` is the other, and Kotlin/Native links a macOS binary on a
       # macOS host and nowhere else, so a `build` on this runner would fail on
@@ -291,26 +308,29 @@ jobs:
           key: deveco-cli-${{ env.DEVECO_CLI_VERSION }}
       - name: Fetch the DevEco Command Line Tools ${{ env.DEVECO_CLI_VERSION }}
         run: scripts/fetch_deveco_cli.sh .deveco-cli
-      # The HAR of the port, out of the release: publishing to ohpm is not
-      # switched on yet, so `libs/` and a `file:` dependency is the way an app
-      # takes it, and `demo/harmonyos/README.md` says so.
+      # The HAR of the port, built out of this checkout and not downloaded out
+      # of a release. Publishing to ohpm is not switched on yet, so `libs/` and
+      # a `file:` dependency is how the demo takes the package either way; what
+      # lands there is normally a `gh release download`. Built here instead, so
+      # that the ArkTS the demo is compiled against is the ArkTS in the tree
+      # and not the ArkTS of the newest tag, which is one release behind it.
       #
       # The rename is not decoration: `entry/oh-package.json5` names the file
       # it depends on, and it names it `1.0.0` — the version the package will
-      # carry once it is on ohpm, and not the version a release ships today.
-      # What a release carries is renamed to the name the manifest asks for,
-      # because the manifest is the half an app outside this repository copies.
-      - name: The HAR the release carries
+      # carry once it is on ohpm, and not the version this checkout builds.
+      # The manifest is the half an app outside this repository copies, so it
+      # is the manifest that is humoured.
+      - name: Assemble the HAR of the port
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEVECO_HOME: ${{ github.workspace }}/.deveco-cli/command-line-tools
         run: |
           set -euo pipefail
+          export PATH="$DEVECO_HOME/bin:$DEVECO_HOME/tool/node/bin:$PATH"
+          scripts/assemble_harmony_har.sh dist
+          har="$(find dist -name '*.har' -print -quit)"
+          test -n "$har" || { echo "::error::hvigor wrote no .har under dist"; exit 1; }
           mkdir -p demo/harmonyos/libs
-          gh release download v0.1.0-alpha.3 \
-            --pattern 'marsrs-harmonyos-xlog-*.har' \
-            --dir demo/harmonyos/libs
-          mv demo/harmonyos/libs/marsrs-harmonyos-xlog-*.har \
-             demo/harmonyos/libs/marsrs-harmonyos-xlog-1.0.0.har
+          mv "$har" demo/harmonyos/libs/marsrs-harmonyos-xlog-1.0.0.har
       # `ohpm install`, which is what resolves the `file:` dependency above into
       # `oh_modules/`: hvigor does not read `oh-package.json5` for it. Where the
       # binary sits inside the archive is not the same in every release of the

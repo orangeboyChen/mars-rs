@@ -18,7 +18,7 @@
 # and `flutter pub publish` has nothing to do with it.
 
 name: marsrs_demo
-description: The Flutter demo of mars-rs: write a .xlog file and read it back.
+description: "The Flutter demo of mars-rs: write a .xlog file and read it back."
 publish_to: none
 
 # The newest stable Dart SDK, and the floor the plugin's own is at.
@@ -40,6 +40,16 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+
+dependency_overrides:
+  # The plugin out of the checkout beside this one, and not out of pub.dev:
+  # what this demo is analysed against is then the Dart in the tree and not the
+  # Dart of the newest tag, which is one release behind it.
+  #
+  # An override and not a `path:` dependency, so that the line an app outside
+  # this repository writes is the one above and not this one.
+  marsrs_xlog:
+    path: ../../platforms/flutter/marsrs-xlog
 
 flutter:
   uses-material-design: true
