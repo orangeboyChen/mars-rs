@@ -24,7 +24,9 @@ object Mars {
 
     /**
      * Whether `libmarsrsxlog.so` is in this process: what [loadDefaultMarsLibrary]
-     * sets, and what the entry points ask before the `external` below them.
+     * sets, and what [requireLibrary] asks before a symbol is reached. It is
+     * public because [loadDefaultMarsLibrary] cannot be the only way an app
+     * hears the answer — that one logs a failure and goes on.
      *
      * A load that failed used to be a log line and nothing else, and the failure
      * then came out of whichever `external` an app called first — thrown on the
@@ -51,10 +53,18 @@ object Mars {
     }
 
     /**
-     * `libmarsrsxlog.so`, or an `IllegalStateException` naming it: what an entry
-     * point asks before the `external` it is about to call, so that a process
-     * the library is not in says so on the call an app made rather than inside a
-     * symbol.
+     * `libmarsrsxlog.so`, or an `IllegalStateException` naming it: what
+     * [onCreate] and [onDestroy] ask before [BaseEvent] reaches a symbol, so
+     * that a process the library is not in says so on the call an app made
+     * rather than inside one.
+     *
+     * Those two are the entry points of this object, and the ones its own
+     * `external`s are behind. `StnLogic`, `SdtLogic` and the `BaseEvent` a
+     * broadcast reaches are not guarded this way — their `init` has to log a
+     * failed load and go on, because an exception out of it is a class the app
+     * can never touch again — so a call of theirs with the library missing is
+     * still an `UnsatisfiedLinkError` naming the symbol. [libraryLoaded] is
+     * what an app asks when it wants that answer before it makes one.
      */
     private fun requireLibrary() {
         if (!libraryLoaded) {
