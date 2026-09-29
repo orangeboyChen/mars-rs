@@ -177,8 +177,15 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * [flushQueue] drains on is a non-daemon one, and an executor that is
      * never shut down keeps its thread alive for the life of the process — one
      * more of them per reload of the bridge, because a reload builds a module
-     * of its own. A drain already queued is one this waits for, and not one
-     * this takes the appender out from under.
+     * of its own.
+     *
+     * `shutdown` is a request and not a wait: a drain that is already queued is
+     * still run, but this call is back before it has, and the promise that
+     * drain resolves is answered on a thread the bridge may already be gone
+     * from. What is kept by running it is the drain — the records reach the
+     * file — and what is not is the JS answer. No appender is taken out from
+     * under one: nothing here closes one, and a drain of a closed appender
+     * writes nothing.
      */
     override fun invalidate() {
         flushQueue.shutdown()
