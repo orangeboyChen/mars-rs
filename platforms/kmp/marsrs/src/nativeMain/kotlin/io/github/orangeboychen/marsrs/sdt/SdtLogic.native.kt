@@ -22,6 +22,9 @@ import io.github.orangeboychen.marsrs.net.ffi.mars_sdt_run_checks
 import io.github.orangeboychen.marsrs.net.ffi.mars_sdt_set_http_netcheck_cgi
 import io.github.orangeboychen.marsrs.net.ffi.mars_sdt_start_active_check
 import io.github.orangeboychen.marsrs.net.ffi.mars_sdt_take_report
+import kotlin.concurrent.Volatile
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.CPointer
@@ -57,9 +60,10 @@ import kotlinx.cinterop.toKString
  * two platforms one API, and what makes the two ways of asking answer the same
  * document however the app chose to be told.
  */
-@OptIn(ExperimentalForeignApi::class)
+@OptIn(ExperimentalForeignApi::class, ExperimentalAtomicApi::class)
 public actual object SdtLogic {
     /** The callback the report of a run is handed to, which is the app's. */
+    @Volatile
     private var callBack: ICallBack? = null
 
     /**
@@ -77,8 +81,16 @@ public actual object SdtLogic {
      * it listened or asked. What an app that never asks pays for the ones it
      * leaves is what it pays on Android today — a run of two links' hosts is a
      * few hundred bytes — and [reset] is what throws them away.
+     *
+     * Replaced whole and never written into, and an [AtomicReference] of an
+     * immutable [List] and not a `MutableList` two threads share: a run puts a
+     * report by on the thread that ran it and a [takeReport] takes one on the
+     * thread that asked, and there is nothing here to lock the two with —
+     * `synchronized` is the JVM's, `platform.posix` has no mutex on
+     * `mingwX64`, and a coroutine's `Mutex` is one only a `suspend` function
+     * can wait on.
      */
-    private val pending = mutableListOf<String>()
+    private val pending = AtomicReference<List<String>>(emptyList())
 
     /** What [SdtLogic]'s own KDoc says, which is where the words are. */
     public actual fun interface ICallBack {
@@ -155,7 +167,7 @@ public actual object SdtLogic {
             if (ran == MARS_SDT_OK) {
                 val report = drainReport()
                 if (report != null) {
-                    pending.add(report)
+                    putBy(report)
                 }
                 callBack?.reportSignalDetectResults(report)
             }
@@ -169,10 +181,30 @@ public actual object SdtLogic {
     public actual fun takeReport(): String? {
         // What a run is holding for a caller that asks, and otherwise what the
         // C ABI is: one document either way, and taking it empties it.
-        if (pending.isNotEmpty()) {
-            return pending.removeAt(0)
+        return takePending() ?: drainReport()
+    }
+
+    /** Puts [report] by for the [takeReport] that comes looking for it. */
+    private fun putBy(report: String) {
+        while (true) {
+            val waiting = pending.load()
+            if (pending.compareAndSet(waiting, waiting + report)) {
+                return
+            }
         }
-        return drainReport()
+    }
+
+    /** The oldest report nothing has taken yet, or `null` when there is none. */
+    private fun takePending(): String? {
+        while (true) {
+            val waiting = pending.load()
+            if (waiting.isEmpty()) {
+                return null
+            }
+            if (pending.compareAndSet(waiting, waiting.drop(1))) {
+                return waiting.first()
+            }
+        }
     }
 
     /**
@@ -210,7 +242,7 @@ public actual object SdtLogic {
         // which is what `mars_sdt_reset` says and what an app that resets before
         // it asks expects: a report of a run it threw away is not one it is
         // handed afterwards.
-        pending.clear()
+        pending.store(emptyList())
         mars_sdt_reset()
     }
 
