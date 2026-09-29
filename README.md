@@ -29,7 +29,7 @@ package carries the last two — [use it](#use-it) says which do.
 
 | your app is | what you take | where it comes from |
 |---|---|---|
-| Rust | `marsrs` / `marsrs-xlog` | [crates.io](https://crates.io) |
+| Rust | `marsrs` / `marsrs-xlog` | the tag of this repository — [crates.io](https://crates.io) publication is pending |
 | iOS 12+, watchOS 10+, Swift or Objective-C | the `MarsRSXlog` product or pod | SwiftPM or CocoaPods, from this repository |
 | Android, Kotlin or Java | `xlog` / `marsrs` | [JitPack](https://jitpack.io) |
 | Kotlin Multiplatform | `xlog-kmp` / `marsrs-kmp` | GitHub Packages, or the release's `marsrs-kmp-maven.zip` |
@@ -47,8 +47,10 @@ through, and `marsrs-harmony-<version>.tar.gz` is the three `.so` and the header
 for an app that would rather write NAPI of its own.
 
 Every release also ships the `xlog` CLI, which writes and reads those files from
-a shell and makes the key pair that decides who can — `cargo install marsrs-xlog`,
-`xlog keygen`.
+a shell and makes the key pair that decides who can — as
+`marsrs-xlog-cli-<version>-<host>` on the release, or off the tag with
+`cargo install --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3 marsrs-xlog`
+— and then `xlog keygen`.
 
 Every one of those platforms has a demo in [`demo/`](demo/README.md) — one
 directory each, and the same six records written in all eight, so that what
@@ -59,7 +61,7 @@ does.
 
 Two ways in, and the difference is how much of the port you take: **xlog alone**,
 or **the whole port** — xlog, STN and SDT. An app that only logs takes the first;
-the pair is the same one the crates on crates.io are. Two of the packages carry
+the pair is the same one the crates are. Two of the packages carry
 the logger under both names without the other two pieces — Flutter's `marsrs` and
 `marsrs-react-native` have no STN or SDT surface yet, so on those two the choice
 is one of name and not of contents. Everywhere else the wider name is the wider
@@ -68,29 +70,37 @@ on Apple are where an app reaches the task pipeline and the diagnosis, and the C
 archive ships both headers beside the libraries.
 
 ```bash
-cargo add marsrs-xlog    # xlog alone — the logger and nothing else
-cargo add marsrs         # the whole port: + STN, SDT
+# The crates are not on crates.io yet — publication is pending — so a Rust app
+# takes them off the tag: `cargo add marsrs-xlog` on its own resolves nothing.
+# xlog alone — the logger and nothing else:
+cargo add marsrs-xlog --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
+# the whole port: + STN, SDT
+cargo add marsrs --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
 ```
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
+.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0-alpha.3")
 .product(name: "MarsRSXlog", package: "mars-rs")   // or "MarsRS", for both halves
 ```
 
 ```ruby
 # Podfile — Swift or Objective-C
-pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/v0.1.0/MarsRSXlog.podspec'
+pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/v0.1.0-alpha.3/MarsRSXlog.podspec'
 ```
+
+The pods are not on a spec repo, so the podspec is fetched out of the tag it
+names — [the releases page](https://github.com/orangeboyChen/mars-rs/releases)
+is where the newest one is.
 
 ```kotlin
 // settings.gradle.kts: maven { url = uri("https://jitpack.io") }
-implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")    // xlog alone
-implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")  // + STN, SDT
+implementation("io.github.orangeboychen.marsrs:xlog:0.1.0-alpha.3")    // xlog alone
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0-alpha.3")  // + STN, SDT
 
 // build.gradle.kts of a Kotlin Multiplatform shared module
-implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")
-implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")
+implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0-alpha.3")
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0-alpha.3")
 ```
 
 ```bash

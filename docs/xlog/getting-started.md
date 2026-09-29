@@ -38,8 +38,10 @@ Native carry the logger in both of their packages today.
 ## Rust
 
 ```bash
-cargo add marsrs          # the whole port: xlog, stn and sdt
-cargo add marsrs-xlog     # xlog alone — the logger and nothing else
+# The crates are not on crates.io yet — publication is pending — so a Rust app
+# takes them off the tag: `cargo add marsrs` on its own resolves nothing.
+cargo add marsrs      --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
+cargo add marsrs-xlog --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
 ```
 
 `marsrs` is one module per piece of mars — `xlog`, `stn`, `sdt`, `comm` — and
@@ -48,7 +50,7 @@ logs takes `marsrs-xlog`, or `marsrs` with the rest turned off:
 
 ```toml
 [dependencies]
-marsrs = { version = "0.1", default-features = false, features = ["xlog"] }
+marsrs = { git = "https://github.com/orangeboyChen/mars-rs", tag = "v0.1.0-alpha.3", default-features = false, features = ["xlog"] }
 ```
 
 ```rust
@@ -87,7 +89,7 @@ itself when it is dropped, so one held for the life of the process needs no
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
+.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0-alpha.3")
 
 // and, in the target that takes it:
 .product(name: "MarsRSXlog", package: "mars-rs")
@@ -134,14 +136,17 @@ C symbols are there too for whoever prefers them.
 platform :ios, '12.0'
 use_frameworks!
 
-pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/v0.1.0/MarsRSXlog.podspec'
+pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/v0.1.0-alpha.3/MarsRSXlog.podspec'
 ```
 
 Three pods, under the names of the three products above: `MarsRSXlog` is the
 logger, `MarsRSNet` is the task pipeline and the diagnosis, and `MarsRS` is both.
 `:podspec` is the point of the line — the pods are not on a spec repo, and the
-podspec is what names the archive a release publishes. An app that writes `pod
-'MarsRSXlog'` alone is asking the trunk CDN for a pod that is not on it.
+podspec is what names the archive a release publishes; the tag in the URL is the
+release, and [the releases
+page](https://github.com/orangeboyChen/mars-rs/releases) is where the newest one
+is. An app that writes `pod 'MarsRSXlog'` alone is asking the trunk CDN for a pod
+that is not on it.
 
 The Swift is the one of the SwiftPM package — one `import`, the same `Xlog`,
 `XlogConfig` and `LogLevel`, because the pod and the package are the same Swift
@@ -177,8 +182,8 @@ diagnosis writes that part in Swift.
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")    // xlog alone
-implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")  // + STN and SDT
+implementation("io.github.orangeboychen.marsrs:xlog:0.1.0-alpha.3")    // xlog alone
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0-alpha.3")  // + STN and SDT
 ```
 
 Both AARs carry the same `libmarsrsxlog.so`, for `arm64-v8a`, `armeabi-v7a` and
@@ -218,8 +223,8 @@ maven {
 }
 
 // build.gradle.kts of the shared module
-implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")    // xlog alone
-implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")  // + STN and SDT
+implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0-alpha.3")    // xlog alone
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0-alpha.3")  // + STN and SDT
 ```
 
 One dependency in `commonMain`, and each platform compiles its own half of it —
@@ -358,7 +363,7 @@ MarsXLogConfig config = {
     .compress_mode = MarsCompressZlib,
 };
 long long xlog = mars_xlog_new_instance(&config, MarsLevelVerbose);
-if (xlog == 0) { /* the config was refused */ }
+if (xlog <= 0) { /* the config was refused: `xlog` names the MARS_XLOG_ERR_* */ }
 
 mars_xlog_write_instance(xlog, MarsLevelInfo, "startup", __FILE__, __func__, __LINE__,
                          "hello from mars");
@@ -369,8 +374,9 @@ mars_xlog_release_instance("marsrs");
 Every pointer in `MarsXLogConfig` has to be NUL-terminated UTF-8 or `NULL`;
 `NULL` is "empty", except for `log_dir`, which is mandatory. What an app holds
 is an **instance**: `mars_xlog_new_instance(&config, level)` answers its handle,
-or `0` when it refuses the config, and every `*_instance` call takes that
-handle. There is no process-wide appender to open from C — an app that wants a
+or a negative `MARS_XLOG_ERR_*` code when it refuses the config, and every
+`*_instance` call takes that handle. `0` is not one of those codes — it is the
+process-wide appender, and there is none to open from C, so an app that wants a
 second logger gives it a second prefix.
 
 ```bash

@@ -10,7 +10,7 @@ history.
 
 | the piece you use | what you take here | where it is written down |
 |---|---|---|
-| `mars/xlog` | `xlog`: `marsrs-xlog` on crates.io, `xlog` on JitPack, `xlog-kmp` for a shared Kotlin module, `MarsRSXlog` on Apple | [Getting started](/xlog/getting-started) |
+| `mars/xlog` | `xlog`: the `marsrs-xlog` crate — crates.io publication pending — `xlog` on JitPack, `xlog-kmp` for a shared Kotlin module, `MarsRSXlog` on Apple | [Getting started](/xlog/getting-started) |
 
 The split is the one the Rust crates, JitPack and the shared Kotlin module
 make: the logger is one package and the whole port is the other, and the whole

@@ -31,8 +31,10 @@ Apple 那边有三种而不是两种 —— `MarsRSXlog` 是日志，`MarsRSNet`
 ## Rust
 
 ```bash
-cargo add marsrs          # 整个移植：xlog、stn、sdt
-cargo add marsrs-xlog     # 只有 xlog —— 日志，别的都没有
+# 这两个 crate 还没上 crates.io —— 发布还在进行中 —— 所以 Rust 应用现在从
+# tag 上取：只写 `cargo add marsrs` 是解析不到东西的。
+cargo add marsrs      --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
+cargo add marsrs-xlog --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
 ```
 
 `marsrs` 给 mars 的每一块一个模块 —— `xlog`、`stn`、`sdt`、`comm` —— 每块有自己
@@ -41,7 +43,7 @@ cargo add marsrs-xlog     # 只有 xlog —— 日志，别的都没有
 
 ```toml
 [dependencies]
-marsrs = { version = "0.1", default-features = false, features = ["xlog"] }
+marsrs = { git = "https://github.com/orangeboyChen/mars-rs", tag = "v0.1.0-alpha.3", default-features = false, features = ["xlog"] }
 ```
 
 ```rust
@@ -77,7 +79,7 @@ xlog.flush_now();   // 返回时记录已经在磁盘上
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
+.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0-alpha.3")
 
 // 在要用的 target 里：
 .product(name: "MarsRSXlog", package: "mars-rs")
@@ -122,13 +124,14 @@ log.flushNow()    // 返回时记录已经在磁盘上
 platform :ios, '12.0'
 use_frameworks!
 
-pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/v0.1.0/MarsRSXlog.podspec'
+pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/v0.1.0-alpha.3/MarsRSXlog.podspec'
 ```
 
 三个 pod，名字就是上面三个 product：`MarsRSXlog` 是日志，`MarsRSNet` 是任务链路和
 网络诊断，`MarsRS` 是两者。这一行的重点是 `:podspec` —— 这些 pod 不在 spec repo
-上，podspec 才是给 release 发布的那个压缩包命名的东西。只写 `pod 'MarsRSXlog'` 的
-App 是在向 trunk CDN 要一个并不在上面的 pod。
+上，podspec 才是给 release 发布的那个压缩包命名的东西；URL 里那个 tag 就是那个
+release，最新的是[ releases 页](https://github.com/orangeboyChen/mars-rs/releases)。
+只写 `pod 'MarsRSXlog'` 的 App 是在向 trunk CDN 要一个并不在上面的 pod。
 
 Swift 这边就是 SwiftPM 包里的那一套 —— 一次 `import`，同样的 `Xlog`、
 `XlogConfig`、`LogLevel`，因为 pod 和 package 是同一个 framework 上的同一份
@@ -162,8 +165,8 @@ Objective-C 没有 `#file` 可填，所以这里写的记录带的是空文件�
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")    // 只有 xlog
-implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")  // + STN 和 SDT
+implementation("io.github.orangeboychen.marsrs:xlog:0.1.0-alpha.3")    // 只有 xlog
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0-alpha.3")  // + STN 和 SDT
 ```
 
 两个 AAR 带的是同一个 `libmarsrsxlog.so`，覆盖 `arm64-v8a`、`armeabi-v7a` 和
@@ -201,8 +204,8 @@ maven {
 }
 
 // 共享模块的 build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")    // 只有 xlog
-implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")  // + STN 和 SDT
+implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0-alpha.3")    // 只有 xlog
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0-alpha.3")  // + STN 和 SDT
 ```
 
 `commonMain` 里一个依赖，每个平台各自编译自己的一半 —— `androidMain` 走 JNI
@@ -330,7 +333,7 @@ MarsXLogConfig config = {
     .compress_mode = MarsCompressZlib,
 };
 long long xlog = mars_xlog_new_instance(&config, MarsLevelVerbose);
-if (xlog == 0) { /* config 被拒绝 */ }
+if (xlog <= 0) { /* config 被拒绝，xlog 就是那个 MARS_XLOG_ERR_* */ }
 
 mars_xlog_write_instance(xlog, MarsLevelInfo, "startup", __FILE__, __func__, __LINE__,
                          "hello from mars");
@@ -340,9 +343,10 @@ mars_xlog_release_instance("marsrs");
 
 `MarsXLogConfig` 里每个指针都得以 NUL 结尾的 UTF-8，或者是 `NULL`；`NULL` 就是
 “空”，只有 `log_dir` 例外，它是必填的。应用持有的是一个 **instance**：
-`mars_xlog_new_instance(&config, level)` 回答它的 handle，不接受 config 时回答
-`0`，`*_instance` 那一族都收下这个 handle。C 这边没有进程级 appender 可以打开 ——
-想要第二个 logger 就给它第二个 prefix。
+`mars_xlog_new_instance(&config, level)` 回答它的 handle，不接受 config 时回答一个负
+的 `MARS_XLOG_ERR_*`，`*_instance` 那一族都收下这个 handle。`0` 不是这些错误码之
+一 —— 它是进程级 appender，而 C 这边没有它可以打开，想要第二个 logger 就给它第二个
+prefix。
 
 ```bash
 cc -I include -o app app.c libmars_ffi.a -lpthread -ldl     # 静态

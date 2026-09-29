@@ -9,22 +9,24 @@ App 从来不需要它 —— app 里的 appender 写出的是同样的字节 �
 
 ::: code-group
 
-```bash [从 crates.io]
-cargo install marsrs-xlog      # 这个 crate 的 `xlog`，装到 $PATH 上
+```bash [从 tag]
+# 这个 crate 还没上 crates.io —— 发布还在进行中 —— 所以 `cargo install` 指向的是
+# tag。它把 `xlog` 装到 $PATH 上。
+cargo install --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3 marsrs-xlog
 xlog --version
 ```
 
 ```bash [从 release]
 # marsrs-xlog-cli-<version>-<host>.tar.gz，Windows 上是 .zip
-tar -xzf marsrs-xlog-cli-0.1.0-aarch64-apple-darwin.tar.gz
-./marsrs-xlog-cli-0.1.0-aarch64-apple-darwin/xlog --version
+tar -xzf marsrs-xlog-cli-0.1.0-alpha.3-aarch64-apple-darwin.tar.gz
+./marsrs-xlog-cli-0.1.0-alpha.3-aarch64-apple-darwin/xlog --version
 ```
 
 :::
 
 压缩包和 C ABI 的一样，为 Linux、macOS、Windows 三个 host 构建，里面只有这一条命令，
-别的什么都没有 —— 它是给没有 Rust 工具链的机器准备的。`cargo install` 和压缩包装到
-的是同一个 `xlog`。
+别的什么都没有 —— 它是给没有 Rust 工具链的机器准备的。从 tag 装和从压缩包取，是同
+一个 `xlog`。
 
 | 命令 | 做什么 |
 |---|---|

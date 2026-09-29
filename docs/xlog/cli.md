@@ -11,22 +11,24 @@ away.
 
 ::: code-group
 
-```bash [From crates.io]
-cargo install marsrs-xlog      # the `xlog` bin of the crate, on the $PATH
+```bash [From the tag]
+# The crate is not on crates.io yet — publication is pending — so the tag is
+# what `cargo install` is pointed at. It puts the `xlog` bin on the $PATH.
+cargo install --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3 marsrs-xlog
 xlog --version
 ```
 
 ```bash [From a release]
 # marsrs-xlog-cli-<version>-<host>.tar.gz, or .zip on Windows
-tar -xzf marsrs-xlog-cli-0.1.0-aarch64-apple-darwin.tar.gz
-./marsrs-xlog-cli-0.1.0-aarch64-apple-darwin/xlog --version
+tar -xzf marsrs-xlog-cli-0.1.0-alpha.3-aarch64-apple-darwin.tar.gz
+./marsrs-xlog-cli-0.1.0-alpha.3-aarch64-apple-darwin/xlog --version
 ```
 
 :::
 
 The archive is built for the same three hosts as the C ABI's — Linux, macOS and
 Windows — and carries one command and nothing else; it is for the machine that
-has no Rust toolchain. `cargo install` and the archive give the same `xlog`.
+has no Rust toolchain. The tag and the archive give the same `xlog`.
 
 | command | what it does |
 |---|---|

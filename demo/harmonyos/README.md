@@ -19,11 +19,17 @@ same archive, and it goes in `libs/`:
 ```bash
 gh release download v0.1.0-alpha.3 --pattern 'marsrs-harmonyos-xlog-*.har' \
     --dir demo/harmonyos/libs
+mv demo/harmonyos/libs/marsrs-harmonyos-xlog-*.har \
+    demo/harmonyos/libs/marsrs-harmonyos-xlog.har
 ohpm install
 ```
 
-`libs/` is ignored, because it is a download and not a source. The line an app
-writes once the package *is* on ohpm is `"marsrs-harmonyos-xlog": "^1.0.0"` in
+`libs/` is ignored, because it is a download and not a source. The rename is
+what makes the download and `entry/oh-package.json5` the same file: a release
+asset carries the version of its release — `marsrs-harmonyos-xlog-0.1.0-alpha.3.har`
+today — and the `file:` dependency names no version, so that it names a file
+that is there after the next release too. The line an app writes once the
+package *is* on ohpm is `"marsrs-harmonyos-xlog": "^1.0.0"` in
 `entry/oh-package.json5`, and nothing else in the module changes.
 
 ## The two numbers that are the SDK's

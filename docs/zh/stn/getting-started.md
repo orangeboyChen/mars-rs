@@ -47,7 +47,9 @@ native 一侧在 Android 上倒是带着 STN —— 整个移植的那个 AAR �
 ## Rust
 
 ```bash
-cargo add marsrs          # 整个移植：xlog、stn、sdt
+# 这个 crate 还没上 crates.io —— 发布还在进行中 —— 所以 Rust 应用现在从
+# tag 上取：只写 `cargo add marsrs` 是解析不到东西的。
+cargo add marsrs --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
 ```
 
 ```rust
@@ -167,7 +169,7 @@ profile 和报告。
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
+.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0-alpha.3")
 
 // 在要用的 target 里：
 .product(name: "MarsRSNet", package: "mars-rs")   // 要两半都有就 MarsRS
@@ -213,7 +215,7 @@ framework 上的同一份 Swift。Objective-C 看不见它：只有 static 成�
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")   // 只有 xlog 的那个没有
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0-alpha.3")   // 只有 xlog 的那个没有
 ```
 
 ```kotlin
@@ -265,7 +267,7 @@ interface，所以那个对象要 App 自己补完。
 
 ```kotlin
 // 共享模块的 build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")   // 不是 xlog-kmp
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0-alpha.3")   // 不是 xlog-kmp
 ```
 
 ```kotlin

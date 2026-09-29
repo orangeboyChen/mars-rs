@@ -7,7 +7,7 @@
 
 | 你用的那一块 | 这里拿什么 | 写在哪一页 |
 |---|---|---|
-| `mars/sdt` | crates.io 和 JitPack 上的 `marsrs`，共享 Kotlin 模块的 `marsrs-kmp`，Apple 上的 `MarsRSNet` | [快速开始](/zh/sdt/getting-started) |
+| `mars/sdt` | JitPack 上的 `marsrs` 和同名的 crate（crates.io 还没发布），共享 Kotlin 模块的 `marsrs-kmp`，Apple 上的 `MarsRSNet` | [快速开始](/zh/sdt/getting-started) |
 | `mars/xlog` | `xlog` —— 日志，在自己的一个包里 | [从 mars-xlog 迁移](/zh/xlog/migrating-from-mars-xlog) |
 | `mars/stn` | 同一个 `marsrs`，和诊断在同一个包里 | [从 mars-stn 迁移](/zh/stn/migrating-from-mars-stn) |
 

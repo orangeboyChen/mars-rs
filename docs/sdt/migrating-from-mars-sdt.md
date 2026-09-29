@@ -8,7 +8,7 @@ and the checks, run them, take the report — and the report is the same
 
 | the piece you use | what you take here | where it is written down |
 |---|---|---|
-| `mars/sdt` | `marsrs` on crates.io and JitPack, `marsrs-kmp` for a shared Kotlin module, `MarsRSNet` on Apple | [Getting started](/sdt/getting-started) |
+| `mars/sdt` | `marsrs` on JitPack, and the crate of the same name — crates.io publication pending — `marsrs-kmp` for a shared Kotlin module, `MarsRSNet` on Apple | [Getting started](/sdt/getting-started) |
 | `mars/xlog` | `xlog` — the logger, in a package of its own | [Migrating from mars-xlog](/xlog/migrating-from-mars-xlog) |
 | `mars/stn` | the same `marsrs`, in the same package as the diagnosis | [Migrating from mars-stn](/stn/migrating-from-mars-stn) |
 

@@ -33,7 +33,9 @@ Flutter 插件和 React Native 模块目前都只有日志：两个都起不了�
 ## Rust
 
 ```bash
-cargo add marsrs          # 整个移植：xlog、stn、sdt
+# 这个 crate 还没上 crates.io —— 发布还在进行中 —— 所以 Rust 应用现在从
+# tag 上取：只写 `cargo add marsrs` 是解析不到东西的。
+cargo add marsrs --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
 ```
 
 ```rust
@@ -90,7 +92,7 @@ println!("{}", report_json(&results));
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
+.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0-alpha.3")
 
 // 在要用的 target 里：
 .product(name: "MarsRSNet", package: "mars-rs")   // 要两半都有就 MarsRS
@@ -133,7 +135,7 @@ if let report = MarsSdt.takeReport() { send(report) }
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")   // 只有 xlog 的那个没有
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0-alpha.3")   // 只有 xlog 的那个没有
 ```
 
 ```kotlin
@@ -178,7 +180,7 @@ SdtLogic.runChecks(
 
 ```kotlin
 // 共享模块的 build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")   // 不是 xlog-kmp
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0-alpha.3")   // 不是 xlog-kmp
 ```
 
 ```kotlin

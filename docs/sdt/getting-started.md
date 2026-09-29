@@ -35,7 +35,9 @@ In Rust the three are one call — `sdt.diagnose(…)` — and the mode has name
 ## Rust
 
 ```bash
-cargo add marsrs          # the whole port: xlog, stn and sdt
+# The crate is not on crates.io yet — publication is pending — so a Rust app
+# takes it off the tag: `cargo add marsrs` on its own resolves nothing.
+cargo add marsrs --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
 ```
 
 ```rust
@@ -94,7 +96,7 @@ with `set_callback`, the way it is when the three calls are made apart.
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
+.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0-alpha.3")
 
 // and, in the target that takes it:
 .product(name: "MarsRSNet", package: "mars-rs")   // or MarsRS, for both halves
@@ -137,7 +139,7 @@ app that takes the report asks for it once and does not size anything.
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")   // xlog alone has none of it
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0-alpha.3")   // xlog alone has none of it
 ```
 
 ```kotlin
@@ -182,7 +184,7 @@ SdtLogic.runChecks(
 
 ```kotlin
 // build.gradle.kts of the shared module
-implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")   // not xlog-kmp
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0-alpha.3")   // not xlog-kmp
 ```
 
 ```kotlin

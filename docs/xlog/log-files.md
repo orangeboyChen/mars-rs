@@ -178,8 +178,9 @@ mars logs reads these.
 ::: code-group
 
 ```bash [The CLI]
-cargo install marsrs-xlog          # puts `xlog` on the $PATH; a release
-                                   # carries the same command as an archive
+# The crate is not on crates.io yet — publication is pending — so this is the
+# tag; a release carries the same command as an archive.
+cargo install --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3 marsrs-xlog
 xlog decode --privkey=<hex> marsrs_20260927.xlog --out=marsrs.plain
 ```
 

@@ -26,8 +26,8 @@ repository rather than the Maven group the documentation quotes:
 `com.github.orangeboyChen.mars-rs:xlog`. A JitPack group of one's own has to be
 claimed before it resolves, and `io.github.orangeboychen.marsrs` is not — that
 one answers 401, which looks exactly like a version that does not exist. The
-release the demo is written against is `0.1.0-alpha.3`; `0.1.0` is what the
-documentation quotes and is not out yet. Both of those are one line of
+release the demo is written against is `0.1.0-alpha.3`, which is what the
+documentation quotes; `0.1.0` is not out yet. Both of those are one line of
 `gradle/libs.versions.toml`.
 
 ## What to look at

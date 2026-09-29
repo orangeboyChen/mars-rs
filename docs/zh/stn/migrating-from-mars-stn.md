@@ -6,7 +6,7 @@ App 从 C++ 项目的任务链路迁过来，要挪的有两样东西：发起�
 
 | 你用的那一块 | 这里拿什么 | 写在哪一页 |
 |---|---|---|
-| `mars/stn` | crates.io 和 JitPack 上的 `marsrs`，共享 Kotlin 模块的 `marsrs-kmp`，Apple 上的 `MarsRSNet` | [快速开始](/zh/stn/getting-started) |
+| `mars/stn` | JitPack 上的 `marsrs` 和同名的 crate（crates.io 还没发布），共享 Kotlin 模块的 `marsrs-kmp`，Apple 上的 `MarsRSNet` | [快速开始](/zh/stn/getting-started) |
 | `mars/xlog` | `xlog` —— 日志，在自己的一个包里 | [从 mars-xlog 迁移](/zh/xlog/migrating-from-mars-xlog) |
 | `mars/sdt` | 同一个 `marsrs`，和链路在同一个包里 | [从 mars-sdt 迁移](/zh/sdt/migrating-from-mars-sdt) |
 
