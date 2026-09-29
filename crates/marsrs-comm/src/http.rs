@@ -847,6 +847,14 @@ impl Parser {
             self.peer_hung_up();
             return self.status;
         }
+        // A parser that is done is handed no more bytes. `run` cannot use
+        // them — every state past the body answers its status and stops —
+        // so they would sit in `buffered()` and grow for as long as a caller
+        // that is still reading the socket hands them over, which is what a
+        // peer that did not close it lets it do.
+        if self.status.is_error() || self.status.is_end() {
+            return self.status;
+        }
         self.buffer.extend_from_slice(bytes);
         self.run(false)
     }
@@ -861,6 +869,10 @@ impl Parser {
     pub fn recv_header_only(&mut self, bytes: &[u8]) -> RecvStatus {
         if bytes.is_empty() {
             self.peer_hung_up();
+            return self.status;
+        }
+        // as [`Parser::recv`]
+        if self.status.is_error() || self.status.is_end() {
             return self.status;
         }
         self.buffer.extend_from_slice(bytes);

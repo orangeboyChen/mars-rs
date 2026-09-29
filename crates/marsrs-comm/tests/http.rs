@@ -236,6 +236,46 @@ fn a_trailer_that_never_ends_is_an_error() {
     assert_eq!(parser.recv(field.as_bytes()), RecvStatus::BodyError);
 }
 
+/// A parser that is done takes no more bytes: `run` has no state left that
+/// could use them, so what it was given would sit in `buffered()` and grow
+/// for as long as the caller kept handing over what the socket gave it.
+#[test]
+fn an_answer_that_is_whole_buffers_nothing_more() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"),
+        RecvStatus::End
+    );
+    for _ in 0..8 {
+        assert_eq!(parser.recv(&[b'x'; 8 * 1024]), RecvStatus::End);
+    }
+    assert!(
+        parser.buffered().is_empty(),
+        "{} bytes of an answer that was already whole",
+        parser.buffered().len()
+    );
+    assert_eq!(parser.body(), b"hello");
+}
+
+/// The same for a parser that failed: what a peer writes after a first line
+/// that is not one is not an answer either, and the line that failed is what
+/// stays in the buffer and not that as well.
+#[test]
+fn an_answer_that_failed_buffers_nothing_more() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"not a first line at all\r\n"),
+        RecvStatus::FirstLineError
+    );
+    let buffered = parser.buffered().len();
+    assert_eq!(parser.recv(&[b'x'; 8 * 1024]), RecvStatus::FirstLineError);
+    assert_eq!(
+        parser.buffered().len(),
+        buffered,
+        "nothing was added to what the failed line left"
+    );
+}
+
 /// The bound is on the wait for a trailer and not on the trailer: one that
 /// came in whole is taken whole, however many fields it carries — a peer is
 /// entitled to a trailer longer than the head's own bound, and a parser that
