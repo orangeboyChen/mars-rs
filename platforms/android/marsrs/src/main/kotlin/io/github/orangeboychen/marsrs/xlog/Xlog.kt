@@ -279,7 +279,7 @@ class Xlog : Log.LogImp {
      */
     fun signalFlush() {
         if (isOpen) {
-            appenderFlush(handle, false)
+            appenderSignalFlush(handle)
         }
     }
 
@@ -296,7 +296,7 @@ class Xlog : Log.LogImp {
      */
     fun flushNow() {
         if (isOpen) {
-            appenderFlush(handle, true)
+            appenderFlushNow(handle)
         }
     }
 
@@ -565,6 +565,15 @@ class Xlog : Log.LogImp {
 
     external override fun appenderClose()
 
+    /** Tells the writer thread it may drain, and returns at once. */
+    external override fun appenderSignalFlush(logInstancePtr: Long)
+
+    /** Drains on the calling thread: the records are on disk when it returns. */
+    external override fun appenderFlushNow(logInstancePtr: Long)
+
+    /** Upstream's name, and the one call of the Java seam that still asks for a
+     * `sync`: what the C++'s Java declared, and what the deprecated `Log`
+     * facade calls. */
     external override fun appenderFlush(logInstancePtr: Long, isSync: Boolean)
 
     external override fun setMaxFileSize(logInstancePtr: Long, size: Long)
