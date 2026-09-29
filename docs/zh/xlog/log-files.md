@@ -30,9 +30,29 @@ char path[512];
 mars_xlog_current_log_path_instance(handle, path, sizeof path);   // 字节数，或负的错误码
 ```
 
+```kotlin [Android]
+xlog.currentLogPath
+```
+
+```kotlin [Kotlin Multiplatform]
+xlog.currentLogPath
+```
+
+```typescript [HarmonyOS]
+xlog.currentLogPath
+```
+
+```dart [Flutter]
+await xlog.currentLogPath()
+```
+
+```ts [React Native]
+xlog.currentLogPath
+```
+
 :::
 
-能给出这个路径的就是这三个包，而且三个都是这个 `Xlog` 自己的。其余平台要 App 自己拼
+这里的每个包都能给出这个路径，而且都是关于这个 `Xlog` 自己的。其余平台要 App 自己拼
 出文件名，拼的时候用的还是交给配置的那两样：目录和前缀，中间夹着当天日期。
 
 一整**天**的文件是另一件事，要上传昨天日志的 App 问的就是它。这里有两个调用：一个是
@@ -55,6 +75,31 @@ char path[512];
 // 下标 0、1、2 ……；负的错误码 —— MARS_XLOG_ERR_NO_PATH —— 表示后面没有了
 mars_xlog_getfilepath_from_timespan_instance(handle, 1, 0, path, sizeof path);
 mars_xlog_make_logfile_name_instance(handle, 1, 0, path, sizeof path);
+```
+
+```kotlin [Android]
+xlog.logFiles(1)
+xlog.logFileNames(1)
+```
+
+```kotlin [Kotlin Multiplatform]
+xlog.logFiles(1)
+xlog.logFileNames(1)
+```
+
+```typescript [HarmonyOS]
+xlog.logFiles(1)
+xlog.logFileNames(1)
+```
+
+```dart [Flutter]
+await xlog.logFiles(1)
+await xlog.logFileNames(1)
+```
+
+```ts [React Native]
+xlog.logFiles(1)
+xlog.logFileNames(1)
 ```
 
 :::

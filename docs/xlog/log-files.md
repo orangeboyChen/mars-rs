@@ -31,10 +31,30 @@ char path[512];
 mars_xlog_current_log_path_instance(handle, path, sizeof path);   // bytes, or a negative code
 ```
 
+```kotlin [Android]
+xlog.currentLogPath
+```
+
+```kotlin [Kotlin Multiplatform]
+xlog.currentLogPath
+```
+
+```typescript [HarmonyOS]
+xlog.currentLogPath
+```
+
+```dart [Flutter]
+await xlog.currentLogPath()
+```
+
+```ts [React Native]
+xlog.currentLogPath
+```
+
 :::
 
-Those three are the ones that answer it, and all three are the `Xlog`'s own.
-The rest leave
+Every package here answers it, and every one of them answers it about the `Xlog`
+the file belongs to. The rest leave
 the app to name the file itself, which is the two things it gave the config: the
 directory and the prefix, with the day in between.
 
@@ -59,6 +79,31 @@ char path[512];
 // index 0, 1, 2 …; a negative code — MARS_XLOG_ERR_NO_PATH — is the end of the list
 mars_xlog_getfilepath_from_timespan_instance(handle, 1, 0, path, sizeof path);
 mars_xlog_make_logfile_name_instance(handle, 1, 0, path, sizeof path);
+```
+
+```kotlin [Android]
+xlog.logFiles(1)
+xlog.logFileNames(1)
+```
+
+```kotlin [Kotlin Multiplatform]
+xlog.logFiles(1)
+xlog.logFileNames(1)
+```
+
+```typescript [HarmonyOS]
+xlog.logFiles(1)
+xlog.logFileNames(1)
+```
+
+```dart [Flutter]
+await xlog.logFiles(1)
+await xlog.logFileNames(1)
+```
+
+```ts [React Native]
+xlog.logFiles(1)
+xlog.logFileNames(1)
 ```
 
 :::

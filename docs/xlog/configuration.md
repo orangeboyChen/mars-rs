@@ -142,8 +142,8 @@ every one of them takes effect from the next record:
 | mirror records to the console | `xlog.set_console_log_enabled` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log_instance(0, on)` | `log.setConsoleLogEnabled` | `xlog.consoleLogEnabled` |
 | close a file after N bytes | `xlog.set_max_file_size_bytes` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size_instance(0, bytes)` | `log.setMaxFileSizeBytes` | `xlog.maxFileSizeBytes` |
 | drop a file older than N seconds | `xlog.set_max_alive_time_seconds` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration_instance(0, secs)` | `log.setMaxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` |
-| where the current file is | `xlog.current_log_path()` | `xlog.currentLogPath` | — | — | — | — | `mars_xlog_current_log_path_instance` | — | — |
-| a day of files | `xlog.log_files(days_ago)` | `xlog.logFiles(daysAgo:)` | — | — | — | — | `mars_xlog_getfilepath_from_timespan_instance` | — | — |
+| where the current file is | `xlog.current_log_path()` | `log.currentLogPath` | `xlog.currentLogPath` | `xlog.currentLogPath` | `await xlog.currentLogPath()` / `xlog.currentLogPath` | `mars_xlog_current_log_path_instance` | `log.currentLogPath()` | `xlog.currentLogPath` | — |
+| a day of files | `xlog.log_files(days_ago)` | `log.logFiles(daysAgo:)` | `xlog.logFiles(daysAgo)` | `xlog.logFiles(daysAgo)` | `await xlog.logFiles(daysAgo)` / `xlog.logFiles(daysAgo)` | `mars_xlog_getfilepath_from_timespan_instance` | `log.logFiles(daysAgo)` | `xlog.logFiles(daysAgo)` | — |
 
 `0` is "no limit" for both sizes and ages: a file is never split and never
 dropped — the C++ keeps its own ten days.
