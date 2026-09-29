@@ -65,18 +65,18 @@ public actual object SdtLogic {
     /**
      * The reports of runs that are over and that nothing has taken yet.
      *
-     * The C ABI has one buffer and [takeReport] empties it, so a report handed
+     * The C ABI has one buffer and [drainReport] empties it, so a report handed
      * to a callback is a report a later [takeReport] would find gone: what the
      * common API promises is one document either way — the callback gets it, and
      * an app that would rather ask keeps its own copy to ask for.
      *
-     * Kept for a listener as much as for a caller that polls, because the other
-     * `actual` does: Android's [takeReport] is an `external` over the list the
-     * JNI bridge fills on every delivery, whether or not a callback was there to
-     * be handed one, so an app that installed a callback and asked anyway got
-     * the document there and `null` here. What an app that never asks pays for
-     * the ones it leaves is what it pays on Android today — a run of two links'
-     * hosts is a few hundred bytes — and [reset] is what throws them away.
+     * Kept whether or not a callback was listening, because the other `actual`
+     * does: Android's [takeReport] is an `external` over the results the bridge
+     * keeps, and `reportSignalDetectResults` is a call it makes beside keeping
+     * them and not instead of it, so an app there is handed a document whether
+     * it listened or asked. What an app that never asks pays for the ones it
+     * leaves is what it pays on Android today — a run of two links' hosts is a
+     * few hundred bytes — and [reset] is what throws them away.
      */
     private val pending = mutableListOf<String>()
 
