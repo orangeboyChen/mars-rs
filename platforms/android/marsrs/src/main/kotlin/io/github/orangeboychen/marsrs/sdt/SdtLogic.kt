@@ -8,8 +8,6 @@ package io.github.orangeboychen.marsrs.sdt
 import io.github.orangeboychen.marsrs.Mars
 
 /**
- * The signal detection utility class
- *
  * Every `external` is a static of this very class — that is what makes them the
  * `Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_*` symbols `marsrs-jni`
  * exports — and four of them are asked from the native side while a diagnosis

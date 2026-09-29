@@ -3,8 +3,6 @@ package io.github.orangeboychen.marsrs.stn
 import java.util.Arrays
 
 /**
- * The network task statistics info class
- *
  * What `StnLogic.ICallBack.reportTaskProfile` hands the app is the JSON of one
  * of these; the fields are the C++ project's, `@JvmField` so that Java reads
  * them as it read the C++ class's.

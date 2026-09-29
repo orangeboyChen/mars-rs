@@ -43,8 +43,17 @@ object BaseEvent {
     external fun onInitConfigBeforeOnCreate(packerEncoderVersion: Int)
 
     /**
-     * Listens for a network change: the client registers this broadcast to tell mars STN that the
-     * network changed.
+     * The receiver an app registers for `CONNECTIVITY_ACTION`, and the thing
+     * that calls [onNetworkChange].
+     *
+     * Not a straight forward, because Android's broadcast is not one per
+     * change: a connection sends one when its own state moves, which is a
+     * `CONNECTED` either way, and more than one for one switch — and an STN
+     * woken for the network it is already on is an STN woken for nothing. So
+     * the network of the last broadcast is kept beside the one of this, and
+     * only a difference is answered: the `bssid`, the `ssid` and the
+     * `networkId` of a Wifi, and the `extraInfo`, the `subtype` and the `type`
+     * of everything else.
      */
     class ConnectionReceiver : BroadcastReceiver() {
 
@@ -55,6 +64,9 @@ object BaseEvent {
 
             val mgr = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             var netInfo: NetworkInfo? = null
+            // An app that did not ask for `ACCESS_NETWORK_STATE` is answered
+            // with a `SecurityException` and not with a null, and a network
+            // that cannot be read is the one state STN can be told: nothing.
             try {
                 @Suppress("DEPRECATION")
                 netInfo = mgr?.activeNetworkInfo
