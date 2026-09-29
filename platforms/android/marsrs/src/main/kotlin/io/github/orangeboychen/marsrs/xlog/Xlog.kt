@@ -329,6 +329,12 @@ class Xlog(config: XlogConfig, context: Context? = null) {
 
     private external fun getLogLevel(handle: Long): Int
 
+    private external fun getCurrentLogPath(handle: Long): String?
+
+    private external fun logFiles(handle: Long, timespan: Long): Array<String>
+
+    private external fun logFileNames(handle: Long, timespan: Long): Array<String>
+
     private external fun setLogLevel(handle: Long, level: Int)
 
     private external fun setAppenderMode(handle: Long, mode: Int)
