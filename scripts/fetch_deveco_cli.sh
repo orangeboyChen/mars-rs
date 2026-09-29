@@ -92,6 +92,17 @@ else
     echo "::warning::no DEVECO_CLI_SHA256: $zip is unpacked unchecked"
 fi
 
+# Unpacked into a directory emptied first, and not unpacked over what is
+# already in it. What an identity mismatch says is that the copy in the cache
+# is not the one this run asked for, and `unzip` will not quietly make it the
+# right one: it asks before it replaces a file it finds, and with no stdin to
+# read the answer from it takes "none" and exits non-zero, which is a failed
+# job for a cache it could have served. Nor is an overwrite enough on its own —
+# a full tree unpacked over a pruned one is right, and a pruned one unpacked
+# over a full one leaves the rest of the full one behind under an identity
+# that says it is not there.
+rm -rf "$dir/command-line-tools"
+
 if [ "$prune" = 0 ]; then
     unzip -q "$zip" -d "$dir"
 else
