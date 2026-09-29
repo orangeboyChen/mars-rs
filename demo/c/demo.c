@@ -7,7 +7,7 @@
  *
  *   1. fill in a `MarsXLogConfig` and open the appender — `mars_xlog_open`;
  *   2. write one record at every level — `mars_xlog_write`;
- *   3. drain it to disk — `mars_xlog_flush_sync`;
+ *   3. drain it to disk — `mars_xlog_flush_now_instance`;
  *   4. ask where the file went, and close — `mars_xlog_close`.
  *
  * Build it with `make` and run it with `make run`; the Makefile builds the
@@ -70,15 +70,19 @@ int main(void) {
      *
      * The level is not part of the config — there is no level field in it —
      * because the level belongs to the logger and not to the file. */
-    mars_xlog_set_level(MarsLevelVerbose);
+    /* `0` is the process-wide appender `mars_xlog_open` opened, and it is the
+     * handle every setting below is asked of: the ABI spells each of them once,
+     * in the instance form, so the level, the console, the two sizes and the
+     * drain of that appender are all asked for with a handle of `0`. */
+    mars_xlog_set_level_instance(0, MarsLevelVerbose);
     /* Mirror every record to stderr as well: off in an app that ships, on here
      * so a run shows what went into the file. */
-    mars_xlog_set_console_log(1);
+    mars_xlog_set_console_log_instance(0, 1);
     /* Close a file at 8 MiB, drop one at ten days. Both are 0 by default, which
      * is not the same 0 twice: a maximum size of 0 never splits a file, and a
      * lifetime of 0 is the C++'s own ten days. */
-    mars_xlog_set_max_file_size(8ULL * 1024 * 1024);
-    mars_xlog_set_max_alive_duration(10LL * 24 * 3600);
+    mars_xlog_set_max_file_size_instance(0, 8ULL * 1024 * 1024);
+    mars_xlog_set_max_alive_duration_instance(0, 10LL * 24 * 3600);
 
     /* -- 2. write ---------------------------------------------------------- */
     struct {
@@ -116,10 +120,11 @@ int main(void) {
 
     /* -- 3. flush ----------------------------------------------------------
      *
-     * `mars_xlog_flush` only signals the writer thread and returns; this one
-     * waits, so every record above is on disk before the next line runs. An app
-     * calls it before it reads the files, uploads them, or exits. */
-    mars_xlog_flush_sync();
+     * `mars_xlog_signal_flush_instance` only signals the writer thread and
+     * returns; this one waits, so every record above is on disk before the next
+     * line runs. An app calls it before it reads the files, uploads them, or
+     * exits. */
+    mars_xlog_flush_now_instance(0);
 
     /* -- 4. where it went, and close ---------------------------------------
      *
