@@ -9,8 +9,8 @@
 use std::fs;
 
 use mars_ffi::sdt::{
-    MARS_SDT_ERR_BUSY, MARS_SDT_ERR_NO_CHECK, MARS_SDT_ERR_NO_PROBE, MARS_SDT_ERR_NO_SPACE,
-    MARS_SDT_ERR_NULL_OUT, MARS_SDT_ERR_PANIC, MARS_SDT_OK,
+    MARS_SDT_ERR_BAD_ARG, MARS_SDT_ERR_BUSY, MARS_SDT_ERR_NO_CHECK, MARS_SDT_ERR_NO_PROBE,
+    MARS_SDT_ERR_NO_SPACE, MARS_SDT_ERR_NULL_OUT, MARS_SDT_ERR_PANIC, MARS_SDT_OK,
 };
 
 fn header() -> String {
@@ -100,6 +100,7 @@ fn error_codes_match_the_header_defines() {
         ("MARS_SDT_ERR_NO_PROBE", MARS_SDT_ERR_NO_PROBE),
         ("MARS_SDT_ERR_BUSY", MARS_SDT_ERR_BUSY),
         ("MARS_SDT_ERR_NO_CHECK", MARS_SDT_ERR_NO_CHECK),
+        ("MARS_SDT_ERR_BAD_ARG", MARS_SDT_ERR_BAD_ARG),
     ] {
         let needle = format!("{name} (-{n})", n = value.abs());
         let zero = format!("{name} 0");

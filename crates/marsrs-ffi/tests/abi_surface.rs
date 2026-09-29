@@ -6,7 +6,7 @@
 //! serialise on [`LOCK`].
 
 use std::ffi::CString;
-use std::os::raw::{c_char, c_int, c_uint};
+use std::os::raw::{c_char, c_int, c_longlong, c_uint};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_ffi::abi::{
@@ -18,8 +18,9 @@ use mars_ffi::abi::{
     mars_xlog_request_flush_instance, mars_xlog_set_console_log_instance,
     mars_xlog_set_level_instance, mars_xlog_set_max_alive_duration_instance,
     mars_xlog_set_max_file_size_instance, mars_xlog_set_mode_instance, mars_xlog_write_instance,
-    MarsXLogConfig, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_CONFIG,
-    MARS_XLOG_ERR_NULL_OUT,
+    MarsXLogConfig, MARS_XLOG_ERR_APPENDER, MARS_XLOG_ERR_BAD_COMPRESS, MARS_XLOG_ERR_BAD_MODE,
+    MARS_XLOG_ERR_EMPTY_LOG_DIR, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE,
+    MARS_XLOG_ERR_NULL_CONFIG, MARS_XLOG_ERR_NULL_OUT,
 };
 
 fn serial() -> MutexGuard<'static, ()> {
@@ -72,22 +73,57 @@ fn make_config(dir: &std::path::Path, mode: c_int, compress: c_int) -> ConfigBun
 #[test]
 fn a_new_instance_refuses_a_bad_config_before_touching_the_disk() {
     let _guard = serial();
-    // `0` is the answer to every one of these: an instance is a handle, and
-    // there is no room in one for a `MARS_XLOG_ERR_*` code. What is pinned
-    // here is that the config is refused at all, and before the disk is
-    // touched.
-    assert_eq!(unsafe { mars_xlog_new_instance(std::ptr::null(), 0) }, 0);
+    // Every refusal is its own negative code, and not `0`: `0` is the
+    // process-wide appender, so a caller that took it for "no instance"
+    // logged through a logger it never opened. What is pinned here is which
+    // part of the config was refused, and that the disk is not touched.
+    assert_eq!(
+        unsafe { mars_xlog_new_instance(std::ptr::null(), 0) },
+        MARS_XLOG_ERR_NULL_CONFIG as c_longlong
+    );
 
     let dir = tempdir("bad");
-    for (mode, compress) in [(7, 0), (0, 9)] {
-        let config = make_config(&dir, mode, compress);
-        assert_eq!(unsafe { mars_xlog_new_instance(&config.raw, 0) }, 0);
-    }
+    let bad_mode = make_config(&dir, 7, 0);
+    assert_eq!(
+        unsafe { mars_xlog_new_instance(&bad_mode.raw, 0) },
+        MARS_XLOG_ERR_BAD_MODE as c_longlong
+    );
+    let bad_compress = make_config(&dir, 0, 9);
+    assert_eq!(
+        unsafe { mars_xlog_new_instance(&bad_compress.raw, 0) },
+        MARS_XLOG_ERR_BAD_COMPRESS as c_longlong
+    );
 
     let empty = CString::new("").unwrap();
     let mut config = make_config(&dir, 0, 0);
     config.raw.log_dir = empty.as_ptr();
-    assert_eq!(unsafe { mars_xlog_new_instance(&config.raw, 0) }, 0);
+    assert_eq!(
+        unsafe { mars_xlog_new_instance(&config.raw, 0) },
+        MARS_XLOG_ERR_EMPTY_LOG_DIR as c_longlong
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A config that is *valid* and that the appender still refuses is refused out
+/// loud: the log directory is a file, so there is nowhere to put an appender.
+///
+/// This is the case `0` used to hide — a caller took the process-wide handle
+/// for its own logger, and the first record it wrote through it went wherever
+/// the JNI bridge had put the process-wide appender, if anywhere at all.
+#[test]
+fn an_appender_that_will_not_open_is_reported_and_not_handed_out() {
+    let _guard = serial();
+    let dir = tempdir("refused");
+    let file = dir.join("not-a-directory");
+    std::fs::write(&file, b"").unwrap();
+
+    let log_dir = CString::new(file.to_str().unwrap()).unwrap();
+    let mut config = make_config(&dir, 0, 0);
+    config.raw.log_dir = log_dir.as_ptr();
+    assert_eq!(
+        unsafe { mars_xlog_new_instance(&config.raw, 0) },
+        MARS_XLOG_ERR_APPENDER as c_longlong
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -197,7 +233,9 @@ fn the_whole_abi_runs_over_one_appender() {
         MARS_XLOG_ERR_NULL_OUT
     );
 
-    let mut cache = vec![0u8; 512];
+    // `char*` and not `unsigned char*`, which is what the header — and the
+    // Swift `LogPath` that follows it — declares this buffer as.
+    let mut cache = vec![0 as c_char; 512];
     let written =
         unsafe { mars_xlog_current_log_cache_path(cache.as_mut_ptr(), cache.len() as c_uint) };
     assert!(written != MARS_XLOG_ERR_NULL_OUT);
@@ -261,15 +299,24 @@ fn instances_are_created_addressed_and_released() {
     assert_eq!(unsafe { mars_xlog_get_instance(prefix.as_ptr()) }, 0);
 
     // a null config has no instance
-    assert_eq!(unsafe { mars_xlog_new_instance(std::ptr::null(), 2) }, 0);
+    assert_eq!(
+        unsafe { mars_xlog_new_instance(std::ptr::null(), 2) },
+        MARS_XLOG_ERR_NULL_CONFIG as c_longlong
+    );
     // an empty log dir is refused
     let empty = CString::new("").unwrap();
     let mut broken = make_config(&dir, 0, 0);
     broken.raw.log_dir = empty.as_ptr();
-    assert_eq!(unsafe { mars_xlog_new_instance(&broken.raw, 2) }, 0);
+    assert_eq!(
+        unsafe { mars_xlog_new_instance(&broken.raw, 2) },
+        MARS_XLOG_ERR_EMPTY_LOG_DIR as c_longlong
+    );
     // and so is a bad mode
     let broken_mode = make_config(&dir, 9, 0);
-    assert_eq!(unsafe { mars_xlog_new_instance(&broken_mode.raw, 2) }, 0);
+    assert_eq!(
+        unsafe { mars_xlog_new_instance(&broken_mode.raw, 2) },
+        MARS_XLOG_ERR_BAD_MODE as c_longlong
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

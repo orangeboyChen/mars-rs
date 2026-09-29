@@ -21,8 +21,9 @@ use mars_ffi::{
     mars_xlog_request_flush_instance, mars_xlog_set_console_fun,
     mars_xlog_set_console_log_instance, mars_xlog_set_level_instance,
     mars_xlog_set_max_alive_duration_instance, mars_xlog_set_max_file_size_instance,
-    mars_xlog_write_instance, MarsXLogConfig, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE,
-    MARS_XLOG_ERR_NULL_OUT,
+    mars_xlog_write_instance, MarsXLogConfig, MARS_XLOG_ERR_APPENDER, MARS_XLOG_ERR_BAD_COMPRESS,
+    MARS_XLOG_ERR_BAD_MODE, MARS_XLOG_ERR_EMPTY_LOG_DIR, MARS_XLOG_ERR_NO_PATH,
+    MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_CONFIG, MARS_XLOG_ERR_NULL_OUT,
 };
 
 /// Closes the appender when the test ends, even if it failed.
@@ -483,9 +484,12 @@ fn null_pointers_are_never_dereferenced() {
     let _close = CloseOnDrop;
     let dir = tempfile::tempdir().unwrap();
 
-    // No config at all. An instance is refused with handle `0`, whatever the
-    // reason: the C ABI has no `mars_xlog_open` to report a code through.
-    assert_eq!(unsafe { mars_xlog_new_instance(std::ptr::null(), 0) }, 0);
+    // No config at all, and a code that says so: `0` is the process-wide
+    // appender, so it is not the answer to a refusal.
+    assert_eq!(
+        unsafe { mars_xlog_new_instance(std::ptr::null(), 0) },
+        MARS_XLOG_ERR_NULL_CONFIG as c_longlong
+    );
 
     // Every string null: log_dir is mandatory, so this is rejected.
     let cfg = MarsXLogConfig {
@@ -498,16 +502,25 @@ fn null_pointers_are_never_dereferenced() {
         cache_dir: std::ptr::null(),
         cache_days: 0,
     };
-    assert_eq!(unsafe { mars_xlog_new_instance(&cfg, 0) }, 0);
+    assert_eq!(
+        unsafe { mars_xlog_new_instance(&cfg, 0) },
+        MARS_XLOG_ERR_EMPTY_LOG_DIR as c_longlong
+    );
 
     // Bad enum values.
     let good = Config::new(dir.path(), 1, 0);
     let mut cfg = good.raw;
     cfg.mode = 7;
-    assert_eq!(unsafe { mars_xlog_new_instance(&cfg, 0) }, 0);
+    assert_eq!(
+        unsafe { mars_xlog_new_instance(&cfg, 0) },
+        MARS_XLOG_ERR_BAD_MODE as c_longlong
+    );
     cfg.mode = 1;
     cfg.compress_mode = 9;
-    assert_eq!(unsafe { mars_xlog_new_instance(&cfg, 0) }, 0);
+    assert_eq!(
+        unsafe { mars_xlog_new_instance(&cfg, 0) },
+        MARS_XLOG_ERR_BAD_COMPRESS as c_longlong
+    );
     // ...and the same object keeps working once it is valid again.
     cfg.compress_mode = 0;
     let log = unsafe { mars_xlog_new_instance(&cfg, 0) };
@@ -656,8 +669,13 @@ fn appender_error_is_reported_not_panicked() {
     // An instance is registered *under* its prefix, so an empty one has no
     // name to be registered under and gets no handle at all. The appender
     // itself is never asked, which is what the old `OK || ERR_APPENDER`
-    // assertion used to leave open.
-    assert_eq!(unsafe { mars_xlog_new_instance(&cfg, 0) }, 0);
+    // assertion used to leave open — and `MARS_XLOG_ERR_APPENDER` is what
+    // the caller hears, instead of the handle `0` that means "the
+    // process-wide appender".
+    assert_eq!(
+        unsafe { mars_xlog_new_instance(&cfg, 0) },
+        MARS_XLOG_ERR_APPENDER as c_longlong
+    );
     close();
 }
 

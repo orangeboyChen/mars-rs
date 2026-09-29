@@ -38,6 +38,15 @@ fn header_declares_every_exported_symbol() {
         "mars_xlog_oneshot_flush",
         "mars_xlog_make_logfile_name",
         "mars_xlog_getfilepath_from_timespan",
+        // The six instance symbols, which the list above used to leave out: a
+        // rename of one of them shipped with a header that still named the old
+        // one, and nothing failed.
+        "mars_xlog_new_instance",
+        "mars_xlog_get_instance",
+        "mars_xlog_release_instance",
+        "mars_xlog_write_instance",
+        "mars_xlog_is_enabled_for",
+        "mars_xlog_get_level",
     ] {
         assert!(
             header.contains(symbol),

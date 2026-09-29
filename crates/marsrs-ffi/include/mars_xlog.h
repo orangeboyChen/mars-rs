@@ -198,7 +198,16 @@ int mars_xlog_current_log_path(char* out, unsigned int len);
  * drain of the process-wide appender are all asked for with a handle of `0`.
  */
 
-/* Returns the instance handle, or 0 on a null/invalid config. */
+/* The handle of the instance, or a negative MARS_XLOG_ERR_* code when no
+ * instance could be opened: MARS_XLOG_ERR_NULL_CONFIG for a NULL `config`,
+ * MARS_XLOG_ERR_BAD_MODE / MARS_XLOG_ERR_BAD_COMPRESS /
+ * MARS_XLOG_ERR_EMPTY_LOG_DIR for one the appender cannot use, and
+ * MARS_XLOG_ERR_APPENDER when the open itself failed.
+ *
+ * `0` is never the answer to a failure: it is the process-wide appender above,
+ * so an app that read it as "no instance" and went on would log through handle
+ * `0` — a logger it never opened, whose records go wherever the JNI bridge put
+ * them — and never learn that its own config was refused. */
 long long mars_xlog_new_instance(const MarsXLogConfig* config, int level);
 
 /* The handle registered for name_prefix, or 0 when there is none. */

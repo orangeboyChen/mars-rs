@@ -31,7 +31,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use marsrs_sdt::checkimpl::{Answer, Ask, PingStatus, Query};
 use marsrs_sdt::netchecker_profile::CheckResultProfile;
 use marsrs_sdt::sdt_core::CancelHandle;
-use marsrs_sdt::{report_json, Callback, CheckIPPort, CheckIPPorts, NetCheckType, SdtLogic};
+use marsrs_sdt::{
+    report_json, Callback, CheckIPPort, CheckIPPorts, NetCheckType, SdtLogic, NET_CHECK_BASIC,
+    NET_CHECK_LONG, NET_CHECK_SHORT,
+};
 
 use crate::cstr;
 use crate::guard;
@@ -54,6 +57,16 @@ pub const MARS_SDT_ERR_NO_PROBE: c_int = -4;
 pub const MARS_SDT_ERR_BUSY: c_int = -5;
 /// There is no check in flight, so there is nothing to run.
 pub const MARS_SDT_ERR_NO_CHECK: c_int = -6;
+/// What the caller handed [`mars_sdt_start_active_check`] cannot start a
+/// check at all: a hosts array that promises `count` hosts behind a null
+/// pointer, or a `mode` with none of the three `NET_CHECK_*` bits in it, so a
+/// request with no check to make.
+///
+/// This is deliberately *not* [`MARS_SDT_ERR_BUSY`], which is the one code a
+/// caller retries on — "a check is already in flight, ask again". Nothing
+/// about this one changes with time: the same arguments are refused the same
+/// way however often they are tried, so a caller that retried it would spin.
+pub const MARS_SDT_ERR_BAD_ARG: c_int = -7;
 
 /// Which probe is being asked, and which answer came back: the four of
 /// `mars/sdt/src/checkimpl/`, plus `Nothing` for a probe nobody answered.
@@ -332,7 +345,8 @@ pub unsafe extern "C" fn mars_sdt_http_netcheck_cgi(out: *mut c_char, len: c_uin
 /// `timeout` milliseconds to spend on it.
 ///
 /// @return [`MARS_SDT_OK`], or [`MARS_SDT_ERR_BUSY`] when a check is already in
-/// flight, or [`MARS_SDT_ERR_PANIC`].
+/// flight — the one answer worth retrying — or [`MARS_SDT_ERR_BAD_ARG`] when
+/// the arguments cannot start a check at all, or [`MARS_SDT_ERR_PANIC`].
 ///
 /// # Safety
 ///
@@ -349,6 +363,20 @@ pub unsafe extern "C" fn mars_sdt_start_active_check(
     timeout: c_uint,
 ) -> c_int {
     guard(MARS_SDT_ERR_PANIC, || {
+        // A count that promises hosts the pointer cannot deliver. A caller
+        // that gets [`MARS_SDT_ERR_BUSY`] here retries, and retrying this
+        // would never stop: the request is the same every time.
+        if (longlink.is_null() && longlink_count > 0)
+            || (shortlink.is_null() && shortlink_count > 0)
+        {
+            return MARS_SDT_ERR_BAD_ARG;
+        }
+        // A mode with none of the three `NET_CHECK_*` bits in it is a request
+        // with an empty plan: it runs nothing and reports nothing, which is
+        // not what a caller that asked for a diagnosis meant.
+        if mode & (NET_CHECK_BASIC | NET_CHECK_LONG | NET_CHECK_SHORT) == 0 {
+            return MARS_SDT_ERR_BAD_ARG;
+        }
         // SAFETY: forwarded to `hosts_from_c`, whose contract the caller
         // upholds for both links.
         let (longlink_items, shortlink_items) = unsafe {
@@ -460,10 +488,7 @@ pub unsafe extern "C" fn mars_sdt_run_checks(
         let Some(probe) = probe else {
             return MARS_SDT_ERR_NO_PROBE;
         };
-        let probe = Probe {
-            probe,
-            ctx: ctx as usize,
-        };
+        let probe = Probe { probe, ctx };
         let mut ask = Ask::new(move |query| probe.ask(query));
         let results = with_state(|state| state.logic.run_checks(&mut ask, network_type));
         if results.is_empty() {
@@ -524,14 +549,25 @@ pub unsafe extern "C" fn mars_sdt_take_report(out: *mut c_char, len: c_uint) -> 
 }
 
 /// The caller's four probes, as [`marsrs_sdt::checkimpl::Ask`] wants them: a
-/// function pointer and the `ctx` that goes with it, carried as a `usize` so the
-/// closure that asks them is `Send` — which `Ask::new` requires, because a
-/// diagnosis may be run from any thread.
+/// function pointer and the `ctx` that goes with it.
+///
+/// `ctx` is kept as the pointer the caller handed over and not as the integer
+/// it would round-trip through: an address turned into a `usize` and cast back
+/// carries no provenance, and the code that reads through it is the caller's
+/// C, on whatever thread a check asks it from. The single crossing is the one
+/// [`mars_sdt_run_checks`] makes, from the caller's `void*` to this field.
 #[derive(Clone, Copy)]
 struct Probe {
     probe: extern "C" fn(*mut c_void, *const MarsSdtQuery, *mut MarsSdtAnswer),
-    ctx: usize,
+    ctx: *mut c_void,
 }
+
+// SAFETY: `Ask::new` asks for `Send` because a diagnosis may be run from any
+// thread, and a raw pointer is not one. What crosses is an address: this crate
+// never dereferences `ctx`, it only hands it back to the C probe it came from,
+// and the contract `mars_sdt_run_checks` states is that `ctx` stays alive for
+// the whole run — whichever thread the run is on.
+unsafe impl Send for Probe {}
 
 impl Probe {
     /// One probe: the question out, the answer back.
@@ -562,11 +598,7 @@ impl Probe {
         // it is handed is: `ctx` is the pointer the caller gave
         // `mars_sdt_run_checks`, alive for the whole run by that contract, and
         // the query and answer it reads and writes are locals that outlive it.
-        (self.probe)(
-            self.ctx as *mut c_void,
-            addr_of!(query),
-            addr_of_mut!(answer),
-        );
+        (self.probe)(self.ctx, addr_of!(query), addr_of_mut!(answer));
         answer_from_c(&answer)
     }
 }
@@ -589,6 +621,10 @@ fn answer_from_c(answer: &MarsSdtAnswer) -> Answer {
             Answer::Dns {
                 error_code: answer.error_code,
                 rtt: answer.rtt,
+                // `MarsSdtAnswer` carries no resolver and no connect time,
+                // so a host on this seam reports neither: the profile keeps
+                // what it started with.
+                local_dns: String::new(),
                 ips,
             }
         }
@@ -596,6 +632,7 @@ fn answer_from_c(answer: &MarsSdtAnswer) -> Answer {
             sent: answer.sent,
             received: answer.received,
             is_noop_resp: answer.is_noop_resp != 0,
+            conntime: 0,
             rtt: answer.rtt,
         },
         MarsSdtKind::Http => Answer::Http {
@@ -717,6 +754,7 @@ mod tests {
             Answer::Dns {
                 error_code: 0,
                 rtt: 7,
+                local_dns: String::new(),
                 ips: vec!["1.2.3.4".to_owned()],
             }
         );

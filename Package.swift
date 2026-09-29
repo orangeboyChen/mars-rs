@@ -42,7 +42,7 @@
 //  file name asks for nothing of a compiler.
 //
 //  Three products over two prebuilt libraries, and the first library is xlog's:
-//  the C ABI is 28 `mars_xlog_*` symbols and nothing else, which is why its
+//  the C ABI is 23 `mars_xlog_*` symbols and nothing else, which is why its
 //  artifact is named after xlog and not after the port — orangeboyChen/mars publishes
 //  `MarsXlog.xcframework` for the same reason, and taking xlog alone is the only
 //  thing its package offers. `MarsRSXlog` is the Swift over it.
@@ -58,13 +58,7 @@
 //
 //  The package ships prebuilt xcframeworks built by
 //  .github/workflows/release.yml (scripts/build_xcframework.sh), so consumers
-//  need neither a Rust toolchain nor an NDK. The one the xlog binary target
-//  points at is still `MarsRS.xcframework.zip`, because that is the name the tag
-//  it resolves was published under; the release after it publishes
-//  `marsrs-xlog.xcframework.zip`, and the workflow rewrites the name along with
-//  the tag. The C module inside keeps the port's name, `MarsRSFFI`, for the
-//  same reason: renaming it would break the asset every consumer resolves
-//  until a release carries the renamed one. A binary target is named after the
+//  need neither a Rust toolchain nor an NDK. A binary target is named after the
 //  module it carries and not after the zip it downloads, and SwiftPM asks for
 //  no match between the two — the zip is extracted under the target's name and
 //  the module is the one the module map inside declares.

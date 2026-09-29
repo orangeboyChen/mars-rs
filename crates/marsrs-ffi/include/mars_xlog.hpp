@@ -116,11 +116,16 @@ public:
         EmptyNamePrefix,
         InvalidCompressionLevel,
         NegativeCacheDays,
-        /** `mars_xlog_new_instance` answered `0`. */
+        /** `mars_xlog_new_instance` answered a negative `MARS_XLOG_ERR_*`
+         * code. `0` is not one of them: it is the process-wide appender, which
+         * this call never opens. */
         Refused,
     };
 
     XlogError(Reason reason, const char* what) : std::runtime_error(what), reason_(reason) {
+    }
+
+    XlogError(Reason reason, const std::string& what) : std::runtime_error(what), reason_(reason) {
     }
 
     Reason reason() const noexcept {
@@ -206,9 +211,14 @@ public:
         c.cache_dir = cacheDir.c_str();
         c.cache_days = config.cacheDays;
 
+        // A failure is a negative `MARS_XLOG_ERR_*` code and never `0`, which
+        // is the process-wide appender: an `Xlog` that took it for a handle of
+        // its own would write through a logger it never opened.
         const long long handle = mars_xlog_new_instance(&c, static_cast<int>(config.level));
-        if (handle == 0) {
-            throw XlogError(XlogError::Reason::Refused, "mars_xlog_new_instance refused the configuration");
+        if (handle <= 0) {
+            throw XlogError(XlogError::Reason::Refused,
+                            "mars_xlog_new_instance refused the configuration: " +
+                                std::to_string(handle));
         }
         return Xlog(handle, config);
     }
@@ -457,9 +467,20 @@ public:
     static void setConsoleSink(ConsoleSink sink) {
         // One sink for the process, and one the trampoline below reaches
         // without a capture of its own: a function pointer carries no state.
-        static ConsoleSink installed;
-        installed = std::move(sink);
-        if (!installed) {
+        //
+        // It is leaked, and that is the point. The trampoline is a plain C
+        // function pointer Rust keeps until the process goes away — there is no
+        // teardown symbol in the C ABI to hand it back with — so a sink the
+        // runtime destroys would leave it calling a `std::function` whose
+        // lifetime had already ended, which is what a record written during
+        // exit, or by another thread, lands on. The alternative is a
+        // `clearConsoleSink()` nobody is left to call at exit: an app that
+        // wanted its sink destroyed would have to know the last record has
+        // been written, and a library is the one thing that cannot. One
+        // `ConsoleSink` for the life of the process is what that costs.
+        static ConsoleSink* installed = new ConsoleSink();
+        *installed = std::move(sink);
+        if (!*installed) {
             mars_xlog_set_console_fun(nullptr);
             return;
         }
@@ -469,7 +490,7 @@ public:
                                       const char* function,
                                       int line,
                                       const char* message) {
-            installed(static_cast<LogLevel>(level), tag, file, function, line, message);
+            (*installed)(static_cast<LogLevel>(level), tag, file, function, line, message);
         });
     }
 

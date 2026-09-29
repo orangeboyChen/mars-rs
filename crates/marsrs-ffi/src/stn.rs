@@ -710,7 +710,6 @@ fn with_logic<R>(f: impl FnOnce(&mut StnLogic) -> R) -> R {
 #[no_mangle]
 pub unsafe extern "C" fn mars_stn_set_app(ctx: *mut c_void, ask: MarsStnAsk) {
     guard((), || {
-        let ctx = ctx as usize;
         with_logic(|logic| match ask {
             Some(ask) => logic.set_callback(CApp { ask, ctx }),
             None => logic.set_callback(NoApp),
@@ -1253,12 +1252,28 @@ pub extern "C" fn mars_stn_trig_nooping() {
 }
 
 /// The app STN asks, when the app is C: one function pointer and the `ctx` that
-/// goes with it, carried as a `usize` so that the app is `Send` — which
-/// [`marsrs_stn::App`] requires, because a task may run on any thread.
+/// goes with it.
+///
+/// `ctx` is kept as the pointer the caller handed over and not as the integer
+/// it used to round-trip through: an address turned into a `usize` and cast
+/// back carries no provenance, and what reads through it is the caller's C. The
+/// one crossing is the one [`mars_stn_set_app`] makes, from the caller's
+/// `void*` to this field.
+///
+/// The `usize` used to be there for [`marsrs_stn::App`]'s `Send`, which a task
+/// running on any thread needs; the `impl` below is what says why that is sound
+/// now that the pointer is kept whole.
 struct CApp {
     ask: extern "C" fn(*mut c_void, *const MarsStnQuestion, *mut MarsStnAnswer),
-    ctx: usize,
+    ctx: *mut c_void,
 }
+
+// SAFETY: a raw pointer is not `Send`, and [`marsrs_stn::App`] asks for one
+// because a task may run on any thread. What crosses a thread boundary here is
+// an address: this crate never dereferences `ctx`, it only hands it back to the
+// C `ask` it came from, and `mars_stn_set_app`'s contract is that `ctx` stays
+// alive until another `ask` takes its place — whichever thread asks.
+unsafe impl Send for CApp {}
 
 impl CApp {
     /// One question out, one answer back.
@@ -1269,7 +1284,7 @@ impl CApp {
         // `mars_stn_set_app`, alive by that contract, and the question and
         // answer it reads and writes are locals that outlive it.
         (self.ask)(
-            self.ctx as *mut c_void,
+            self.ctx,
             addr_of!(*question),
             &mut answer as *mut MarsStnAnswer,
         );
@@ -2056,7 +2071,7 @@ mod tests {
         (
             CApp {
                 ask,
-                ctx: app as *const App as usize,
+                ctx: app as *const App as *mut c_void,
             },
             asked,
         )

@@ -40,7 +40,14 @@
  *
  * Threading: every symbol may be called from any thread, but the diagnosis is
  * one process-wide value — the counterpart of the C++'s singleton — and
- * `mars_sdt_run_checks` holds it for as long as the checks take.
+ * `mars_sdt_run_checks` holds it for as long as the checks take. Everything a
+ * run calls back into is therefore entered with that lock held, and must not
+ * call another `mars_sdt_*` from inside: the probe, which is asked once per
+ * check, and — on a seam that hands the report to an app — the app's own
+ * handler for it. Either one asking `mars_sdt_is_checking()`,
+ * `mars_sdt_plan()` or `mars_sdt_start_active_check()` waits for the lock the
+ * run is holding, and the run is waiting for the call to come back. What a
+ * probe needs is in the query it is given.
  *
  * Panics: no Rust panic ever crosses this boundary. Every entry point is
  * wrapped in `catch_unwind`; a panic is reported as `MARS_SDT_ERR_PANIC` (or
@@ -67,6 +74,7 @@ extern "C" {
 #define MARS_SDT_ERR_NO_PROBE (-4)   /* `mars_sdt_run_checks` got no probe    */
 #define MARS_SDT_ERR_BUSY (-5)       /* a check is already in flight          */
 #define MARS_SDT_ERR_NO_CHECK (-6)   /* nothing is in flight, so nothing ran  */
+#define MARS_SDT_ERR_BAD_ARG (-7)    /* the arguments cannot start a check    */
 
 /* --- what a probe is asked, and what it answers -------------------------- */
 
@@ -172,8 +180,14 @@ int mars_sdt_http_netcheck_cgi(char* out, unsigned int len);
  * `StartActiveCheck` — a diagnosis of the two links' hosts, in `mode` and with
  * `timeout` milliseconds to spend on it.
  *
- * @return MARS_SDT_OK, or MARS_SDT_ERR_BUSY when a check is already in flight,
- *         or MARS_SDT_ERR_PANIC.
+ * @return MARS_SDT_OK, or MARS_SDT_ERR_BUSY when a check is already in flight —
+ *         the one answer a caller retries — or MARS_SDT_ERR_BAD_ARG when these
+ *         arguments cannot start a check at all: a `longlink` / `shortlink`
+ *         that promises `count` hosts behind a NULL pointer, or a `mode` with
+ *         none of the three `NET_CHECK_*` bits in it, which is a request with an
+ *         empty plan. The two are separate codes because retrying the first
+ *         ends when the request in flight does and retrying the second never
+ *         does, or MARS_SDT_ERR_PANIC.
  */
 int mars_sdt_start_active_check(const MarsSdtHosts* longlink,
                                 unsigned int longlink_count,

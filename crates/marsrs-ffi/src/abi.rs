@@ -8,7 +8,7 @@
 //! [`crate::cstr`].
 
 use std::borrow::Cow;
-use std::ffi::{c_char, c_int, c_longlong, c_uchar, c_uint, c_ulonglong, CString};
+use std::ffi::{c_char, c_int, c_longlong, c_uint, c_ulonglong, CString};
 use std::path::Path;
 use std::sync::{Mutex, RwLock};
 
@@ -16,7 +16,7 @@ use marsrs_appender::{
     appender_get_current_log_path, category_set_max_alive_duration as set_max_alive_duration,
     category_set_max_file_size as set_max_file_size, current_log_path, flush_now, flush_now_all,
     request_flush, request_flush_all, set_console_fun, set_console_log_open, set_level,
-    xlogger_assert, AppenderMode, ConsoleFun, LogLevel, XLogConfig, XLoggerInfo,
+    xlogger_assert, AppenderMode, ConsoleFun, LogLevel, XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
 };
 use marsrs_buffer::CompressMode;
 
@@ -246,10 +246,22 @@ static CONSOLE_FUN_LOCK: Mutex<()> = Mutex::new(());
 /// pointers that live at least as long as the call and a Rust `&str` borrowed
 /// from a `CString` on this stack is exactly that.
 fn console_fun(info: &XLoggerInfo, log: &str) {
-    let Some(fun) = *CONSOLE_FUN
-        .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-    else {
+    // Read out and let go: the read lock is *not* held across the call. A
+    // sink that sets the sink — a logger that installs itself the first time
+    // it writes, or one that swaps in a buffered sink once its file is open —
+    // would wait for the write lock `mars_xlog_set_console_fun` takes while
+    // this thread still holds the read one, and `RwLock` is no more reentrant
+    // than `Mutex`: the thread would hang inside its own log call. What is
+    // copied is one function pointer, so a sink installed in the meantime is
+    // the next record's, which is the race `CONSOLE_FUN_LOCK` exists to keep
+    // to one half-installed pair at most.
+    let fun = {
+        let installed = CONSOLE_FUN
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *installed
+    };
+    let Some(fun) = fun else {
         return;
     };
 
@@ -331,7 +343,7 @@ pub unsafe extern "C" fn mars_xlog_current_log_path(out: *mut c_char, len: c_uin
 
         // SAFETY: `out` is non-null (checked above) and the caller promises
         // `len` writable bytes.
-        unsafe { write_path_into(path_to_bytes(&path), out as *mut c_uchar, len) }
+        unsafe { write_path_into(path_to_bytes(&path), out, len) }
     })
 }
 
@@ -370,14 +382,20 @@ pub unsafe extern "C" fn mars_xlog_current_log_path_instance(
 
         // SAFETY: `out` is non-null (checked above) and the caller promises
         // `len` writable bytes.
-        unsafe { write_path_into(path_to_bytes(&path), out as *mut c_uchar, len) }
+        unsafe { write_path_into(path_to_bytes(&path), out, len) }
     })
 }
-///
 /// # Safety
 ///
 /// `out` must be non-null and point to at least `len` writable bytes.
-unsafe fn write_path_into(bytes: Vec<u8>, out: *mut c_uchar, len: c_uint) -> c_int {
+///
+/// `char*` and not `unsigned char*`: the paths of this seam are C strings, and
+/// `mars_xlog_current_log_cache_path` declares `char* out` in the header, which
+/// is what Swift's `LogPath` takes it from. Writing through the two spellings
+/// is the same bytes either way, but a caller that passes a `char*` to a
+/// `unsigned char*` parameter is a type error on the C side and a pointer of
+/// the wrong signedness on the Rust one.
+unsafe fn write_path_into(bytes: Vec<u8>, out: *mut c_char, len: c_uint) -> c_int {
     if out.is_null() {
         return MARS_XLOG_ERR_NULL_OUT;
     }
@@ -393,7 +411,10 @@ unsafe fn write_path_into(bytes: Vec<u8>, out: *mut c_uchar, len: c_uint) -> c_i
     // both the copy and the NUL write stay in the caller's buffer. The slice is
     // sized by what is written, not by what the caller claimed.
     unsafe {
-        let dst = std::slice::from_raw_parts_mut(out, bytes.len() + 1);
+        // `out` is a `char*` and the bytes are `u8`, which is the same width
+        // and the same layout; casting the destination is what keeps the copy
+        // a `copy_from_slice` rather than a byte loop.
+        let dst = std::slice::from_raw_parts_mut(out.cast::<u8>(), bytes.len() + 1);
         dst[..bytes.len()].copy_from_slice(&bytes);
         dst[bytes.len()] = 0;
     }
@@ -471,9 +492,17 @@ fn path_to_bytes(path: &Path) -> Vec<u8> {
 /// This is the C counterpart of `mars::xlog::NewXloggerInstance`: each
 /// instance gets its own log directory, prefix, key, mode and cache file.
 ///
-/// Returns the instance handle, or `0` when `config` is null / invalid or the
-/// appender cannot be opened. A level outside `0..=5` is accepted: the C++
-/// casts it, so `MARS_LEVEL_NONE` (6) is "an instance that logs nothing".
+/// @return the instance handle, or a negative `MARS_XLOG_ERR_*` code —
+/// [`MARS_XLOG_ERR_NULL_CONFIG`] for a null `config`,
+/// [`MARS_XLOG_ERR_BAD_MODE`] / [`MARS_XLOG_ERR_BAD_COMPRESS`] /
+/// [`MARS_XLOG_ERR_EMPTY_LOG_DIR`] for one the appender cannot use, and
+/// [`MARS_XLOG_ERR_APPENDER`] when the open itself failed.
+///
+/// `0` is *not* the answer for a failure, and never was a handle this call
+/// opens: it is the process-wide appender, so an app that took it for one and
+/// wrote through it logged into a logger it never opened, and had no way of
+/// telling that from a logger it had. A level outside `0..=5` is accepted: the
+/// C++ casts it, so `MARS_LEVEL_NONE` (6) is "an instance that logs nothing".
 ///
 /// # Safety
 ///
@@ -484,15 +513,18 @@ pub unsafe extern "C" fn mars_xlog_new_instance(
     config: *const MarsXLogConfig,
     level: c_int,
 ) -> c_longlong {
-    guard(0, || {
+    guard(MARS_XLOG_ERR_PANIC as c_longlong, || {
         // SAFETY: null-checked inside `ptr_to_ref`.
         let Some(cfg) = (unsafe { cstr::ptr_to_ref(config) }) else {
-            return 0;
+            return MARS_XLOG_ERR_NULL_CONFIG as c_longlong;
         };
-        // SAFETY: `cfg` is the caller's valid config, as above. A config the
-        // appender cannot use has no instance, which is what `0` means.
-        let Ok(rust_config) = (unsafe { to_xlog_config(cfg) }) else {
-            return 0;
+        // SAFETY: `cfg` is the caller's valid config, as above.
+        let rust_config = match unsafe { to_xlog_config(cfg) } {
+            Ok(config) => config,
+            // The code says which part of the config is unusable, because a
+            // caller that only learns "no instance" cannot tell a bad mode
+            // from a log directory it has no write permission on.
+            Err(code) => return code as c_longlong,
         };
         // `NewXloggerInstance(_config, (TLogLevel)_level)`: the level is cast,
         // never checked — `MARS_LEVEL_NONE` (6) is the level a caller starts an
@@ -500,7 +532,16 @@ pub unsafe extern "C" fn mars_xlog_new_instance(
         // which silently gave back handle `0`, the appender-less default.
         let level = to_filter_level(level);
 
-        marsrs_appender::new_xlogger_instance(&rust_config, level) as c_longlong
+        let handle = marsrs_appender::new_xlogger_instance(&rust_config, level);
+        if handle == DEFAULT_HANDLE {
+            // The appender refused the config — an empty prefix, a directory
+            // it could not create, a cache file it could not map. `DEFAULT_
+            // HANDLE` is what `new_xlogger_instance` answers for all of them,
+            // and it is `0`, the process-wide handle, so it is turned into a
+            // code here rather than handed out as a logger.
+            return MARS_XLOG_ERR_APPENDER as c_longlong;
+        }
+        handle as c_longlong
     })
 }
 
@@ -732,7 +773,7 @@ pub extern "C" fn mars_xlog_set_max_alive_duration_instance(
 /// `out` must be null, or point to at least `len` writable bytes that stay alive for the duration
 /// of the call.
 #[no_mangle]
-pub unsafe extern "C" fn mars_xlog_current_log_cache_path(out: *mut c_uchar, len: c_uint) -> c_int {
+pub unsafe extern "C" fn mars_xlog_current_log_cache_path(out: *mut c_char, len: c_uint) -> c_int {
     guard(MARS_XLOG_ERR_PANIC, || {
         if out.is_null() {
             return MARS_XLOG_ERR_NULL_OUT;
@@ -871,7 +912,7 @@ unsafe fn path_at(
     len: c_uint,
 ) -> c_int {
     match paths.get(index as usize) {
-        Some(path) => unsafe { write_path_into(path_to_bytes(path), out as *mut c_uchar, len) },
+        Some(path) => unsafe { write_path_into(path_to_bytes(path), out, len) },
         None => MARS_XLOG_ERR_NO_PATH,
     }
 }
