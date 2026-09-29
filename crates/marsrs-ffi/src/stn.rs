@@ -124,7 +124,7 @@ pub enum MarsStnQuestionKind {
 /// One answer per question, and an answer of another kind than the question
 /// asked for is no answer: STN takes [`marsrs_stn::App`]'s own instead, which is
 /// what a host with no app gets.
-#[repr(C)]
+#[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarsStnAnswerKind {
     /// Nobody answered — [`MarsStnAnswer::default`], and what an app that has
@@ -150,6 +150,31 @@ pub enum MarsStnAnswerKind {
     /// what an app puts back is the out-value of the C++'s `unsigned int&`.
     /// Nobody reads it: a task a gate refused stays refused.
     Limit = 8,
+}
+
+impl MarsStnAnswerKind {
+    /// The integer the caller left in `kind`, as the kind it names —
+    /// [`MarsStnAnswerKind::Nothing`] for one no variant has, which is what
+    /// every question an app did not answer is read as anyway.
+    ///
+    /// `kind` is the caller's to fill in, so what it holds is whatever that
+    /// caller left there, and a number no variant has is a value the enum
+    /// cannot hold: reading one is undefined behaviour of its own, before any
+    /// match on it runs and whichever arm that match would have taken. So the
+    /// field is read as the `i32` it is, here, and what leaves is a variant.
+    pub fn of(raw: i32) -> Self {
+        match raw {
+            1 => Self::Yes,
+            2 => Self::Ips,
+            3 => Self::Encoded,
+            4 => Self::Failed,
+            5 => Self::Decoded,
+            6 => Self::Ended,
+            7 => Self::Identified,
+            8 => Self::Limit,
+            _ => Self::Nothing,
+        }
+    }
 }
 
 /// One header of a task: a name and a value, both NUL-terminated.
@@ -1288,6 +1313,16 @@ impl CApp {
             addr_of!(*question),
             &mut answer as *mut MarsStnAnswer,
         );
+        // What the caller left in `kind` is an `i32`, and not necessarily one
+        // of the numbers that are variants — a caller that writes anything
+        // else, or nothing at all, has written a value the enum cannot hold.
+        //
+        // SAFETY: `MarsStnAnswerKind` is a fieldless `#[repr(i32)]` enum, so
+        // the field is four bytes holding that integer, and reading them as
+        // one yields no value that type cannot hold. Reading the field as the
+        // enum would, and that is undefined behaviour before the first match.
+        let raw = unsafe { addr_of!(answer.kind).cast::<i32>().read() };
+        answer.kind = MarsStnAnswerKind::of(raw);
         answer
     }
 }
@@ -2092,6 +2127,31 @@ mod tests {
         assert_eq!(answer.kind, MarsStnAnswerKind::Nothing);
         assert!(answer.ips.is_null());
         assert!(answer.bytes.is_null());
+    }
+
+    #[test]
+    fn a_kind_no_variant_has_is_an_answer_nobody_gave() {
+        let mut answer = MarsStnAnswer {
+            kind: MarsStnAnswerKind::Yes,
+            yes: 1,
+            ..Default::default()
+        };
+        // What a caller that filled the field in with a number of its own
+        // leaves there — four bytes no variant is.
+        //
+        // SAFETY: `MarsStnAnswerKind` is a fieldless `#[repr(i32)]` enum, so
+        // the field is an `i32` and writing one leaves that integer in it.
+        unsafe {
+            std::ptr::addr_of_mut!(answer.kind).cast::<i32>().write(99);
+        }
+        let (mut app, _) = app_of(answer);
+        assert_eq!(
+            app.ask(&MarsStnQuestion::default()).kind,
+            MarsStnAnswerKind::Nothing
+        );
+        // `Yes` with a `yes` of `1` answers `true`, so this is the read of
+        // `Nothing` and not of what the caller wrote.
+        assert!(!app.identify_response("longlink", b"answer", b"hash"));
     }
 
     #[test]

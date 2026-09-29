@@ -70,7 +70,7 @@ pub const MARS_SDT_ERR_BAD_ARG: c_int = -7;
 
 /// Which probe is being asked, and which answer came back: the four of
 /// `mars/sdt/src/checkimpl/`, plus `Nothing` for a probe nobody answered.
-#[repr(C)]
+#[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarsSdtKind {
     /// Nobody answered — a host with no network to probe with, which the
@@ -88,6 +88,27 @@ pub enum MarsSdtKind {
     Http = 3,
     /// `PingQuery::RunPingQuery`.
     Ping = 4,
+}
+
+impl MarsSdtKind {
+    /// The integer the caller left in `kind`, as the probe it names —
+    /// [`MarsSdtKind::Nothing`] for one no variant has, which is what a probe
+    /// nobody answered is read as anyway.
+    ///
+    /// `kind` is the caller's to fill in, so what it holds is whatever that
+    /// caller left there, and a number no variant has is a value the enum
+    /// cannot hold: reading one is undefined behaviour of its own, before any
+    /// match on it runs. So the field is read as the `i32` it is, here, and
+    /// what leaves is a variant.
+    pub fn of(raw: i32) -> Self {
+        match raw {
+            1 => Self::Dns,
+            2 => Self::Tcp,
+            3 => Self::Http,
+            4 => Self::Ping,
+            _ => Self::Nothing,
+        }
+    }
 }
 
 /// What one probe is asked: [`MarsSdtKind`], and the arguments the C++ hands
@@ -599,6 +620,16 @@ impl Probe {
         // `mars_sdt_run_checks`, alive for the whole run by that contract, and
         // the query and answer it reads and writes are locals that outlive it.
         (self.probe)(self.ctx, addr_of!(query), addr_of_mut!(answer));
+        // What the caller left in `kind` is an `i32`, and not necessarily one
+        // of the numbers that are variants — a caller that writes anything
+        // else, or nothing at all, has written a value the enum cannot hold.
+        //
+        // SAFETY: `MarsSdtKind` is a fieldless `#[repr(i32)]` enum, so the
+        // field is four bytes holding that integer, and reading them as one
+        // yields no value that type cannot hold. Reading the field as the
+        // enum would, and that is undefined behaviour before the first match.
+        let raw = unsafe { addr_of!(answer.kind).cast::<i32>().read() };
+        answer.kind = MarsSdtKind::of(raw);
         answer_from_c(&answer)
     }
 }
@@ -735,6 +766,38 @@ mod tests {
     #[test]
     fn an_answer_nobody_wrote_is_nothing() {
         assert_eq!(answer_from_c(&MarsSdtAnswer::default()), Answer::Nothing);
+    }
+
+    /// A probe that fills `kind` in with a number of its own, the way a C
+    /// caller writing the field itself would.
+    extern "C" fn probe_of_raw(
+        _ctx: *mut c_void,
+        _query: *const MarsSdtQuery,
+        answer: *mut MarsSdtAnswer,
+    ) {
+        // SAFETY: `answer` is the caller's, alive for this call.
+        let answer = unsafe { &mut *answer };
+        answer.rtt = 7;
+        // SAFETY: `MarsSdtKind` is a fieldless `#[repr(i32)]` enum, so the
+        // field is an `i32` and writing one leaves that integer in it.
+        unsafe {
+            addr_of_mut!(answer.kind).cast::<i32>().write(99);
+        }
+    }
+
+    #[test]
+    fn a_kind_no_variant_has_is_a_probe_nobody_answered() {
+        let probe = Probe {
+            probe: probe_of_raw,
+            ctx: std::ptr::null_mut(),
+        };
+        let answer = probe.ask(Query::Dns {
+            domain: "example.com".to_owned(),
+            timeout_ms: 1,
+        });
+        // The `rtt` of `7` is in the answer the caller wrote, and `Nothing`
+        // is what a probe that names no probe is read as.
+        assert_eq!(answer, Answer::Nothing);
     }
 
     #[test]
