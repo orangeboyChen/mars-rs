@@ -39,6 +39,16 @@
 #ifndef MARS_XLOG_H_
 #define MARS_XLOG_H_
 
+/* The symbols this header declares are the ones `#[no_mangle]` exports: plain
+ * C names, and a C++ translation unit that includes this and calls
+ * `mars_xlog_open()` asks its linker for a mangled one that does not exist.
+ * `mars_stn.h` and `mars_sdt.h` carry the same guard, and `mars_xlog.hpp` —
+ * the C++ face of this seam — includes this one, so a C++ caller asks for the
+ * same names whichever of the two it takes. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* --- enums ------------------------------------------------------------- */
 
 /** Mirrors `mars::xlog::TAppenderMode` (appender.h). */
@@ -316,5 +326,8 @@ int mars_xlog_getfilepath_from_timespan(int timespan,
 /* The cache directory, or a negative MARS_XLOG_ERR_* code. */
 int mars_xlog_current_log_cache_path(char* out, unsigned int len);
 
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 #endif /* MARS_XLOG_H_ */
