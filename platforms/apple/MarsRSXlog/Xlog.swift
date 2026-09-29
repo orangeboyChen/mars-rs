@@ -389,9 +389,10 @@ public final class Xlog: NSObject {
     /// ago that are *there* — what an app that uploads yesterday's opens. `[]`
     /// when the directory holds none of that day's.
     ///
-    /// This is a day of files and not the file being written: what an `Xlog`'s
-    /// `currentLogPath` answers is one, and it is that appender's, while this
-    /// takes the prefix and the directory of the files it is asked about.
+    /// This is a day of files and not the file being written: an `Xlog`'s
+    /// `currentLogPath` answers the *directory* they are in, and not one of
+    /// them, while this takes that directory and the prefix the files start
+    /// with and names the ones that are there.
     ///
     /// - Parameters:
     ///   - daysAgo: `0` is today, `1` yesterday, and so on.
