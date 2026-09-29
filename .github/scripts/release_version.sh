@@ -167,11 +167,20 @@ ASSETS="$ASSETS $KMP_NATIVE_ZIP $KMP_MAVEN_ZIP"
 # archives below are: a pod is downloaded under the version it is, so an
 # archive of another version is not the one its podspec names
 ASSETS="$ASSETS marsrs-cocoapods-xlog-$VERSION.zip marsrs-cocoapods-net-$VERSION.zip"
+# the four packages of the two plugin ecosystems, one archive each, and named
+# by the package: `package_flutter.sh` and `package_react_native.sh` write
+# them into `dist` under the name and the version npm and pub read
+ASSETS="$ASSETS marsrs-flutter-$VERSION.tar.gz marsrs-flutter-xlog-$VERSION.tar.gz"
+ASSETS="$ASSETS marsrs-react-native-$VERSION.tgz marsrs-react-native-xlog-$VERSION.tgz"
+# HarmonyOS, two ways in: the three `.so` and the headers an app writes a NAPI
+# module of its own against, and the HAR of the ArkTS and the same Rust core
+ASSETS="$ASSETS marsrs-harmony-$VERSION.tar.gz marsrs-harmonyos-xlog-$VERSION.har"
 # one archive per host of the matrix in release.yml, in the shape that host
-# packages it in
+# packages it in — the C ABI and then the `xlog` CLI, of the same three hosts
 for HOST in x86_64-unknown-linux-gnu:tar.gz aarch64-apple-darwin:tar.gz \
             x86_64-pc-windows-msvc:zip; do
   ASSETS="$ASSETS marsrs-$VERSION-${HOST%%:*}.${HOST##*:}"
+  ASSETS="$ASSETS marsrs-xlog-cli-$VERSION-${HOST%%:*}.${HOST##*:}"
 done
 if gh release view "$TAG" >/dev/null 2>&1; then
   PUBLISHED=$(gh release view "$TAG" --json assets -q '.assets[].name')
