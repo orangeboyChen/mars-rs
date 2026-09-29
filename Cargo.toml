@@ -70,8 +70,8 @@ md5 = "0.8"
 #
 # The rule the list was built by: enable every lint that fires zero times on
 # the workspace today, and nothing else. A lint that fires is either fixed or
-# left out of these tables, never silenced at the site — with three exceptions,
-# and each of them is a `#[allow]` with the reason written beside it:
+# left out of these tables, never silenced at the site — with these exceptions,
+# and each of them is an `#[allow]` with the reason written beside it:
 #
 #   * `#[allow(unsafe_code)]` on `map_region` in `marsrs-appender` — the crate
 #     denies `unsafe_code` outright and a `memmap2` mapping cannot be made
@@ -80,7 +80,13 @@ md5 = "0.8"
 #     and on `start_task_impl` in `marsrs-jni` — because the C ABI and the JNI
 #     keep the call the C++ named, deprecated in Rust or not.
 #
-# Those three are the whole of it, and a fourth is a change to this comment.
+# Those three are every `#[allow]` written at a site. Three more are written
+# over a whole crate or module, and they are the places `unsafe` is this
+# tree's business rather than an exception to it: `marsrs-ffi` — the C ABI,
+# where every pointer is one — `marsrs-appender`'s `sys` module, and that
+# crate's test-only allocator. Each is argued where it is written.
+#
+# A seventh is a change to this comment.
 #
 # Every entry was measured with
 #   cargo clippy --workspace --all-targets --message-format=json
