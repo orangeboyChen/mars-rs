@@ -322,9 +322,12 @@ static napi_value GetLevel(napi_env env, napi_callback_info info) {
     char* namePrefix = ArgString(env, info, 0);
     long long handle = HandleOf(namePrefix);
     free(namePrefix);
-    // -1 is what the C ABI answers for a handle it does not know, and it is not
-    // a `LogLevel`; what this answers instead is the level the ArkTS is already
-    // holding, which `Xlog.level` reads when the appender is closed.
+    // Two ways of having no level to answer: a prefix this table never opened,
+    // which is what `close` leaves behind and what a call after it is, and a
+    // handle the C ABI does not know — it answers -1, and -1 is not a
+    // `LogLevel`. Both are answered with `MarsLevelInfo`, the level an
+    // appender is opened at when the caller asked for none, which is the one
+    // the ArkTS holds beside it.
     int level = handle == 0 ? MarsLevelInfo : mars_xlog_get_level(handle);
     return Int32(env, level < 0 ? MarsLevelInfo : level);
 }
