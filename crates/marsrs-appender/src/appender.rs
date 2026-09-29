@@ -3339,21 +3339,20 @@ mod tests {
             "a hole the length of the block reads as zeros"
         );
 
-        let (region, use_mmap) = open_region(&mut file, &path);
+        let (region, _) = open_region(&mut file, &path);
         drop(region);
-        // What is asserted is the decision, and not the disk's bookkeeping: a
-        // filesystem that allocates late or compresses is free to answer the
-        // block count either way for a file of zeros, and that count is what
-        // stopped being asked. A mapping is the answer only when the
-        // pre-allocation ran through — a write of zeros it could not do sends
-        // `open_region` to the heap instead.
-        if use_mmap {
-            assert_eq!(
-                file.metadata().unwrap().len(),
-                BUFFER_BLOCK_LENGTH as u64,
-                "the pre-allocation wrote the block and left the file at the block"
-            );
-        }
+        // The file's length, and not the region's kind: a filesystem that
+        // allocates late or compresses is free to answer the block count
+        // either way for a file of zeros, and that count is what stopped
+        // being asked. What every way out leaves behind is a file that
+        // measures the block — one the pre-allocation filled, one it put
+        // back the way it found it, and one it filled before the mapping
+        // declined it are all the same length.
+        assert_eq!(
+            file.metadata().unwrap().len(),
+            BUFFER_BLOCK_LENGTH as u64,
+            "the pre-allocation wrote the block and left the file at the block"
+        );
     }
 
     /// The way round that costs records: a file that measures the block *and*
