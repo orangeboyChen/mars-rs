@@ -112,8 +112,7 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
 
     /** `Xlog.currentLogPath`: the file this appender is writing to, or `null`
      * before the first record of the day opens one. */
-    override fun currentLogPath(namePrefix: String): String? =
-        appender(namePrefix)?.currentLogPath
+    override fun currentLogPath(namePrefix: String): String? = appender(namePrefix)?.currentLogPath
 
     /** `Xlog.logFiles`: the day's files that are there. */
     override fun logFiles(namePrefix: String, daysAgo: Double): ReadableArray? =

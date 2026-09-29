@@ -60,6 +60,11 @@ public expect class Xlog(config: XlogConfig) {
      * builds a message that is expensive to build. `false` once [close] ran,
      * which is the one honest answer of an appender that writes nothing.
      */
+    public fun isLoggable(level: LogLevel): Boolean
+
+    /** Writes one record of [level]. */
+    public fun log(level: LogLevel, tag: String, message: String)
+
     /**
      * The file this appender is writing to, or `null` when it has none open yet
      * — the first record of a day is what opens one.
@@ -90,11 +95,6 @@ public expect class Xlog(config: XlogConfig) {
      * [logFiles] answers one.
      */
     public fun logFileNames(daysAgo: Long): List<String>
-
-    public fun isLoggable(level: LogLevel): Boolean
-
-    /** Writes one record of [level]. */
-    public fun log(level: LogLevel, tag: String, message: String)
 
     /** Writes one record of [LogLevel.VERBOSE]. */
     public fun v(tag: String, message: String)

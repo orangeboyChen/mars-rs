@@ -1,12 +1,12 @@
 package io.github.orangeboychen.marsrs.xlog
 
 import io.github.orangeboychen.marsrs.xlog.ffi.MarsXLogConfig
-import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_flush_now_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_current_log_path_instance
+import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_flush_now_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_get_level
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_getfilepath_from_timespan_instance
-import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_make_logfile_name_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_is_enabled_for
+import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_make_logfile_name_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_new_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_release_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_request_flush_instance
@@ -113,19 +113,29 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     }
 
     public actual val currentLogPath: String?
-        get() = if (isOpen) pathAt { out, len ->
-            mars_xlog_current_log_path_instance(handle, out, len)
-        } else null
+        get() = if (isOpen) {
+            pathAt { out, len ->
+                mars_xlog_current_log_path_instance(handle, out, len)
+            }
+        } else {
+            null
+        }
 
-    public actual fun logFiles(daysAgo: Long): List<String> =
-        if (isOpen) dayPaths(daysAgo) { index, out, len ->
+    public actual fun logFiles(daysAgo: Long): List<String> = if (isOpen) {
+        dayPaths(daysAgo) { index, out, len ->
             mars_xlog_getfilepath_from_timespan_instance(handle, daysAgo.toInt(), index, out, len)
-        } else emptyList()
+        }
+    } else {
+        emptyList()
+    }
 
-    public actual fun logFileNames(daysAgo: Long): List<String> =
-        if (isOpen) dayPaths(daysAgo) { index, out, len ->
+    public actual fun logFileNames(daysAgo: Long): List<String> = if (isOpen) {
+        dayPaths(daysAgo) { index, out, len ->
             mars_xlog_make_logfile_name_instance(handle, daysAgo.toInt(), index, out, len)
-        } else emptyList()
+        }
+    } else {
+        emptyList()
+    }
 
     public actual fun isLoggable(level: LogLevel): Boolean =
         isOpen && mars_xlog_is_enabled_for(handle, level.ordinal) != DISABLED

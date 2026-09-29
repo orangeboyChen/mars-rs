@@ -58,14 +58,14 @@ class Alarm : BroadcastReceiver() {
                 Log.i(TAG, String.format("onReceive id=%d, curId=%d", id, next.id))
                 if (next.id == id) {
                     Log.i(
-                    TAG,
-                    String.format(
-                        "onReceive find alarm id:%d, pid:%d, delta miss time:%d",
-                        id,
-                        pid,
-                        SystemClock.elapsedRealtime() - next.waittime
+                        TAG,
+                        String.format(
+                            "onReceive find alarm id:%d, pid:%d, delta miss time:%d",
+                            id,
+                            pid,
+                            SystemClock.elapsedRealtime() - next.waittime
+                        )
                     )
-                )
                     iterator.remove()
                     hit = true
                     break

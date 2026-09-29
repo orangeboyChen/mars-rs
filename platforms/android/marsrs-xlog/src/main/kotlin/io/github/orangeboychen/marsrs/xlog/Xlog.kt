@@ -205,8 +205,7 @@ class Xlog(config: XlogConfig, context: Context? = null) {
      * builds a message that is expensive to build. `false` once [close] ran,
      * which is the one honest answer of an appender that writes nothing.
      */
-    fun isLoggable(level: LogLevel): Boolean =
-        isOpen && LogLevel.of(getLogLevel(handle)).isEnabledFor(level)
+    fun isLoggable(level: LogLevel): Boolean = isOpen && LogLevel.of(getLogLevel(handle)).isEnabledFor(level)
 
     /** Writes a record of [level]. */
     fun log(level: LogLevel, tag: String, message: String) {
