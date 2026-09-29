@@ -284,7 +284,17 @@ jobs:
           # of that directory and not of the one above it.
           mkdir -p platforms/kmp/native
           unzip -q -o "dist/$KMP_NATIVE_ZIP" -d platforms/kmp/native
-          find platforms/kmp/native -name '*.a' -o -name '*.so' | sort
+          # `find` answers 0 for a tree with no archive in it and so does
+          # `sort`, so a release whose zip carried none — or an asset that was
+          # never uploaded — is a step that passed, and what follows publishes
+          # a module whose every klib links nothing. What says they are there
+          # is the list and not the exit of either.
+          archives="$(find platforms/kmp/native -name '*.a' -o -name '*.so' | sort)"
+          [ -n "$archives" ] || {
+            echo "::error::no .a or .so under platforms/kmp/native"
+            exit 1
+          }
+          printf '%s\n' "$archives"
       - name: Publish to GitHub Packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

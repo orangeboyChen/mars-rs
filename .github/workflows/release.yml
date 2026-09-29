@@ -723,7 +723,16 @@ jobs:
           set -euo pipefail
           mkdir -p platforms/kmp/native/android
           unzip -q -o "dist/$NATIVE_ZIP" -d platforms/kmp/native/android
-          find platforms/kmp/native -name '*.a' -o -name '*.so' | sort
+          # `find` answers 0 for a tree with no archive in it and so does
+          # `sort`, so a zip that unpacked none is a step that passed — and
+          # what it was unpacked for is every klib this job publishes. What
+          # says they are there is the list and not the exit of either.
+          archives="$(find platforms/kmp/native -name '*.a' -o -name '*.so' | sort)"
+          [ -n "$archives" ] || {
+            echo "::error::no .a or .so under platforms/kmp/native"
+            exit 1
+          }
+          printf '%s\n' "$archives"
       - name: Prove an archive links
         # Nothing on the way to Maven links a klib, so without this a wrong
         # linker flag in mars_ffi.def is a link error in an app a month later
