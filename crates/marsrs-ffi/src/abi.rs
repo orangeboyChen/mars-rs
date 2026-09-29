@@ -15,9 +15,9 @@ use std::sync::{Mutex, RwLock};
 use marsrs_appender::{
     appender_close, appender_get_current_log_path, appender_open,
     category_set_max_alive_duration as set_max_alive_duration,
-    category_set_max_file_size as set_max_file_size, flush_now, flush_now_all, set_console_fun,
-    set_console_log_open, set_level, signal_flush, signal_flush_all, xlogger_assert, AppenderMode,
-    ConsoleFun, LogLevel, XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
+    category_set_max_file_size as set_max_file_size, current_log_path, flush_now, flush_now_all,
+    set_console_fun, set_console_log_open, set_level, signal_flush, signal_flush_all,
+    xlogger_assert, AppenderMode, ConsoleFun, LogLevel, XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
 };
 use marsrs_buffer::CompressMode;
 
@@ -451,7 +451,44 @@ pub unsafe extern "C" fn mars_xlog_current_log_path(out: *mut c_char, len: c_uin
     })
 }
 
-/// Copies `bytes` plus a terminating NUL into the caller's buffer.
+/// [`mars_xlog_current_log_path`] of one instance.
+///
+/// The only spelling an app that holds an instance has: the process-wide
+/// question is about the appender `mars_xlog_open` installed, and an app that
+/// never called it — one that opened its logger with
+/// [`mars_xlog_new_instance`] — has no answer to it at all.
+///
+/// @return the number of bytes written excluding the terminating NUL, or
+/// [`MARS_XLOG_ERR_NULL_OUT`], [`MARS_XLOG_ERR_NO_SPACE`] (including `len == 0`)
+/// or [`MARS_XLOG_ERR_NO_PATH`].
+///
+/// # Safety
+///
+/// `out` must be null, or point to at least `len` writable bytes that stay alive for the duration
+/// of the call.
+#[no_mangle]
+pub unsafe extern "C" fn mars_xlog_current_log_path_instance(
+    instance: c_longlong,
+    out: *mut c_char,
+    len: c_uint,
+) -> c_int {
+    guard(MARS_XLOG_ERR_PANIC, || {
+        if out.is_null() {
+            return MARS_XLOG_ERR_NULL_OUT;
+        }
+        if len == 0 {
+            return MARS_XLOG_ERR_NO_SPACE;
+        }
+
+        let Some(path) = current_log_path(instance as u64) else {
+            return MARS_XLOG_ERR_NO_PATH;
+        };
+
+        // SAFETY: `out` is non-null (checked above) and the caller promises
+        // `len` writable bytes.
+        unsafe { write_path_into(path_to_bytes(&path), out as *mut c_uchar, len) }
+    })
+}
 ///
 /// # Safety
 ///
