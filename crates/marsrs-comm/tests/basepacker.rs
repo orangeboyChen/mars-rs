@@ -134,6 +134,20 @@ fn a_url_longer_than_the_c_reads_is_packed_without_its_tail() {
 }
 
 #[test]
+fn a_url_with_a_nul_in_it_is_packed_up_to_it() {
+    // the other half of `strnlen(_url, 128)`
+    let packed = packer_pack("/cgi\0behind-it", 0, b"", true);
+
+    assert_eq!(head(&packed).3, 4);
+    assert_eq!(packed.len(), HEAD_LEN + 4);
+
+    let PackerUnpacked::Ok { url, .. } = packer_unpack(&packed) else {
+        panic!("{:?}", packer_unpack(&packed))
+    };
+    assert_eq!(url, "/cgi");
+}
+
+#[test]
 fn a_package_of_nothing_is_a_header_and_a_url() {
     let packed = packer_pack("", 0, b"", true);
     assert_eq!(packed.len(), HEAD_LEN);
