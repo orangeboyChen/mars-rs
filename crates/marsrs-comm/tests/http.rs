@@ -8,6 +8,7 @@
 
 use marsrs_comm::http::{
     Body, Builder, CsMode, Method, Parser, RecvStatus, RequestLine, StatusLine, Version,
+    MAX_HEADER_FIELDS,
 };
 
 /// `shortlink_pack` — the fields the C++ sets, which is not the order they
@@ -217,6 +218,22 @@ fn the_answer_after_a_chunked_one_is_read_off_the_same_connection() {
     let mut next = Parser::new();
     assert_eq!(next.recv(parser.buffered()), RecvStatus::End);
     assert_eq!(next.body(), b"hi");
+}
+
+/// The trailer a peer never ends: what is left to find the empty line in
+/// grows with every byte that arrives, so the wait is bounded the way the
+/// head's own fields are, and a trailer over that bound is an error rather
+/// than a buffer that grows for as long as the peer keeps writing.
+#[test]
+fn a_trailer_that_never_ends_is_an_error() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n"),
+        RecvStatus::Body
+    );
+    // a field with no empty line after it, and more than the bound of them
+    let field = "Trailer-Field: v\r\n".repeat(MAX_HEADER_FIELDS / 16 + 1);
+    assert_eq!(parser.recv(field.as_bytes()), RecvStatus::BodyError);
 }
 
 /// `MAX_CHUNK_LENGTH` is 4g, and a chunk that big is one this parser does

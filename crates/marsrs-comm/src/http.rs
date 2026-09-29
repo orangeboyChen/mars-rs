@@ -1108,7 +1108,23 @@ impl Parser {
         let consumed = if self.buffer[trailer_begin..].starts_with(CRLF.as_bytes()) {
             CRLF.len()
         } else {
-            let Some(trailer_end) = find(&self.buffer[trailer_begin..], CRLF_CRLF) else {
+            // Searched inside a window the size of the one the head's own
+            // fields are bounded by, and not in the rest of the buffer: a
+            // trailer with no empty line in it is a response that is never
+            // going to end, and an unbounded search keeps scanning — and
+            // keeps buffering — for a terminator that is not coming, which
+            // is a parser that grows without a limit on what a peer sends
+            // it. Over the bound it is an error, the way a head that never
+            // ends is one, and not a wait.
+            let buffered = self.buffer.len() - trailer_begin;
+            let window = buffered.min(MAX_HEADER_FIELDS);
+            let Some(trailer_end) = find(
+                &self.buffer[trailer_begin..trailer_begin + window],
+                CRLF_CRLF,
+            ) else {
+                if buffered > MAX_HEADER_FIELDS {
+                    self.status = RecvStatus::BodyError;
+                }
                 return true;
             };
             trailer_end + CRLF_CRLF.len()
