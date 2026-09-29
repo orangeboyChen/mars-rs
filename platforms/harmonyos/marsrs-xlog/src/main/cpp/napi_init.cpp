@@ -460,21 +460,30 @@ static napi_value Log(napi_env env, napi_callback_info info) {
     return Undefined(env);
 }
 
-static napi_value Flush(napi_env env, napi_callback_info info) {
+// `mars_xlog_flush_instance`, as two methods and not as one carrying a `sync`:
+// whether the caller waits is not a detail a call site can be trusted to spell,
+// and it is the whole of the difference between the two — `SignalFlush` tells
+// the writer thread it may drain and returns at once, `FlushNow` drains on the
+// calling thread and is over when it returns.
+static napi_value SignalFlush(napi_env env, napi_callback_info info) {
     char* namePrefix = ArgString(env, info, 0);
     long long handle = HandleOf(namePrefix);
     free(namePrefix);
     if (handle == 0) {
         return Undefined(env);
     }
-    size_t argc = 2;
-    napi_value argv[2] = {NULL, NULL};
-    napi_value self = NULL;
-    bool sync = false;
-    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) == napi_ok && argc >= 2) {
-        napi_get_value_bool(env, argv[1], &sync);
+    mars_xlog_flush_instance(handle, 0);
+    return Undefined(env);
+}
+
+static napi_value FlushNow(napi_env env, napi_callback_info info) {
+    char* namePrefix = ArgString(env, info, 0);
+    long long handle = HandleOf(namePrefix);
+    free(namePrefix);
+    if (handle == 0) {
+        return Undefined(env);
     }
-    mars_xlog_flush_instance(handle, sync ? 1 : 0);
+    mars_xlog_flush_instance(handle, 1);
     return Undefined(env);
 }
 
@@ -502,7 +511,8 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setMaxAliveTime", NULL, SetMaxAliveTime, NULL, NULL, NULL, napi_default, NULL},
         {"isLoggable", NULL, IsLoggable, NULL, NULL, NULL, napi_default, NULL},
         {"log", NULL, Log, NULL, NULL, NULL, napi_default, NULL},
-        {"flush", NULL, Flush, NULL, NULL, NULL, napi_default, NULL},
+        {"signalFlush", NULL, SignalFlush, NULL, NULL, NULL, napi_default, NULL},
+        {"flushNow", NULL, FlushNow, NULL, NULL, NULL, napi_default, NULL},
         {"close", NULL, Close, NULL, NULL, NULL, napi_default, NULL},
     };
     napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties);

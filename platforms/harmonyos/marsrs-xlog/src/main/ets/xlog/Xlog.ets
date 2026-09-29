@@ -17,6 +17,12 @@ import { XlogConfig } from './XlogConfig';
 // the record is handed to the C ABI in the call, and the call is over when it
 // returns.
 //
+// The one member the Swift's `Xlog` has and this one does not is `flush()`:
+// an awaited drain is an async work item and a promise, and every method of the
+// NAPI module behind this file is synchronous — so a caller that wants the drain
+// off its own thread gives `flushNow()` a thread of its own, and one that wants
+// it off the writer's and off no thread of the app's calls `signalFlush()`.
+//
 // Five settings are properties and not `setLevel` / `getLevel` pairs, because a
 // property is the Kotlin and the Swift spelling. `xlog.level` reads the
 // appender's own — `mars_xlog_get_level`, the one of the five the C ABI has a
@@ -224,14 +230,38 @@ export class Xlog {
     this.log(LogLevel.Fatal, tag, message);
   }
 
-  /** `mars_xlog_flush_instance`: takes what is in the cache to the file. `sync`
-   * waits for the write, which is what an app wants before it reads the file or
-   * uploads it. */
-  flush(sync: boolean = false): void {
+  /** `mars_xlog_flush_instance`, signalled: tells the writer thread it may take
+   * what is in the cache to the log file, and returns at once.
+   *
+   * It guarantees nothing. The drain is the writer thread's, it has not
+   * necessarily begun when this returns, and a record that is still in the
+   * cache is not in the file yet — so a caller that reads the day's files or
+   * uploads them wants `flushNow()` and not this. What this is for is a drain
+   * an app wants soon and does not want to wait for: what is in the cache is
+   * in a file the kernel holds, so a drain that has not happened yet has lost
+   * nothing. */
+  signalFlush(): void {
     if (!this.opened) {
       return;
     }
-    xlogNapi.flush(this.namePrefix, sync);
+    xlogNapi.signalFlush(this.namePrefix);
+  }
+
+  /** `mars_xlog_flush_instance`, waited for: takes what is in the cache to the
+   * log file on the calling thread, and hands the file's own buffer to the OS
+   * — the last few KiB of a log file sit in a `FILE*` until this runs, so a
+   * reader in another process cannot see them yet.
+   *
+   * The records are on disk when it returns, and what it costs is the time the
+   * drain takes, on the thread that asked for it. It answers no promise and
+   * takes no callback, because a drain that is over when the call returns is
+   * not something to await: blocking a thread is the cost, and it is the
+   * caller's to pay or not. */
+  flushNow(): void {
+    if (!this.opened) {
+      return;
+    }
+    xlogNapi.flushNow(this.namePrefix);
   }
 
   /** `mars_xlog_release_instance`: closes the appender `Xlog.open` made.
