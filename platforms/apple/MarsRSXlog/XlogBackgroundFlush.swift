@@ -75,10 +75,12 @@ internal final class XlogBackgroundFlush {
         let live = appenders
         appenders = live.filter { $0.appender != nil }
         lock.unlock()
-        // `flush` does nothing once [Xlog.close()] ran, so an appender closed
-        // between the notification and here loses nothing by being asked.
+        // `flushNow` does nothing once [Xlog.close()] ran, so an appender
+        // closed between the notification and here loses nothing by being
+        // asked. The drain is this thread's: the app is suspended the moment
+        // this returns, so the signal that only wakes the writer is not enough.
         for appender in live {
-            appender.appender?.flush(sync: true)
+            appender.appender?.flushNow()
         }
     }
 

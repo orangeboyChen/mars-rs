@@ -14,7 +14,7 @@
 //      let log = try Xlog(config)
 //
 //      log.info(message: "hello", tag: "Net")
-//      log.flush(sync: true)
+//      log.flushNow()     // the records are on disk when it returns
 //
 //  or, for an app that only logs:
 //
