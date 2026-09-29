@@ -64,12 +64,12 @@ int main(void) {
      * argument and not a field of the config, because the level belongs to
      * the logger and not to the file.
      *
-     * Not `mars_xlog_open`: that one installs the *process-wide* appender,
-     * which is the plumbing the C ABI and the JNI bridge reach for, and not
-     * the thing an app holds. Asking anything of it means naming handle `0`,
-     * and `0` is also what `mars_xlog_new_instance` answers when it fails —
-     * one number for "the process-wide one" and for "no instance at all".
-     * An app that holds the handle never has to say which it means.
+     * Not handle `0`: that one names the *process-wide* appender, which is
+     * the plumbing the JNI bridge installs from Rust and which no symbol of
+     * this ABI opens, and not the thing an app holds. It is also the number
+     * `mars_xlog_new_instance` answers when it fails — one number for "the
+     * process-wide one" and for "no instance at all". An app that holds the
+     * handle never has to say which it means.
      *
      * No Rust panic crosses this boundary either: every entry point is
      * wrapped in `catch_unwind`, and a panic becomes `MARS_XLOG_ERR_PANIC`

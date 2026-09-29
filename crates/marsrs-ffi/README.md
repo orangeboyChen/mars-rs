@@ -6,19 +6,20 @@ layers of Mars talk to `marsrs-appender` **without** a big-bang rewrite.
 
 | C symbol (this crate)            | C++ it replaces                                                |
 | -------------------------------- | -------------------------------------------------------------- |
-| `mars_xlog_open`                 | `mars::xlog::appender_open(const XLogConfig&)`                 |
-| `mars_xlog_write`                | `mars::xlog::XloggerWrite(...)` + `xlogger_IsEnabledFor`        |
+| `mars_xlog_new_instance`         | `mars::xlog::NewXloggerInstance(_config, (TLogLevel)_level)`    |
+| `mars_xlog_write_instance`       | `mars::xlog::XloggerWrite(...)` + `xlogger_IsEnabledFor`        |
 | `mars_xlog_signal_flush_instance` | `mars::xlog::appender_flush()`                                 |
 | `mars_xlog_flush_now_instance`   | `mars::xlog::appender_flush_sync()`                            |
-| `mars_xlog_close`                | `mars::xlog::appender_close()`                                 |
+| `mars_xlog_release_instance`     | `mars::xlog::appender_close()`                                 |
 | `mars_xlog_set_level_instance`   | `xlogger_SetLevel()` / `SetLevel` on an instance                |
 | `mars_xlog_set_console_log_instance` | `mars::xlog::appender_set_console_log(bool)`                |
 | `mars_xlog_set_max_file_size_instance` | `mars::xlog::appender_set_max_file_size(uint64_t)`        |
 | `mars_xlog_set_max_alive_duration_instance` | `mars::xlog::appender_set_max_alive_duration(long)`  |
 | `mars_xlog_current_log_path`     | `mars::xlog::appender_get_current_log_path(char*, unsigned)`   |
 
-Handle `0` is the process-wide appender `mars_xlog_open` opened, so every
-instance symbol is also how that one is asked: `mars_xlog_signal_flush_instance(0)`
+Handle `0` names the process-wide appender, which the JNI bridge installs from
+Rust and which no symbol of this ABI opens, so every instance symbol is also how
+that one is asked: `mars_xlog_signal_flush_instance(0)`
 tells the writer thread it may drain and returns at once, and
 `mars_xlog_flush_now_instance(0)` drains on the calling thread, so the records
 are on the disk when it returns. There is one spelling per operation and not
@@ -74,15 +75,19 @@ MarsXLogConfig cfg = {
     .cache_days    = 0,
 };
 
-if (mars_xlog_open(&cfg) != MARS_XLOG_OK) { /* handle */ }
-mars_xlog_set_level_instance(0, MarsLevelInfo);
-mars_xlog_write(MarsLevelInfo, "tag", __FILE__, __func__, __LINE__, "hello");
-mars_xlog_flush_now_instance(0);
+/* The level is the second argument and not a field of the config: it belongs
+   to the logger and not to the file. `0` is both the handle of the
+   process-wide appender and what an instance that could not be opened
+   answers, so it is the one failure to handle. */
+long long xlog = mars_xlog_new_instance(&cfg, MarsLevelInfo);
+if (xlog == 0) { /* handle */ }
+mars_xlog_write_instance(xlog, MarsLevelInfo, "tag", __FILE__, __func__, __LINE__, "hello");
+mars_xlog_flush_now_instance(xlog);
 
 char path[512];
-int n = mars_xlog_current_log_path(path, sizeof(path));   /* bytes, excl. NUL */
+int n = mars_xlog_current_log_path_instance(xlog, path, sizeof(path));   /* bytes, excl. NUL */
 
-mars_xlog_close();
+mars_xlog_release_instance("Mars");
 ```
 
 Compile and link:
@@ -138,8 +143,9 @@ close.
 
 `mars/xlog/jni/Java2C_Xlog.cc` reads an `Xlog` config object out of Java and
 calls `appender_open` + `xlogger_SetLevel`. The equivalent through this shim is
-a single `mars_xlog_open` followed by `mars_xlog_set_level_instance(0, level)`; `logWrite` becomes
-one `mars_xlog_write` (the level gate the JNI code performs with
+a single `mars_xlog_new_instance(&cfg, level)` — the level is its second
+argument, and not a second call — and `logWrite` becomes one
+`mars_xlog_write_instance` (the level gate the JNI code performs with
 `xlogger_IsEnabledFor` is built in).
 
 ## Guarantees at the boundary
@@ -152,14 +158,17 @@ one `mars_xlog_write` (the level gate the JNI code performs with
   Rust aborts at the `extern "C"` boundary, before any `catch_unwind` here can
   see it.
 * **No null dereference.** Every incoming pointer is null-checked; null and
-  invalid UTF-8 degrade to an empty string. `mars_xlog_open` returns
+  invalid UTF-8 degrade to an empty string. `mars_xlog_oneshot_flush` returns
   `MARS_XLOG_ERR_NULL_CONFIG` / `MARS_XLOG_ERR_EMPTY_LOG_DIR` instead of failing
-  later.
-* **No truncation surprises.** `mars_xlog_current_log_path` either writes a
+  later; `mars_xlog_new_instance` has no code to answer with, so it gives back
+  handle `0`.
+* **No truncation surprises.** `mars_xlog_current_log_path` and
+  `mars_xlog_current_log_path_instance` either write a
   NUL-terminated path and returns its byte count (excluding the NUL) or returns
   `MARS_XLOG_ERR_NO_SPACE` — it never writes a partial path.
-* **Threading.** All symbols may be called from any thread; `open`/`close` and
-  the setters touch process-wide state and belong in start-up / shut-down.
+* **Threading.** All symbols may be called from any thread;
+  `mars_xlog_new_instance` / `mars_xlog_release_instance` and the setters touch
+  process-wide state and belong in start-up / shut-down.
 
 ## Where `unsafe` lives
 

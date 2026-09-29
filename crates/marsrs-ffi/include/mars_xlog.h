@@ -307,8 +307,9 @@ int mars_xlog_getfilepath_from_timespan(int timespan,
 /* The directory an instance is writing its files to, or a negative
  * MARS_XLOG_ERR_* code. It is the same question mars_xlog_current_log_path
  * asks of the process-wide appender, and the only spelling an app that opened
- * its logger with mars_xlog_new_instance has: it never called mars_xlog_open,
- * so the process-wide one answers MARS_XLOG_ERR_NO_PATH for it. */
+ * its logger with mars_xlog_new_instance has: no symbol of this ABI installs
+ * the process-wide one — the JNI bridge does, from Rust — so the process-wide
+ * question answers MARS_XLOG_ERR_NO_PATH for it. */
 int mars_xlog_current_log_path_instance(long long instance, char* out, unsigned int len);
 
 /* The cache directory, or a negative MARS_XLOG_ERR_* code. */

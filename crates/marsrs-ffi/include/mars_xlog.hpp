@@ -9,9 +9,9 @@
  * `mars_xlog_*` call, so nothing here is a behaviour the C ABI does not have.
  *
  * A caller that would rather name the C symbols takes `mars_xlog.h`, which this
- * includes; a caller that wants the process-wide appender `mars_xlog_open`
- * opens takes them too, because the C ABI's answer to "the appender of handle
- * 0" is those very symbols.
+ * includes; handle `0` in them names the process-wide appender, which the JNI
+ * bridge installs from Rust and no symbol of this ABI opens — an app that
+ * wants one of its own calls `mars_xlog_new_instance`.
  *
  * The header is header-only and needs C++17: `std::string_view` is what the
  * console sink is handed, and `std::future<void>` is what `flush()` answers.
