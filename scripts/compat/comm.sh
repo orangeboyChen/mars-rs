@@ -125,7 +125,9 @@ compare_readings() {
         for _side in rust cpp; do
             _bin_of_side=$RUST
             if [ "$_side" = cpp ]; then _bin_of_side=$CPP; fi
-            # shellcheck disable=SC2086 — `_subcmd` is two words on purpose.
+            # shellcheck disable=SC2086
+            # `_subcmd` is two words on purpose: the subcommand and its
+            # `--kind=`, both unquoted so that the shell splits them.
             $_bin_of_side $_subcmd --in="$_bin" > "$WORK/$_name-$_side-$_at.txt"
             normalize "$WORK/$_name-$_side-$_at.txt" > "$WORK/$_name-$_side-$_at-norm.txt"
             if [ "$_side$_at" != "rust1" ] && ! cmp -s "$WORK/$_name-$_side-$_at-norm.txt" "$WORK/$_name-rust-1-norm.txt"; then
