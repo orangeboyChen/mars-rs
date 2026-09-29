@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::{Mutex, RwLock};
 
 use marsrs_appender::{
-    appender_close, appender_get_current_log_path, appender_open, appender_write,
+    appender_close, appender_get_current_log_path, appender_open,
     category_set_max_alive_duration as set_max_alive_duration,
     category_set_max_file_size as set_max_file_size, flush_now, flush_now_all, set_console_fun,
     set_console_log_open, set_level, signal_flush, signal_flush_all, xlogger_assert, AppenderMode,
@@ -252,7 +252,13 @@ pub unsafe extern "C" fn mars_xlog_write(
 
         // The appender returns whether anything was written; a C caller has no
         // channel for it (the C++ `xlogger_AssertP` family did not check either).
-        let _written = appender_write(Some(&info), message);
+        //
+        // Handle `0` and not `appender_write`: the process-wide appender's own
+        // free function is the plumbing this crate is one layer above, and what
+        // the C ABI says handle `0` is, is that appender — so this is the same
+        // write every `mars_xlog_write_instance(0, …)` does, and one spelling
+        // for it in the crate rather than two.
+        let _written = marsrs_appender::xlogger_write(DEFAULT_HANDLE, Some(&info), Some(message));
     });
 }
 

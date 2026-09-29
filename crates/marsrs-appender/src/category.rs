@@ -31,8 +31,8 @@ use std::time::Instant;
 
 use crate::{
     appender_close_instance, appender_flush, appender_flush_instance, appender_flush_now,
-    appender_flush_now_instance, appender_open_instance, appender_set_console_log,
-    appender_set_console_log_instance, appender_set_max_alive_duration,
+    appender_flush_now_instance, appender_get_current_log_path_instance, appender_open_instance,
+    appender_set_console_log, appender_set_console_log_instance, appender_set_max_alive_duration,
     appender_set_max_alive_duration_instance, appender_set_max_file_size,
     appender_set_max_file_size_instance, appender_set_mode, appender_set_mode_instance,
     appender_signal_flush, appender_signal_flush_instance, appender_write, appender_write_instance,
@@ -789,6 +789,23 @@ pub fn set_console_log_open(handle: XloggerHandle, open: bool) {
         Target::Instance(id) => appender_set_console_log_instance(id, open),
         Target::Default => appender_set_console_log(open),
         Target::Gone => {}
+    }
+}
+
+/// The directory the appender of `handle` writes its files to, or `None` when
+/// there is none — an appender with no log dir was never opened.
+///
+/// `appender_get_current_log_path` is the process-wide appender's and takes no
+/// handle, because the C++ has no instance of the question; this is the same
+/// one about any handle, `DEFAULT_HANDLE` included, which is that appender and
+/// answers the same path. The name is the C++'s, and so is what it answers:
+/// the directory and not a file — the same question `Xlog::current_log_path`
+/// asks of an object.
+pub fn current_log_path(handle: XloggerHandle) -> Option<PathBuf> {
+    match target(handle) {
+        Target::Instance(id) => appender_get_current_log_path_instance(id),
+        Target::Default => crate::appender_get_current_log_path(),
+        Target::Gone => None,
     }
 }
 

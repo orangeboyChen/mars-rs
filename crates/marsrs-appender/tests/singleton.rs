@@ -11,12 +11,11 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::task::{Context, Waker};
 
 use marsrs_appender::{
-    appender_close, appender_flush, appender_flush_now, appender_get_current_log_cache_path,
-    appender_get_current_log_path, appender_getfilepath_from_timespan, appender_make_logfile_name,
-    appender_oneshot_flush, appender_open, appender_set_console_log,
-    appender_set_max_alive_duration, appender_set_max_file_size, appender_set_mode,
-    appender_signal_flush, appender_write, AppenderMode, FileIoAction, LogLevel, XLogConfig,
-    XLoggerInfo,
+    appender_close, appender_get_current_log_cache_path, appender_get_current_log_path,
+    appender_getfilepath_from_timespan, appender_make_logfile_name, appender_oneshot_flush,
+    appender_open, category_set_max_alive_duration, category_set_max_file_size, flush, flush_now,
+    set_appender_mode, set_console_log_open, signal_flush, xlogger_write, AppenderMode,
+    FileIoAction, LogLevel, XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
 };
 use marsrs_crypt::{magic, LogCrypt, HEADER_LEN, TAILER_LEN};
 
@@ -101,17 +100,22 @@ fn open_write_flush_close_roundtrip() {
     assert_eq!(appender_get_current_log_path().as_deref(), Some(tmp.path()));
     assert!(appender_get_current_log_cache_path().is_none());
 
-    assert!(appender_write(
+    assert!(xlogger_write(
+        DEFAULT_HANDLE,
         Some(&info(LogLevel::Info)),
-        "singleton roundtrip"
+        Some("singleton roundtrip")
     ));
-    appender_signal_flush();
-    appender_flush_now();
+    signal_flush(DEFAULT_HANDLE);
+    flush_now(DEFAULT_HANDLE);
     appender_close();
 
     // After `close()` the appender is gone again.
     assert!(appender_get_current_log_path().is_none());
-    assert!(!appender_write(Some(&info(LogLevel::Info)), "dropped"));
+    assert!(!xlogger_write(
+        DEFAULT_HANDLE,
+        Some(&info(LogLevel::Info)),
+        Some("dropped")
+    ));
 
     let path = today_log_file(tmp.path());
     assert!(path.exists(), "{path:?} was not created");
@@ -126,12 +130,13 @@ fn async_mode_writes_through_the_writer_thread() {
 
     appender_open(config(tmp.path(), AppenderMode::Async)).unwrap();
     for i in 0..32 {
-        assert!(appender_write(
+        assert!(xlogger_write(
+            DEFAULT_HANDLE,
             Some(&info(LogLevel::Debug)),
-            &format!("async line {i}")
+            Some(&format!("async line {i}"))
         ));
     }
-    appender_flush_now();
+    flush_now(DEFAULT_HANDLE);
     appender_close();
 
     let bytes = std::fs::read(today_log_file(tmp.path())).unwrap();
@@ -165,11 +170,15 @@ fn awaited_flush_drains_off_the_calling_thread() {
     let tmp = tempfile::tempdir().unwrap();
 
     appender_open(config(tmp.path(), AppenderMode::Async)).unwrap();
-    assert!(appender_write(Some(&info(LogLevel::Info)), "awaited flush"));
+    assert!(xlogger_write(
+        DEFAULT_HANDLE,
+        Some(&info(LogLevel::Info)),
+        Some("awaited flush")
+    ));
 
     // Pending at least once, which is the whole point of the call: the drain
     // is another thread's, and this one is not held while it runs.
-    let mut future = std::pin::pin!(appender_flush());
+    let mut future = std::pin::pin!(flush(DEFAULT_HANDLE));
     let waker = Waker::noop();
     let mut cx = Context::from_waker(waker);
     assert!(future.as_mut().poll(&mut cx).is_pending());
@@ -181,7 +190,7 @@ fn awaited_flush_drains_off_the_calling_thread() {
     }
 
     // Dropped and never polled: the drain never runs, and nothing panics.
-    drop(appender_flush());
+    drop(flush(DEFAULT_HANDLE));
 
     let bytes = std::fs::read(today_log_file(tmp.path())).unwrap();
     assert!(
@@ -192,8 +201,12 @@ fn awaited_flush_drains_off_the_calling_thread() {
 
     // And the call the Rust API gives a caller with no executor: the same
     // drain, waited for on this thread.
-    assert!(appender_write(Some(&info(LogLevel::Info)), "second record"));
-    poll(appender_flush());
+    assert!(xlogger_write(
+        DEFAULT_HANDLE,
+        Some(&info(LogLevel::Info)),
+        Some("second record")
+    ));
+    poll(flush(DEFAULT_HANDLE));
     appender_close();
 
     let bytes = std::fs::read(today_log_file(tmp.path())).unwrap();
@@ -207,14 +220,16 @@ fn mode_can_be_switched_on_a_live_appender() {
     let tmp = tempfile::tempdir().unwrap();
 
     appender_open(config(tmp.path(), AppenderMode::Async)).unwrap();
-    assert!(appender_write(
+    assert!(xlogger_write(
+        DEFAULT_HANDLE,
         Some(&info(LogLevel::Warn)),
-        "written while async"
+        Some("written while async")
     ));
-    appender_set_mode(AppenderMode::Sync);
-    assert!(appender_write(
+    set_appender_mode(DEFAULT_HANDLE, AppenderMode::Sync);
+    assert!(xlogger_write(
+        DEFAULT_HANDLE,
         Some(&info(LogLevel::Warn)),
-        "written while sync"
+        Some("written while sync")
     ));
     appender_close();
 
@@ -249,9 +264,9 @@ fn setters_before_open_are_applied() {
     let tmp = tempfile::tempdir().unwrap();
     let cache = tmp.path().join("cache");
 
-    appender_set_max_file_size(0);
-    appender_set_max_alive_duration(3 * 24 * 60 * 60);
-    appender_set_console_log(false);
+    category_set_max_file_size(DEFAULT_HANDLE, 0);
+    category_set_max_alive_duration(DEFAULT_HANDLE, 3 * 24 * 60 * 60);
+    set_console_log_open(DEFAULT_HANDLE, false);
 
     let mut cfg = config(tmp.path(), AppenderMode::Sync);
     cfg.cachedir = Some(cache.clone());
@@ -266,8 +281,8 @@ fn setters_before_open_are_applied() {
     assert_eq!(paths[0], today_log_file(tmp.path()));
 
     appender_close();
-    appender_set_max_file_size(0);
-    appender_set_max_alive_duration(0);
+    category_set_max_file_size(DEFAULT_HANDLE, 0);
+    category_set_max_alive_duration(DEFAULT_HANDLE, 0);
 }
 
 #[test]
@@ -276,9 +291,10 @@ fn getfilepath_from_timespan_finds_todays_file() {
     let tmp = tempfile::tempdir().unwrap();
 
     appender_open(config(tmp.path(), AppenderMode::Sync)).unwrap();
-    assert!(appender_write(
+    assert!(xlogger_write(
+        DEFAULT_HANDLE,
         Some(&info(LogLevel::Info)),
-        "make the file exist"
+        Some("make the file exist")
     ));
     appender_close();
 
@@ -333,7 +349,11 @@ fn sync_mode_holds_the_tail_until_it_is_handed_over() {
     let tmp = tempfile::tempdir().unwrap();
 
     appender_open(config(tmp.path(), AppenderMode::Sync)).unwrap();
-    appender_write(None, "the tail of a session that was killed");
+    xlogger_write(
+        DEFAULT_HANDLE,
+        None,
+        Some("the tail of a session that was killed"),
+    );
 
     // Nothing has been handed to the OS yet, and there is no cache file behind
     // it: a process that dies here takes the record with it.

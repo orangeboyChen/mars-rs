@@ -26,8 +26,8 @@ use std::time::{Duration, Instant};
 
 use marsrs_appender::{
     appender_close, appender_close_instance, appender_flush_now_instance, appender_oneshot_flush,
-    appender_open, appender_open_instance, appender_write, appender_write_instance, AppenderMode,
-    FileIoAction, LogLevel, XLogConfig, XLoggerInfo,
+    appender_open, appender_open_instance, appender_write_instance, xlogger_write, AppenderMode,
+    FileIoAction, LogLevel, XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
 };
 use marsrs_buffer::{CompressMode, LogBuffer};
 use marsrs_crypt::{magic, LogCrypt, HEADER_LEN, TAILER_LEN};
@@ -300,9 +300,10 @@ fn peer_process_writer() {
     wait_for(&dir.join("go"), "the parent to start writing");
 
     for i in 0..RECORDS {
-        assert!(appender_write(
+        assert!(xlogger_write(
+            DEFAULT_HANDLE,
             Some(&info(LogLevel::Info)),
-            &format!("peer-{i:04}")
+            Some(&format!("peer-{i:04}"))
         ));
     }
     appender_close();
@@ -327,9 +328,10 @@ fn two_processes_keep_every_record() {
     fs::write(tmp.path().join("go"), b"1").unwrap();
 
     for i in 0..RECORDS {
-        assert!(appender_write(
+        assert!(xlogger_write(
+            DEFAULT_HANDLE,
             Some(&info(LogLevel::Info)),
-            &format!("local-{i:04}")
+            Some(&format!("local-{i:04}"))
         ));
     }
     appender_close();
