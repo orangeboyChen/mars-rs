@@ -32,5 +32,5 @@ pub use sdt::{
     NetCheckStatus, NetCheckType, TcpErrCode,
 };
 pub use sdt_core::SdtCore;
-pub use sdt_logic::SdtLogic;
+pub use sdt_logic::{Mode, SdtLogic};
 pub use trafficmonitor::{NetCheckTrafficMonitor, DEFAULT_WIFI_DATA_THRESHOLD};
