@@ -9,7 +9,7 @@
 ```
 
 `XlogConfig(logDir = "/data/…/xlog/log", namePrefix = "marsrs")` 写出的就是
-`marsrs_20260927.xlog`。目录不存在时会创建；前缀就是这个 appender 的身份 —— 两个
+`marsrs_20260927.xlog`。目录不存在就创建；前缀就是这个 appender 的身份 —— 两个
 appender 用了同一个前缀就写同一个文件，关掉其中一个，另一个也就写不了了。
 哪一块日志要单独读，就给它一个自己的前缀。
 
@@ -33,8 +33,8 @@ mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK，或负的错�
 
 :::
 
-能给出这个路径的就是这三个包。其余平台由 App 自己拼出文件名，而拼用到的正是它交给配置
-的那两样：目录和前缀，中间夹着当天日期。
+能给出这个路径的就是这三个包。其余平台要 App 自己拼出文件名，拼的时候用的还是交给
+配置的那两样：目录和前缀，中间夹着当天日期。
 
 ## 异步：记录可能还在缓存里
 
@@ -96,7 +96,7 @@ mars_xlog_flush_sync();
 
 | 平台 | 谁在 flush |
 |---|---|
-| Android | `Xlog(config, context)` —— App 任意一个 `Context` 都会注册一个 `ComponentCallbacks2`，从 `TRIM_MEMORY_UI_HIDDEN` 往上就 flush |
+| Android | `Xlog(config, context)` —— App 的任意一个 `Context` 都会注册一个 `ComponentCallbacks2`，从 `TRIM_MEMORY_UI_HIDDEN` 往上就 flush |
 | SwiftPM | 每个 `Xlog`，建好就开始：它看着 `didEnterBackground` 和 `willTerminate`，在 watchOS 上还看着 `WKExtension` 的 |
 | 其余每个平台 | 下次启动，如上 |
 
@@ -147,10 +147,9 @@ python3 decode_mars_log_file.py marsrs_20260927.xlog      # Tencent/mars
 一条记录，它把这些记录写成一个 `.xlog`，给了 `--pubkey`（那对密钥里的公钥）
 就顺带加密。
 
-不完整的文件也读得出来。读不出的那条记录 —— 进程在两次写入之间被杀掉留下的
-半块，或者拷到别处时坏掉的某个字节 —— 会被跳过，而它占的那段字节会在输出里、
-本来该是这条记录正文的地方标出来：损坏后面那些记录还在命令行写出的文件
-里，不会跟着一起丢。
+不完整的文件也读得出来。读不出的那条记录 —— 进程在两次写入之间被杀掉留下的半块，
+或者拷到别处时坏掉的某个字节 —— 会跳过去，它占的那段字节在输出里标出来，就标在原本
+该是这条记录正文的地方：损坏后面那些记录还在命令行写出的文件里，不会跟着一起丢。
 
 [命令行](/zh/xlog/cli)那一页是整条命令行 —— 怎么装、怎么造这对密钥、怎么读回一个文件、
 怎么写一个。终端里 `xlog help` 打出来的是同样的东西；公钥到底对一条记录做了什么，
