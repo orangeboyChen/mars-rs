@@ -1069,6 +1069,14 @@ impl Parser {
         }
 
         if size != 0 {
+            // The cap is on the body and not on the chunk: `size` is under
+            // `MAX_CHUNK_LENGTH` for every chunk there is, so a peer that
+            // announces one after another of them is waved through by the
+            // check above, and `body` is then as long as it cares to write.
+            if (self.body.len() as u64).saturating_add(size) > MAX_CONTENT_LENGTH {
+                self.status = RecvStatus::BodyError;
+                return true;
+            }
             let begin = size_end + CRLF.len();
             // The size has to fit in a `usize` before it is an offset into
             // this buffer, and adding it to `begin` must not wrap: on a
@@ -1159,7 +1167,11 @@ impl Parser {
         } else {
             content_length - have
         };
-        if append > MAX_CONTENT_LENGTH {
+        // The cap is on the body the parser holds, and not on what one read
+        // adds: a peer that writes for ever into a `Connection: close` with
+        // no `Content-Length` adds a bufferful at a time, and every one of
+        // them is under the limit on its own.
+        if have.saturating_add(append) > MAX_CONTENT_LENGTH {
             self.status = RecvStatus::BodyError;
             return true;
         }
