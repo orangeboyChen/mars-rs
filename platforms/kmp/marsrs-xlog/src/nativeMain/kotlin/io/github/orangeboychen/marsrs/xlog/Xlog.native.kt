@@ -127,9 +127,9 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
     /**
      * The handle of this appender, or [IllegalStateException] when there is none
-     * left to forward: no handle is the process-wide appender of `mars_xlog_open`
-     * to the C ABI, so a closed [Xlog] that handed it on would read and move the
-     * appender every other part of the process writes through.
+     * left to forward: no handle is the process-wide appender to the C ABI, so
+     * a closed [Xlog] that handed it on would read and move the appender every
+     * other part of the process writes through.
      */
     private fun requireOpen(): Long {
         check(isOpen) {

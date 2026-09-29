@@ -34,13 +34,14 @@ public enum class CompressMode {
  *
  * Every property has the default the C++ project's own `XLogConfig` carries, so
  * the only one an app has to give is [logDir], and a config the appender cannot
- * honour is refused here and not silently by the bridge: `mars_xlog_open`
- * answers a config it does not like by opening nothing, and an app that finds
- * out three days later that it has no logs has no way back.
+ * honour is refused here and not silently by the bridge:
+ * `mars_xlog_new_instance` answers a config it does not like by opening
+ * nothing, and an app that finds out three days later that it has no logs has
+ * no way back.
  *
  * @property logDir the directory the log files are written to. It is created if
  *   it is missing, and it is the one field the C ABI insists on: without it,
- *   `mars_xlog_open` answers `MARS_XLOG_ERR_EMPTY_LOG_DIR` and opens nothing.
+ *   `mars_xlog_new_instance` answers handle `0` and opens nothing.
  * @property namePrefix the name every log file starts with (`marsrs_20260927.xlog`),
  *   and the name the appender is known by — an app that writes through two of
  *   them gives them two.

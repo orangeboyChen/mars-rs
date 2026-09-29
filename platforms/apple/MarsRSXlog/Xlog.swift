@@ -10,14 +10,14 @@
 // C strings, `int` modes and a config struct that has to be filled field by
 // field. This file is that surface in Swift — `String`s, an `XlogConfig` with
 // defaults and a value an app writes through — and it re-exports the C module,
-// so `mars_xlog_open(&config)` and friends stay reachable for whoever prefers
+// so the symbols an `Xlog` is written over stay reachable for whoever prefers
 // them.
 //
 // The shape is the one the Android `Xlog` has, and the one the C ABI spells with
 // a handle: `Xlog.open(config)` opens an appender of its own and answers it, and
 // the app writes through what it was given. Nothing here is deprecated, because
-// there is no older Swift API to keep — the process-wide appender
-// `mars_xlog_open` opens is a set of C symbols, and `import MarsRSFFI` reaches
+// there is no older Swift API to keep — the process-wide appender the JNI
+// bridge installs is a set of C symbols, and `import MarsRSFFI` reaches
 // them. `currentLogPath` and `currentCachePath` are the exception: they are that
 // appender's, and they say so.
 //
@@ -341,7 +341,7 @@ public final class Xlog: NSObject {
     }
 
     /// The path of the file the *process-wide* appender is writing — the one
-    /// `mars_xlog_open` opens, not the one of an `Xlog` — or `nil` when there is
+    /// the JNI bridge installs, not the one of an `Xlog` — or `nil` when there is
     /// no open file (or the buffer was too small, which 1024 bytes never is).
     @objc public static var currentLogPath: String? {
         path(of: mars_xlog_current_log_path)
