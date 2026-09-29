@@ -27,9 +27,12 @@
  * caller can include it without running cbindgen. It is kept in sync with
  * `src/abi.rs` by `tests/header_sync.rs`.
  *
- * Threading: every symbol may be called from any thread. `mars_xlog_open`,
- * `mars_xlog_close` and the setters mutate process-wide state (exactly like the
- * C++ globals) and should be called from one place during start-up / shut-down.
+ * Threading: every symbol may be called from any thread. The setters and the
+ * instance lifecycle mutate shared state (exactly like the C++ globals) and
+ * should be called from one place during start-up / shut-down. What no symbol
+ * here does is install the process-wide appender: an app opens an instance
+ * with `mars_xlog_new_instance`, and the process-wide one is the plumbing the
+ * JNI bridge sets up from Rust.
  *
  * Panics: no Rust panic ever crosses this boundary. Every entry point is
  * wrapped in `catch_unwind`; a panic is reported as `MARS_XLOG_ERR_PANIC` (or
@@ -41,7 +44,8 @@
 
 /* The symbols this header declares are the ones `#[no_mangle]` exports: plain
  * C names, and a C++ translation unit that includes this and calls
- * `mars_xlog_open()` asks its linker for a mangled one that does not exist.
+ * `mars_xlog_new_instance()` asks its linker for a mangled one that does not
+ * exist.
  * `mars_stn.h` and `mars_sdt.h` carry the same guard, and `mars_xlog.hpp` —
  * the C++ face of this seam — includes this one, so a C++ caller asks for the
  * same names whichever of the two it takes. */
@@ -113,35 +117,12 @@ typedef struct {
     int cache_days;        /* < 0 => 0; 0 => keep every file                 */
 } MarsXLogConfig;
 
-/* --- lifecycle ---------------------------------------------------------- */
-
-/**
- * Replaces `mars::xlog::appender_open(const XLogConfig&)`.
- *
- * @return MARS_XLOG_OK (0) on success, or a negative MARS_XLOG_ERR_* code.
- */
-int mars_xlog_open(const MarsXLogConfig* config);
-
-/**
- * Replaces `mars::xlog::XloggerWrite(...)` / `appender_write`: the record goes
- * to the process-wide appender `mars_xlog_open` opened. It is dropped (cheaply,
- * before any formatting) when `level` is below the level set for handle `0` by
- * `mars_xlog_set_level_instance`.
- *
- * `tag`, `filename`, `func_name` and `message` may be NULL; NULL and invalid
- * UTF-8 are treated as an empty string.
- */
-void mars_xlog_write(int level,
-                     const char* tag,
-                     const char* filename,
-                     const char* func_name,
-                     int line,
-                     const char* message);
+/* --- writing ------------------------------------------------------------- */
 
 /**
  * Replaces `xlogger_Assert(...)` of `mars/comm/xlogger/xloggerbase.h` — the
- * record an assert writes, with the same flattened fields `mars_xlog_write`
- * takes plus the expression that failed.
+ * record an assert writes, with the same flattened fields
+ * `mars_xlog_write_instance` takes plus the expression that failed.
  *
  * The record is written at `MarsLevelFatal` and its body is
  * `[ASSERT(<expression>)]` followed by `message`. `xloggerbase.h` annotates
@@ -159,9 +140,6 @@ void mars_xlog_assert(const char* tag,
                       const char* expression,
                       const char* message);
 
-/** Replaces `mars::xlog::appender_close()`. */
-void mars_xlog_close(void);
-
 /**
  * Replaces `appender_set_console_fun(TConsoleFun)` of `mars/xlog/appender.h`
  * — where a console record goes instead of the built-in sink, which is stderr
@@ -170,8 +148,8 @@ void mars_xlog_close(void);
  * The C++ `TConsoleFun` is an Apple-only enum of three sinks of its own
  * (`kConsolePrintf` / `kConsoleNSLog` / `kConsoleOSLog`), and
  * `os_log_with_type` is a macro with no symbol to link against, so the port
- * takes the sink instead: a callback handed the same fields `mars_xlog_write`
- * takes, unformatted, so what a console record looks like is the caller's
+ * takes the sink instead: a callback handed the same fields
+ * `mars_xlog_write_instance` takes, unformatted, so what a console record looks like is the caller's
  * decision and not the port's.
  *
  * Pass NULL to take the callback away again. The callback may be called from
@@ -208,8 +186,10 @@ int mars_xlog_current_log_path(char* out, unsigned int len);
 /* ---- logger instances (mars::xlog::NewXloggerInstance and friends) ----
  *
  * Each instance owns an appender: its own log directory, prefix, key, mode and
- * cache file. Handle 0 means "the process-wide appender opened by
- * mars_xlog_open".
+ * cache file. Handle 0 means "the process-wide appender", which no symbol here
+ * installs: it is the one the JNI bridge sets up from Rust, and a C caller
+ * that wants a logger of its own opens an instance with
+ * mars_xlog_new_instance.
  *
  * Every call that can be asked of an instance exists only in this spelling: the
  * C++ has a free function for the process-wide appender and a handle-taking one
@@ -244,7 +224,8 @@ int mars_xlog_get_level(long long instance);
 
 /* SetLevel for an instance; `0` is the process-wide appender, so this is also
  * `xlogger_SetLevel` — the level `mars_xlog_get_level` and
- * `mars_xlog_is_enabled_for` answer, and the one `mars_xlog_write` asks. */
+ * `mars_xlog_is_enabled_for` answer, and the one a write through handle `0`
+ * asks. */
 void mars_xlog_set_level_instance(long long instance, int level);
 
 /* appender_setmode / SetAppenderMode; `0` is the process-wide appender. */

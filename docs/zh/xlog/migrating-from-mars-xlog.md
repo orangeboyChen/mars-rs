@@ -33,11 +33,11 @@ appender 在 `mars/xlog/appender.h` 里是一组选项构成的一个 struct 加
 
 | C++ | Rust | C ABI |
 |---|---|---|
-| `appender_open(const XLogConfig&)` | `Xlog::open(config, level)` | `mars_xlog_open(&config)` |
-| `xlogger_Write(info, log)`，或 `xinfo2` 那一族 | `xlog.log(level, tag, message)` | `mars_xlog_write(...)` |
+| `appender_open(const XLogConfig&)` | `Xlog::open(config, level)` | `mars_xlog_new_instance(&config, level)` |
+| `xlogger_Write(info, log)`，或 `xinfo2` 那一族 | `xlog.log(level, tag, message)` | `mars_xlog_write_instance(handle, ...)` |
 | `appender_flush()` | `xlog.signal_flush()` | `mars_xlog_signal_flush_instance(0)` |
 | `appender_flush_sync()` | `xlog.flush_now()` | `mars_xlog_flush_now_instance(0)` |
-| `appender_close()` | `xlog.close()` | `mars_xlog_close()` |
+| `appender_close()` | `xlog.close()` | `mars_xlog_release_instance(prefix)` |
 | `xlogger_SetLevel(level)` | `xlog.set_level(level)` | `mars_xlog_set_level_instance(0, level)` |
 | `appender_setmode(mode)` | `xlog.set_mode(mode)` | `mars_xlog_set_mode_instance(0, mode)` |
 | `appender_set_console_log(bool)` | `xlog.set_console_log_enabled(on)` | `mars_xlog_set_console_log_instance(0, on)` |

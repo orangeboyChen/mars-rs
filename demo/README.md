@@ -7,7 +7,7 @@ say where the file went.
 They are written to be read side by side. The point of the port is that one API
 is spelled once per platform and means the same thing on all of them —
 `Xlog.open(config)` in Rust, in Kotlin, in Swift, in Dart and in ArkTS, and
-`mars_xlog_open` in C — so the only thing that differs between these eight is
+`mars_xlog_new_instance` in C — so the only thing that differs between these eight is
 what a platform makes of two questions: where the log directory comes from, and
 whether the call is a future.
 

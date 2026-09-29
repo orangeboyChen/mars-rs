@@ -9,9 +9,9 @@
 //!
 //! | C symbol                                | C++ original                                        |
 //! |-----------------------------------------|-----------------------------------------------------|
-//! | [`mars_xlog_open`]                      | `mars::xlog::appender_open(const XLogConfig&)`      |
-//! | [`mars_xlog_write`]                     | `mars::xlog::XloggerWrite(...)`                     |
-//! | [`mars_xlog_close`]                     | `mars::xlog::appender_close()`                      |
+//! | [`abi::mars_xlog_new_instance`]               | `mars::xlog::NewXloggerInstance(config, level)`     |
+//! | [`mars_xlog_write_instance`]             | `mars::xlog::XloggerWrite(...)`, `xlogger_Write`    |
+//! | [`abi::mars_xlog_release_instance`]           | `mars::xlog::ReleaseXloggerInstance(name_prefix)`   |
 //! | [`mars_xlog_set_level_instance`]        | `xlogger_SetLevel()`, `SetLevel` on an instance      |
 //! | [`mars_xlog_signal_flush_instance`]     | `mars::xlog::appender_flush()`                      |
 //! | [`mars_xlog_flush_now_instance`]        | `mars::xlog::appender_flush_sync()`                 |
@@ -21,10 +21,12 @@
 //! | [`mars_xlog_current_log_path`]          | `mars::xlog::appender_get_current_log_path(char*,unsigned)` |
 //!
 //! Every one of the instance symbols takes a handle, and `0` is the process-wide
-//! appender `mars_xlog_open` opened: the C++ it mirrors has a free function for
-//! that logger and a handle-taking one for the rest, and this seam has one
-//! spelling instead — the same thing the platforms do, where the handle is a
-//! field of the object an app holds.
+//! appender: the C++ it mirrors has a free function for that logger and a
+//! handle-taking one for the rest, and this seam has one spelling instead — the
+//! same thing the platforms do, where the handle is a field of the object an
+//! app holds. What a C caller has no way to do is *install* that appender:
+//! `mars_xlog_new_instance` is how an app gets a logger, and the process-wide
+//! one is the plumbing the JNI bridge sets up from Rust.
 //!
 //! The matching C header lives next to this crate at
 //! `crates/marsrs-ffi/include/mars_xlog.h` (`include/mars_sdt.h` for the `sdt`
@@ -81,17 +83,22 @@ pub mod state;
 pub mod stn;
 
 // The Rust-side mirror of the C surface: the symbols an instance is addressed
-// through, plus the handful that are the process-wide appender's own (`open`,
-// `write`, `assert`, `close`, the two paths and the recovery helpers) — those
-// have no instance spelling, there being nothing to pick between.
+// through, plus the handful that are the process-wide appender's own
+// (`assert`, the two paths and the recovery helpers) — those have no instance
+// spelling, there being nothing to pick between.
+//
+// What is *not* here is the process-wide lifecycle: `mars_xlog_open`,
+// `mars_xlog_write` and `mars_xlog_close` went when the C ABI took them out.
+// An app holds an instance now, the way it does in Rust and in Kotlin, and
+// the process-wide appender is the plumbing the JNI bridge installs from
+// Rust — not a thing a C caller is offered a handle for.
 #[cfg(feature = "xlog")]
 pub use abi::{
-    mars_xlog_assert, mars_xlog_close, mars_xlog_current_log_path, mars_xlog_flush_now_all,
-    mars_xlog_flush_now_instance, mars_xlog_open, mars_xlog_set_console_fun,
-    mars_xlog_set_console_log_instance, mars_xlog_set_level_instance,
-    mars_xlog_set_max_alive_duration_instance, mars_xlog_set_max_file_size_instance,
-    mars_xlog_set_mode_instance, mars_xlog_signal_flush_all, mars_xlog_signal_flush_instance,
-    mars_xlog_write, mars_xlog_write_instance, MarsXLogConfig, MarsXLogConsoleFun,
+    mars_xlog_assert, mars_xlog_current_log_path, mars_xlog_flush_now_all,
+    mars_xlog_flush_now_instance, mars_xlog_set_console_fun, mars_xlog_set_console_log_instance,
+    mars_xlog_set_level_instance, mars_xlog_set_max_alive_duration_instance,
+    mars_xlog_set_max_file_size_instance, mars_xlog_set_mode_instance, mars_xlog_signal_flush_all,
+    mars_xlog_signal_flush_instance, mars_xlog_write_instance, MarsXLogConfig, MarsXLogConsoleFun,
 };
 #[cfg(feature = "xlog")]
 pub use error::{

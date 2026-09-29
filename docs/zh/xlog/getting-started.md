@@ -327,19 +327,20 @@ MarsXLogConfig config = {
     .name_prefix = "marsrs",
     .compress_mode = MarsCompressZlib,
 };
-if (mars_xlog_open(&config) != MARS_XLOG_OK) { /* 看返回码 */ }
+long long xlog = mars_xlog_new_instance(&config, MarsLevelVerbose);
+if (xlog == 0) { /* config 被拒绝 */ }
 
-mars_xlog_write(MarsLevelInfo, "startup", __FILE__, __func__, __LINE__, "hello from mars");
-
-mars_xlog_flush_now_instance(0);  /* 返回时记录已经在磁盘上 */
-mars_xlog_close();
+mars_xlog_write_instance(xlog, MarsLevelInfo, "startup", __FILE__, __func__, __LINE__,
+                         "hello from mars");
+mars_xlog_flush_now_instance(xlog);  /* 返回时记录已经在磁盘上 */
+mars_xlog_release_instance("marsrs");
 ```
 
 `MarsXLogConfig` 里每个指针都得以 NUL 结尾的 UTF-8，或者是 `NULL`；`NULL` 就是
-“空”，只有 `log_dir` 例外，它是必填的。`mars_xlog_open` 装上一个进程级 appender，
-`mars_xlog_write` 往它里面写。第二个是
-`mars_xlog_new_instance(&config, level)`，它不接受 config 时回答 `0`；`*_instance`
-那一族收下它回答的 handle。
+“空”，只有 `log_dir` 例外，它是必填的。应用持有的是一个 **instance**：
+`mars_xlog_new_instance(&config, level)` 回答它的 handle，不接受 config 时回答
+`0`，`*_instance` 那一族都收下这个 handle。C 这边没有进程级 appender 可以打开 ——
+想要第二个 logger 就给它第二个 prefix。
 
 ```bash
 cc -I include -o app app.c libmars_ffi.a -lpthread -ldl     # 静态

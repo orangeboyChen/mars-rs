@@ -1,6 +1,6 @@
 //! What a record costs the allocator on the C ABI boundary.
 //!
-//! `mars_xlog_write` used to build three `String`s before it could hand a
+//! `mars_xlog_write_instance` used to build three `String`s before it could hand a
 //! record to the appender — one each for `tag`, `filename` and `func_name` —
 //! while `Java2C_Xlog.cc` hands the caller's `const char*` straight to
 //! `xlogger_Write`. `XLoggerInfo` borrows those fields now, so this pins the
@@ -14,13 +14,12 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::ffi::{CStr, CString};
 use std::fs;
+use std::os::raw::c_longlong;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use mars_ffi::{
-    mars_xlog_close, mars_xlog_open, mars_xlog_set_level_instance, mars_xlog_write, MarsXLogConfig,
-    MARS_XLOG_OK,
-};
+use mars_ffi::abi::{mars_xlog_new_instance, mars_xlog_release_instance};
+use mars_ffi::{mars_xlog_set_level_instance, mars_xlog_write_instance, MarsXLogConfig};
 
 /// Whether [`COUNT`] is open.
 static ARMED: AtomicBool = AtomicBool::new(false);
@@ -76,7 +75,7 @@ fn lock() -> MutexGuard<'static, ()> {
 
 /// Opens the appender in sync mode — no writer thread, so nothing allocates on
 /// behalf of the counting thread while it is being counted.
-fn open(dir: &std::path::Path) {
+fn open(dir: &std::path::Path) -> c_longlong {
     fs::create_dir_all(dir).unwrap();
     let log_dir = CString::new(dir.to_str().unwrap()).unwrap();
     let prefix = CString::new("write_alloc").unwrap();
@@ -93,23 +92,25 @@ fn open(dir: &std::path::Path) {
     };
     // SAFETY: `cfg` borrows the `CString`s above, which are alive across the
     // call, and a null `cfg` is answered inside rather than dereferenced.
-    let opened = unsafe { mars_xlog_open(&cfg) };
-    assert_eq!(opened, MARS_XLOG_OK, "mars_xlog_open failed");
-    // Another test may have raised the process-wide level.
-    mars_xlog_set_level_instance(0, 0);
+    let log = unsafe { mars_xlog_new_instance(&cfg, 0) };
+    assert_ne!(log, 0, "mars_xlog_new_instance failed");
+    // A prefix is one appender, and its level outlives the test that set it.
+    mars_xlog_set_level_instance(log, 0);
+    log
 }
 
 /// Writes one record the way a C caller does: with pointers it owns.
 ///
 /// The `CString`s are built by the caller and live outside the counting
-/// window — the cost being measured is the one inside `mars_xlog_write`, not
+/// window — the cost being measured is the one inside `mars_xlog_write_instance`, not
 /// the cost of a host building its arguments.
-fn write(tag: &CStr, file: &CStr, func: &CStr, message: &CStr) {
+fn write(log: c_longlong, tag: &CStr, file: &CStr, func: &CStr, message: &CStr) {
     // SAFETY: the four pointers are borrowed from `CStr`s the caller keeps
     // alive across the call, so each is null-terminated and readable for as
     // long as the callee holds it.
     unsafe {
-        mars_xlog_write(
+        mars_xlog_write_instance(
+            log,
             2,
             tag.as_ptr(),
             file.as_ptr(),
@@ -125,7 +126,7 @@ fn a_record_written_through_the_c_abi_costs_no_allocation() {
     let _guard = lock();
     let dir = std::env::temp_dir().join("marsrs-ffi-write-alloc");
     let _ = fs::remove_dir_all(&dir);
-    open(&dir);
+    let log = open(&dir);
 
     let tag = CString::new("write_alloc").unwrap();
     let file = CString::new("write_alloc.rs").unwrap();
@@ -135,14 +136,17 @@ fn a_record_written_through_the_c_abi_costs_no_allocation() {
 
     // Warm-up: opens the log file and grows the buffers a real caller grows in
     // its first record.
-    write(&tag, &file, &func, &warm_up);
+    write(log, &tag, &file, &func, &warm_up);
 
     watch();
     for _ in 0..16 {
-        write(&tag, &file, &func, &body);
+        write(log, &tag, &file, &func, &body);
     }
     let count = stop();
-    mars_xlog_close();
+    let prefix = CString::new("write_alloc").unwrap();
+    unsafe {
+        mars_xlog_release_instance(prefix.as_ptr());
+    }
 
     // The records have to have reached the log for the count to mean
     // anything: a level that filtered them out would also cost nothing.

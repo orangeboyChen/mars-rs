@@ -2,25 +2,24 @@
 //! would: with valid arguments, and with the bad arguments that have to be
 //! reported as `MARS_XLOG_ERR_*` instead of crashing.
 //!
-//! The appender is a process-wide singleton, so the tests serialise on
-//! [`LOCK`].
+//! The appender they share is registered under one prefix, so the tests
+//! serialise on [`LOCK`].
 
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_uint};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_ffi::abi::{
-    mars_xlog_close, mars_xlog_current_log_cache_path, mars_xlog_current_log_path,
-    mars_xlog_flush_now_all, mars_xlog_flush_now_instance, mars_xlog_get_instance,
-    mars_xlog_get_level, mars_xlog_getfilepath_from_timespan, mars_xlog_is_enabled_for,
-    mars_xlog_make_logfile_name, mars_xlog_new_instance, mars_xlog_oneshot_flush, mars_xlog_open,
-    mars_xlog_release_instance, mars_xlog_set_console_log_instance, mars_xlog_set_level_instance,
-    mars_xlog_set_max_alive_duration_instance, mars_xlog_set_max_file_size_instance,
-    mars_xlog_set_mode_instance, mars_xlog_signal_flush_all, mars_xlog_signal_flush_instance,
-    mars_xlog_write, mars_xlog_write_instance, MarsXLogConfig, MARS_XLOG_ERR_APPENDER,
-    MARS_XLOG_ERR_BAD_COMPRESS, MARS_XLOG_ERR_BAD_MODE, MARS_XLOG_ERR_EMPTY_LOG_DIR,
+    mars_xlog_current_log_cache_path, mars_xlog_current_log_path,
+    mars_xlog_current_log_path_instance, mars_xlog_flush_now_all, mars_xlog_flush_now_instance,
+    mars_xlog_get_instance, mars_xlog_get_level, mars_xlog_getfilepath_from_timespan,
+    mars_xlog_is_enabled_for, mars_xlog_make_logfile_name, mars_xlog_new_instance,
+    mars_xlog_oneshot_flush, mars_xlog_release_instance, mars_xlog_set_console_log_instance,
+    mars_xlog_set_level_instance, mars_xlog_set_max_alive_duration_instance,
+    mars_xlog_set_max_file_size_instance, mars_xlog_set_mode_instance, mars_xlog_signal_flush_all,
+    mars_xlog_signal_flush_instance, mars_xlog_write_instance, MarsXLogConfig,
     MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_CONFIG,
-    MARS_XLOG_ERR_NULL_OUT, MARS_XLOG_OK,
+    MARS_XLOG_ERR_NULL_OUT,
 };
 
 fn serial() -> MutexGuard<'static, ()> {
@@ -71,29 +70,24 @@ fn make_config(dir: &std::path::Path, mode: c_int, compress: c_int) -> ConfigBun
 }
 
 #[test]
-fn open_rejects_a_bad_config_before_touching_the_disk() {
+fn a_new_instance_refuses_a_bad_config_before_touching_the_disk() {
     let _guard = serial();
-    assert_eq!(
-        unsafe { mars_xlog_open(std::ptr::null()) },
-        MARS_XLOG_ERR_NULL_CONFIG
-    );
+    // `0` is the answer to every one of these: an instance is a handle, and
+    // there is no room in one for a `MARS_XLOG_ERR_*` code. What is pinned
+    // here is that the config is refused at all, and before the disk is
+    // touched.
+    assert_eq!(unsafe { mars_xlog_new_instance(std::ptr::null(), 0) }, 0);
 
     let dir = tempdir("bad");
-    for (mode, compress, expected) in [
-        (7, 0, MARS_XLOG_ERR_BAD_MODE),
-        (0, 9, MARS_XLOG_ERR_BAD_COMPRESS),
-    ] {
+    for (mode, compress) in [(7, 0), (0, 9)] {
         let config = make_config(&dir, mode, compress);
-        assert_eq!(unsafe { mars_xlog_open(&config.raw) }, expected);
+        assert_eq!(unsafe { mars_xlog_new_instance(&config.raw, 0) }, 0);
     }
 
     let empty = CString::new("").unwrap();
     let mut config = make_config(&dir, 0, 0);
     config.raw.log_dir = empty.as_ptr();
-    assert_eq!(
-        unsafe { mars_xlog_open(&config.raw) },
-        MARS_XLOG_ERR_EMPTY_LOG_DIR
-    );
+    assert_eq!(unsafe { mars_xlog_new_instance(&config.raw, 0) }, 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -128,18 +122,17 @@ fn the_whole_abi_runs_over_one_appender() {
     let _guard = serial();
     let dir = tempdir("surface");
     let config = make_config(&dir, 0, 0);
-    assert_eq!(unsafe { mars_xlog_open(&config.raw) }, MARS_XLOG_OK);
-    // a second open is refused, like the C++ singleton
-    assert_eq!(
-        unsafe { mars_xlog_open(&config.raw) },
-        MARS_XLOG_ERR_APPENDER
-    );
+    let handle = unsafe { mars_xlog_new_instance(&config.raw, 0) };
+    assert_ne!(handle, 0);
+    // a prefix is one appender, so a second open answers that one's handle
+    assert_eq!(unsafe { mars_xlog_new_instance(&config.raw, 0) }, handle);
 
     let tag = CString::new("Net").unwrap();
     let message = CString::new("hello").unwrap();
     // null pieces are allowed
     unsafe {
-        mars_xlog_write(
+        mars_xlog_write_instance(
+            handle,
             2,
             tag.as_ptr(),
             std::ptr::null(),
@@ -149,7 +142,8 @@ fn the_whole_abi_runs_over_one_appender() {
         );
     }
     unsafe {
-        mars_xlog_write(
+        mars_xlog_write_instance(
+            handle,
             2,
             std::ptr::null(),
             std::ptr::null(),
@@ -182,18 +176,24 @@ fn the_whole_abi_runs_over_one_appender() {
     mars_xlog_set_mode_instance(0, 9);
 
     let mut path = vec![0u8; 512];
+    // The instance's own path: there is no process-wide appender for the
+    // handle-less spelling to answer for any more.
     let written = unsafe {
-        mars_xlog_current_log_path(path.as_mut_ptr() as *mut c_char, path.len() as c_uint)
+        mars_xlog_current_log_path_instance(
+            handle,
+            path.as_mut_ptr() as *mut c_char,
+            path.len() as c_uint,
+        )
     };
     assert!(written > 0, "no current log path: {written}");
     assert!(std::str::from_utf8(&path[..written as usize]).is_ok());
     // too small a buffer, and a null buffer
     assert_eq!(
-        unsafe { mars_xlog_current_log_path(path.as_mut_ptr() as *mut c_char, 0) },
+        unsafe { mars_xlog_current_log_path_instance(handle, path.as_mut_ptr() as *mut c_char, 0) },
         MARS_XLOG_ERR_NO_SPACE
     );
     assert_eq!(
-        unsafe { mars_xlog_current_log_path(std::ptr::null_mut(), 64) },
+        unsafe { mars_xlog_current_log_path_instance(handle, std::ptr::null_mut(), 64) },
         MARS_XLOG_ERR_NULL_OUT
     );
 
@@ -210,7 +210,10 @@ fn the_whole_abi_runs_over_one_appender() {
     mars_xlog_flush_now_instance(0);
     mars_xlog_signal_flush_instance(0);
     mars_xlog_flush_now_instance(0);
-    mars_xlog_close();
+    let prefix = CString::new("surface").unwrap();
+    unsafe {
+        mars_xlog_release_instance(prefix.as_ptr());
+    }
     // closed: there is no current file any more
     let mut path = vec![0u8; 512];
     assert_eq!(
@@ -275,7 +278,8 @@ fn the_void_symbols_survive_a_closed_appender() {
     let _guard = serial();
     // nothing is open: every void symbol has to be a no-op instead of a crash
     unsafe {
-        mars_xlog_write(
+        mars_xlog_write_instance(
+            0,
             2,
             std::ptr::null(),
             std::ptr::null(),
@@ -298,7 +302,10 @@ fn the_void_symbols_survive_a_closed_appender() {
     mars_xlog_signal_flush_instance(0);
     mars_xlog_flush_now_instance(0);
     mars_xlog_flush_now_instance(0);
-    mars_xlog_close();
+    let prefix = CString::new("surface").unwrap();
+    unsafe {
+        mars_xlog_release_instance(prefix.as_ptr());
+    }
     mars_xlog_set_level_instance(0, 2);
     mars_xlog_set_level_instance(0, 2);
     mars_xlog_set_console_log_instance(0, 0);
