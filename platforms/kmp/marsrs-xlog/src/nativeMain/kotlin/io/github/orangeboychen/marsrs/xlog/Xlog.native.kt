@@ -14,6 +14,7 @@ import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_max_alive_duration_
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_max_file_size_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_mode_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_write_instance
+import kotlin.concurrent.Volatile
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.cstr
@@ -70,8 +71,17 @@ public actual class Xlog actual constructor(config: XlogConfig) {
             field = seconds
         }
 
+    /**
+     * The handle of this appender, which [close] writes from whichever thread
+     * closed it and every member reads from whichever thread it was called on:
+     * the two have to see one handle, because a thread that read a stale one
+     * would write through an appender this [Xlog] has already released.
+     */
+    @Volatile
     private var handle: Long = newInstance(config)
 
+    /** The mode this [Xlog] was last moved to, which any thread may read. */
+    @Volatile
     private var currentMode: AppenderMode = config.mode
 
     public actual val isOpen: Boolean
