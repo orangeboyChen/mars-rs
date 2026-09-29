@@ -275,18 +275,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             gcc-aarch64-linux-gnu libc6-dev-arm64-cross mingw-w64
-      # The package of this checkout, published where `mavenLocal()` of
-      # demo/kmp will find it. Not a composite build: an included build is
-      # compiled against the *including* build's resolved dependencies, and
-      # `platforms/kmp` is pinned to Kotlin 2.2.20 — under the demo's 2.4.20
-      # its own source stops compiling. Publishing keeps the two builds on
-      # their own versions.
-      #
-      # `-PpublishedVersion` is the version the demo's catalog asks for; left
-      # alone the build stamps `0.0.0`, which resolves to nothing.
-      - name: Publish the package of this checkout
-        working-directory: platforms/kmp
-        run: ./gradlew publishToMavenLocal -PpublishedVersion=0.1.0-alpha.3
       # `libmars_ffi.a` per Kotlin/Native target, which cinterop embeds into
       # the klib. `platforms/kmp` does not compile them — the release builds
       # them once per host — so without this the composite build below has
@@ -305,6 +293,21 @@ jobs:
       # macOS host and nowhere else, so a `build` on this runner would fail on
       # a target that has nothing to do with this commit. Both targets compile
       # the same `commonMain`, which is the half the demo is.
+      # Last of the three, and not first: configuring `:marsrs-xlog` reads
+      # `native/` and fails on an empty one, so the archives above have to be
+      # there before this runs.
+      # The package of this checkout, published where `mavenLocal()` of
+      # demo/kmp will find it. Not a composite build: an included build is
+      # compiled against the *including* build's resolved dependencies, and
+      # `platforms/kmp` is pinned to Kotlin 2.2.20 — under the demo's 2.4.20
+      # its own source stops compiling. Publishing keeps the two builds on
+      # their own versions.
+      #
+      # `-PpublishedVersion` is the version the demo's catalog asks for; left
+      # alone the build stamps `0.0.0`, which resolves to nothing.
+      - name: Publish the package of this checkout
+        working-directory: platforms/kmp
+        run: ./gradlew publishToMavenLocal -PpublishedVersion=0.1.0-alpha.3
       - name: Link the Linux executable
         working-directory: demo/kmp
         run: ./gradlew linkDebugExecutableLinuxX64
