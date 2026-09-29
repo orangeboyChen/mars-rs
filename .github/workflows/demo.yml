@@ -382,12 +382,18 @@ jobs:
       # asked for — `macosArm64Test` included — and a `native/android` with no
       # `.so` in it is a configuration failure before any task runs. It is the
       # asset the `android` job of release.yml uploads, taken from the newest
-      # tag that has one the way jitpack.yml takes it, and resolved off origin
-      # rather than written here: a version in this file is a version that goes
-      # stale, and the archive is a JNI bridge no Kotlin of this tree calls.
+      # tag named like a release the way jitpack.yml takes it, and resolved off
+      # origin rather than written here: a version in this file is a version
+      # that goes stale, and the archive is a JNI bridge no Kotlin of this tree
+      # calls.
       - name: Unpack the Android natives of the newest release
         run: |
           set -euo pipefail
+          # The newest tag named like a release, which is not the same thing as
+          # the newest release that uploaded this asset: whether it did is
+          # answered by `curl -f` below, and a tag with no such asset is a
+          # failed step and not a wrong archive.
+          #
           # Sorted by git and not by `sort -V`, which is GNU's: this runner is
           # macOS, whose `sort` has no `-V`, and a step that dies of it takes
           # the whole job down before a byte is downloaded.
@@ -401,7 +407,15 @@ jobs:
             "https://github.com/orangeboyChen/mars-rs/releases/download/$tag/marsrs-android-native.zip"
           mkdir -p platforms/kmp/native/android
           unzip -q -o marsrs-android-native.zip -d platforms/kmp/native/android
-          find platforms/kmp/native/android -name '*.so' | sort
+          # `find` answers 0 for a tree with no `.so` in it and so does `sort`,
+          # so an archive that unpacked none is a step that passed. What says
+          # they are there is the list and not the exit of either.
+          shared="$(find platforms/kmp/native/android -name '*.so' | sort)"
+          [ -n "$shared" ] || {
+            echo "::error::no .so under platforms/kmp/native/android"
+            exit 1
+          }
+          printf '%s\n' "$shared"
       - name: Test marsrs-xlog on macosArm64
         working-directory: platforms/kmp
         run: ./gradlew :marsrs-xlog:macosArm64Test

@@ -73,4 +73,9 @@ for entry in "${abis[@]}"; do
     cp "target/$target/release/libmarsrsxlog.so" "$out/$abi/libmarsrsxlog.so"
 done
 
-find "$out" -name '*.so' | sort
+# `find` answers 0 for a tree with no `.so` in it and so does `sort`, so an
+# output directory the loop above never wrote to is a script that passed. What
+# says the archives are there is the list and not the exit of either.
+shared="$(find "$out" -name '*.so' | sort)"
+[ -n "$shared" ] || { echo "::error::no .so under $out"; exit 1; }
+printf '%s\n' "$shared"
