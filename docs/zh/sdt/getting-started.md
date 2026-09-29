@@ -59,7 +59,6 @@ let mut ask = Ask::new(|query| match query {
     Query::Http { .. } => Answer::Http { error_code: 0, status_code: 200, rtt: 40 },
     Query::Ping { .. } => Answer::Ping { error_code: 0, rtt: 20, status: None },
 });
-});
 
 // 3. 一整趟诊断：先 ping 和 dns，再 tcp，跑在 `1` 说的那个网络之上 —— 也就是 C++
 //    里的 `comm::getNetInfo()`。`None` 是已经有一趟在跑了。
