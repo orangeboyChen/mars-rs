@@ -375,12 +375,14 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_getCurrentL
     _this: JObject<'local>,
     instance: jlong,
 ) -> JObject<'local> {
-    guard_env(&mut env, |env| match current_log_path_impl(instance as u64) {
-        Some(path) => JObject::from(
-            env.new_string(path.to_string_lossy().as_ref())
-                .unwrap_or_else(|_| JString::default()),
-        ),
-        None => JObject::null(),
+    guard_env(&mut env, |env| {
+        match current_log_path_impl(instance as u64) {
+            Some(path) => JObject::from(
+                env.new_string(path.to_string_lossy().as_ref())
+                    .unwrap_or_else(|_| JString::default()),
+            ),
+            None => JObject::null(),
+        }
     })
 }
 
@@ -413,17 +415,27 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logFileName
 }
 
 /// A day of paths, as a Java `String[]`.
-fn paths_to_array<'local>(env: &mut Env<'local>, paths: Vec<std::path::PathBuf>) -> JObject<'local> {
+fn paths_to_array<'local>(
+    env: &mut Env<'local>,
+    paths: Vec<std::path::PathBuf>,
+) -> JObject<'local> {
     let Ok(class) = env.find_class(jni_str!("java/lang/String")) else {
         return JObject::null();
     };
-    let Ok(array) = env.new_object_array(paths.len() as i32, &class, &JObject::null()) else {
+    let Ok(array) = env.new_object_array(paths.len() as i32, class, JObject::null()) else {
         return JObject::null();
     };
     for (index, path) in paths.iter().enumerate() {
         let Ok(value) = env.new_string(path.to_string_lossy().as_ref()) else {
             continue;
         };
+        // `JObjectArray::set_element` is the call that replaces this one, and
+        // it wants a `JObjectArray` borrowed from the `Env` — which is what
+        // this entry point does not have: the JVM handed it an `EnvUnowned`
+        // and [`guard_env`] lends the `Env` for the length of the call. The
+        // deprecated method writes into an array this call owns, which is the
+        // same thing.
+        #[allow(deprecated)]
         let _ = env.set_object_array_element(&array, index, &value);
     }
     JObject::from(array)
