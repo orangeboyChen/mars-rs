@@ -31,7 +31,11 @@ import { XlogConfig } from './XlogConfig';
 // the C ABI, nor the Kotlin, nor the Swift answers one.
 
 /** `XlogConfig.namePrefix` of the Kotlin and of the Swift: what an appender is
- * opened with when a caller gives none. */
+ * opened with when a caller gives none — and when it gives an empty one, which
+ * is what the native side makes of it anyway: the NAPI module answers its own
+ * default for a blank prefix, the Kotlin answers the same, and the Swift
+ * refuses one outright, so an empty prefix is not a name this `Xlog` could ask
+ * the appender about afterwards. */
 const DEFAULT_NAME_PREFIX: string = 'xlog';
 
 /** The appender of every `namePrefix` `Xlog.open` has opened and `close` has not
@@ -67,7 +71,7 @@ export class Xlog {
   private opened: boolean = true;
 
   private constructor(config: XlogConfig) {
-    this.namePrefix = config.namePrefix ?? DEFAULT_NAME_PREFIX;
+    this.namePrefix = config.namePrefix || DEFAULT_NAME_PREFIX;
     this.currentLevel = config.level ?? LogLevel.Info;
     this.currentMode = config.mode ?? AppenderMode.Async;
   }
@@ -83,7 +87,7 @@ export class Xlog {
    * Throws when the appender would not take the configuration — an empty
    * `logDir`, or a directory the app cannot write to. */
   static open(config: XlogConfig): Xlog {
-    let namePrefix: string = config.namePrefix ?? DEFAULT_NAME_PREFIX;
+    let namePrefix: string = config.namePrefix || DEFAULT_NAME_PREFIX;
     let alreadyOpen: Xlog | undefined = openAppenders.get(namePrefix);
     if (alreadyOpen !== undefined) {
       return alreadyOpen;

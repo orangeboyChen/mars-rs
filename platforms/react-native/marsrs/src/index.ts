@@ -75,7 +75,7 @@ export interface XlogConfig {
   logDir: string;
   /** What every log file starts with (`marsrs_20260927.xlog`), and the name the
    * appender is known by — an app that writes through two of them gives them
-   * two. `xlog` when left out. */
+   * two. `xlog` when left out, and when handed over empty. */
   namePrefix?: string;
   /** The level the appender is opened at; `info` when left out. */
   level?: LogLevel;
@@ -94,7 +94,10 @@ export interface XlogConfig {
 }
 
 /** `XlogConfig.namePrefix` of the Kotlin and of the Swift: what an appender is
- * opened with when a caller gives none. */
+ * opened with when a caller gives none — and when it gives an empty one, which
+ * is what the two of them make of it anyway: the Kotlin answers its own default
+ * for a blank prefix and the Swift refuses one outright, so an empty prefix is
+ * not a name this `Xlog` could ask the appender about afterwards. */
 const DEFAULT_NAME_PREFIX = 'xlog';
 
 /** The appender of every `namePrefix` `Xlog.open` has opened and `close` has
@@ -130,7 +133,7 @@ export class Xlog {
   private open = true;
 
   private constructor(config: XlogConfig) {
-    this.namePrefix = config.namePrefix ?? DEFAULT_NAME_PREFIX;
+    this.namePrefix = config.namePrefix || DEFAULT_NAME_PREFIX;
     this.currentLevel = config.level ?? LogLevel.info;
     this.currentMode = config.mode ?? AppenderMode.async;
   }
@@ -144,9 +147,9 @@ export class Xlog {
    * of one prefix are one `Xlog`, and `close` on it is `close` on both.
    *
    * Throws when the appender would not take the configuration — an empty
-   * `logDir` or `namePrefix`, or a directory it cannot write to. */
+   * `logDir`, or a directory it cannot write to. */
   static open(config: XlogConfig): Xlog {
-    const namePrefix = config.namePrefix ?? DEFAULT_NAME_PREFIX;
+    const namePrefix = config.namePrefix || DEFAULT_NAME_PREFIX;
     const alreadyOpen = openAppenders.get(namePrefix);
     if (alreadyOpen) {
       return alreadyOpen;
