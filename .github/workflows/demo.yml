@@ -248,6 +248,13 @@ jobs:
     needs: changes
     if: needs.changes.outputs.kmp == 'true'
     runs-on: ubuntu-latest
+    env:
+      # The Android half of the Kotlin Multiplatform module is JNI and not
+      # cinterop, so it wants the same `.so` the AAR does — and configuring
+      # `:kmp:marsrs-xlog` fails on a `native/android/` with no ABI in it.
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      NDK_VERSION: 27.1.12297006
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -255,6 +262,8 @@ jobs:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install the Android NDK
+        run: .github/scripts/install_android_ndk.sh
       # The three targets the script builds on this host want linkers `apt`
       # carries and the image does not: linuxArm64 and mingwX64 cross-compile,
       # and `zstd-sys` compiles C through cc-rs, so it is the C compiler *and
@@ -273,6 +282,12 @@ jobs:
       # this host can: Linux, and not the Apple targets.
       - name: Build the native archives
         run: scripts/build_kmp_native.sh platforms/kmp/native
+      # `RUSTFLAGS` is empty for the same reason the Android job empties it:
+      # the 16 KiB page size comes from .cargo/config.toml.
+      - name: Build libmarsrsxlog.so for the Android half
+        env:
+          RUSTFLAGS: ''
+        run: scripts/build_android.sh platforms/kmp/native/android
       # The Linux half of the two targets the build declares, and not `build`:
       # `macosArm64` is the other, and Kotlin/Native links a macOS binary on a
       # macOS host and nowhere else, so a `build` on this runner would fail on
