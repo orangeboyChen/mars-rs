@@ -413,9 +413,11 @@ public final class Xlog: NSObject {
     /// days ago whether or not they are *there yet* — the name an app that is
     /// about to write, or that is naming a file to someone else, asks for.
     ///
-    /// A day's answer is the log-dir file and, when a cache dir is configured
-    /// and the file exists, its cache-dir twin, so this can answer two where
-    /// [`logFiles(daysAgo:prefix:logDirectory:)`] answers one.
+    /// One name, and always one: the log-dir file. The twin the C++ answers
+    /// beside it — the cache-dir file, when a cache dir is configured and the
+    /// file is there — is the process-wide appender's own lookup, and an Apple
+    /// process has none: `mars_xlog_open` is not in the C ABI, and the one
+    /// appender this target makes is the instance [`Xlog.open(_:)`] answers.
     ///
     /// - Parameters:
     ///   - daysAgo: `0` is today, `1` yesterday, and so on.
