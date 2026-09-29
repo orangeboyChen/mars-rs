@@ -5,10 +5,11 @@
  * same file at the end — so that a reader who knows one of the two can read the
  * other by the shape of it. What it does, in the order an app does it:
  *
- *   1. fill in a `MarsXLogConfig` and open the appender — `mars_xlog_open`;
- *   2. write one record at every level — `mars_xlog_write`;
- *   3. drain it to disk — `mars_xlog_flush_sync`;
- *   4. ask where the file went, and close — `mars_xlog_close`.
+ *   1. fill in a `MarsXLogConfig` and open an instance —
+ *      `mars_xlog_new_instance`;
+ *   2. write one record at every level — `mars_xlog_write_instance`;
+ *   3. drain it to disk — `mars_xlog_flush_now_instance`;
+ *   4. ask where the file went, and close — `mars_xlog_release_instance`.
  *
  * Build it with `make` and run it with `make run`; the Makefile builds the
  * `libmars_ffi.a` of this checkout first.
@@ -55,30 +56,38 @@ int main(void) {
     config.name_prefix = PREFIX;
     config.compress_mode = MarsCompressZlib;
 
-    /* The one call with a return value to answer. Every other entry point is
-     * `void`: there is nothing left for them to refuse, and no Rust panic ever
-     * crosses this boundary either — each one is wrapped in `catch_unwind`, and
-     * a panic becomes `MARS_XLOG_ERR_PANIC` here and a no-op there. */
-    int rc = mars_xlog_open(&config);
-    if (rc != MARS_XLOG_OK) {
-        fprintf(stderr, "mars_xlog_open failed: %d\n", rc);
+    /* The appender this program writes through, and the one call with a
+     * return value to answer: `mars_xlog_new_instance` opens an instance —
+     * a log directory, a prefix, a key and a cache file of its own, which is
+     * what `Xlog::open` gives Rust and `Xlog.open(config)` gives Kotlin —
+     * and hands back the handle it is known by. The level is the second
+     * argument and not a field of the config, because the level belongs to
+     * the logger and not to the file.
+     *
+     * Not `mars_xlog_open`: that one installs the *process-wide* appender,
+     * which is the plumbing the C ABI and the JNI bridge reach for, and not
+     * the thing an app holds. Asking anything of it means naming handle `0`,
+     * and `0` is also what `mars_xlog_new_instance` answers when it fails —
+     * one number for "the process-wide one" and for "no instance at all".
+     * An app that holds the handle never has to say which it means.
+     *
+     * No Rust panic crosses this boundary either: every entry point is
+     * wrapped in `catch_unwind`, and a panic becomes `MARS_XLOG_ERR_PANIC`
+     * here and a no-op there. */
+    long long xlog = mars_xlog_new_instance(&config, MarsLevelVerbose);
+    if (xlog == 0) {
+        fprintf(stderr, "mars_xlog_new_instance failed for '%s' in %s\n", PREFIX, LOGDIR);
         return 1;
     }
 
-    /* The level a record has to reach to be written at all. Verbose, so that
-     * all six records below survive; an app in the field sets `MarsLevelInfo`.
-     *
-     * The level is not part of the config — there is no level field in it —
-     * because the level belongs to the logger and not to the file. */
-    mars_xlog_set_level(MarsLevelVerbose);
     /* Mirror every record to stderr as well: off in an app that ships, on here
      * so a run shows what went into the file. */
-    mars_xlog_set_console_log(1);
+    mars_xlog_set_console_log_instance(xlog, 1);
     /* Close a file at 8 MiB, drop one at ten days. Both are 0 by default, which
      * is not the same 0 twice: a maximum size of 0 never splits a file, and a
      * lifetime of 0 is the C++'s own ten days. */
-    mars_xlog_set_max_file_size(8ULL * 1024 * 1024);
-    mars_xlog_set_max_alive_duration(10LL * 24 * 3600);
+    mars_xlog_set_max_file_size_instance(xlog, 8ULL * 1024 * 1024);
+    mars_xlog_set_max_alive_duration_instance(xlog, 10LL * 24 * 3600);
 
     /* -- 2. write ---------------------------------------------------------- */
     struct {
@@ -99,27 +108,28 @@ int main(void) {
         /* `__LINE__` is the line this call sits on, so every record carries the
          * same one — a real caller writes from inside the macro it wraps the
          * ABI in, where `__LINE__` expands at the caller's line instead. */
-        mars_xlog_write(records[i].level, records[i].tag, __FILE__, __func__, __LINE__,
-                        records[i].message);
+        mars_xlog_write_instance(xlog, records[i].level, records[i].tag, __FILE__, __func__,
+                                 __LINE__, records[i].message);
         printf("wrote %d [%s] %s\n", records[i].level, records[i].tag, records[i].message);
     }
 
     /* A record that is expensive to build is worth asking about first: the
      * level gate is the only thing standing between a dropped record and the
-     * work its caller did to build it. Handle 0 is the process-wide appender
-     * `mars_xlog_open` opened. */
-    if (mars_xlog_is_enabled_for(0, MarsLevelDebug)) {
+     * work its caller did to build it. */
+    if (mars_xlog_is_enabled_for(xlog, MarsLevelDebug)) {
         char summary[64];
         snprintf(summary, sizeof summary, "%zu records written", count);
-        mars_xlog_write(MarsLevelDebug, "trace", __FILE__, __func__, __LINE__, summary);
+        mars_xlog_write_instance(xlog, MarsLevelDebug, "trace", __FILE__, __func__, __LINE__,
+                                 summary);
     }
 
     /* -- 3. flush ----------------------------------------------------------
      *
-     * `mars_xlog_flush` only signals the writer thread and returns; this one
-     * waits, so every record above is on disk before the next line runs. An app
-     * calls it before it reads the files, uploads them, or exits. */
-    mars_xlog_flush_sync();
+     * `mars_xlog_signal_flush_instance` only signals the writer thread and
+     * returns; this one waits, so every record above is on disk before the next
+     * line runs. An app calls it before it reads the files, uploads them, or
+     * exits. */
+    mars_xlog_flush_now_instance(xlog);
 
     /* -- 4. where it went, and close ---------------------------------------
      *
@@ -127,7 +137,7 @@ int main(void) {
      * ports answers — `XloggerAppender::GetCurrentLogPath` hands back
      * `sg_logdir`. */
     char dir[1024];
-    if (mars_xlog_current_log_path(dir, sizeof dir) > 0) {
+    if (mars_xlog_current_log_path_instance(xlog, dir, sizeof dir) > 0) {
         printf("writing into:  %s\n", dir);
     }
 
@@ -142,8 +152,9 @@ int main(void) {
 
     /* Drains what is left and closes the appender. An app that skips it loses
      * whatever the writer thread still held, which with an async appender is the
-     * last records it wrote. */
-    mars_xlog_close();
+     * last records it wrote. It takes the prefix and not the handle, because a
+     * prefix is one appender: two modules that opened the same one share it. */
+    mars_xlog_release_instance(PREFIX);
 
     return 0;
 }

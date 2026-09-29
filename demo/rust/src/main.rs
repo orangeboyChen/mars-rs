@@ -4,11 +4,11 @@
 //! does it:
 //!
 //! 1. describe where the files go and how they are written — [`XLogConfig`];
-//! 2. open the appender — [`appender_open`];
-//! 3. write one record at every level — [`appender_write`];
-//! 4. drain it to disk — [`appender_flush_sync`];
+//! 2. open the appender — [`Xlog::open`];
+//! 3. write one record at every level — [`Xlog::log_with_info`];
+//! 4. drain it to disk — [`Xlog::flush_now`];
 //! 5. read the file back — [`decode_log_file`];
-//! 6. close it — [`appender_close`].
+//! 6. close it — [`Xlog::close`].
 //!
 //! Run it with `cargo run` from this directory, or `cargo run -- <dir>` to
 //! choose where the `.xlog` files land. They are the same files the C++
@@ -17,10 +17,11 @@
 //!
 //! Two things this program deliberately does *not* show:
 //!
-//! - **An appender per component.** [`marsrs_xlog::appender_open_instance`]
-//!   opens a second appender with a directory, a prefix and a level of its own,
-//!   which is how a component gets a file nobody else's records land in. This
-//!   demo is one appender, because one is what an app that only logs needs.
+//! - **A second writer over one prefix.** [`Xlog::open_unregistered`] opens an
+//!   appender no prefix is registered for, which is what a second copy of the
+//!   library in one process needs — the JNI and the Kotlin side both opening,
+//!   say. This demo is one appender, because one is what an app that only logs
+//!   needs.
 //! - **Encryption.** `XLogConfig::pub_key` takes the 128 hex characters of a
 //!   public key, and an appender opened with one writes records only the
 //!   matching private key decrypts. The key pair is `xlog keygen`, and the
@@ -30,11 +31,8 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use marsrs_xlog::{
-    appender_close, appender_flush_sync, appender_get_current_log_path,
-    appender_getfilepath_from_timespan, appender_open, appender_set_console_log,
-    appender_set_max_alive_duration, appender_set_max_file_size, appender_write, decode_log_file,
-    is_enabled_for, set_level, AppenderMode, CompressMode, LogLevel, XLogConfig, XLoggerInfo,
-    DEFAULT_HANDLE,
+    appender_getfilepath_from_timespan, decode_log_file, AppenderMode, CompressMode, LogLevel,
+    XLogConfig, XLoggerInfo, Xlog,
 };
 
 /// The prefix every file of this demo is named after. A file is
@@ -85,40 +83,45 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // -- 2. open -------------------------------------------------------------
     //
-    // One appender for the process. `appender_open` is the one call with an
-    // error to answer: it fails when the directory cannot be made, and — unlike
-    // the C++ port, which returns quietly — when an appender is already open,
-    // so a program that re-opens closes first.
-    appender_open(config)?;
+    // One `Xlog` for the process, and it is the appender an app writes through
+    // on every platform of the port — `Xlog.open(config)` in Kotlin, in Dart
+    // and in TypeScript, and `Xlog::open` here. `open` is the one call with an
+    // error to answer: it fails when the directory cannot be made, when the
+    // prefix is empty, and — unlike the C++ port, which returns quietly — when
+    // the appender refused the config, so a program that re-opens closes first.
+    //
+    // The level is the second argument and not a field of the config, which is
+    // the one place this is not Kotlin's shape: `XLogConfig` is the C++'s, and
+    // the eight fields it has are the eight the C++ gives it — a ninth would be
+    // a field no other spelling of the config carries. Verbose, so that all six
+    // records of `RECORDS` survive; an app in the field opens with `Info`.
+    let xlog = Xlog::open(config, LogLevel::Verbose)?;
 
-    // The level a record has to reach to be written at all. There is no level
-    // in `XLogConfig`: the level belongs to the logger, and `DEFAULT_HANDLE` is
-    // the process-wide one `appender_open` opened. Verbose, so that all six
-    // records of `RECORDS` survive; an app in the field sets `Info`.
-    set_level(DEFAULT_HANDLE, LogLevel::Verbose);
     // Mirror every record to stderr as well. Off in an app that ships, and on
     // here so that a run shows the records twice: once on the terminal, once
     // in the file it reads back at the end.
-    appender_set_console_log(true);
+    xlog.set_console_log_enabled(true);
     // Close a file at 8 MiB and drop one at ten days. Both are 0 by default,
     // which is not the same 0 twice: a maximum size of 0 never splits a file,
     // and a lifetime of 0 is the C++'s own ten days.
-    appender_set_max_file_size(8 * 1024 * 1024);
-    appender_set_max_alive_duration(10 * 24 * 3600);
+    xlog.set_max_file_size_bytes(8 * 1024 * 1024);
+    xlog.set_max_alive_time_seconds(10 * 24 * 3600);
 
     // -- 3. write ------------------------------------------------------------
     //
-    // `XLoggerInfo` is what lands in the record beside the message: the level,
-    // the tag, and where the call came from. `appender_write` takes `None` for
-    // it and fills in the pid, the tid and the clock from the OS, which is what
-    // an app that does not care about the source line writes.
+    // A write is a tag and a message. [`Xlog::v`] through [`Xlog::f`] are the
+    // six levels as six one-letter methods, and this loop takes
+    // [`Xlog::log_with_info`] instead so that a record can carry where the call
+    // came from: the file, the function and the line go into the `XLoggerInfo`
+    // and land in the record beside the message, which is what a caller that
+    // wants them there — and not only inside the message — hands in.
     //
     // `file!`, `line!` and the function name are compile-time constants of the
     // line the macro sits on, which is why every record below carries the same
     // one: a real caller writes them from inside the `log!` macro it wraps the
     // port in, where `line!` is the caller's line and not the wrapper's.
     for (level, tag, message) in RECORDS {
-        let written = appender_write(
+        let written = xlog.log_with_info(
             Some(&XLoggerInfo {
                 level,
                 tag: Some(tag.into()),
@@ -133,27 +136,27 @@ fn main() -> Result<(), Box<dyn Error>> {
         debug_assert!(written, "a write after a successful open is accepted");
     }
 
-    // A record that is expensive to build is worth asking about first: the
-    // level gate is the only thing standing between a dropped record and the
-    // `String` its caller paid for.
-    if is_enabled_for(DEFAULT_HANDLE, LogLevel::Debug) {
+    // A record that is expensive to build is worth asking about first:
+    // [`Xlog::is_loggable`] is the level gate, and it is the only thing
+    // standing between a dropped record and the `String` its caller paid for.
+    if xlog.is_loggable(LogLevel::Debug) {
         let summary = format!("{} records written", RECORDS.len());
-        appender_write(None, &summary);
+        xlog.d("demo", &summary);
     }
 
     // -- 4. flush ------------------------------------------------------------
     //
-    // `appender_flush` only signals the writer thread and returns; this one
+    // [`Xlog::signal_flush`] only asks the writer thread and returns; this one
     // waits, so every record above is on disk before the next line runs. An app
     // calls it before it reads the files, uploads them, or exits.
-    appender_flush_sync();
+    xlog.flush_now();
 
     // -- 5. read back --------------------------------------------------------
     //
     // The directory the appender is writing into. It is a directory and not a
     // file, because that is what the C++ function it ports answers
     // (`XloggerAppender::GetCurrentLogPath` hands back `sg_logdir`).
-    if let Some(dir) = appender_get_current_log_path() {
+    if let Some(dir) = xlog.current_log_path() {
         println!("writing into:  {}", dir.display());
     }
 
@@ -177,8 +180,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     //
     // Drains what is left and closes the appender. An app that skips it loses
     // whatever the writer thread still held, which with an async appender is
-    // the last records it wrote.
-    appender_close();
+    // the last records it wrote — though an `Xlog` that is simply dropped
+    // closes itself, so a program that lets it go out of scope loses nothing.
+    xlog.close();
 
     Ok(())
 }

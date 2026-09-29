@@ -137,9 +137,10 @@ export default function App(): React.JSX.Element {
     if (xlog.isLoggable(LogLevel.debug)) {
       xlog.d('startup', `the appender is ${xlog.namePrefix}`);
     }
-    // `true` waits for the write, so every record above is on disk when this
-    // returns. An app calls it before it reads the files or uploads them.
-    xlog.flush(true);
+    // `flushNow` waits for the write, so every record above is on disk when
+    // this returns; `flush()` is the same drain as a promise. An app calls it
+    // before it reads the files or uploads them.
+    xlog.flushNow();
     setStatus('six records written and flushed');
   };
 

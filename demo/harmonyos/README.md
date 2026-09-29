@@ -47,7 +47,12 @@ names its own in the build log, and the fix is to put that number in both files.
   may write without a permission. It is a thing the ability has and a page does
   not, which is why the appender is opened in `onCreate` and not in the page.
 - `xlog.log(level, tag, message)` — one method per level as well, `xlog.v` and
-  friends, and `xlog.flush(true)` for the call that waits.
+  friends, and `xlog.flushNow()` for the call that waits.
+- `entry/src/main/resources/base/profile/main_pages.json` — the pages
+  `router.pushUrl` may name, and the one `windowStage.loadContent` loads first.
+  It is the only strict JSON in the module and not a `.json5`, so it takes no
+  comments: hvigor's parser rejects the file outright, in `ProcessResource`,
+  before a line of ArkTS is compiled.
 - `closeLogStore()` in `onDestroy` — the last moment an app is told anything at
   all, and with an async appender the last moment its writer thread is
   guaranteed to be running.

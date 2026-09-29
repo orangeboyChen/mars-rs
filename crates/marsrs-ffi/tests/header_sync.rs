@@ -36,6 +36,7 @@ fn header_declares_every_exported_symbol() {
         "mars_xlog_set_max_alive_duration_instance",
         "mars_xlog_set_mode_instance",
         "mars_xlog_current_log_path",
+        "mars_xlog_current_log_path_instance",
         "mars_xlog_current_log_cache_path",
         "mars_xlog_oneshot_flush",
         "mars_xlog_make_logfile_name",

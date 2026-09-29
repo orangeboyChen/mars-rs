@@ -16,6 +16,13 @@ agp = "9.4.1"
 # `v0.1.0-alpha.3`, so `0.1.0` is a version that resolves to nothing yet and the
 # newest alpha is the newest thing an app can actually take. A run that answers
 # "401 from jitpack.io" is this line and not the build.
+#
+# What this line is for, now that `settings.gradle.kts` substitutes
+# `platforms/android` for it: it is the coordinate a copy of this demo on its
+# own resolves, and not the one a build inside this repository compiles
+# against. A tag is a release behind the tree, so the two disagree — the AAR of
+# the newest one still answers `flush(sync = true)` — and only the first is
+# this line's to move.
 marsrs = "0.1.0-alpha.3"
 
 [libraries]
