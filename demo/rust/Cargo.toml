@@ -1,0 +1,30 @@
+# The Rust demo of mars-rs: one program that opens an appender, writes a record
+# at every level, and reads the file it wrote back.
+#
+# Why a package of its own and not one more member of the workspace two
+# directories up: a demo is not a crate this project publishes, and a member is
+# what `cargo publish` walks and what `cargo clippy --workspace` holds to the
+# `[workspace.lints]` table — a table measured against the port itself and not
+# against a program whose whole job is to be read. The empty `[workspace]`
+# table below is what takes this package out of the workspace it sits inside:
+# without it cargo answers "current package believes it's in a workspace when
+# it's not", and nothing here builds.
+
+[workspace]
+
+[package]
+name = "marsrs-demo-rust"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "The Rust demo of mars-rs: write a .xlog file and read it back"
+
+[dependencies]
+# The logging half of the port, by path and not by version: the demo is built
+# beside the port and is meant to be read next to it, so it compiles against
+# the tree it sits in rather than against whatever crates.io has. An app
+# outside this repository writes the line the docs give instead —
+# `cargo add marsrs-xlog`, which is this same crate from crates.io, or
+# `cargo add marsrs` for the whole port (xlog, STN and SDT) over it.
+marsrs-xlog = { path = "../../crates/marsrs-xlog" }
