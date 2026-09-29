@@ -1,10 +1,11 @@
-// The Android half of the `marsrs_xlog` plugin: the eleven methods of
+// The Android half of the `marsrs_xlog` plugin: the twelve methods of
 // the plugin's channel, each of them a straight call of a member of `Xlog` —
 // the Kotlin face of `libmarsrsxlog.so` in the `marsrs-xlog` AAR, and the same
 // class `platforms/kmp/marsrs-xlog` publishes to a Kotlin Multiplatform app
 // and `platforms/apple/MarsRSXlog/Xlog.swift` to a Swift one. So what this
 // file is is a channel over an API that already exists, and nothing of the API
-// is invented here: `Xlog.open(XlogConfig(...))`, `log`, `isLoggable`, `flush`,
+// is invented here: `Xlog.open(XlogConfig(...))`, `log`, `isLoggable`,
+// `signalFlush`, `flush`,
 // `close`, and the five settings, under the names every other platform of the
 // port gives them.
 //
@@ -69,6 +70,7 @@ class XlogPlugin :
                 "log" -> log(call, result)
                 "isLoggable" -> isLoggable(call, result)
                 "flush" -> flush(call, result)
+                "signalFlush" -> signalFlush(call, result)
                 "setLevel" -> setLevel(call, result)
                 "getLevel" -> getLevel(call, result)
                 "setMode" -> setMode(call, result)
@@ -129,9 +131,20 @@ class XlogPlugin :
         result.success(call.appender().isLoggable(level))
     }
 
-    /** `Xlog.flush`. */
+    /**
+     * `Xlog.flushNow`: the drain that does not return until the records are on
+     * disk, and the one the Dart caller awaits — that caller has no thread of
+     * its own to block on, so the wait is this side's and the answer is what
+     * it awaits.
+     */
     private fun flush(call: MethodCall, result: Result) {
-        call.appender().flush(call.boolean("sync", false))
+        call.appender().flushNow()
+        result.success(null)
+    }
+
+    /** `Xlog.signalFlush`: the signal the writer thread is told to drain by. */
+    private fun signalFlush(call: MethodCall, result: Result) {
+        call.appender().signalFlush()
         result.success(null)
     }
 
