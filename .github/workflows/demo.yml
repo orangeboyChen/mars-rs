@@ -1,35 +1,46 @@
 name: Demos
 
-# The gate of `demo/`: the two demos whose whole toolchain is a command line are
-# built *and run*, so that a change to the port which takes a symbol out from
-# under them is seen here and not by a reader who tries to run one.
+# The gate of `demo/`: every demo the port ships is compiled — and the two whose
+# whole toolchain is a command line are run — so that a change to the port which
+# takes a symbol out from under one of them is seen here and not by a reader who
+# tries to run it.
 #
-# Why a workflow of its own and not two more jobs of rust.yml: neither demo is a
-# member of the workspace — `demo/rust/Cargo.toml` takes itself out of it on
-# purpose, and `demo/c` is a `cc` command line over the FFI archive — so
-# `cargo build --workspace` and `cargo clippy --workspace` compile neither, and
-# the `changes` filter of rust.yml is written around the crates it publishes and
-# not around the programs that consume them.
+# Why a workflow of its own and not more jobs of the workflows that are already
+# here: none of the demos is a member of anything those workflows build.
+# `demo/rust/Cargo.toml` takes itself out of the workspace on purpose, so
+# `cargo build --workspace` never compiles it, and `demo/c` is a `cc` command
+# line over the FFI archive; the four Gradle, Dart and hvigor ones are apps that
+# consume the port the way an app outside this repository does, and the lint
+# workflows read `platforms/` and not the programs written over it.
 #
-# The filter below is the demo *and* the crates it is built over, and not the
-# demo alone. A demo breaks when the library it compiles against moves, which is
-# how both of these came to name symbols the xlog object had taken out of the
-# surface: the commit that did it touched no file under `demo/`, so a filter of
-# `demo/**` alone would have run nothing while both of them stopped compiling.
-# The cost of that is a demo build and run on a pull request that touched only
-# the crates, which is the pull request this gate exists for.
+# The filter below is the demo *and* what it is written over, and not the demo
+# alone. A demo breaks when the library it compiles against moves, which is how
+# six of the eight came to name a symbol the port had taken out: the commit that
+# did it touched no file under `demo/`, so a filter of `demo/**` alone would
+# have run nothing while most of them stopped compiling. The cost of that is a
+# demo build on a pull request that touched only the crates, which is the pull
+# request this gate exists for.
 #
-# The other six are not built here, and `demo/README.md` says why: `android`
-# resolves the AAR out of JitPack, which builds it from a tag, and `kmp`
-# resolves out of GitHub Packages, which answers nothing without a token a fork
-# does not have; `apple` needs an Xcode project around it, `flutter` and
-# `react-native` need the platform folders their own CLIs generate, and
-# `harmonyos` needs the HAR out of a release. None of the six is a project a
-# runner can build from this checkout.
+# What each job can ask varies, because what a platform makes of a demo varies:
 #
-# Both jobs run the demo rather than only building it: `demo/README.md` calls
-# these four "verified by being run", and a demo that compiles and then writes
-# no file is a demo the reader will find broken anyway.
+#   rust, c     built and run — a binary, and a program that reads its own file
+#               back, so a run that exits non-zero is a demo whose output does
+#               not match what its own text promises
+#   android,    built the way an app builds them: `assembleDebug`, and the
+#   kmp         Kotlin/Native executable linked for the host
+#   apple       compiled, for iOS on device and on the simulator — the demo is
+#               sources and not a project, because an app is a bundle, so there
+#               is no build to run and a compile is what a build would answer
+#   flutter,    analysed and type-checked: `flutter analyze`, and `tsc` over
+#   react-      `App.tsx` against the module of this tree
+#   native
+#   harmonyos   built with DevEco's own ArkTS compiler, over the HAR of a
+#               release
+#
+# Which is the most a runner can answer for each of them, and not the same
+# answer for all eight: a demo that is a complete project is built, and one that
+# is complete sources is compiled or type-checked, because the rest of a project
+# is what its own CLI generates and not a thing this repository carries.
 
 on:
   # Every run starts, whatever the commit touched: what decides whether the jobs
@@ -55,12 +66,18 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUSTFLAGS: '-D warnings'
+  # The versions the two JavaScript jobs and the HarmonyOS one pin; the same
+  # numbers lint-harmony.yml pins, for the same reason — a new TypeScript is a
+  # new set of rules over a source no platform compiler of theirs reads.
+  NODE_VERSION: '20.19'
+  TYPESCRIPT_VERSION: '5.9.3'
+  JAVA_VERSION: '17'
+  DEVECO_CLI_VERSION: '5.1.0.840'
 
 jobs:
-  # Which of the files the two jobs below read this commit touched, and so
-  # whether they have work to do. A skipped job answers the ruleset; a run that
-  # never started does not, which is the difference rust.yml writes out at
-  # length.
+  # Which of the files the jobs below read this commit touched, and so whether
+  # they have work to do. A skipped job answers the ruleset; a run that never
+  # started does not, which is the difference rust.yml writes out at length.
   changes:
     name: What changed (Demos)
     runs-on: ubuntu-latest
@@ -79,7 +96,8 @@ jobs:
         run: |
           .github/scripts/changed_paths.sh \
             'demo/**' \
-            'crates/**' 'Cargo.toml' '**/Cargo.toml' 'Cargo.lock' '.cargo/**' \
+            'crates/**' 'platforms/**' \
+            'Cargo.toml' '**/Cargo.toml' 'Cargo.lock' '.cargo/**' \
             '.github/scripts/**' '.github/workflows/demo.yml'
 
   rust:
@@ -121,3 +139,205 @@ jobs:
       - name: make run
         working-directory: demo/c
         run: make run
+
+  android:
+    name: demo (android)
+    needs: changes
+    if: needs.changes.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    env:
+      # `demo/android/gradle.properties` says why there is no `sdk.dir` in it:
+      # it is the one line of a Gradle build that is different on every machine.
+      # `ANDROID_HOME` is what the Android Gradle Plugin reads instead, and the
+      # runner image ships the SDK.
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      # The plugin downloads the platform and the build tools `compileSdk`
+      # names, and it asks only once the licences of the ones it wants are
+      # accepted. An image that already carries them answers nothing here, and
+      # the `|| true` is what keeps that from being a failure.
+      - name: Accept the SDK licences
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+      # `assembleDebug` and not `installDebug`: the second needs a device or an
+      # emulator to install onto, and what this job asks is whether the app
+      # still builds — the AAR it takes comes out of JitPack, which builds it
+      # from the tag `demo/android/gradle/libs.versions.toml` names.
+      - name: assembleDebug
+        working-directory: demo/android
+        run: ./gradlew assembleDebug
+
+  kmp:
+    name: demo (kmp)
+    needs: changes
+    # The Kotlin Multiplatform packages are published to GitHub Packages, which
+    # answers nothing without a token — not even a 404 — and a pull request
+    # from a fork carries no token that reads this repository's packages. So
+    # this job answers on a push, on a dispatch and on a pull request of this
+    # repository's own, and says nothing about a fork's.
+    if: >-
+      needs.changes.outputs.needed == 'true' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    env:
+      # What `demo/kmp/settings.gradle.kts` reads. It takes the credentials out
+      # of the environment and not out of `gradle.properties`, because a token
+      # written into a file is one `git add -A` away from the remote; the
+      # comment there says so. `GITHUB_ACTOR` is already in the environment of
+      # every step, and this is the one that is not.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      # The Linux half of the two targets the build declares, and not `build`:
+      # `macosArm64` is the other, and Kotlin/Native links a macOS binary on a
+      # macOS host and nowhere else, so a `build` on this runner would fail on
+      # a target that has nothing to do with this commit. Both targets compile
+      # the same `commonMain`, which is the half the demo is.
+      - name: Link the Linux executable
+        working-directory: demo/kmp
+        run: ./gradlew linkDebugExecutableLinuxX64
+
+  apple:
+    name: demo (apple)
+    needs: changes
+    if: needs.changes.outputs.needed == 'true'
+    # The iOS SDK is in the Xcode the image carries; a Linux runner cannot ask
+    # the question at all.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: .github/scripts/typecheck_demo_swift.sh
+
+  flutter:
+    name: demo (flutter)
+    needs: changes
+    if: needs.changes.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      # `flutter pub get` resolves `marsrs_xlog` out of pub.dev, which is what
+      # an app outside this repository does; `flutter analyze` is then the
+      # analyzer over `lib/`, and it needs no platform folder — which is the
+      # one thing `flutter create` writes that this demo does not carry.
+      - name: flutter pub get
+        working-directory: demo/flutter
+        run: flutter pub get
+      - name: flutter analyze
+        working-directory: demo/flutter
+        run: flutter analyze
+
+  react-native:
+    name: demo (react-native)
+    needs: changes
+    if: needs.changes.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # The dependencies `App.tsx` imports, and `tsc`, installed out of the
+      # tree into the runner's temp: no `package.json` of this repository asks
+      # for TypeScript, and a `node_modules` in the checkout is a
+      # `node_modules` every `find` and every linter of the run then reads.
+      - name: Install the types App.tsx imports
+        run: |
+          npm install --prefix "$RUNNER_TEMP/rn" --no-save --no-audit --no-fund \
+            "typescript@$TYPESCRIPT_VERSION" react@19 react-native@0.81 \
+            @types/react@19 react-native-fs
+      # Checked against the module of this tree and not against the snapshot on
+      # npm: what this gate is about is drift here, and a published package is
+      # a release behind it.
+      - name: Type-check App.tsx
+        env:
+          NODE_MODULES: ${{ runner.temp }}/rn/node_modules
+          TSC: ${{ runner.temp }}/rn/node_modules/.bin/tsc
+        run: .github/scripts/check_demo_react_native.sh
+
+  harmonyos:
+    name: demo (harmonyos)
+    needs: changes
+    if: needs.changes.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # hvigor runs on the JVM. The DevEco Command Line Tools carry their own
+      # Node and their own SDK, so the JDK is the one thing the runner brings.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      # The archive is 2.1 GB on a mirror whose fast day and slow day are a
+      # minute and ten apart, so it is downloaded once and then cached — under
+      # the same key lint-harmony.yml uses, which is what lets a branch cut
+      # from a main that has run that workflow pay nothing at all.
+      - name: Cache the DevEco Command Line Tools ${{ env.DEVECO_CLI_VERSION }}
+        uses: actions/cache@v6
+        with:
+          path: .deveco-cli
+          key: deveco-cli-${{ env.DEVECO_CLI_VERSION }}
+      - name: Fetch the DevEco Command Line Tools ${{ env.DEVECO_CLI_VERSION }}
+        run: scripts/fetch_deveco_cli.sh .deveco-cli
+      # The HAR of the port, out of the release: publishing to ohpm is not
+      # switched on yet, so `libs/` and a `file:` dependency is the way an app
+      # takes it, and `demo/harmonyos/README.md` says so.
+      #
+      # The rename is not decoration: `entry/oh-package.json5` names the file
+      # it depends on, and it names it `1.0.0` — the version the package will
+      # carry once it is on ohpm, and not the version a release ships today.
+      # What a release carries is renamed to the name the manifest asks for,
+      # because the manifest is the half an app outside this repository copies.
+      - name: The HAR the release carries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p demo/harmonyos/libs
+          gh release download v0.1.0-alpha.3 \
+            --pattern 'marsrs-harmonyos-xlog-*.har' \
+            --dir demo/harmonyos/libs
+          mv demo/harmonyos/libs/marsrs-harmonyos-xlog-*.har \
+             demo/harmonyos/libs/marsrs-harmonyos-xlog-1.0.0.har
+      # `ohpm install`, which is what resolves the `file:` dependency above into
+      # `oh_modules/`: hvigor does not read `oh-package.json5` for it. Where the
+      # binary sits inside the archive is not the same in every release of the
+      # tools, so both places it has been are tried.
+      - name: ohpm install
+        env:
+          DEVECO_HOME: ${{ github.workspace }}/.deveco-cli/command-line-tools
+        working-directory: demo/harmonyos
+        run: |
+          set -euo pipefail
+          export PATH="$DEVECO_HOME/bin:$DEVECO_HOME/tool/node/bin:$PATH"
+          for ohpm in "$DEVECO_HOME/bin/ohpm" "$DEVECO_HOME/ohpm/bin/ohpm" ohpm; do
+            if command -v "$ohpm" > /dev/null 2>&1; then
+              "$ohpm" install
+              exit 0
+            fi
+          done
+          echo "::error::no ohpm under $DEVECO_HOME"
+          exit 1
+      # The app, with DevEco's own ArkTS compiler — the only one in this
+      # repository, and the one thing that answers whether the ArkTS still
+      # builds against the module it imports.
+      - name: assembleHap
+        env:
+          DEVECO_HOME: ${{ github.workspace }}/.deveco-cli/command-line-tools
+        working-directory: demo/harmonyos
+        run: |
+          set -euo pipefail
+          export PATH="$DEVECO_HOME/bin:$DEVECO_HOME/tool/node/bin:$PATH"
+          hvigorw assembleHap --mode module -p module=entry@default -p product=default
