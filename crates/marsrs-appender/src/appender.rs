@@ -1017,8 +1017,15 @@ impl AppenderInner {
         }
 
         if !write_success {
+            // The log directory's file is being left for the cache
+            // directory's, but the batch is not: it is what the cache
+            // directory is for. Only the handle goes, because
+            // [`Self::close_log_file`] flushes, and a flush is one more
+            // attempt at the file that has just refused the batch — and a
+            // second refusal gives the batch up, which would leave the
+            // cache directory nothing to stage.
             if open_success && self.is_sync() {
-                self.close_log_file();
+                self.forget_log_file();
             }
             if self.open_log_file(OpenDir::Cache, tv) {
                 // The batch the log directory would not take — `data` included,
@@ -3126,6 +3133,45 @@ mod tests {
         // nothing this appender accepts can reach a file until `__Log2File`
         // opens the cache directory's copy instead.
         fs::create_dir(today_name(tmp.path())).unwrap();
+
+        let appender = Appender::open(cfg, 0, 0).unwrap();
+        appender.write(Some(&info(LogLevel::Info)), "the very first record");
+        for i in 0..500 {
+            appender.write(
+                Some(&info(LogLevel::Info)),
+                &format!("record {i} {i:x} {i:o} the quick brown fox"),
+            );
+        }
+        appender.close();
+
+        let mut text = String::new();
+        for entry in fs::read_dir(&cache).unwrap().flatten() {
+            if entry.path().extension().is_some_and(|ext| ext == "xlog") {
+                text.push_str(&decoded_text(&fs::read(entry.path()).unwrap()));
+            }
+        }
+        assert!(
+            text.contains("the very first record"),
+            "the batch was dropped instead of cached: {text}"
+        );
+    }
+
+    /// The other way a batch misses the file: the log directory's file opens
+    /// and then refuses the write, which is what a full disk does. An `open`
+    /// that fails is the easy half — nothing has been written, so the batch is
+    /// still whole — and a `write` that fails is the half the cache directory
+    /// is really there for.
+    ///
+    /// `/dev/full` is the one file a unix answers every write to with ENOSPC,
+    /// so the day's log file is a link to it: `open` succeeds, `write` cannot.
+    #[cfg(unix)]
+    #[test]
+    fn a_log_file_that_refuses_a_write_stages_the_batch_in_the_cache_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("cache");
+        let mut cfg = config(tmp.path(), AppenderMode::Sync);
+        cfg.cachedir = Some(cache.clone());
+        std::os::unix::fs::symlink("/dev/full", today_name(tmp.path())).unwrap();
 
         let appender = Appender::open(cfg, 0, 0).unwrap();
         appender.write(Some(&info(LogLevel::Info)), "the very first record");
