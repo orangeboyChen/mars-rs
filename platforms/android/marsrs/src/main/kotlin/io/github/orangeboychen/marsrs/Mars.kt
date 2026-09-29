@@ -19,12 +19,49 @@ import io.github.orangeboychen.marsrs.comm.PlatformComm
  */
 object Mars {
 
+    /** `marsrsxlog` — the `crate-name` of `marsrs-jni`, and the one library every `external` of this AAR lives in. */
+    private const val LIBRARY = "marsrsxlog"
+
+    /**
+     * Whether `libmarsrsxlog.so` is in this process: what [loadDefaultMarsLibrary]
+     * sets, and what the entry points ask before the `external` below them.
+     *
+     * A load that failed used to be a log line and nothing else, and the failure
+     * then came out of whichever `external` an app called first — thrown on the
+     * thread the port was running on, as an `UnsatisfiedLinkError` naming a
+     * symbol and not the load that never happened.
+     */
+    @Volatile
+    var libraryLoaded = false
+        private set
+
     @JvmStatic
     fun loadDefaultMarsLibrary() {
         try {
-            System.loadLibrary("marsrsxlog")
+            System.loadLibrary(LIBRARY)
+            libraryLoaded = true
         } catch (e: Throwable) {
-            android.util.Log.e("mars.Mars", "", e)
+            // Logged and not rethrown: this is called from the `init` of
+            // `StnLogic` and of `SdtLogic`, and an exception out of the `init`
+            // of a class leaves it one the app can never touch again. What names
+            // the library instead is [requireLibrary], on the call that reaches
+            // a symbol.
+            android.util.Log.e("mars.Mars", "System.loadLibrary(\"$LIBRARY\") failed", e)
+        }
+    }
+
+    /**
+     * `libmarsrsxlog.so`, or an `IllegalStateException` naming it: what an entry
+     * point asks before the `external` it is about to call, so that a process
+     * the library is not in says so on the call an app made rather than inside a
+     * symbol.
+     */
+    private fun requireLibrary() {
+        if (!libraryLoaded) {
+            loadDefaultMarsLibrary()
+        }
+        check(libraryLoaded) {
+            "lib$LIBRARY.so is not loaded: no `external` of io.github.orangeboychen.marsrs can be answered without it"
         }
     }
 
@@ -34,6 +71,11 @@ object Mars {
     /**
      * Initializes the platform callbacks, and has to be called before `onCreate`: every method of
      * C2Java takes what it asks about from the context that [PlatformComm.init] leaves behind.
+     *
+     * What is kept is the application context of the one handed over — so an
+     * Activity is safe to hand over — and it is kept for the process: the nine
+     * questions are answered from it whenever the port asks, which is why
+     * [release] is the way an app lets go of it.
      */
     @JvmStatic
     fun init(context: Context, handler: Handler) {
@@ -42,24 +84,35 @@ object Mars {
     }
 
     /**
+     * Lets go of what [init] kept: the context, the handler and the phone-state
+     * listener `NetworkSignalUtil` put on the air. Nothing of `C2Java` answers
+     * afterwards, so this is for an app that is done with the port and not one
+     * that goes on being asked about the device.
+     */
+    @JvmStatic
+    fun release() {
+        PlatformComm.release()
+        hasInitialized = false
+    }
+
+    /**
      * Called when the app starts: the first startup has to go through [init] first, and every one
      * after it goes through [BaseEvent.onCreate].
      */
     @JvmStatic
     fun onCreate(isFirstStartup: Boolean) {
-        if (isFirstStartup && hasInitialized) {
-            BaseEvent.onCreate()
-        } else if (!isFirstStartup) {
-            BaseEvent.onCreate()
-        } else {
+        if (isFirstStartup && !hasInitialized) {
             error(
                 "Mars.init must be executed before Mars.onCreate when the app starts for the first time."
             )
         }
+        requireLibrary()
+        BaseEvent.onCreate()
     }
 
     @JvmStatic
     fun onDestroy() {
+        requireLibrary()
         BaseEvent.onDestroy()
     }
 }

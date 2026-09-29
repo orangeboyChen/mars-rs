@@ -155,11 +155,14 @@ class Alarm : BroadcastReceiver() {
             }
 
             synchronized(alarmWaitingSet) {
+                // Nothing was ever started, so there is no receiver to stop and
+                // no alarm to cancel. Registering one here to have something to
+                // unregister would put a receiver on the air with an empty
+                // `IntentFilter` — which is every broadcast Android sends, and
+                // not the `ALARM_ACTION` [start] asks for — and nothing but
+                // [resetAlarm] would ever take it off again.
                 if (bcAlarm == null) {
-                    val alarm = Alarm()
-                    bcAlarm = alarm
-                    context.registerReceiver(alarm, IntentFilter())
-                    Log.i(TAG, "stop new Alarm")
+                    return false
                 }
 
                 val iterator = alarmWaitingSet.iterator()

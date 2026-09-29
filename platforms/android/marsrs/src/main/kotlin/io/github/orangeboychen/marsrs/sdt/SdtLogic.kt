@@ -214,8 +214,10 @@ object SdtLogic {
         fun ping(host: String, timeoutSec: Int): Answer
     }
 
+    @Volatile
     private var callBack: ICallBack? = null
 
+    @Volatile
     private var probe: IProbe? = null
 
     /**

@@ -59,12 +59,25 @@
 
 # `sdt.rs`: the signal detection results
 -keep,allowoptimization class io.github.orangeboychen.marsrs.sdt.SdtLogic { *; }
+# The class every one of the four probe descriptors names —
+# `(Ljava/lang/String;I)Lio/github/orangeboychen/marsrs/sdt/SdtLogic$Answer;` —
+# so an `Answer` R8 renamed is a `GetStaticMethodID` that finds no `onDnsQuery`
+# and no `onTcpQuery` at all, and a diagnosis that answers nothing.
+-keep,allowoptimization class io.github.orangeboychen.marsrs.sdt.SdtLogic$Answer { *; }
+# One entry of the two `CheckIPPorts` a run is started with: `hosts_from_java`
+# reads `name`, `hosts` and `ports` off every element of the array it is handed.
+-keep,allowoptimization class io.github.orangeboychen.marsrs.sdt.SdtLogic$Link { *; }
 
 # `stn_c2java.rs`: the fifteen `ICallBack` questions, and the task and the
 # profile the two halves pass to each other
 -keep,allowoptimization class io.github.orangeboychen.marsrs.stn.StnLogic { *; }
 -keep,allowoptimization class io.github.orangeboychen.marsrs.stn.StnLogic$Task { *; }
 -keep,allowoptimization class io.github.orangeboychen.marsrs.stn.StnLogic$CgiProfile { *; }
+# What `createLonglink` is handed: `longlink_config_from_java` reads `name`,
+# `hostList`, `isKeepAlive`, `group`, `isMain`, `linkType` and `needTls` off it,
+# and a field R8 renamed out from under a `GetFieldID` is no error — it is a
+# link the app was answered `false` for.
+-keep,allowoptimization class io.github.orangeboychen.marsrs.stn.StnLogic$LonglinkConfig { *; }
 
 # `jni_bridge.rs`: what `appenderOpen` and `logWrite` read out of their argument
 -keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.Xlog { *; }

@@ -48,8 +48,17 @@ object StnLogic {
         @JvmField
         var cgi: String? = null
 
+        /**
+         * The host, or the ip, a task on the short link goes out to.
+         *
+         * `List` and not `ArrayList`, which is what an app builds one with:
+         * `marsrs-jni` reads this with the descriptor `Ljava/util/List;`, and a
+         * `GetFieldID` is a lookup by name *and* descriptor — declared as
+         * `ArrayList` it finds nothing, the read falls into its `Err` arm, and
+         * the task goes out with an empty host list and no error anywhere.
+         */
         @JvmField
-        var shortLinkHostList: ArrayList<String>? = null // host or ip
+        var shortLinkHostList: List<String>? = null
 
         @JvmField
         var sendOnly: Boolean = false
@@ -109,7 +118,7 @@ object StnLogic {
             channelselect: Int,
             cmdid: Int,
             cgi: String?,
-            shortLinkHostList: ArrayList<String>?
+            shortLinkHostList: List<String>?
         ) {
             this.taskID = genTaskID()
             this.channelSelect = channelselect
@@ -174,9 +183,17 @@ object StnLogic {
         @JvmField
         var name: String? = null
 
-        /** The hosts the link goes out on. */
+        /**
+         * The hosts the link goes out on.
+         *
+         * `List` and not `ArrayList`, for the same reason as
+         * [Task.shortLinkHostList]: the descriptor `longlink_config_from_java`
+         * reads this under is `Ljava/util/List;` — as an `ArrayList` it reads
+         * nothing, and `createLonglink` answers `false` for a config the app
+         * filled in.
+         */
         @JvmField
-        var hostList: ArrayList<String>? = null
+        var hostList: List<String>? = null
 
         /** `false` leaves the reconnecting to a task. */
         @JvmField
@@ -406,6 +423,7 @@ object StnLogic {
         fun reportTaskProfile(taskString: String?)
     }
 
+    @Volatile
     private var callBack: ICallBack? = null
 
     /** Sets the instance the network layer calls back on — the app implements NetworkCallBack */
