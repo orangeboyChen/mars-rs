@@ -1392,10 +1392,14 @@ impl AppenderInner {
         // modes behave the same.
         let len = self.flushed_len + self.pending.len() as u64;
         if self.max_file_size > 0 && len > self.max_file_size {
-            self.close_log_file();
+            // Answered by the close, and not with a `true` of its own: a
+            // batch the flush could not get out is still the caller's, and a
+            // rotation that claimed it had been written would let that
+            // caller give up the block it came from.
+            let flushed = self.close_log_file();
             self.open_file_time = 0;
             self.open_file_day = NO_DAY;
-            return true;
+            return flushed;
         }
 
         if self.pending.len() >= LOG_FLUSH_THRESHOLD {
