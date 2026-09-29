@@ -41,24 +41,30 @@ The appender is one struct of options and a handful of free calls in
 
 | the C++ | Rust | the C ABI |
 |---|---|---|
-| `appender_open(const XLogConfig&)` | `appender_open(XLogConfig)` | `mars_xlog_open(&config)` |
-| `xlogger_Write(info, log)`, or the `xinfo2` family | `appender_write(info, message)` | `mars_xlog_write(...)` |
-| `appender_flush()` | `appender_signal_flush()` | `mars_xlog_signal_flush_instance(0)` |
-| `appender_flush_sync()` | `appender_flush_now()` | `mars_xlog_flush_now_instance(0)` |
-| `appender_close()` | `appender_close()` | `mars_xlog_close()` |
-| `xlogger_SetLevel(level)` | `set_level(handle, level)` | `mars_xlog_set_level_instance(0, level)` |
-| `appender_setmode(mode)` | `appender_set_mode(mode)` | `mars_xlog_set_mode_instance(0, mode)` |
-| `appender_set_console_log(bool)` | `appender_set_console_log(bool)` | `mars_xlog_set_console_log_instance(0, on)` |
-| `appender_set_max_file_size(bytes)` | `appender_set_max_file_size(bytes)` | `mars_xlog_set_max_file_size_instance(0, bytes)` |
-| `appender_set_max_alive_duration(secs)` | `appender_set_max_alive_duration(secs)` | `mars_xlog_set_max_alive_duration_instance(0, secs)` |
-| `appender_get_current_log_path(out, len)` | `appender_get_current_log_path()` | `mars_xlog_current_log_path(out, len)` |
+| `appender_open(const XLogConfig&)` | `Xlog::open(config, level)` | `mars_xlog_open(&config)` |
+| `xlogger_Write(info, log)`, or the `xinfo2` family | `xlog.log(level, tag, message)` | `mars_xlog_write(...)` |
+| `appender_flush()` | `xlog.signal_flush()` | `mars_xlog_signal_flush_instance(0)` |
+| `appender_flush_sync()` | `xlog.flush_now()` | `mars_xlog_flush_now_instance(0)` |
+| `appender_close()` | `xlog.close()` | `mars_xlog_close()` |
+| `xlogger_SetLevel(level)` | `xlog.set_level(level)` | `mars_xlog_set_level_instance(0, level)` |
+| `appender_setmode(mode)` | `xlog.set_mode(mode)` | `mars_xlog_set_mode_instance(0, mode)` |
+| `appender_set_console_log(bool)` | `xlog.set_console_log_enabled(on)` | `mars_xlog_set_console_log_instance(0, on)` |
+| `appender_set_max_file_size(bytes)` | `xlog.set_max_file_size_bytes(bytes)` | `mars_xlog_set_max_file_size_instance(0, bytes)` |
+| `appender_set_max_alive_duration(secs)` | `xlog.set_max_alive_time_seconds(secs)` | `mars_xlog_set_max_alive_duration_instance(0, secs)` |
+| `appender_get_current_log_path(out, len)` | `xlog.current_log_path()` | `mars_xlog_current_log_path(out, len)` |
 
-The two flush rows are the one place the Rust column is not the C++'s name:
-what the C++ calls `appender_flush` is `appender_signal_flush` here, because
-`appender_flush` in Rust is the drain a caller `await`s — see
-[log files](/xlog/log-files). `appender_flush_sync` still compiles and does what
-`appender_flush_now` does, deprecated, so that code written against the C++'s
-name keeps building. The C ABI column is the same story, and it takes no `sync` anywhere: the C++'s
+The Rust column is the object an app holds — the `Xlog.open(config)` of Kotlin,
+of Dart and of TypeScript — and not the free function the C++ has: a second
+appender is a second `Xlog` of a prefix of its own, and the `Xlog` closes itself
+when it is dropped. What the object names is a member and not a call, so
+`appender_open`, `appender_write` and the rest of the process-wide free
+functions are the plumbing the C ABI and the JNI bridge are written over, and an
+app has no reason to name them.
+
+The two flush rows are the one place neither column is the C++'s name: what the
+C++ calls `appender_flush` is `signalFlush` on every platform here, because
+`flush` is the drain a caller `await`s — see [log files](/xlog/log-files). The C
+ABI column is the same story, and it takes no `sync` anywhere: the C++'s
 `appender_flush` is `mars_xlog_signal_flush_instance(0)` and its `appender_flush_sync` is
 `mars_xlog_flush_now_instance(0)`, and the instance pair is two calls too — what a caller
 wrote as `mars_xlog_flush_instance(handle, 0)` or `(handle, 1)` is
@@ -90,7 +96,8 @@ The macros are the other half of what goes. `XLOGGER_TAG` and the
 `xverbose2` / `xdebug2` / `xinfo2` / `xwarn2` / `xerror2` / `xfatal2` family
 carried the level, the tag and the call site in one line of C++; what replaces
 them is a method per level — `xlog.i(tag, message)` in Kotlin,
-`log.info(message:tag:)` in Swift, `appender_write(None, message)` in Rust.
+`log.info(message:tag:)` in Swift, `xlog.log(LogLevel::Info, tag, message)` in
+Rust.
 
 The call site is the one of the three that does not come along everywhere.
 Swift fills the file, the function and the line in from `#file`, `#function`
@@ -99,11 +106,10 @@ it was written. Kotlin's write takes a handle, a level, a tag and a message and
 nothing else, so a record written through `xlog.i(tag, message)` carries an
 empty file and the line 0 — what the C++ project's own `Log` always passed. An
 app that needs them in the record has two ways: the `XLoggerInfo` the old
-`logWrite` takes, or, in Rust, the one `appender_write` is handed instead of
-`None`:
+`logWrite` takes, or, in Rust, the one `Xlog::log_with_info` is handed:
 
 ```rust
-appender_write(
+xlog.log_with_info(
     Some(&XLoggerInfo {
         level: LogLevel::Info,
         tag: Some("startup".into()),
@@ -120,9 +126,13 @@ A second appender is where the shapes differ most. The C++ project's Java opened
 one with `Log.openLogInstance(level, mode, cacheDir, logDir, nameprefix,
 cacheDays)` and threaded the handle it answered through every call after it;
 here an appender you hold *is* the instance, so a second one is a second `Xlog`
-of a prefix of its own, or the `*_instance` family in Rust —
-`appender_open_instance(config)` answers a handle, and `appender_write_instance`,
-`appender_flush_instance` and `appender_close_instance` take it.
+of a prefix of its own — `Xlog::open(config, level)` again, with the prefix the
+second one is known by — and `Xlog::open_unregistered(config, level)` for the
+one shape a prefix of its own cannot express: two appenders of one prefix in one
+process, which is what two copies of the library linked side by side are. That
+one is *not* registered under the prefix, so it is a second writer where
+`Xlog::open` would hand back the first, and it keeps a level of its own, because
+it has no category to share one with.
 
 ### From the C++ project's Java
 

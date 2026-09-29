@@ -5,7 +5,7 @@
 //!   own copy of the crate next to the Kotlin one, or the JNI and the Kotlin
 //!   side both opening. From the crate's point of view these are two
 //!   `XloggerAppender`s over the same directory and prefix, which is what
-//!   [`marsrs_appender::appender_open_instance`] twice gives.
+//!   [`Xlog::open_unregistered`] twice gives.
 //! * **Two processes** — an Android app with a `:push` process, or a host app
 //!   and its extension. The parent test re-executes this very binary to get a
 //!   real second process.
@@ -25,9 +25,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use marsrs_appender::{
-    appender_close, appender_close_instance, appender_flush_now_instance, appender_oneshot_flush,
-    appender_open, appender_open_instance, appender_write, appender_write_instance, AppenderMode,
-    FileIoAction, LogLevel, XLogConfig, XLoggerInfo,
+    appender_close, appender_oneshot_flush, appender_open, xlogger_write, AppenderMode,
+    FileIoAction, LogLevel, XLogConfig, XLoggerInfo, Xlog, DEFAULT_HANDLE,
 };
 use marsrs_buffer::{CompressMode, LogBuffer};
 use marsrs_crypt::{magic, LogCrypt, HEADER_LEN, TAILER_LEN};
@@ -136,9 +135,10 @@ fn two_instances_of_one_prefix_keep_every_record() {
     let log = tmp.path().join("log");
     let cfg = config(&log);
 
-    let native = appender_open_instance(cfg.clone()).unwrap();
-    let kotlin = appender_open_instance(cfg.clone()).unwrap();
-    assert_ne!(native, kotlin);
+    // Unregistered, so the prefix's registry does not hand the second one the
+    // first one's appender back — which is the whole point of that call.
+    let native = Xlog::open_unregistered(cfg.clone(), LogLevel::Info).unwrap();
+    let kotlin = Xlog::open_unregistered(cfg.clone(), LogLevel::Info).unwrap();
     // A cache file each: the shared `<prefix>.mmap3` is the bug being fixed.
     assert!(log.join("Mars.mmap3").exists());
     assert!(
@@ -147,21 +147,13 @@ fn two_instances_of_one_prefix_keep_every_record() {
     );
 
     for i in 0..RECORDS {
-        assert!(appender_write_instance(
-            native,
-            Some(&info(LogLevel::Info)),
-            &format!("native-{i:04}")
-        ));
-        assert!(appender_write_instance(
-            kotlin,
-            Some(&info(LogLevel::Info)),
-            &format!("kotlin-{i:04}")
-        ));
+        assert!(native.log_with_info(Some(&info(LogLevel::Info)), &format!("native-{i:04}")));
+        assert!(kotlin.log_with_info(Some(&info(LogLevel::Info)), &format!("kotlin-{i:04}")));
     }
-    appender_flush_now_instance(native);
-    appender_flush_now_instance(kotlin);
-    appender_close_instance(native);
-    appender_close_instance(kotlin);
+    native.flush_now();
+    kotlin.flush_now();
+    native.close();
+    kotlin.close();
 
     let text = payload_text(&fs::read(today_log_file(&log)).unwrap());
     for i in 0..RECORDS {
@@ -184,9 +176,9 @@ fn two_cache_directories_share_the_log_directories_lock() {
     let mut cfg = config(&log);
     cfg.cachedir = Some(tmp.path().join("cache-a"));
 
-    let first = appender_open_instance(cfg.clone()).unwrap();
+    let first = Xlog::open_unregistered(cfg.clone(), LogLevel::Info).unwrap();
     cfg.cachedir = Some(tmp.path().join("cache-b"));
-    let second = appender_open_instance(cfg).unwrap();
+    let second = Xlog::open_unregistered(cfg, LogLevel::Info).unwrap();
 
     let entries: Vec<_> = fs::read_dir(&log)
         .unwrap()
@@ -199,21 +191,13 @@ fn two_cache_directories_share_the_log_directories_lock() {
     );
 
     for i in 0..RECORDS {
-        assert!(appender_write_instance(
-            first,
-            Some(&info(LogLevel::Info)),
-            &format!("cache-a-{i:04}")
-        ));
-        assert!(appender_write_instance(
-            second,
-            Some(&info(LogLevel::Info)),
-            &format!("cache-b-{i:04}")
-        ));
+        assert!(first.log_with_info(Some(&info(LogLevel::Info)), &format!("cache-a-{i:04}")));
+        assert!(second.log_with_info(Some(&info(LogLevel::Info)), &format!("cache-b-{i:04}")));
     }
-    appender_flush_now_instance(first);
-    appender_flush_now_instance(second);
-    appender_close_instance(first);
-    appender_close_instance(second);
+    first.flush_now();
+    second.flush_now();
+    first.close();
+    second.close();
 
     let text = payload_text(&fs::read(today_log_file(&log)).unwrap());
     for i in 0..RECORDS {
@@ -300,9 +284,10 @@ fn peer_process_writer() {
     wait_for(&dir.join("go"), "the parent to start writing");
 
     for i in 0..RECORDS {
-        assert!(appender_write(
+        assert!(xlogger_write(
+            DEFAULT_HANDLE,
             Some(&info(LogLevel::Info)),
-            &format!("peer-{i:04}")
+            Some(&format!("peer-{i:04}"))
         ));
     }
     appender_close();
@@ -327,9 +312,10 @@ fn two_processes_keep_every_record() {
     fs::write(tmp.path().join("go"), b"1").unwrap();
 
     for i in 0..RECORDS {
-        assert!(appender_write(
+        assert!(xlogger_write(
+            DEFAULT_HANDLE,
             Some(&info(LogLevel::Info)),
-            &format!("local-{i:04}")
+            Some(&format!("local-{i:04}"))
         ));
     }
     appender_close();
@@ -353,7 +339,7 @@ fn one_shot_flush_leaves_a_live_cache_slot_alone() {
     let log = tmp.path().join("log");
     let cfg = config(&log);
 
-    let live = appender_open_instance(cfg.clone()).unwrap();
+    let live = Xlog::open_unregistered(cfg.clone(), LogLevel::Info).unwrap();
     let live_slot = log.join("Mars.mmap3");
     assert!(live_slot.exists(), "the instance claimed no cache file");
 
@@ -378,5 +364,5 @@ fn one_shot_flush_leaves_a_live_cache_slot_alone() {
 
     let text = payload_text(&fs::read(today_log_file(&log)).unwrap());
     assert!(text.contains("left behind by a dead process"), "{text}");
-    appender_close_instance(live);
+    live.close();
 }

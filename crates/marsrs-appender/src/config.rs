@@ -95,13 +95,16 @@ pub struct XLogConfig {
 
 impl Default for XLogConfig {
     /// Matches the C++ in-class initialisers (`logdir_` defaults to `./log`
-    /// through the callers, `nameprefix_` to `Mars`, `compress_mode_` to
-    /// `kZlib`, `compress_level_` to 6).
+    /// through the callers, `compress_mode_` to `kZlib`, `compress_level_` to
+    /// 6) — except `nameprefix_`, which the C++ gives `Mars` and this port gives
+    /// `xlog`: that is the default every platform of the port carries, and an
+    /// app that names no prefix gets the same file names whichever of them it
+    /// was written against.
     fn default() -> Self {
         Self {
             mode: AppenderMode::Async,
             logdir: PathBuf::from("./log"),
-            nameprefix: "Mars".to_owned(),
+            nameprefix: "xlog".to_owned(),
             pub_key: String::new(),
             compress_mode: CompressMode::Zlib,
             compress_level: 6,
@@ -203,7 +206,7 @@ mod tests {
         let c = XLogConfig::default();
         assert_eq!(c.mode, AppenderMode::Async);
         assert_eq!(c.logdir, PathBuf::from("./log"));
-        assert_eq!(c.nameprefix, "Mars");
+        assert_eq!(c.nameprefix, "xlog");
         assert!(c.pub_key.is_empty());
         assert_eq!(c.compress_mode, CompressMode::Zlib);
         assert_eq!(c.compress_level, 6);

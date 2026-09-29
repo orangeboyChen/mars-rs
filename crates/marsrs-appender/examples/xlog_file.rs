@@ -22,8 +22,8 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use marsrs_appender::{
-    appender_close, appender_flush_now, appender_open, appender_write, AppenderMode, CompressMode,
-    LogLevel, XLogConfig, XLoggerInfo,
+    appender_close, appender_open, flush_now, xlogger_write, AppenderMode, CompressMode, LogLevel,
+    XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
 };
 
 fn main() {
@@ -93,6 +93,10 @@ fn main() {
     };
     appender_open(config).expect("appender_open");
 
+    // Handle `0`, and not an `Xlog`: the process-wide appender is the one the
+    // C++ side of `cross.sh` opens, so what the two halves compare is what one
+    // appender of each writes — and the handle is how the port asks for it now
+    // that the process-wide free functions are the plumbing and not the API.
     for (index, record) in records.iter().enumerate() {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -109,10 +113,10 @@ fn main() {
             ),
             ..Default::default()
         };
-        appender_write(Some(&info), record);
+        xlogger_write(DEFAULT_HANDLE, Some(&info), Some(record));
     }
 
-    appender_flush_now();
+    flush_now(DEFAULT_HANDLE);
     appender_close();
 
     let mut found = 0;

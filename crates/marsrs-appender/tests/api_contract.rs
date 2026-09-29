@@ -1,46 +1,111 @@
-//! Compile-time check that `marsrs-appender` keeps exposing the API the
-//! FFI and JNI crates are written against. Every public function is coerced to
-//! a function pointer of its expected signature, so a signature drift fails
-//! the build instead of the FFI crate downstream.
+//! Compile-time check that `marsrs-appender` keeps exposing the API an app,
+//! the FFI crate and the JNI crate are written against. Every public function
+//! — and every member of [`Xlog`] — is coerced to a function pointer of its
+//! expected signature, so a signature drift fails the build instead of the
+//! FFI crate downstream.
+//!
+//! What is checked is the shape an app sees, and it is three things: the
+//! [`Xlog`] an app holds, the process-wide `appender_open` / `appender_close`
+//! the C ABI installs the default logger with, and the handle of
+//! [`marsrs_appender::category`] — a handle and not an object, because neither
+//! the C ABI nor JNI has one to hold. The write, the drain and the four setters
+//! of the process-wide appender are deliberately *not* here: they are the
+//! category's at `DEFAULT_HANDLE`, and a second spelling of them is what this
+//! test would otherwise pin down twice.
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use marsrs_appender::{
-    appender_close, appender_flush, appender_flush_instance, appender_flush_now,
-    appender_flush_now_instance, appender_get_current_log_cache_path,
-    appender_get_current_log_path, appender_getfilepath_from_timespan, appender_make_logfile_name,
-    appender_oneshot_flush, appender_open, appender_set_console_log,
-    appender_set_max_alive_duration, appender_set_max_file_size, appender_set_mode,
-    appender_signal_flush, appender_signal_flush_instance, appender_write, log_formater,
-    AppenderError, AppenderId, AppenderMode, FileIoAction, Flush, LogLevel, XLogConfig,
-    XLoggerInfo,
+    appender_close, appender_get_current_log_cache_path, appender_get_current_log_path,
+    appender_getfilepath_from_timespan, appender_make_logfile_name, appender_oneshot_flush,
+    appender_open, category_set_max_alive_duration, category_set_max_file_size, current_log_path,
+    flush, flush_all, flush_now, flush_now_all, get_filter, get_level, get_xlogger_instance,
+    is_enabled_for, log_formater, new_xlogger_instance, release_xlogger_instance,
+    set_appender_mode, set_console_log_open, set_filter, set_level, signal_flush, signal_flush_all,
+    xlogger_assert, xlogger_assert_p, xlogger_write, AppenderError, AppenderMode, FileIoAction,
+    Flush, LogLevel, XLogConfig, XLoggerInfo, Xlog, XloggerFilter, XloggerHandle, DEFAULT_HANDLE,
 };
 use marsrs_buffer::CompressMode;
 use marsrs_core::PtrBuffer;
 
 #[test]
+fn the_object_is_the_api_an_app_takes() {
+    let _: fn(XLogConfig, LogLevel) -> Result<Xlog, AppenderError> = Xlog::open;
+    // The second writer over one prefix: the appender layer, which the
+    // `*_instance` family used to be the public face of.
+    let _: fn(XLogConfig, LogLevel) -> Result<Xlog, AppenderError> = Xlog::open_unregistered;
+    let _: fn(&Xlog) -> &str = Xlog::name_prefix;
+    let _: fn(&Xlog) -> bool = Xlog::is_open;
+    let _: fn(&Xlog) -> Option<LogLevel> = Xlog::level;
+    let _: fn(&Xlog, LogLevel) = Xlog::set_level;
+    let _: fn(&Xlog) -> AppenderMode = Xlog::mode;
+    let _: fn(&Xlog, AppenderMode) = Xlog::set_mode;
+    let _: fn(&Xlog) -> bool = Xlog::console_log_enabled;
+    let _: fn(&Xlog, bool) = Xlog::set_console_log_enabled;
+    let _: fn(&Xlog) -> u64 = Xlog::max_file_size_bytes;
+    let _: fn(&Xlog, u64) = Xlog::set_max_file_size_bytes;
+    let _: fn(&Xlog) -> u64 = Xlog::max_alive_time_seconds;
+    let _: fn(&Xlog, u64) = Xlog::set_max_alive_time_seconds;
+    let _: fn(&Xlog, LogLevel) -> bool = Xlog::is_loggable;
+    let _: for<'a, 'b> fn(&Xlog, LogLevel, &'a str, &'b str) -> bool = Xlog::log;
+    let _: for<'a, 'b, 'c> fn(&Xlog, Option<&'a XLoggerInfo<'b>>, &'c str) -> bool =
+        Xlog::log_with_info;
+    let _: for<'a, 'b> fn(&Xlog, &'a str, &'b str) -> bool = Xlog::v;
+    let _: for<'a, 'b> fn(&Xlog, &'a str, &'b str) -> bool = Xlog::d;
+    let _: for<'a, 'b> fn(&Xlog, &'a str, &'b str) -> bool = Xlog::i;
+    let _: for<'a, 'b> fn(&Xlog, &'a str, &'b str) -> bool = Xlog::w;
+    let _: for<'a, 'b> fn(&Xlog, &'a str, &'b str) -> bool = Xlog::e;
+    let _: for<'a, 'b> fn(&Xlog, &'a str, &'b str) -> bool = Xlog::f;
+    let _: fn(&Xlog) = Xlog::signal_flush;
+    let _: fn(&Xlog) = Xlog::flush_now;
+    let _: fn(&Xlog) -> Flush = Xlog::flush;
+    let _: fn(&Xlog) -> Option<PathBuf> = Xlog::current_log_path;
+    let _: fn(&Xlog) = Xlog::close;
+}
+
+#[test]
 fn function_signatures_match_the_contract() {
+    // The process-wide appender the C ABI and JNI install and drop. Its write,
+    // its drain and its four setters are `category`'s at `DEFAULT_HANDLE`.
     let _: fn(XLogConfig) -> Result<(), AppenderError> = appender_open;
-    let _: fn() -> Flush = appender_flush;
-    let _: fn() = appender_flush_now;
-    let _: fn() = appender_signal_flush;
-    let _: fn(AppenderId) -> Flush = appender_flush_instance;
-    let _: fn(AppenderId) = appender_flush_now_instance;
-    let _: fn(AppenderId) = appender_signal_flush_instance;
     let _: fn() = appender_close;
-    let _: fn(AppenderMode) = appender_set_mode;
-    let _: fn(bool) = appender_set_console_log;
-    let _: fn(u64) = appender_set_max_file_size;
-    let _: fn(u64) = appender_set_max_alive_duration;
     let _: fn() -> Option<PathBuf> = appender_get_current_log_path;
     let _: fn() -> Option<PathBuf> = appender_get_current_log_cache_path;
     let _: for<'a> fn(&'a XLogConfig) -> FileIoAction = appender_oneshot_flush;
-    let _: for<'a> fn(Option<&'a XLoggerInfo>, &str) -> bool = appender_write;
     let _: for<'a> fn(i64, &'a str, &'a Path) -> Vec<PathBuf> = appender_make_logfile_name;
     let _: for<'a> fn(i64, &'a str, &'a Path) -> Vec<PathBuf> = appender_getfilepath_from_timespan;
     let _: for<'a, 'b, 'c, 'd> fn(Option<&'a XLoggerInfo>, Option<&'b str>, &'c mut PtrBuffer<'d>) =
         log_formater;
+
+    // The handle: what the C ABI and the JNI bridge are written over.
+    let _: for<'a> fn(&'a XLogConfig, LogLevel) -> XloggerHandle = new_xlogger_instance;
+    let _: for<'a> fn(&'a str) -> XloggerHandle = get_xlogger_instance;
+    let _: for<'a> fn(&'a str) = release_xlogger_instance;
+    let _: for<'a, 'b, 'c> fn(XloggerHandle, Option<&'a XLoggerInfo<'b>>, Option<&'c str>) -> bool =
+        xlogger_write;
+    let _: for<'a> fn(Option<&'a XLoggerInfo>, &'a str, &'a str) -> bool = xlogger_assert;
+    let _: for<'a> fn(Option<&'a XLoggerInfo>, &'a str, std::fmt::Arguments<'a>) -> bool =
+        xlogger_assert_p;
+    let _: fn(XloggerHandle, LogLevel) -> bool = is_enabled_for;
+    let _: fn(XloggerHandle) -> Option<LogLevel> = get_level;
+    let _: fn(XloggerHandle, LogLevel) = set_level;
+    let _: fn(XloggerHandle, AppenderMode) = set_appender_mode;
+    let _: fn(XloggerHandle, bool) = set_console_log_open;
+    let _: fn(XloggerHandle, u64) = category_set_max_file_size;
+    let _: fn(XloggerHandle, u64) = category_set_max_alive_duration;
+    let _: fn(XloggerHandle) = signal_flush;
+    let _: fn(XloggerHandle) = flush_now;
+    let _: fn(XloggerHandle) -> Flush = flush;
+    let _: fn() = signal_flush_all;
+    let _: fn() = flush_now_all;
+    let _: fn() -> Flush = flush_all;
+    let _: fn(XloggerHandle) -> Option<PathBuf> = current_log_path;
+    let _: fn(Option<XloggerFilter>) = set_filter;
+    let _: fn() -> Option<XloggerFilter> = get_filter;
+
+    // `DEFAULT_HANDLE` is what the process-wide appender answers to.
+    let _: fn() -> XloggerHandle = || DEFAULT_HANDLE;
 }
 
 #[test]

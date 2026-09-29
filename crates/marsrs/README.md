@@ -10,14 +10,14 @@ marsrs = "0.1"
 ```
 
 ```rust
-use marsrs::xlog::{appender_close, appender_flush_sync, appender_open, appender_write, XLogConfig};
+use marsrs::xlog::{LogLevel, XLogConfig, Xlog};
 
 let mut config = XLogConfig::default();
 config.logdir = std::path::PathBuf::from("/tmp/mars-log");
-appender_open(config).unwrap();
-appender_write(None, "hello from mars");
-appender_flush_sync();
-appender_close();
+
+let xlog = Xlog::open(config, LogLevel::Info).unwrap();
+xlog.i("startup", "hello from mars");
+xlog.flush_now();
 ```
 
 | module   | what it is                                        | C++         |

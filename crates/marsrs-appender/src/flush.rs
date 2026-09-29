@@ -1,4 +1,4 @@
-//! The [`Future`] an awaited drain is: [`crate::appender_flush`] and
+//! The [`Future`] an awaited drain is: `appender_flush` and
 //! [`crate::appender_flush_instance`] hand one back instead of holding the
 //! thread that asked for it, and what waits for the drain is a thread of
 //! their own.
@@ -24,7 +24,7 @@ struct Shared {
 
 /// A drain that has been asked for and not waited on yet.
 ///
-/// [`Future`], and not a blocking call: [`crate::appender_flush`] hands this
+/// [`Future`], and not a blocking call: `appender_flush` hands this
 /// back so that a caller in an async context can wait for the records to
 /// reach the disk without parking whatever thread its executor gave it — the
 /// drain runs on a thread of this one's, and the future is Ready once that
@@ -32,7 +32,7 @@ struct Shared {
 ///
 /// Two things it does not do. It does nothing until it is polled — a `Future`
 /// that is dropped unpolled never drains, and a caller that wants the drain
-/// whatever happens wants [`crate::appender_flush_now`]. And it is not
+/// whatever happens wants `appender_flush_now`. And it is not
 /// cancelled with the task that asked for it: the drain is already running on
 /// a thread that holds its own handle on the appender, so dropping this leaves
 /// it to finish.

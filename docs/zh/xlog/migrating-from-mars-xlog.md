@@ -33,23 +33,27 @@ appender 在 `mars/xlog/appender.h` 里是一组选项构成的一个 struct 加
 
 | C++ | Rust | C ABI |
 |---|---|---|
-| `appender_open(const XLogConfig&)` | `appender_open(XLogConfig)` | `mars_xlog_open(&config)` |
-| `xlogger_Write(info, log)`，或 `xinfo2` 那一族 | `appender_write(info, message)` | `mars_xlog_write(...)` |
-| `appender_flush()` | `appender_signal_flush()` | `mars_xlog_signal_flush_instance(0)` |
-| `appender_flush_sync()` | `appender_flush_now()` | `mars_xlog_flush_now_instance(0)` |
-| `appender_close()` | `appender_close()` | `mars_xlog_close()` |
-| `xlogger_SetLevel(level)` | `set_level(handle, level)` | `mars_xlog_set_level_instance(0, level)` |
-| `appender_setmode(mode)` | `appender_set_mode(mode)` | `mars_xlog_set_mode_instance(0, mode)` |
-| `appender_set_console_log(bool)` | `appender_set_console_log(bool)` | `mars_xlog_set_console_log_instance(0, on)` |
-| `appender_set_max_file_size(bytes)` | `appender_set_max_file_size(bytes)` | `mars_xlog_set_max_file_size_instance(0, bytes)` |
-| `appender_set_max_alive_duration(secs)` | `appender_set_max_alive_duration(secs)` | `mars_xlog_set_max_alive_duration_instance(0, secs)` |
-| `appender_get_current_log_path(out, len)` | `appender_get_current_log_path()` | `mars_xlog_current_log_path(out, len)` |
+| `appender_open(const XLogConfig&)` | `Xlog::open(config, level)` | `mars_xlog_open(&config)` |
+| `xlogger_Write(info, log)`，或 `xinfo2` 那一族 | `xlog.log(level, tag, message)` | `mars_xlog_write(...)` |
+| `appender_flush()` | `xlog.signal_flush()` | `mars_xlog_signal_flush_instance(0)` |
+| `appender_flush_sync()` | `xlog.flush_now()` | `mars_xlog_flush_now_instance(0)` |
+| `appender_close()` | `xlog.close()` | `mars_xlog_close()` |
+| `xlogger_SetLevel(level)` | `xlog.set_level(level)` | `mars_xlog_set_level_instance(0, level)` |
+| `appender_setmode(mode)` | `xlog.set_mode(mode)` | `mars_xlog_set_mode_instance(0, mode)` |
+| `appender_set_console_log(bool)` | `xlog.set_console_log_enabled(on)` | `mars_xlog_set_console_log_instance(0, on)` |
+| `appender_set_max_file_size(bytes)` | `xlog.set_max_file_size_bytes(bytes)` | `mars_xlog_set_max_file_size_instance(0, bytes)` |
+| `appender_set_max_alive_duration(secs)` | `xlog.set_max_alive_time_seconds(secs)` | `mars_xlog_set_max_alive_duration_instance(0, secs)` |
+| `appender_get_current_log_path(out, len)` | `xlog.current_log_path()` | `mars_xlog_current_log_path(out, len)` |
 
-两行 flush 是 Rust 那一列唯一不沿用 C++ 名字的地方：C++ 的 `appender_flush` 在这里叫
-`appender_signal_flush`，因为 Rust 的 `appender_flush` 是调用方要 `await` 的那次排空
-—— 见[日志文件](/zh/xlog/log-files)。`appender_flush_sync` 仍然能编译，做的事和
-`appender_flush_now` 一样，只是标了 deprecated，好让照着 C++ 名字写的代码继续编过。
-C ABI 那一列是同一件事，而且整条缝都不收 `sync`：C++ 的 `appender_flush` 是
+Rust 那一列是 App 拿着的那个对象 —— Kotlin、Dart 和 TypeScript 的
+`Xlog.open(config)` —— 而不是 C++ 的那个自由函数：第二个 appender 是另一个前缀的
+第二个 `Xlog`，`Xlog` 被 drop 时自己会关。对象上的是成员而不是调用，所以
+`appender_open`、`appender_write` 那批进程级自由函数是 C ABI 和 JNI 桥写在上头的
+管道，应用没有理由去点它们。
+
+两行 flush 是两列都不沿用 C++ 名字的地方：C++ 的 `appender_flush` 在这个移植的每个
+平台都叫 `signalFlush`，因为 `flush` 是调用方要 `await` 的那次排空 —— 见
+[日志文件](/zh/xlog/log-files)。C ABI 那一列是同一件事，而且整条缝都不收 `sync`：C++ 的 `appender_flush` 是
 `mars_xlog_signal_flush_instance(0)`，`appender_flush_sync` 是 `mars_xlog_flush_now_instance(0)`；instance
 那一对也拆成了两个 —— 以前写 `mars_xlog_flush_instance(handle, 0)` 或 `(handle, 1)`
 的地方，现在是 `mars_xlog_signal_flush_instance(handle)` 或
@@ -75,7 +79,7 @@ config 在三种写法里都是一个 struct，八个字段还是那八个：C++
 另一半要搬走的是宏。`XLOGGER_TAG` 和 `xverbose2` / `xdebug2` / `xinfo2` / `xwarn2` /
 `xerror2` / `xfatal2` 那一族，把级别、tag 和调用点塞在一行 C++ 里；取代它们的是每个
 级别一个方法 —— Kotlin 的 `xlog.i(tag, message)`、Swift 的 `log.info(message:tag:)`、
-Rust 的 `appender_write(None, message)`。
+Rust 的 `xlog.log(LogLevel::Info, tag, message)`。
 
 级别、tag 和调用点这三样里，唯一不是每个平台都跟着走的是调用点。Swift 从 `#file`、
 `#function` 和 `#line` 填上文件、函数和行号，所以从 `log.info(message:tag:)` 写出的记录
@@ -83,10 +87,10 @@ Rust 的 `appender_write(None, message)`。
 Kotlin 的 write 只接 handle、级别、tag 和消息，没有别的，所以从 `xlog.i(tag, message)`
 写出的记录里文件是空的、行号是 0 —— 也就是 C++ 项目自己的 `Log` 一直传的那两个值。要
 把调用点写进记录的应用有两条路：旧的 `logWrite` 接的那个 `XLoggerInfo`，或者在 Rust
-里给 `appender_write` 传一个而不是 `None`：
+里给 `Xlog::log_with_info` 传一个：
 
 ```rust
-appender_write(
+xlog.log_with_info(
     Some(&XLoggerInfo {
         level: LogLevel::Info,
         tag: Some("startup".into()),
@@ -102,9 +106,11 @@ appender_write(
 第二个 appender 是形状差别最大的地方。C++ 项目的 Java 是用
 `Log.openLogInstance(level, mode, cacheDir, logDir, nameprefix, cacheDays)` 开第二个，
 然后把它返回的 handle 一路传下去；这里你拿着一个 appender 就*是*拿到一个实例，所以第
-二个就是自己的另一个前缀的第二个 `Xlog`，或者 Rust 里的 `*_instance` 那一族 ——
-`appender_open_instance(config)` 返回 handle，`appender_write_instance`、
-`appender_flush_instance` 和 `appender_close_instance` 接它。
+二个就是自己的另一个前缀的第二个 `Xlog` —— 再 `Xlog::open(config, level)` 一次，用
+第二个的前缀；而对象表达不了的那一种形状 —— 一个进程里同一个前缀的两个 appender，也就
+是两份库并排链进来时那样 —— 用 `Xlog::open_unregistered(config, level)`。它不登记在那个
+前缀名下，所以在 `Xlog::open` 会还给你第一个的地方，它是第二个 writer；它自己拿着一份级
+别，因为没有 category 可以跟别人共用。
 
 ### 从 C++ 项目的 Java 来
 

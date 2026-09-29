@@ -18,8 +18,8 @@ appender 用了同一个前缀就写同一个文件，关掉其中一个，另�
 ::: code-group
 
 ```rust [Rust]
-appender_get_current_log_path()          // Option<PathBuf>
-appender_get_current_log_path_instance(id)
+xlog.current_log_path()                  // Option<PathBuf>
+appender_get_current_log_path()          // 进程级那个 appender 的
 ```
 
 ```swift [Swift]
@@ -74,8 +74,7 @@ Swift 那两个调用做的就是一趟走完它的事。配了缓存目录、�
 ::: code-group
 
 ```rust [Rust]
-appender_flush_now()                     // 等文件写完
-appender_flush_now_instance(id)
+xlog.flush_now()                         // 等文件写完
 ```
 
 ```swift [Swift]
@@ -112,9 +111,9 @@ mars_xlog_flush_now_instance(0);
 
 | 调用 | 做什么 |
 |---|---|
-| `signalFlush()` —— `appender_signal_flush()`、`mars_xlog_signal_flush_instance(0)` | 通知写线程可以排空，然后立刻返回：它返回了，不代表记录已经在文件里 |
-| `flushNow()` —— `appender_flush_now()`、`mars_xlog_flush_now_instance(0)` | 在调用方线程上排空：它返回时记录已经在磁盘上 |
-| `await flush()` —— `appender_flush()`、`flush(handle)` | 同一次排空，只是不在调用方线程上 |
+| `signalFlush()` —— `xlog.signal_flush()`、`mars_xlog_signal_flush_instance(0)` | 通知写线程可以排空，然后立刻返回：它返回了，不代表记录已经在文件里 |
+| `flushNow()` —— `xlog.flush_now()`、`mars_xlog_flush_now_instance(0)` | 在调用方线程上排空：它返回时记录已经在磁盘上 |
+| `await flush()` —— `xlog.flush().await`、`flush(handle)` | 同一次排空，只是不在调用方线程上 |
 
 `signalFlush()` 是定时器该调的那个。它不保证排空什么时候结束，而没结束也不丢东西：
 还在缓存里的记录在一个内核手里的文件里。读文件或上传之前要调的是 `flushNow()`，
