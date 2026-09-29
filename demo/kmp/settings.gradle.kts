@@ -18,6 +18,17 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
+        // First, because inside a checkout this is where the package of the
+        // tree beside this one is: `.github/workflows/demo.yml` publishes
+        // `platforms/kmp` here before it builds this app, so what the demo
+        // compiles against is the Kotlin in the tree and not a tag.
+        //
+        // Not a composite build, which was the first thing tried and does not
+        // work here: an included build is compiled against the *including*
+        // build's resolved dependencies, and `platforms/kmp` is pinned to
+        // Kotlin 2.2.20 — under this app's 2.4.20 its own source stops
+        // compiling (`Dispatchers.IO` is not the same symbol there).
+        mavenLocal()
         mavenCentral()
         // Where the Kotlin Multiplatform packages of the port are published:
         // `marsrs-kmp` for the whole port and `xlog-kmp` for the logging half.
@@ -43,35 +54,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "marsrs-demo-kmp"
 
-// The package this demo takes, built out of the checkout beside it rather than
-// resolved out of GitHub Packages.
-//
-// A composite build, and why one: `platforms/kmp` *is* the Kotlin
-// Multiplatform package, and this app took it from the registry the way an app
-// outside this repository does — which meant the `Xlog` it compiled against
-// was the one published from a tag and not the one in the tree beside it. A
-// release one commit behind the sources is a demo that compiles here and not
-// there, or the other way round: the package of the newest tag still answers
-// `flush(sync = true)`, and this checkout answers `flushNow()`.
-//
-// It is also what takes the token out of this build. GitHub Packages answers
-// nothing without one — not even a 404 — so the registry the app was written
-// against is one a pull request from a fork cannot read, and a composite build
-// does not ask it at all.
-//
-// The coordinate the app declares is unchanged, and the block is guarded for
-// the reader who copies `demo/kmp` on its own: with no `platforms/kmp` beside
-// it, it resolves from GitHub Packages exactly as it did.
-//
-// What it needs before it will build is `libmarsrs_ffi.a` per Kotlin/Native
-// target, which platforms/kmp does not compile — see
-// scripts/build_kmp_native.sh.
-val localBuild = file("../../platforms/kmp")
-if (localBuild.isDirectory) {
-    includeBuild(localBuild) {
-        dependencySubstitution {
-            substitute(module("io.github.orangeboychen.marsrs:xlog-kmp"))
-                .using(project(":marsrs-xlog"))
-        }
+// Where the package comes from inside a checkout is answered by the
+// repository list above and not here. See `mavenLocal()`.
     }
 }
