@@ -4,10 +4,9 @@
 // port, and the same class `platforms/kmp/marsrs-xlog` publishes to a Kotlin
 // Multiplatform app and `platforms/apple/MarsRSXlog/Xlog.swift` to a Swift
 // one. So what this file is is a channel over an API that already exists, and
-// nothing of it is invented
-// `Xlog.open(XlogConfig(...))`, `log`, `isLoggable`, `flush`, `close`, and
-// the five settings, under the names every other platform of the port gives
-// them.
+// nothing of the API is invented here: `Xlog.open(XlogConfig(...))`, `log`,
+// `isLoggable`, `flush`, `close`, and the five settings, under the names every
+// other platform of the port gives them.
 //
 // The xlog-only plugin is `marsrs_xlog`, and this file is its Kotlin
 // with the two names changed: xlog is the whole C ABI today, so the two plugins

@@ -214,7 +214,7 @@ internal final class Xlog: NSObject {
     /// What the C++ passes on, which is the appender's own 6.
     private static let defaultCompressLevel: Int32 = 0
 
-    /// `0` keeps every log file, which is what the C++'s default is.
+    /// `0` keeps every cache file, which is what the C++'s default is.
     private static let keepEveryFile: Int32 = 0
 
     /// The four fields of `MarsXLogConfig` that are C strings, in the order the

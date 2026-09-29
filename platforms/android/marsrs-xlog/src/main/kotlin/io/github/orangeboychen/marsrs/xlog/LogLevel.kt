@@ -12,20 +12,6 @@
 
 package io.github.orangeboychen.marsrs.xlog
 
-/**
- * How severe a log record is, in the order the C++ project's `TLogLevel` is —
- * [VERBOSE] lets everything through and [NONE] lets nothing through.
- *
- * [native] is the number `marsrs-jni` speaks: the one `Xlog.getLogLevel`
- * answers with, the one `Xlog.setLogLevel` reads, and the one the
- * `Xlog.LEVEL_*` constants of the older API spell. [of] is the way back from
- * that number, for a level that arrives from somewhere else — a remote
- * config, a saved preference.
- *
- * A record is written when the level of the appender it goes through is at
- * most its own: an appender opened at [INFO] keeps [WARNING] and drops
- * [DEBUG].
- */
 // The numbers `marsrs-jni` speaks, one per level of the C++ project's
 // `TLogLevel`. They sit outside the enum because an enum entry's argument
 // cannot reach into the enum's own companion object — `VERBOSE(0)` and
@@ -41,6 +27,20 @@ private object NativeLevel {
     const val NONE = 6
 }
 
+/**
+ * How severe a log record is, in the order the C++ project's `TLogLevel` is —
+ * [VERBOSE] lets everything through and [NONE] lets nothing through.
+ *
+ * [native] is the number `marsrs-jni` speaks: the one `Xlog.getLogLevel`
+ * answers with, the one `Xlog.setLogLevel` reads, and the one the
+ * `Xlog.LEVEL_*` constants of the older API spell. [of] is the way back from
+ * that number, for a level that arrives from somewhere else — a remote
+ * config, a saved preference.
+ *
+ * A record is written when the level of the appender it goes through is at
+ * most its own: an appender opened at [INFO] keeps [WARNING] and drops
+ * [DEBUG].
+ */
 enum class LogLevel(internal val native: Int) {
     VERBOSE(NativeLevel.VERBOSE),
 

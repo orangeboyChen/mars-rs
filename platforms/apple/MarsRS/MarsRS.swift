@@ -1,9 +1,10 @@
 // The `MarsRS` module: the whole port in one import.
 //
 // Two halves, and the split is the one the Android packages make between
-// `marsrs` and `xlog`: `MarsRSXlog` is the 28 `mars_xlog_*` symbols of
-// the C ABI, and `MarsRSNet` is the `mars_sdt_*` and `mars_stn_*` of the
-// diagnosis and the task pipeline. Each comes from a framework of its own —
+// `marsrs` and `xlog`: `MarsRSXlog` is the `mars_xlog_*` half of the C ABI —
+// the fifteen of `mars_xlog.h` an appender of an app's own is opened and
+// written through — and `MarsRSNet` is the `mars_sdt_*` and `mars_stn_*` of
+// the diagnosis and the task pipeline. Each comes from a framework of its own —
 // neither carries a symbol of the other — so an app that only logs imports
 // `MarsRSXlog` and downloads xlog alone, and an app that imports this one gets
 // both, with one `@_exported import` per half.

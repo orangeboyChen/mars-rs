@@ -165,7 +165,7 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
         /** `0` — what the C++ passes on, which is the appender's own 6. */
         private const val DEFAULT_COMPRESS_LEVEL = 0
 
-        /** `0` keeps every log file, which is what the C++'s default is. */
+        /** `0` keeps every cache file, which is what the C++'s default is. */
         private const val NO_CACHE_DAYS = 0
 
         /**
