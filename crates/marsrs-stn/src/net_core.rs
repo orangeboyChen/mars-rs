@@ -266,32 +266,92 @@ enum FollowUp {
     },
 }
 
+/// One of [`Hooks`], behind a lock of its own and taken out for the call.
+///
+/// Nothing the app is given runs with the lock the hooks are kept in held:
+/// an app that answers one by calling back into the net core — a task it
+/// starts from `on_task_end` that fails at once, say — comes back into the
+/// very callback it is in, and a mutex taken twice on one thread never lets
+/// go. Out of the cell for as long as it runs, the call it comes back into
+/// finds nothing set and goes on without it.
+struct Hook<F: ?Sized> {
+    cell: Arc<Mutex<Option<Box<F>>>>,
+}
+
+impl<F: ?Sized> Hook<F> {
+    /// `… = …`.
+    fn set(&self, hook: Box<F>) {
+        *self.cell.lock().unwrap_or_else(poisoned) = Some(hook);
+    }
+
+    /// Whether the app is given this one at all.
+    fn is_set(&self) -> bool {
+        self.cell.lock().unwrap_or_else(poisoned).is_some()
+    }
+
+    /// Call the app, and put the callback back when the call is over, an
+    /// unwind included. [`None`] is an unset hook, and one that is being
+    /// called already.
+    fn run<R>(&self, run: impl FnOnce(&mut F) -> R) -> Option<R> {
+        let taken = self.cell.lock().unwrap_or_else(poisoned).take()?;
+        let mut back = PutBack(self, Some(taken));
+        Some(run(back.1.as_deref_mut()?))
+    }
+}
+
+impl<F: ?Sized> Clone for Hook<F> {
+    fn clone(&self) -> Self {
+        Self {
+            cell: Arc::clone(&self.cell),
+        }
+    }
+}
+
+impl<F: ?Sized> Default for Hook<F> {
+    fn default() -> Self {
+        Self {
+            cell: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
+/// What puts a callback back into its cell when the call to the app is over.
+struct PutBack<'a, F: ?Sized>(&'a Hook<F>, Option<Box<F>>);
+
+impl<F: ?Sized> Drop for PutBack<'_, F> {
+    fn drop(&mut self) {
+        if let Some(hook) = self.1.take() {
+            self.0.set(hook);
+        }
+    }
+}
+
 /// The hooks the two queues reach themselves, without the net core being asked:
 /// a task that ended, the profile of one that is over, and a push. Everything
 /// else the app is told comes from [`NetCore`] itself.
 #[derive(Default)]
 struct Hooks {
-    task_callback: Option<Box<TaskCallback>>,
-    on_task_end: Option<Box<OnTaskEnd>>,
-    push_preprocess: Option<Box<PushPreprocess>>,
-    on_push: Option<Box<OnPush>>,
-    report_task_profile: Option<Box<ReportTaskProfile>>,
-    report_task_limited: Option<Box<ReportTaskLimited>>,
-    on_timeout_or_remote_shutdown: Option<Box<TimeoutOrRemoteShutdown>>,
+    task_callback: Hook<TaskCallback>,
+    on_task_end: Hook<OnTaskEnd>,
+    push_preprocess: Hook<PushPreprocess>,
+    on_push: Hook<OnPush>,
+    report_task_profile: Hook<ReportTaskProfile>,
+    report_task_limited: Hook<ReportTaskLimited>,
+    on_timeout_or_remote_shutdown: Hook<TimeoutOrRemoteShutdown>,
 }
 
 impl std::fmt::Debug for Hooks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Hooks")
-            .field("task_callback", &self.task_callback.is_some())
-            .field("on_task_end", &self.on_task_end.is_some())
-            .field("push_preprocess", &self.push_preprocess.is_some())
-            .field("on_push", &self.on_push.is_some())
-            .field("report_task_profile", &self.report_task_profile.is_some())
-            .field("report_task_limited", &self.report_task_limited.is_some())
+            .field("task_callback", &self.task_callback.is_set())
+            .field("on_task_end", &self.on_task_end.is_set())
+            .field("push_preprocess", &self.push_preprocess.is_set())
+            .field("on_push", &self.on_push.is_set())
+            .field("report_task_profile", &self.report_task_profile.is_set())
+            .field("report_task_limited", &self.report_task_limited.is_set())
             .field(
                 "on_timeout_or_remote_shutdown",
-                &self.on_timeout_or_remote_shutdown.is_some(),
+                &self.on_timeout_or_remote_shutdown.is_set(),
             )
             .finish()
     }
@@ -562,13 +622,14 @@ impl NetCore {
 
         let hooks = Arc::clone(&self.hooks);
         self.longlink.set_on_push(move |name, cmdid, taskid, body| {
-            let mut hooks = hooks.lock().unwrap_or_else(poisoned);
-            if let Some(preprocess) = hooks.push_preprocess.as_mut() {
-                preprocess(cmdid, body);
-            }
-            if let Some(on_push) = hooks.on_push.as_mut() {
-                on_push(name, cmdid, taskid, body);
-            }
+            let preprocess = hooks
+                .lock()
+                .unwrap_or_else(poisoned)
+                .push_preprocess
+                .clone();
+            let _ = preprocess.run(|preprocess| preprocess(cmdid, body));
+            let on_push = hooks.lock().unwrap_or_else(poisoned).on_push.clone();
+            let _ = on_push.run(|on_push| on_push(name, cmdid, taskid, body));
         });
 
         let hooks = Arc::clone(&self.hooks);
@@ -609,38 +670,32 @@ impl NetCore {
 
         let hooks = Arc::clone(&self.hooks);
         self.shortlink.set_report_profile(move |profile| {
-            if let Some(report) = hooks
+            let report = hooks
                 .lock()
                 .unwrap_or_else(poisoned)
                 .report_task_profile
-                .as_mut()
-            {
-                report(profile);
-            }
+                .clone();
+            let _ = report.run(|report| report(profile));
         });
         let hooks = Arc::clone(&self.hooks);
         self.longlink.set_report_profile(move |profile| {
-            if let Some(report) = hooks
+            let report = hooks
                 .lock()
                 .unwrap_or_else(poisoned)
                 .report_task_profile
-                .as_mut()
-            {
-                report(profile);
-            }
+                .clone();
+            let _ = report.run(|report| report(profile));
         });
 
         let hooks = Arc::clone(&self.hooks);
         self.shortlink
             .set_on_timeout_or_remote_shutdown(move |profile| {
-                if let Some(hook) = hooks
+                let hook = hooks
                     .lock()
                     .unwrap_or_else(poisoned)
                     .on_timeout_or_remote_shutdown
-                    .as_mut()
-                {
-                    hook(profile);
-                }
+                    .clone();
+                let _ = hook.run(|hook| hook(profile));
             });
 
         let net_info = Arc::clone(&self.net_info);
@@ -683,7 +738,11 @@ impl NetCore {
             + Send
             + 'static,
     ) {
-        self.hooks.lock().unwrap_or_else(poisoned).task_callback = Some(Box::new(callback));
+        self.hooks
+            .lock()
+            .unwrap_or_else(poisoned)
+            .task_callback
+            .set(Box::new(callback));
     }
 
     /// `StnManager::OnTaskEnd`.
@@ -691,17 +750,29 @@ impl NetCore {
         &mut self,
         end: impl FnMut(u32, &str, ErrCmdType, i32, &ConnectProfile) -> i32 + Send + 'static,
     ) {
-        self.hooks.lock().unwrap_or_else(poisoned).on_task_end = Some(Box::new(end));
+        self.hooks
+            .lock()
+            .unwrap_or_else(poisoned)
+            .on_task_end
+            .set(Box::new(end));
     }
 
     /// `push_preprocess_signal_`.
     pub fn set_push_preprocess(&mut self, preprocess: impl FnMut(u32, &[u8]) + Send + 'static) {
-        self.hooks.lock().unwrap_or_else(poisoned).push_preprocess = Some(Box::new(preprocess));
+        self.hooks
+            .lock()
+            .unwrap_or_else(poisoned)
+            .push_preprocess
+            .set(Box::new(preprocess));
     }
 
     /// `StnManager::OnPush`.
     pub fn set_on_push(&mut self, push: impl FnMut(&str, u32, u32, &[u8]) + Send + 'static) {
-        self.hooks.lock().unwrap_or_else(poisoned).on_push = Some(Box::new(push));
+        self.hooks
+            .lock()
+            .unwrap_or_else(poisoned)
+            .on_push
+            .set(Box::new(push));
     }
 
     /// `StnManager::ReportTaskProfile` — the finished task, which the queue a
@@ -712,7 +783,8 @@ impl NetCore {
         self.hooks
             .lock()
             .unwrap_or_else(poisoned)
-            .report_task_profile = Some(Box::new(report));
+            .report_task_profile
+            .set(Box::new(report));
     }
 
     /// `StnManager::ReportTaskLimited` — a task the anti-avalanche gates
@@ -727,7 +799,8 @@ impl NetCore {
         self.hooks
             .lock()
             .unwrap_or_else(poisoned)
-            .report_task_limited = Some(Box::new(limited));
+            .report_task_limited
+            .set(Box::new(limited));
     }
 
     /// `NetCore::SetShortLinkOnTimeoutOrRemoteShutdown` — a try of the
@@ -742,7 +815,8 @@ impl NetCore {
         self.hooks
             .lock()
             .unwrap_or_else(poisoned)
-            .on_timeout_or_remote_shutdown = Some(Box::new(ended));
+            .on_timeout_or_remote_shutdown
+            .set(Box::new(ended));
     }
 
     /// `StnManager::ReportConnectStatus`.
@@ -1535,16 +1609,14 @@ impl NetCore {
         err_code: i32,
         profile: &ConnectProfile,
     ) -> i32 {
-        match self
+        let end = self
             .hooks
             .lock()
             .unwrap_or_else(poisoned)
             .on_task_end
-            .as_mut()
-        {
-            Some(end) => end(task.taskid, &task.user_id, err_type, err_code, profile),
-            None => 0,
-        }
+            .clone();
+        end.run(|end| end(task.taskid, &task.user_id, err_type, err_code, profile))
+            .unwrap_or(0)
     }
 
     /// `__OnLongLinkNetworkError(...)` — the diagnosis is told, the app is told
@@ -2188,14 +2260,12 @@ fn anti_avalanche_check(
     // the app answers is the out-value of the C++'s `unsigned int&`, and the
     // C++ does not read it either — `Check` is `void` there and answers
     // `false` once a gate refused, so the gate's answer stands.
-    if let Some(report) = hooks
+    let report = hooks
         .lock()
         .unwrap_or_else(poisoned)
         .report_task_limited
-        .as_mut()
-    {
-        let _answered = report(kind.as_check_type(), task, param);
-    }
+        .clone();
+    let _answered = report.run(|report| report(kind.as_check_type(), task, param));
     false
 }
 
@@ -2216,11 +2286,9 @@ fn call_back(
     profile: &ConnectProfile,
 ) -> i32 {
     {
-        let mut hooks = hooks.lock().unwrap_or_else(poisoned);
-        if let Some(callback) = hooks.task_callback.as_mut() {
-            if callback(from, err_type, err_code, handle, task) == 0 {
-                return 0;
-            }
+        let callback = hooks.lock().unwrap_or_else(poisoned).task_callback.clone();
+        if callback.run(|callback| callback(from, err_type, err_code, handle, task)) == Some(0) {
+            return 0;
         }
     }
 
@@ -2293,10 +2361,9 @@ fn end_task(
     err_code: i32,
     profile: &ConnectProfile,
 ) -> i32 {
-    match hooks.lock().unwrap_or_else(poisoned).on_task_end.as_mut() {
-        Some(end) => end(task.taskid, &task.user_id, err_type, err_code, profile),
-        None => 0,
-    }
+    let end = hooks.lock().unwrap_or_else(poisoned).on_task_end.clone();
+    end.run(|end| end(task.taskid, &task.user_id, err_type, err_code, profile))
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -3095,6 +3162,26 @@ mod tests {
         );
         assert!(rec.ended().is_empty());
         assert!(!core.has_task(7));
+    }
+
+    #[test]
+    fn a_hook_is_not_held_while_the_app_is_called() {
+        let cell: Hook<dyn FnMut() -> bool + Send> = Hook::default();
+        let asked = cell.clone();
+        cell.set(Box::new(move || {
+            // What an app that answers a callback by calling back into the
+            // core does: it comes back into the very hook it is in, and a
+            // mutex taken twice on one thread never lets go — a hang, and
+            // not a failure anyone sees reported. So the hook is out of its
+            // cell while the app is called, and `try_lock` is how this asks.
+            asked.cell.try_lock().is_ok()
+        }));
+
+        assert_eq!(
+            cell.run(|hook| hook()),
+            Some(true),
+            "the hook is held while the app is called, so an app that calls back into the core hangs"
+        );
     }
 
     #[test]
