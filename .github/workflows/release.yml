@@ -959,8 +959,20 @@ jobs:
       # token, so this is the one publish here that a secret gates — and it is
       # the script that decides what an unset secret means, which is a warning
       # and an unpublished HAR rather than a failed release.
+      #
+      # `continue-on-error`, the way every other registry of the release is
+      # asked: a credential ohpm has rotated or revoked, an ohpm that cannot be
+      # reached, or a version it refuses is a fact about ohpm and not about the
+      # tag, and this is the last step of the last job `publish` waits for — a
+      # failure here would hold back the GitHub Release, the 21 assets and the
+      # nine crates of a tag that is already out, over one registry of the six.
+      # What a reader still gets is the step red in the run, the `::error::` of
+      # the script and ohpm's own complaint beside it, and `published=false` in
+      # the output of the step when it was given nothing to publish with. What
+      # the release loses is ohpm alone, and publish.yml is the way back.
       - name: Publish the HarmonyOS package to ohpm
         if: needs.version.outputs.is_new == 'true'
+        continue-on-error: true
         env:
           # The publish code ohpm gives the publisher of the package — its
           # `publish_id` — which is what the repository's OHOS_PUBLIC_TOKEN
