@@ -240,11 +240,35 @@ class XlogPlugin :
         result.success(null)
     }
 
-    /** `Xlog.close`: releases the appender `open` made. */
+    /**
+     * `Xlog.close`: releases the appender [open] made.
+     *
+     * Off the main thread, and back to it for the answer, the way [flush] does
+     * it: `Xlog.close` is a drain of everything the appender is still holding,
+     * and a write of the banner that ends the file, so an app that closes its
+     * appender on the way out would hold the thread the UI draws on for as
+     * long as that takes. What a queue that was shut down already means is
+     * that [closeAll] ran, and with it this close.
+     */
     private fun close(call: MethodCall, result: Result) {
         val namePrefix = call.string("namePrefix")
-        appenders.remove(namePrefix)?.close()
-        result.success(null)
+        // Taken out of [appenders] here, and not on the queue below: the map is
+        // this thread's, so a reopen of the prefix that lands while the drain
+        // is still queued is a reopen of an appender this close does not hold.
+        val appender = appenders.remove(namePrefix)
+        if (appender == null) {
+            result.success(null)
+            return
+        }
+        try {
+            flushQueue.execute {
+                appender.close()
+                mainHandler.post { result.success(null) }
+            }
+        } catch (e: RejectedExecutionException) {
+            appender.close()
+            result.success(null)
+        }
     }
 
     /**

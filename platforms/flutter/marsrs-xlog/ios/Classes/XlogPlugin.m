@@ -369,6 +369,14 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
 }
 
 /// `mars_xlog_release_instance_of`: closes the appender `open` made.
+///
+/// The release is a drain of everything the appender still holds and a write of
+/// the banner that ends the file, so it runs off the thread the call came in
+/// on — the app's main thread, the one the UI draws on — the way `flush:` does
+/// it. The handle is read and the prefix is taken out of `instances` here and
+/// not in the block, because the dictionary is this thread's: a reopen of the
+/// prefix that lands while the drain is queued is a reopen of an appender this
+/// close does not hold.
 - (void)close:(FlutterMethodCall *)call result:(FlutterResult)result {
   NSString *namePrefix = XlogString(call.arguments, @"namePrefix");
   NSNumber *handle = self.instances[namePrefix];
@@ -384,8 +392,12 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   // after this one was closed. Naming the handle makes the question and the
   // release one call, which a `mars_xlog_get_instance` before a release is
   // not: a `close` on another thread lands between the two.
-  mars_xlog_release_instance_of(namePrefix.UTF8String, opened);
-  XlogAnswer(result, nil);
+  dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    mars_xlog_release_instance_of(namePrefix.UTF8String, opened);
+    dispatch_async(dispatch_get_main_queue(), ^{
+      XlogAnswer(result, nil);
+    });
+  });
 }
 
 #pragma mark - The appender of a call
