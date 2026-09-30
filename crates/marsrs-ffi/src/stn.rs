@@ -2529,6 +2529,15 @@ mod tests {
         assert_eq!(
             unsafe { mars_stn_longlink_is_connected_ext(name.as_ptr()) },
             0,
+            "a link that is not there is not up, and asking for it leaves it so"
+        );
+        // … and "not up" is not what says it was never made: the question is
+        // whether a link of that name is there at all, which is what taking it
+        // away answers
+        // SAFETY: `name` is a valid NUL-terminated string, read for the call.
+        assert_eq!(
+            unsafe { mars_stn_destroy_longlink(name.as_ptr()) },
+            0,
             "asking for a link that is not there makes none"
         );
         assert_eq!(mars_stn_longlink_is_connected(), 0);
