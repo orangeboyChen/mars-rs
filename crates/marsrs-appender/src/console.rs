@@ -26,6 +26,9 @@ use crate::formater::{extract_file_name, extract_function_name, LEVEL_STRINGS};
 /// built-in stderr line, and the recursion guard of `Appender::write` makes
 /// it the one recursive-call diagnostic, so the two of them do not call one
 /// another until the stack goes.
+///
+/// What a sink is not handed either is a record the logger wrote about itself
+/// — `console_log_stderr` of this module, which is not the sink's to have.
 pub type ConsoleFun = fn(&XLoggerInfo, &str);
 
 /// `sg_console_fun` of `mars/xlog/objc/objc_console.mm` — the sink every
@@ -101,6 +104,26 @@ pub(crate) fn console_log(info: Option<&XLoggerInfo>, log: &str) {
             return;
         }
     }
+
+    console_log_stderr(Some(info), log);
+}
+
+/// [`console_log`] that never asks the sink, whatever one an app set: the
+/// built-in stderr line and nothing else.
+///
+/// This is what a record the logger writes *about itself* is written with —
+/// the tips of `XloggerAppender::__WriteTips2Console`, which are what a failed
+/// write to the log file comes to. Those are reached from inside
+/// [`crate::appender::Appender::lock`], which is a `Mutex` a sink cannot take:
+/// a sink is the app's own code and the ordinary shape of one is a logging
+/// adapter, so a tip handed to it is a tip followed by `XloggerAppender::Write`
+/// on the thread that holds the lock — and the second `lock()` waits for the
+/// first to be given up, which is a process that hangs instead of logging the
+/// error it had.
+pub(crate) fn console_log_stderr(info: Option<&XLoggerInfo>, log: &str) {
+    let Some(info) = info else {
+        return;
+    };
 
     let level = LEVEL_STRINGS[info.level as usize];
     let tag = info.tag.as_deref().unwrap_or("");
@@ -199,5 +222,42 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
         assert_eq!(seen, "4:to-the-app");
+    }
+
+    /// A record the logger writes about itself is not the sink's, whatever one
+    /// an app set: a tip is written from inside `Appender::lock`, and a sink
+    /// that logs on the way through takes that lock again on the thread that
+    /// holds it — a process that hangs instead of logging the error it had.
+    #[test]
+    fn a_record_the_logger_writes_about_itself_is_not_the_sinks() {
+        let _guard = crate::test_lock::serial();
+        struct NoSink;
+        impl Drop for NoSink {
+            fn drop(&mut self) {
+                set_console_fun(None);
+            }
+        }
+        let _no_sink = NoSink;
+
+        static SEEN: std::sync::OnceLock<Mutex<usize>> = std::sync::OnceLock::new();
+        fn count(_info: &XLoggerInfo, _log: &str) {
+            *SEEN
+                .get_or_init(|| Mutex::new(0))
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
+        }
+
+        set_console_fun(Some(count));
+        let info = XLoggerInfo {
+            level: LogLevel::Error,
+            ..Default::default()
+        };
+        console_log_stderr(Some(&info), "the log file could not be written");
+
+        let seen = *SEEN
+            .get_or_init(|| Mutex::new(0))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(seen, 0);
     }
 }

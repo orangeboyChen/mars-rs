@@ -68,7 +68,7 @@ use marsrs_buffer::LogBuffer;
 use marsrs_core::{local_time, AutoBuffer, PtrBuffer};
 
 use crate::config::{AppenderMode, LogLevel, XLogConfig, XLoggerInfo};
-use crate::console::console_log;
+use crate::console::{console_log, console_log_stderr};
 use crate::file_util::{
     append_file, create_private_dir, del_timeout_file, format_local_timestamp, make_log_file_name,
     monotonic_millis, move_old_files, now_secs, private_file, LOG_EXT, MMAP_EXT, SECONDS_PER_DAY,
@@ -933,7 +933,7 @@ impl AppenderInner {
             level: LogLevel::Error,
             ..Default::default()
         };
-        console_log(Some(&info), tips);
+        console_log_stderr(Some(&info), tips);
     }
 
     /// `XloggerAppender::__Log2File`.
