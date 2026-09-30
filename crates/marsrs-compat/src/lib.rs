@@ -164,9 +164,10 @@ pub fn encode(opts: &Opts) -> Result<(), String> {
     } else {
         let mut buffered = 0;
         for (index, record) in records.iter().enumerate() {
-            // Flush every `flush_every` records instead of testing
-            // `index % flush_every`, which clippy now wants spelled as
-            // `is_multiple_of()` (too new for the toolchains this builds on).
+            // A counter since the last flush, and not
+            // `index.is_multiple_of(flush_every)`: what a block is made of
+            // is what the region still holds, which a record that did not
+            // fit in it does not add to.
             if flush_every > 0 && buffered >= flush_every {
                 let mut block = AutoBuffer::new();
                 buffer.flush(&mut region, &mut block);
