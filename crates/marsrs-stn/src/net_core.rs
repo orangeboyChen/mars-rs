@@ -1210,7 +1210,7 @@ impl NetCore {
                     .get_mut(&name)
                     .is_some_and(|meta| meta.monitor().network_change_at(now));
                 if changed {
-                    self.longlink.redo_tasks_of_at(now, &name);
+                    self.longlink.redo_tasks_of_at(now, Some(&name));
                 }
             }
             self.zombie().redo_tasks_at(now);

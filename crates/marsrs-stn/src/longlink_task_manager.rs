@@ -440,21 +440,21 @@ impl LongLinkTaskManager {
                 reset(&name);
             }
         }
-        self.redo_tasks_of_at(now, "");
+        self.redo_tasks_of_at(now, None);
     }
 
     /// `__RedoTasks(_name)` — the tasks of one channel are cancelled and tried
     /// again, which is what a channel whose own monitor said the network changed
     /// asks for. The channel itself is left alone.
     pub fn redo_tasks_of(&mut self, name: &str) {
-        self.redo_tasks_of_at(gettickcount(), name)
+        self.redo_tasks_of_at(gettickcount(), Some(name))
     }
 
     /// The same, with the reading handed in.
-    pub fn redo_tasks_of_at(&mut self, now: u64, name: &str) {
+    pub fn redo_tasks_of_at(&mut self, now: u64, name: Option<&str>) {
         let mut i = 0;
         while i < self.tasks.len() {
-            if !name.is_empty() && self.tasks[i].channel_name != name {
+            if name.is_some_and(|name| self.tasks[i].channel_name != name) {
                 i += 1;
                 continue;
             }
@@ -534,7 +534,7 @@ impl LongLinkTaskManager {
         for name in channels {
             self.batch_error_resp_handle_at(
                 now,
-                name,
+                Some(name),
                 Failure {
                     err_type,
                     err_code,
@@ -652,7 +652,7 @@ impl LongLinkTaskManager {
             let name = response.name.clone();
             self.batch_error_resp_handle_at(
                 now,
-                response.name,
+                Some(response.name),
                 Failure {
                     err_type: response.err_type,
                     err_code: response.err_code,
@@ -757,7 +757,7 @@ impl LongLinkTaskManager {
             TaskFailHandleType::Default | TaskFailHandleType::TaskTimeout => {
                 self.batch_error_resp_handle_at(
                     now,
-                    name,
+                    Some(name),
                     Failure {
                         err_type: ErrCmdType::EnDecode,
                         err_code,
@@ -801,7 +801,7 @@ impl LongLinkTaskManager {
                 None => true,
             };
             if changed {
-                self.redo_tasks_of_at(now, &name);
+                self.redo_tasks_of_at(now, Some(&name));
             }
         }
     }
@@ -1154,7 +1154,7 @@ impl LongLinkTaskManager {
                 // already; the rest of the channel is told with it
                 self.batch_error_resp_handle_at(
                     now,
-                    name,
+                    Some(name),
                     Failure {
                         err_type: ErrCmdType::NetMsgXp,
                         err_code: LOCAL_TASK_TIMEOUT,
@@ -1169,7 +1169,7 @@ impl LongLinkTaskManager {
             self.notify_network_err(&name, ErrCmdType::NetMsgXp, code, &profile);
             self.batch_error_resp_handle_at(
                 now,
-                name,
+                Some(name),
                 Failure {
                     err_type: ErrCmdType::NetMsgXp,
                     err_code: code,
@@ -1473,10 +1473,15 @@ impl LongLinkTaskManager {
     /// `__BatchErrorRespHandle` — one answer for every task of a channel.
     /// `running_only` is the C++'s `_callback_runing_task_only`, which only the
     /// destructor says `false` to.
+    ///
+    /// `name` of `None` is every channel. The C++ spells that as an empty
+    /// `_channel_name`, which is also the name a task the app gave none
+    /// carries, so a caller that handed over the channel of such a task was
+    /// answered with every other channel's tasks as well.
     fn batch_error_resp_handle_at(
         &mut self,
         now: u64,
-        name: String,
+        name: Option<String>,
         failure: Failure,
         running_only: bool,
     ) {
@@ -1492,7 +1497,10 @@ impl LongLinkTaskManager {
                 i += 1;
                 continue;
             }
-            if !name.is_empty() && self.tasks[i].channel_name != name {
+            if name
+                .as_deref()
+                .is_some_and(|name| self.tasks[i].channel_name != name)
+            {
                 i += 1;
                 continue;
             }
@@ -1515,27 +1523,31 @@ impl LongLinkTaskManager {
             self.retry_interval = RETRY_INTERNAL;
         }
 
-        if matches!(
-            fail_handle,
-            TaskFailHandleType::SessionTimeout | TaskFailHandleType::RetryAllTasks
-        ) {
-            self.disconnect(&name, DisconnectInternalCode::DecodeErr);
-            self.retry_interval = 0;
-        }
+        // a channel is taken down for the answer it drew, and there is no
+        // channel to take down when it is the queue itself that is dropped
+        if let Some(name) = name.as_deref() {
+            if matches!(
+                fail_handle,
+                TaskFailHandleType::SessionTimeout | TaskFailHandleType::RetryAllTasks
+            ) {
+                self.disconnect(name, DisconnectInternalCode::DecodeErr);
+                self.retry_interval = 0;
+            }
 
-        // not a long-link callback: a link that failed on dns, on a socket or on
-        // a cancel is one the C++ leaves alone
-        if fail_handle == TaskFailHandleType::Default
-            && !matches!(
-                err_type,
-                ErrCmdType::Dns | ErrCmdType::Socket | ErrCmdType::Canceld
-            )
-        {
-            self.disconnect(&name, DisconnectInternalCode::DecodeErr);
-        }
+            // not a long-link callback: a link that failed on dns, on a socket
+            // or on a cancel is one the C++ leaves alone
+            if fail_handle == TaskFailHandleType::Default
+                && !matches!(
+                    err_type,
+                    ErrCmdType::Dns | ErrCmdType::Socket | ErrCmdType::Canceld
+                )
+            {
+                self.disconnect(name, DisconnectInternalCode::DecodeErr);
+            }
 
-        if err_type == ErrCmdType::NetMsgXp {
-            self.disconnect(&name, DisconnectInternalCode::TaskTimeout);
+            if err_type == ErrCmdType::NetMsgXp {
+                self.disconnect(name, DisconnectInternalCode::TaskTimeout);
+            }
         }
     }
 
@@ -1722,7 +1734,7 @@ impl Drop for LongLinkTaskManager {
     fn drop(&mut self) {
         self.batch_error_resp_handle_at(
             gettickcount(),
-            String::new(),
+            None,
             Failure {
                 err_type: ErrCmdType::Local,
                 err_code: LOCAL_RESET,
@@ -2723,6 +2735,45 @@ mod tests {
                 TaskFailHandleType::TaskEnd,
                 7
             )]
+        );
+    }
+
+    /// A task the app gave no channel name is on the channel named nothing,
+    /// and that is not every channel: the C++ spells "every channel" with an
+    /// empty name too, so retrying the tasks of one user used to fail the
+    /// tasks that were out on every other channel with them.
+    #[test]
+    fn a_task_with_no_channel_name_is_not_every_channel() {
+        let mut manager = manager();
+        let (_, ended, _, _) = wire(&mut manager);
+        manager.add_long_link(LonglinkConfig::new("long.bob.qq.com"));
+        let mut alice = task(7);
+        alice.user_id = "alice".to_string();
+        alice.channel_name = String::new();
+        let mut bob = task(8);
+        bob.user_id = "bob".to_string();
+        bob.channel_name = "long.bob.qq.com".to_string();
+        manager.start_task_at(NOW, alice, Task::CHANNEL_LONG);
+        manager.start_task_at(NOW, bob, Task::CHANNEL_LONG);
+
+        manager.retry_tasks_at(
+            NOW + 10,
+            ErrCmdType::Local,
+            LOCAL_TASK_TIMEOUT,
+            TaskFailHandleType::TaskEnd,
+            Task::INVALID_TASK_ID,
+            "alice",
+        );
+        // the channel-less task is one no link could have sent, so the retry
+        // passes it over; what it must not do is fail bob's task for it
+        assert!(manager.has_task(7), "a task no channel could send");
+        assert!(manager.has_task(8), "the other channel was not asked about");
+        assert!(
+            ended
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty(),
+            "nothing was failed"
         );
     }
 
