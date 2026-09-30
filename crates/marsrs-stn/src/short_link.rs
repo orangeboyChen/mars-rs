@@ -2478,6 +2478,25 @@ mod tests {
         );
     }
 
+    /// `shortlink_pack` — the C++ overrides the symbol by linking its own, and
+    /// what stands in for that here is the packer the app hands the link:
+    /// [`default_packer`] is what writes until then, and not after.
+    #[test]
+    fn the_packer_the_app_replaced_is_the_one_that_writes() {
+        let seen = Seen::default();
+        let (mut link, socket) = connected(&seen);
+        link.set_packer(Box::new(|url, _headers, body| {
+            format!("GET {url}\r\n\r\n{}", body.len()).into_bytes()
+        }));
+
+        let request = b"GET /cgi-bin/micromsg-bin/short\r\n\r\n5".to_vec();
+        assert_eq!(
+            link.write_at(1100, socket, b"hello").unwrap(),
+            request.len()
+        );
+        assert_eq!(seen.sent(), vec![request]);
+    }
+
     #[test]
     fn an_answer_of_two_hundred_is_the_body_of_it() {
         let seen = Seen::default();

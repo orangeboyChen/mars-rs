@@ -226,17 +226,3 @@ fn a_socket_the_server_kept_is_the_one_the_next_task_reuses() {
         KeepAlive::Reuse { timeout: 5 }
     );
 }
-
-#[test]
-fn the_packer_the_app_replaced_is_the_one_that_writes() {
-    // one that writes its own head, which is what the app hands a link instead
-    // of the `shortlink_pack` mars ships
-    let own: Box<marsrs_stn::Packer> =
-        Box::new(|url, _, body| format!("GET {url}\r\n\r\n{}", body.len()).into_bytes());
-    let (task, profile) = a_task();
-    let headers = request_headers(&profile, &task);
-    assert_eq!(
-        own("/cgi-bin/micromsg-bin/short", &headers, b"hello"),
-        b"GET /cgi-bin/micromsg-bin/short\r\n\r\n5".to_vec()
-    );
-}
