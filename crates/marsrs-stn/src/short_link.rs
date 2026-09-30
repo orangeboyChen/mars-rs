@@ -754,10 +754,9 @@ impl ShortLink {
                 })
                 .collect()
         };
-        if addresses.is_empty() {
-            self.run_response_error(ErrCmdType::Dns, ECT_DNS_MAKE_SOCKET_PREPARED, false);
-            return Err(ConnectFail::NoAddress);
-        }
+        // no `is_empty()` here: the items the list was built from were checked
+        // above, and an http proxy puts one address of its own on it, so a
+        // list of no addresses is one the early return already answered
 
         self.profile.nat64 = stack == LocalIpStack::IPv6;
         self.profile.dns_endtime = now;
