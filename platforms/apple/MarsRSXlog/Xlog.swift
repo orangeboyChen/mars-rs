@@ -317,17 +317,20 @@ public final class Xlog: NSObject {
     public func close() {
         Self.registryLock.lock()
         defer { Self.registryLock.unlock() }
-        guard openHandle() != Self.noHandle else {
+        let opened = openHandle()
+        guard opened != Self.noHandle else {
             return
         }
-        // Releasing takes the prefix and not the handle, so it drops whatever
-        // the prefix answers *now* — and [openHandle] has just asked the
-        // registry and been answered this one, with [registryLock] holding an
-        // open of that prefix outside the window between the question and the
-        // release. A prefix is one appender to the C ABI, so two `Xlog`s of
-        // one prefix hold one handle between them and this closes both.
+        // `mars_xlog_release_instance_of` and not `mars_xlog_release_instance`:
+        // a release is given a prefix, so what it drops is whatever the prefix
+        // answers *now* — the appender another part of the app opened after
+        // this one was closed. Naming the handle makes the question and the
+        // release one call, and [registryLock] keeps an open of this prefix
+        // outside it besides: a prefix is one appender to the C ABI, so two
+        // `Xlog`s of one prefix hold one handle between them and this closes
+        // both.
         namePrefix.withCString { prefix in
-            mars_xlog_release_instance(prefix)
+            mars_xlog_release_instance_of(prefix, opened)
         }
         handleLock.lock()
         handle = Self.noHandle
