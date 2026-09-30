@@ -85,6 +85,13 @@ object Mars {
      * Initializes the platform callbacks, and has to be called before `onCreate`: every method of
      * C2Java takes what it asks about from the context that [PlatformComm.init] leaves behind.
      *
+     * [handler] is kept and nothing is posted on it: the Rust side attaches the
+     * thread that called into it and asks the nine questions there, so the
+     * device is read on a thread of the port's and not on the looper an app
+     * handed over. It is asked for because `Mars.java` of the C++ project is —
+     * an app that hands its main looper over is not answered on it, and hears
+     * nothing about that.
+     *
      * What is kept is the application context of the one handed over — so an
      * Activity is safe to hand over — and it is kept for the process: the nine
      * questions are answered from it whenever the port asks, which is why

@@ -36,6 +36,11 @@ object PlatformComm {
     @Volatile
     var context: Context? = null
 
+    /**
+     * The looper an app handed [init]. Kept, and posted on nothing: the nine
+     * questions of [C2Java] are asked on the thread the Rust side attached, and
+     * not on this one — `Mars.init` says why. [release] is what clears it.
+     */
     @JvmField
     @Volatile
     var handler: Handler? = null
