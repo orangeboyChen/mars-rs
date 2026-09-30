@@ -353,7 +353,9 @@ where
     out
 }
 
-/// `strutil::join_to_string_for_log` — `{a,b,c}`.
+/// `strutil::join_to_string_for_log` — `{a,b,c,}` of `["a", "b", "c"]`, the
+/// trailing comma and all: the separator goes after every item, so what
+/// closes the list is the postfix behind it.
 pub fn join_to_string_for_log<I, T>(items: I) -> String
 where
     I: IntoIterator<Item = T>,

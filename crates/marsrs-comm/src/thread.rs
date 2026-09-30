@@ -446,18 +446,18 @@ impl Thread {
     }
 }
 
+/// The wait is one `wait_timeout` on a [`Condition`] and not a run of short
+/// sleeps, which is what a start thirty seconds from now used to cost: a
+/// wake-up every millisecond, thirty thousand of them, and a cancellation
+/// that went unnoticed for up to a millisecond after it was asked for.
+///
+/// A thousand years: what [`CancelSignal::wait`] waits for when the wait it
+/// was asked for does not fit in an [`Instant`].
+const UNREACHABLE_WAIT: Duration = Duration::from_secs(60 * 60 * 24 * 365 * 1000);
+
 /// What a delayed or periodic start waits on: the flag [`Thread::cancel_after`]
 /// and [`Thread::cancel_periodic`] set, and the condition the waiter sleeps
 /// on — the C++'s `condtime`.
-///
-/// The wait is one `wait_timeout` on a [`Condition`] and not a run of short
-/// sleeps, which is what a start thirty seconds from now used to cost: a
-/// A thousand years: what [`CancelSignal::wait`] waits for when the wait it was
-/// asked for does not fit in an [`Instant`].
-const UNREACHABLE_WAIT: Duration = Duration::from_secs(60 * 60 * 24 * 365 * 1000);
-
-/// wake-up every millisecond, thirty thousand of them, and a cancellation
-/// that went unnoticed for up to a millisecond after it was asked for.
 #[derive(Debug)]
 struct CancelSignal {
     cancelled: AtomicBool,
