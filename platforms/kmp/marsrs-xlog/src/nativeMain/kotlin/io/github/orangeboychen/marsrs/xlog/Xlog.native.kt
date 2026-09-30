@@ -109,6 +109,10 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     /**
      * What `read` writes into the buffer it is handed; `null` when it wrote
      * nothing, which is a negative code or a path of no length.
+     *
+     * A negative code is `null` whatever it is, `MARS_XLOG_ERR_NO_SPACE` among
+     * them: a path that does not fit [PATH_BUFFER_SIZE] ends the walk the way
+     * the end of the list does.
      */
     private fun pathAt(read: (CPointer<ByteVar>, UInt) -> Int): String? = memScoped {
         val buffer = allocArray<ByteVar>(PATH_BUFFER_SIZE)

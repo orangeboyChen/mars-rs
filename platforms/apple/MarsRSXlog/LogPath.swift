@@ -26,8 +26,13 @@ internal enum PathBuffer {
     internal static let size = 1_024
 }
 
-/// What `body` wrote, as a `String`, or `nil` when it wrote nothing: `0` is
-/// what a path symbol answers for an appender with no open file.
+/// What `body` wrote, as a `String`, or `nil` when it wrote nothing.
+///
+/// A negative code is `nil` too, `MARS_XLOG_ERR_NO_SPACE` among them — a path
+/// that does not fit [PathBuffer.size] is answered as if the list had ended
+/// there. A path is bounded by `PATH_MAX` on every platform the port ships
+/// on, so what a caller loses in that case is a day's list it could not have
+/// been given a longer buffer for anyway.
 internal func path(of body: (UnsafeMutablePointer<CChar>, UInt32) -> Int32) -> String? {
     var buffer = [CChar](repeating: 0, count: PathBuffer.size)
     let written = body(&buffer, UInt32(buffer.count))

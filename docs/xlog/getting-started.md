@@ -283,10 +283,11 @@ await xlog.close();
 
 The plugin is a method channel and not `dart:ffi`, so what crosses to the
 platform thread is a message and not a call: a write, a setting and
-`requestFlush()` hand the message over and return, and only the four that have
+`requestFlush()` hand the message over and return, and only the seven that have
 something an app can act on answer a `Future` — the appender `Xlog.open` opens,
-the drain `await flush()` waits for, `close()`, and the answer `isLoggable`
-gives. What Dart has no face for is the blocking drain: a channel cannot block
+the drain `await flush()` waits for, `close()`, the answer `isLoggable` gives,
+and the three that name files: `currentLogPath()`, `logFiles(daysAgo)` and
+`logFileNames(daysAgo)`. What Dart has no face for is the blocking drain: a channel cannot block
 this side of it, so what Dart gets is the other two — `requestFlush()`, which
 asks for the drain and returns at once with nothing to say about when it is
 over, and `await xlog.flush()`, which answers when it is. Neither

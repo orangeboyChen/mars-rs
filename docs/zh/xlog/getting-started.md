@@ -262,9 +262,11 @@ await xlog.close();
 ```
 
 这个插件是 method channel 而不是 `dart:ffi`，所以过到平台线程上的是一条消息而不是
-一次调用：写、一个设置和 `requestFlush()` 都是把消息递过去就返回，只有四个回答
+一次调用：写、一个设置和 `requestFlush()` 都是把消息递过去就返回，只有七个回答
 `Future`，也只有它们有 App 要等的东西 —— `Xlog.open` 打开的那个
-appender，`await flush()` 和 `close()` 等的那个 drain，以及 `isLoggable` 给的答案。
+appender，`await flush()` 和 `close()` 等的那个 drain，`isLoggable` 给的答案，
+以及那三个说文件的：`currentLogPath()`、`logFiles(daysAgo)` 和
+`logFileNames(daysAgo)`。
 Dart 这边没有阻塞式排空的那个面：channel 阻塞不了 Dart 这一侧，所以不等的那一下是
 `requestFlush()`，要等的那一下是 `await xlog.flush()`。
 [任务链路](/zh/stn/getting-started)和

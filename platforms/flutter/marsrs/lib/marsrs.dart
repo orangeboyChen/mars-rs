@@ -12,9 +12,11 @@
 // A call that answers nothing waits for nothing: a write and a setting hand the
 // call to the platform side and return, `xlog.i('net', '…')` the way it does in
 // Kotlin and in Swift, and the channel keeps the order the calls were handed
-// over in. Four of them answer a `Future`, because four of them have something
-// an app can act on: the appender [Xlog.open] opens, the drain [Xlog.flush]
-// and [Xlog.close] wait for, and the answer [Xlog.isLoggable] gives.
+// over in. Seven of them answer a `Future`, because seven of them have
+// something an app can act on: the appender [Xlog.open] opens, the drain
+// [Xlog.flush] and [Xlog.close] wait for, the answer [Xlog.isLoggable] gives,
+// and the three that name files — the directory [Xlog.currentLogPath] writes
+// into and the day [Xlog.logFiles] and [Xlog.logFileNames] answer.
 //
 // The five settings are properties and not a `setLevel` / `getLevel` pair, which
 // is the spelling the Kotlin, the Swift and the TypeScript of the port give

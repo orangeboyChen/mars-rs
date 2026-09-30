@@ -334,10 +334,12 @@ internal final class Xlog: NSObject {
         (config[key] as? NSNumber)?.int32Value ?? fallback
     }
     /// What `read` writes into the buffer it is handed, as a string; `nil` when
-    /// it wrote nothing — a negative code, or a path of no length. A path never
-    /// fills the buffer, and a symbol that answers a length rather than a
-    /// pointer is the C ABI's way of saying the caller decides how much it can
-    /// hold.
+    /// it wrote nothing — a negative code, or a path of no length.
+    ///
+    /// A negative code is `nil` whatever it is, `MARS_XLOG_ERR_NO_SPACE` among
+    /// them: a path that does not fit 1024 bytes ends the walk the way the end
+    /// of the list does. A symbol that answers a length rather than a pointer
+    /// is the C ABI's way of saying the caller decides how much it can hold.
     private func path(of read: (UnsafeMutablePointer<CChar>, UInt32) -> Int32) -> String? {
         var buffer = [CChar](repeating: 0, count: 1024)
         let written = read(&buffer, UInt32(buffer.count))

@@ -146,11 +146,9 @@ is its second argument, and not a second call — and `logWrite` becomes one
 
 * **No panic ever unwinds into C.** Every entry point wraps its body in
   `catch_unwind`; a panic is reported as `MARS_XLOG_ERR_PANIC` (or swallowed for
-  the `void` symbols) and the message still reaches stderr. The one thing that
-  is the caller's and not an entry point is a callback it handed in — the
-  console copy of a record — a panic inside a callback written in
-  Rust aborts at the `extern "C"` boundary, before any `catch_unwind` here can
-  see it.
+  the `void` symbols) and the message still reaches stderr. No symbol takes a
+  callback, so there is no `extern "C"` frame here that is not one of these
+  entry points — which is the whole of the unwind surface.
 * **No null dereference.** Every incoming pointer is null-checked; null and
   invalid UTF-8 degrade to an empty string. `mars_xlog_new_instance` has no
   code to answer with, so it gives back handle `0` — which no symbol asks an

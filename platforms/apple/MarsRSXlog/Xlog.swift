@@ -73,9 +73,17 @@ public final class Xlog: NSObject {
     /// What every file of this appender starts with, and what it is known by.
     @objc public let namePrefix: String
 
-    /// Whether this appender is still open: `false` after [close()].
+    /// Whether this appender is still open: `false` after [close()] — on this
+    /// `Xlog` and on every other one of this `namePrefix`, which is the same
+    /// appender and is closed with this one.
+    ///
+    /// The prefix and not the handle alone: a prefix is one appender to the C
+    /// ABI, so two `Xlog`s of one prefix are answered the same handle and
+    /// closing either releases it — the handle this one cached still looks
+    /// open, and a write through it would silently write nothing.
     @objc public var isOpen: Bool {
         handle != Self.noHandle
+            && namePrefix.withCString { mars_xlog_get_instance($0) } == handle
     }
 
     /// The level of this appender: a record less severe than this is dropped.
@@ -332,13 +340,17 @@ public final class Xlog: NSObject {
     /// This is a day of files and not the file being written: what
     /// [`currentLogPath`] answers is the directory, and this names the day's
     /// files in it — the day of *this* appender, its own prefix and directory.
+    ///
+    /// `daysAgo` is an `Int`, and the C ABI takes an `Int32`: what crosses is
+    /// `Int32(exactly:)` and not `Int32(_:)`, which traps on a value it cannot
+    /// represent rather than answering nothing.
     @objc
     public func logFiles(daysAgo: Int) -> [String] {
-        guard isOpen else {
+        guard isOpen, let timespan = Int32(exactly: daysAgo) else {
             return []
         }
         return paths { index, out, len in
-            mars_xlog_getfilepath_from_timespan_instance(handle, Int32(daysAgo), index, out, len)
+            mars_xlog_getfilepath_from_timespan_instance(handle, timespan, index, out, len)
         }
     }
 
@@ -351,11 +363,11 @@ public final class Xlog: NSObject {
     /// [`logFiles(daysAgo:)`] answers one.
     @objc
     public func logFileNames(daysAgo: Int) -> [String] {
-        guard isOpen else {
+        guard isOpen, let timespan = Int32(exactly: daysAgo) else {
             return []
         }
         return paths { index, out, len in
-            mars_xlog_make_logfile_name_instance(handle, Int32(daysAgo), index, out, len)
+            mars_xlog_make_logfile_name_instance(handle, timespan, index, out, len)
         }
     }
 

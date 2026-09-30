@@ -76,6 +76,9 @@ class XlogPlugin :
                 "setConsoleLogEnabled" -> setConsoleLogEnabled(call, result)
                 "setMaxFileSize" -> setMaxFileSize(call, result)
                 "setMaxAliveTime" -> setMaxAliveTime(call, result)
+                "currentLogPath" -> currentLogPath(call, result)
+                "logFiles" -> logFiles(call, result)
+                "logFileNames" -> logFileNames(call, result)
                 "close" -> close(call, result)
                 else -> result.notImplemented()
             }

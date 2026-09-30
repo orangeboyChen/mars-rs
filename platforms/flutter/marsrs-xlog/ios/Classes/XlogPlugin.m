@@ -38,8 +38,11 @@ static void XlogAnswer(FlutterResult result, id value) {
 }
 
 /// What `read` writes into the buffer it is handed, as a string; `nil` when it
-/// wrote nothing — a negative code, or a path of no length. A path never fills
-/// the buffer, and a symbol that answers a length rather than a pointer is the
+/// wrote nothing — a negative code, or a path of no length.
+///
+/// A negative code is `nil` whatever it is, `MARS_XLOG_ERR_NO_SPACE` among
+/// them: a path that does not fit 1024 bytes ends the walk the way the end of
+/// the list does. A symbol that answers a length rather than a pointer is the
 /// C ABI's way of saying the caller decides how much it can hold.
 static NSString *XlogPath(int (^read)(char *, uint32_t)) {
   char buffer[1024];

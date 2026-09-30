@@ -247,9 +247,13 @@ public:
         return namePrefix_;
     }
 
-    /** Whether this appender is still open: `false` after `close()`. */
+    /** Whether this appender is still open: `false` after `close()` — on this
+     * `Xlog` and on every other one of this `namePrefix`, which is the same
+     * appender and is closed with this one. The prefix and not the handle
+     * alone: a prefix is one appender, so a twin that closed it leaves this
+     * handle looking open while every write through it is dropped. */
     bool isOpen() const noexcept {
-        return handle_ != 0;
+        return handle_ != 0 && handle_ == mars_xlog_get_instance(namePrefix_.c_str());
     }
 
     /** The level of this appender: a record less severe than this is dropped.

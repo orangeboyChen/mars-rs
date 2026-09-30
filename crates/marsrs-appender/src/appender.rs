@@ -1948,11 +1948,21 @@ impl Appender {
             Some(&cachedir),
         );
 
-        // Both, and neither filtered by whether it is there: this is the
-        // *name* a day is written under, which is the question an app that is
-        // about to write, or that is naming a file to someone else, asks.
-        // Which of the two are there yet is `getfilepath_from_timespan`'s.
-        vec![log_path, cache_path]
+        // The name of the day's file, and the cache-dir twin of it when that
+        // one is there: asking for a file that is not there yet is what
+        // `logFiles` is for, and what `logFileNames` is for is the name — the
+        // one an app is about to write, or is naming to someone else.
+        let mut paths = Vec::new();
+        if log_path.exists() {
+            paths.push(log_path.clone());
+        }
+        if cache_path.exists() {
+            paths.push(cache_path);
+        }
+        if paths.is_empty() {
+            paths.push(log_path);
+        }
+        paths
     }
 
     /// `XloggerAppender::GetfilepathFromTimespan`.

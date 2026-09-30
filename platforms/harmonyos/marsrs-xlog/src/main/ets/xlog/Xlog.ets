@@ -299,6 +299,9 @@ export class Xlog {
     if (!this.opened) {
       return [];
     }
+    // What the native side answers for a question it could not read is a throw
+    // and not `[]`: an empty list is a true answer to "that day has no files",
+    // and an uploader that took it for one would lose a day.
     return xlogNapi.logFiles(this.namePrefix, daysAgo);
   }
 

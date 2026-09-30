@@ -533,8 +533,12 @@ static napi_value Paths(napi_env env, napi_callback_info info, PathAt pathAt) {
     size_t argc = 2;
     napi_value argv[2] = {NULL, NULL};
     napi_value self = NULL;
+    // A question this module was not asked properly is a throw and not an
+    // empty list: `[]` says "that day has no files", which is a true answer to
+    // a different question, and an uploader that takes it for one loses a day.
     if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || argc < 2) {
-        return list;
+        napi_throw_error(env, NULL, "marsrs-harmonyos-xlog: a day of paths needs a prefix and a day");
+        return Undefined(env);
     }
     char* namePrefix = CopyString(env, argv[0]);
     long long handle = HandleOf(namePrefix);
@@ -544,7 +548,8 @@ static napi_value Paths(napi_env env, napi_callback_info info, PathAt pathAt) {
     }
     int32_t daysAgo = 0;
     if (napi_get_value_int32(env, argv[1], &daysAgo) != napi_ok) {
-        return list;
+        napi_throw_error(env, NULL, "marsrs-harmonyos-xlog: the day is not a number");
+        return Undefined(env);
     }
     char buffer[kPathBufferSize] = {0};
     unsigned int walked = 0;
