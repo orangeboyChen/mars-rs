@@ -68,34 +68,40 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * holds for one prefix are one appender and `close` on either closes it for
      * both.
      *
-     * [Xlog.open] is what refuses a configuration the appender cannot honour —
-     * a blank `logDir` or `namePrefix`, a compression level out of range — and
-     * its `IllegalArgumentException` is what would cross back into JS as a
-     * crash, so it is caught here and answered as `false`: the caller's mistake
-     * to throw on, and not one to take the app with.
+     * [XlogConfig] and [Xlog.open] are what refuse a configuration the
+     * appender cannot honour — a blank `logDir` or `namePrefix`, a compression
+     * level out of range — and their `IllegalArgumentException` is what would
+     * cross back into JS as a crash. Both are inside the `try` below for that
+     * reason, and answered as `false`: the caller's mistake to throw on, and
+     * not one to take the app with.
      */
     override fun open(config: ReadableMap): Boolean {
         val namePrefix = config.string("namePrefix").ifBlank { DEFAULT_NAME_PREFIX }
         if (appenders.containsKey(namePrefix)) {
             return true
         }
-        val xlogConfig = XlogConfig(
-            logDir = config.string("logDir"),
-            namePrefix = namePrefix,
-            level = LogLevel.of(config.int("level", LogLevel.INFO.ordinal)),
-            mode = appenderModeOf(config.int("mode", AppenderMode.ASYNC.ordinal)),
-            pubKey = config.string("pubKey"),
-            compressMode = compressModeOf(config.int("compressMode", CompressMode.ZLIB.ordinal)),
-            compressLevel = config.int("compressLevel", DEFAULT_COMPRESS_LEVEL),
-            cacheDir = config.optionalString("cacheDir"),
-            cacheDays = config.int("cacheDays", NO_CACHE_DAYS)
-        )
         val xlog = try {
-            Xlog.open(xlogConfig)
+            // The configuration is built in here and not above the `try`: its
+            // own `require`s — the blank `logDir`, the level out of range —
+            // throw the same `IllegalArgumentException` `Xlog.open` does, and
+            // one that escapes into JS is a crash rather than a `false`.
+            Xlog.open(
+                XlogConfig(
+                    logDir = config.string("logDir"),
+                    namePrefix = namePrefix,
+                    level = LogLevel.of(config.int("level", LogLevel.INFO.ordinal)),
+                    mode = appenderModeOf(config.int("mode", AppenderMode.ASYNC.ordinal)),
+                    pubKey = config.string("pubKey"),
+                    compressMode = compressModeOf(config.int("compressMode", CompressMode.ZLIB.ordinal)),
+                    compressLevel = config.int("compressLevel", DEFAULT_COMPRESS_LEVEL),
+                    cacheDir = config.optionalString("cacheDir"),
+                    cacheDays = config.int("cacheDays", NO_CACHE_DAYS)
+                )
+            )
         } catch (e: IllegalArgumentException) {
             return false
         }
-        appenders[xlogConfig.namePrefix] = xlog
+        appenders[namePrefix] = xlog
         return true
     }
 
