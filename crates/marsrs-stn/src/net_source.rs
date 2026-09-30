@@ -880,7 +880,14 @@ impl NetSource {
             items.extend(made.unwrap_or_default());
         }
         for host in host_list {
-            if count >= NUM_MAKE_COUNT {
+            // What the C++ asks is the length of the list, and not the count
+            // the pass above was aiming at: that one is a target, this one is
+            // what is in there, and a host that answered nothing leaves it
+            // short of the target. Guarding on the target kept the loop going
+            // for every host whatever the list held, which is a fallback dns
+            // question — and a `host_backup_ips` entry — for hosts upstream
+            // never asks.
+            if items.len() >= NUM_MAKE_COUNT {
                 break;
             }
             let made = self.make_ip_ports_at(
@@ -1182,6 +1189,54 @@ mod tests {
         assert_eq!(items[0].port, 5223, "the port that came with the ip");
         assert_eq!(items[0].host, "minor.example");
         assert_eq!(items[0].source_type, IpSourceType::Debug);
+    }
+
+    /// The backup pass stops at the list, the way the C++ does — and not at
+    /// the count the pass before it was aiming at, which is a number no host
+    /// ever moved: every host got a fallback dns question and an entry in the
+    /// backup map whether the list was full or not.
+    #[test]
+    fn the_backup_pass_stops_when_the_list_is_full() {
+        use std::sync::{Arc, Mutex};
+
+        let asked: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let mut source = NetSource::new_at(0);
+        source.set_longlink(
+            vec!["long.example".to_string(), "long2.example".to_string()],
+            vec![80],
+            "",
+        );
+        source.set_is_active(|| false);
+        source.set_net_info(|| 1);
+        source.set_random(|_| 0);
+        // no `new_dns`: the first pass answers nothing, so the backup pass is
+        // the only thing that asks
+        let recorder = Arc::clone(&asked);
+        source.set_dns(move |host| {
+            recorder.lock().unwrap().push(host.to_string());
+            vec![
+                "1.1.1.1".to_string(),
+                "1.1.1.2".to_string(),
+                "1.1.1.3".to_string(),
+                "1.1.1.4".to_string(),
+                "1.1.1.5".to_string(),
+            ]
+        });
+
+        let items = source.get_longlink_items(&LonglinkConfig::new("main"));
+        assert_eq!(items.len(), NUM_MAKE_COUNT, "the list is full");
+        // the first pass asks both hosts — there is no `new_dns`, so its own
+        // fallback does — and the backup pass asks only the one that fills
+        // the list
+        assert_eq!(
+            *asked.lock().unwrap(),
+            vec![
+                "long.example".to_string(),
+                "long2.example".to_string(),
+                "long.example".to_string()
+            ],
+            "a second host is not asked once the first filled the list"
+        );
     }
 
     #[test]
