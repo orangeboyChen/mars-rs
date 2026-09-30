@@ -816,3 +816,46 @@ fn the_version_and_the_usage_are_printed() {
         }
     }
 }
+/// A file read with the private key of another pair is a file no record of
+/// which comes out: the walk goes on from a record it cannot read, so what it
+/// answers with is a marker per record and no log at all. A command that
+/// answers well to that is a command that read nothing.
+#[test]
+fn a_file_read_with_the_key_of_another_pair_is_refused() {
+    let dir = scratch("wrong-key");
+    let input = write(&dir, "records.txt", RECORDS);
+    let file = dir.join("a.xlog");
+
+    let (ok, _, err) = run(&[
+        "encode",
+        &format!("--pubkey={PUBKEY}"),
+        &input.display().to_string(),
+        "-o",
+        &file.display().to_string(),
+    ]);
+    assert!(ok, "encode failed: {err}");
+
+    // A key of another pair: 64 hex characters, and not the one the file was
+    // written with.
+    let (ok, out, err) = run(&["keygen"]);
+    assert!(ok, "keygen failed: {err}");
+    let (_, other) = pair(&out);
+
+    let (ok, out, err) = run(&[
+        "decode",
+        &format!("--privkey={other}"),
+        &file.display().to_string(),
+    ]);
+    assert!(!ok, "a file was decoded with the key of another pair");
+    assert!(
+        err.contains("came out"),
+        "the error does not say what happened: {err}"
+    );
+    // The markers are written out anyway — a file that did not read is still a
+    // file the operator asked to see — but they are not the log: what each of
+    // them says is why that record did not come out.
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(!out.is_empty(), "no marker was written");
+    assert!(text.contains("error"), "no reason was written: {text}");
+    assert_ne!(out, RECORDS, "the records came out with the wrong key");
+}

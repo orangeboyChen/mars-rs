@@ -48,7 +48,7 @@ use std::io::{Read, Write};
 use std::process::ExitCode;
 
 use marsrs_crypt::{HEADER_LEN, TAILER_LEN};
-use marsrs_xlog::{bytes::AutoBuffer, decode_records, CompressMode, LogBuffer};
+use marsrs_xlog::{bytes::AutoBuffer, decode_records_counted, CompressMode, Decoded, LogBuffer};
 
 /// `kBufferBlockLength` in `mars/xlog/src/appender.cc` (150 KiB), the size of
 /// the region a record is written through.
@@ -494,32 +494,71 @@ fn encode(command: Command) -> Result<(), String> {
 /// framing.
 fn decode(command: Command) -> Result<(), String> {
     let bytes = command.input()?;
-    match decode_records(&bytes, command.privkey.as_ref()) {
-        Ok(plain) => {
-            command.output(&plain)?;
-            eprintln!("xlog: {} bytes -> {} bytes", bytes.len(), plain.len());
-            Ok(())
+    // The text the walk read is written out whether or not the walk ended in an
+    // error — `parseFile` of `decode_log_file.c` writes the output it has, and
+    // so does this: a file that lost its end to a process killed between two
+    // writes still holds every record before the damage, and an operator told
+    // "truncated" with nothing beside it cannot read a single one of them. The
+    // reason is still what the command answers with — the file's tail is
+    // missing, and that has to be said too. What is not written is a file of
+    // nothing: a walk that stopped with no text at all leaves the file the
+    // caller named alone instead of emptying it.
+    let (plain, note, failed) = match decode_records_counted(&bytes, command.privkey.as_ref()) {
+        Ok(decoded) => {
+            let note = if decoded.unreadable > 0 {
+                format!(
+                    ", {} of {} records unreadable",
+                    decoded.unreadable, decoded.records
+                )
+            } else {
+                String::new()
+            };
+            let failed = nothing_came_out(&decoded, command.privkey.is_some());
+            (decoded.text, note, failed)
         }
-        Err(err) => {
-            // `parseFile` of `decode_log_file.c` writes the output it has
-            // whether or not the walk ended in an error, and so does this: a
-            // file that lost its end to a process killed between two writes
-            // still holds every record before the damage, and an operator told
-            // "truncated" with nothing beside it cannot read a single one of
-            // them. The error is still what the command answers with — the
-            // file's tail is missing, and that has to be said.
-            if !err.recovered.is_empty() {
-                command.output(&err.recovered)?;
-                eprintln!(
-                    "xlog: {} bytes -> {} bytes, then {}",
-                    bytes.len(),
-                    err.recovered.len(),
-                    err.reason
-                );
-            }
-            Err(err.reason)
-        }
+        Err(err) => (
+            err.recovered,
+            format!(", then {}", err.reason),
+            Some(err.reason),
+        ),
+    };
+
+    if failed.is_none() || !plain.is_empty() {
+        command.output(&plain)?;
+        eprintln!("xlog: {} bytes -> {} bytes{note}", bytes.len(), plain.len());
     }
+    match failed {
+        Some(reason) => Err(reason),
+        None => Ok(()),
+    }
+}
+
+/// Whether a walk that ended well read no log at all: every record it found is
+/// one whose text did not come out of it, so what it answers with is a marker
+/// per record and nothing else.
+///
+/// That is what a file read with the wrong key looks like — a `--privkey` of
+/// another pair is a record unreadable per record, and the walk ends well —
+/// and a log of markers is not one an operator can tell from a log that said
+/// so. A file no record came out of is a file that was not read, which is a
+/// failure whatever the walk answered.
+fn nothing_came_out(decoded: &Decoded, with_key: bool) -> Option<String> {
+    if !decoded.nothing_came_out() {
+        return None;
+    }
+    Some(if with_key {
+        format!(
+            "none of the {} records in the file came out: a record is read with the private \
+             key of the pair it was written with, and this one is not it",
+            decoded.records
+        )
+    } else {
+        format!(
+            "none of the {} records in the file came out: an encrypted record is read with \
+             --privkey, the private key of the pair the file was written with",
+            decoded.records
+        )
+    })
 }
 
 /// Makes a key pair: the 128 hex characters a `pubKey` is configured with, and
