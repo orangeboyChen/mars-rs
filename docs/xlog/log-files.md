@@ -213,7 +213,7 @@ above do it, and so does an app that closes its appender.
 | knob | what it does | default |
 |---|---|---|
 | `maxFileSizeBytes` | a file is closed and a new one opened once it reaches this many bytes | `0` — never split |
-| `maxAliveTimeSeconds` | a file older than this many seconds is dropped | `0` — ten days (anything under a day is raised to ten) |
+| `maxAliveTimeSeconds` | a file older than this many seconds is dropped | `0` — ten days; a value under a day is refused, and the one already in force stands |
 | `cacheDays` | how many days a file staged in the cache directory waits before it is moved into the log directory | `0` — nothing is staged: the day's file is written in the log directory |
 
 ## Reading a file back

@@ -24,6 +24,6 @@ features:
     details: 每个文件 zlib 或 zstd 压缩，给了公钥就按 ECDH + TEA 加密每条记录，还可以按大小或时间关掉旧文件、开新文件。
   - title: 任务链路，还有网络诊断
     details: "STN 把一个请求当成一个任务跑 —— 排队、重试、超时、上报，走在短连接或 App 自己维持的长连接上。SDT 回答一个主机为什么不再回应：ping、DNS、TCP、HTTP，以及一份写清每一项查到了什么的 JSON 报告。"
-  - title: 它自己不开线程
-    details: "你不要求，就没有谁跑在自己的线程上：本来该是一个线程的地方，是宿主自己调的一次调用 —— 管线是 `run_pending()` 和 `due_time()`，诊断是 `runChecks` 和它的探针。`Driver::spawn()` 是那个可以要的排空线程，appender 异步模式的写线程是日志那一半自己起的那个。"
+  - title: 没要过的线程不起
+    details: "STN 和 SDT 都不自带线程：本该是线程的地方，是宿主自己调的一次调用 —— 管线是 `run_pending()` 和 `due_time()`，诊断是 `runChecks` 和它的探针 —— `Driver::spawn()` 是那个可以要的排空线程。唯一一个不问自起的线程是 appender 异步模式的写线程，异步模式本身就是它；同步模式一个都不起。"
 ---

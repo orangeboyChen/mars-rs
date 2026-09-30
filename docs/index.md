@@ -24,6 +24,6 @@ features:
     details: zlib or zstd per file, ECDH + TEA per record when you give it a public key, and a size or an age at which a file is closed and a new one opened.
   - title: The task pipeline, and the diagnosis
     details: "STN runs a request as a task — queued, retried, timed out, reported, over a short link or a long link the app keeps. SDT answers why a host stopped answering: ping, DNS, TCP and HTTP, and a JSON report of what each found."
-  - title: No threads but yours
-    details: "Nothing runs on a thread of its own unless you ask for one: what would have been a thread is a call the host makes — `run_pending()` and `due_time()` for the pipeline, `runChecks` and its probes for the diagnosis. `Driver::spawn()` is the drain thread you can ask for, and the appender's async writer is the one the logger starts on its own."
+  - title: No thread you did not ask for
+    details: "STN and SDT keep no thread of their own: what would have been one is a call the host makes — `run_pending()` and `due_time()` for the pipeline, `runChecks` and its probes for the diagnosis — and `Driver::spawn()` is the drain thread you can ask for. The one thread this library starts unasked is the appender's async writer, which is what async mode is; sync mode starts none."
 ---
