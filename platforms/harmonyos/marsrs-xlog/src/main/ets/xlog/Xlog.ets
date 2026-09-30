@@ -343,10 +343,16 @@ export class Xlog {
     return xlogNapi.logFileNames(this.namePrefix, daysAgo);
   }
 
-  /** `mars_xlog_release_instance`: closes the appender `Xlog.open` made.
+  /** `mars_xlog_release_instance_of`: closes the appender `Xlog.open` made.
    * Nothing is closed twice: an `Xlog` that is already closed answers `false`
    * from `isOpen` and drops what it is asked to write — and an appender two
-   * names hold is closed for both, because `Xlog.open` gave them one `Xlog`. */
+   * names hold is closed for both, because `Xlog.open` gave them one `Xlog`.
+   *
+   * The `_of`, and not `mars_xlog_release_instance`: a release is given the
+   * handle this one's prefix was opened under, so a `close` of an appender it
+   * never opened — or of one it has closed already — releases nothing at all,
+   * where a release by prefix alone would close whichever appender another
+   * caller had there. */
   close(): void {
     if (!this.opened) {
       return;

@@ -80,5 +80,5 @@ export const logFiles: (namePrefix: string, daysAgo: number) => string[];
  * `daysAgo` days ago, whether or not they are there yet. */
 export const logFileNames: (namePrefix: string, daysAgo: number) => string[];
 
-/** `mars_xlog_release_instance`: closes the appender `open` made. */
+/** `mars_xlog_release_instance_of`: closes the appender `open` made. */
 export const close: (namePrefix: string) => void;
