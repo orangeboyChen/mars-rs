@@ -898,13 +898,17 @@ impl LongLinkTaskManager {
             .tasks
             .iter()
             .filter_map(|profile| next_deadline(profile, network));
-        // a task that has been tried once already waits out the queue's own
-        // interval, which is not one it keeps for itself
-        let retries = self
-            .tasks
-            .iter()
-            .filter(|profile| !profile.is_running() && profile.retried())
-            .map(|_| last_batch_error_time.saturating_add(retry_interval));
+        // A task that has been tried once already waits out the queue's own
+        // interval, which is not one it keeps for itself — and an interval of
+        // `0` is no wait at all. The queue's is `0` until a channel is failed
+        // with one, and `0` again every time a channel is taken down for the
+        // answer it drew or every task of it is tried again: counted from
+        // `last_batch_error_time`, which a queue that was never failed in a
+        // batch still holds as `0`, it is a tick an hour past, and a host told
+        // to come back then is a host whose loop runs hot until the task's own
+        // timeout runs out.
+        let retries =
+            (retry_interval > 0).then_some(last_batch_error_time.saturating_add(retry_interval));
 
         deadlines.chain(retries).min()
     }

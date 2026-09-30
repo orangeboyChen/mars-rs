@@ -544,6 +544,33 @@ fn a_task_whose_link_is_down_waits_for_it() {
 }
 
 #[test]
+fn a_task_retried_by_a_queue_that_is_not_waiting_is_due_on_its_own_timeout() {
+    let mut app = App::new();
+    app.start(7);
+    assert!(app.manager.on_send_at(START, 7));
+
+    // the network changed under a task that is out, and the link is gone: the
+    // task is cancelled and tried again, and the wait the queue had is dropped
+    // — which is what leaves it with no wait at all
+    app.take_down(MAIN);
+    app.manager.redo_tasks_of_at(START + 100, Some(MAIN));
+    assert_eq!(app.manager.retry_interval(), 0, "the queue is not waiting");
+    assert!(app.manager.tasks()[0].retried());
+    assert!(!app.manager.tasks()[0].is_running(), "nowhere to go out on");
+
+    // What the host is told to come back at, then, is the task's own timeout
+    // and not the tick the queue's wait was counted from: that tick is the one
+    // `last_batch_error_time` holds — a queue that was never failed in a batch
+    // still holds `0` — and a wait of `0` is one that ran out an hour ago, so
+    // the host's loop is asked to wake again the moment it wakes up.
+    assert_eq!(
+        app.manager.due_time(),
+        Some(START + ONE_TRY),
+        "and not a tick that is already past"
+    );
+}
+
+#[test]
 fn one_answer_one_task_could_not_read_fails_every_task_of_the_link() {
     let mut app = App::new();
     app.answer_with(-1, TaskFailHandleType::Default);
