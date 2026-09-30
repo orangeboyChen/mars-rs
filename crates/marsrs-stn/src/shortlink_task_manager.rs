@@ -38,6 +38,8 @@
 //!   here: the run is the host's, so the queue draws the sequence and times
 //!   the encode and keeps those counts itself.
 
+use std::sync::{Arc, Mutex};
+
 use marsrs_comm::tickcount::gettickcount;
 
 use crate::config::{DYN_TIME_TASK_FAILED_PKG_LEN, MOBILE_PACKAGE_INTERVAL, WIFI_PACKAGE_INTERVAL};
@@ -484,7 +486,14 @@ impl ShortLinkTaskManager {
     }
 
     /// The same, with the reading handed in.
+    ///
+    /// The sockets are cleaned before the queue asks whether it has anything
+    /// to do, and not inside [`Self::run_on_timeout_at`]: what a run cached
+    /// outlives the run, so a queue without a task still holds a keep-alive
+    /// socket, and one whose five seconds are up is a connection the pool is
+    /// holding open for nobody.
     pub fn run_loop_at(&mut self, now: u64) {
+        self.socket_pool.clean_timeout_at(now);
         if self.tasks.is_empty() {
             return;
         }
@@ -961,13 +970,28 @@ impl ShortLinkTaskManager {
     }
 
     /// `closefunc` — what a socket the queue is done with is closed with.
+    ///
+    /// The pool closes sockets of its own accord too — one whose five seconds
+    /// ran out, and every one of them when the network changes — so the
+    /// closure is the pool's as well: a pool with no `closefunc` of its own
+    /// drops them instead, and a dropped fd is one the host never gets back.
     pub fn set_close_socket(&mut self, close: impl FnMut(SocketFd) + Send + 'static) {
-        self.close = Some(Box::new(close));
+        let close: Arc<Mutex<dyn FnMut(SocketFd) + Send>> = Arc::new(Mutex::new(close));
+        let pooled = Arc::clone(&close);
+        self.socket_pool.set_close(move |socket| {
+            if let Ok(mut close) = pooled.lock() {
+                close(socket);
+            }
+        });
+        self.close = Some(Box::new(move |socket| {
+            if let Ok(mut close) = close.lock() {
+                close(socket);
+            }
+        }));
     }
 
     /// `__RunOnTimeout` — the tasks that answered nothing.
     fn run_on_timeout_at(&mut self, now: u64) {
-        self.socket_pool.clean_timeout_at(now);
         let network = self.network();
 
         // The C++ walks its list once, and so does this: a task that is tried
@@ -2364,6 +2388,32 @@ mod tests {
             Some(101_500),
             "the retry of the cancelled task"
         );
+    }
+
+    #[test]
+    fn an_idle_queue_lets_the_socket_it_kept_time_out() {
+        // a socket outlives the run that put it in, so the cleaning is not a
+        // pass only a queue with a task in it makes: one that is idle held a
+        // keep-alive socket until a network change or a drop, and what the
+        // other end saw was a connection open for nobody
+        let mut manager = ShortLinkTaskManager::new();
+        let closed: Arc<Mutex<Vec<SocketFd>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = closed.clone();
+        manager.set_close_socket(move |socket| recorder.lock().unwrap().push(socket));
+        manager.socket_pool().add_cache(CachedSocket::new_at(
+            0,
+            IpPortItem::new("1.1.1.1", 80),
+            SocketFd(3),
+            5,
+        ));
+
+        // five seconds — which the item counts in seconds — and not yet
+        manager.run_loop_at(4_999);
+        assert_eq!(manager.socket_pool().len(), 1);
+
+        manager.run_loop_at(5_000);
+        assert_eq!(manager.socket_pool().len(), 0);
+        assert_eq!(*closed.lock().unwrap(), vec![SocketFd(3)]);
     }
 
     #[test]
