@@ -5,12 +5,12 @@ package io.github.orangeboychen.marsrs
  * an app that depends on `marsrs-kmp` writes, as opposed to the ones an app
  * that depends on `xlog-kmp` writes.
  *
- * Every one of them is xlog's today, and each is a `typealias` rather than a
- * second declaration, because `marsrs-ffi` is an xlog C ABI: xlog is all a
- * Kotlin/Native target can reach, so `marsrs-kmp` is `xlog-kmp` under
- * another name and no more. When STN and SDT join the C ABI, their Kotlin is
- * declared here beside these — and an app that took `marsrs-kmp` picks it up
- * without a rename, which is the only reason this module exists.
+ * Every one of them is xlog's, and each is a `typealias` rather than a second
+ * declaration: these are the names `marsrs-kmp` published first, while xlog was
+ * all the C ABI carried, and they stay at the top of the package so that an app
+ * that wrote `Xlog` keeps writing `Xlog`. STN and SDT joined the C ABI after
+ * them and are declared in `stn` and `sdt` below instead — nothing of theirs
+ * was ever published from here, so nothing of theirs is aliased.
  *
  * A module with no declaration of its own cannot be published, by the way:
  * Kotlin makes no klib out of no source, and a publication with no klib in it
