@@ -63,6 +63,16 @@ CPP_DECODER=0
 printf '| case | rust -> cpp | cpp -> rust | bytes |\n|---|---|---|---|\n'
 
 while read -r name mode compress sync crypt flush_every file; do
+    # The golden of the case, which no step of this loop reads: both `.xlog`s
+    # are written fresh into `$WORK`, and what every comparison is against is
+    # `expected.bin`. So a case that names a file that is not in `fixtures/` —
+    # or names none at all — is a row that says `ok` over nothing, which is
+    # the hole the check above closes for the table and not for the rows.
+    [ -s "$FIX/$file" ] || {
+        echo "the case $name names $file, which is not a file of $FIX" >&2
+        exit 1
+    }
+
     # `--pubkey` empty is "no server key", i.e. the no-crypt magics.
     if [ "$crypt" = 1 ]; then
         KEY="--pubkey=$PUBKEY"
