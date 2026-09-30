@@ -124,7 +124,7 @@ MarsSdt.runChecks(networkType: 1) { query in
     case .tcp:   return .tcp(errorCode: 0, rtt: 30, noop: MarsSdt.Noop(sent: 0, received: 0, isNoopResponse: true))
     case .http:  return .http(errorCode: 0, rtt: 40, statusCode: 200)
     case .ping:  return .ping(errorCode: 0, rtt: 20, lossRate: 0, averageRTT: 18)
-    default:     return .nothing
+    default:     return .nothing()
     }
 }
 

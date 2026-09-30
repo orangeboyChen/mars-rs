@@ -40,7 +40,7 @@ written here — all eighteen of them, in the order STN numbers them:
 
 A question the app does not answer is a question with the default answer, and
 every platform but Android carries one for all eighteen — so an app writes the
-ones it cares about: `default: return .nothing` in Swift, `else -> Answer.None`
+ones it cares about: `default: return .nothing()` in Swift, `else -> Answer.None`
 in the shared Kotlin, an `App` with three methods in Rust.
 
 In Rust, two of the eighteen are asked of the app only for a task nobody is
