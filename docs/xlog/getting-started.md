@@ -68,7 +68,7 @@ xlog.flush_now();   // the records are on disk when this returns
 ```
 
 `Xlog::open` answers the appender, which is the `Xlog.open(config)` of Kotlin, of
-Dart and of TypeScript and the `Xlog(config:)` of Swift: one object, held, and
+Dart and of TypeScript and the `Xlog.open(config)` of Swift: one object, held, and
 written through — a second logger is a second `Xlog` of a prefix of its own.
 Every option is on [the configuration page](/xlog/configuration). A record can
 carry more than a message — `xlog.log_with_info(Some(&info), message)` takes an

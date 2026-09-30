@@ -8,7 +8,7 @@ middle boxes the connection is still wanted.
 |---|---|---|---|---|
 | where it connects | `set_longlink_svr_addr` | `setLongLinkServerAddress` | `setLonglinkSvrAddr` | `mars_stn_set_longlink_svr_addr` |
 | where the short link goes | `set_shortlink_svr_addr` | `setShortLinkServerAddress` | `setShortlinkSvrAddr` | `mars_stn_set_shortlink_svr_addr` |
-| force a connect | `make_sure_long_link_connected` | `makeSureLongLinkConnected` | `makesureLongLinkConnected` | `mars_stn_makesure_longlink_connected` |
+| force a connect | `make_sure_default_long_link_connected` | `makeSureLongLinkConnected` | `makesureLongLinkConnected` | `mars_stn_makesure_longlink_connected` |
 | force a connect on one you named | `make_sure_long_link_connected` | `makeSureLongLinkConnected(name:)` | `makesureLongLinkConnectedExt` | `mars_stn_makesure_longlink_connected_ext` |
 | name one of your own | `create_long_link` | `createLongLink` | `createLonglink` | `mars_stn_create_longlink` |
 | throw one you named away | `destroy_long_link` | `destroyLongLink` | `destroyLonglink` | `mars_stn_destroy_longlink` |

@@ -61,7 +61,7 @@ xlog.flush_now();   // 返回时记录已经在磁盘上
 ```
 
 `Xlog::open` 回答的那个 appender，就是 Kotlin、Dart 和 TypeScript 的
-`Xlog.open(config)`，也是 Swift 的 `Xlog(config:)` —— 一个对象，拿着它，对着它写；
+`Xlog.open(config)`，也是 Swift 的 `Xlog.open(config)` —— 一个对象，拿着它，对着它写；
 第二个 logger 就是第二个 `Xlog`，给它自己的 prefix。每个选项都在
 [配置项](/zh/xlog/configuration)那页。一条记录可以不止带一句话 ——
 `xlog.log_with_info(Some(&info), message)` 收一个 `XLoggerInfo`，里面有级别、tag

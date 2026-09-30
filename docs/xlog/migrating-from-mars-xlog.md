@@ -92,7 +92,7 @@ above with none of the C strings. What it does *not* carry is the C++ column's
 names — `mars::xlog::appender_open` and the free functions beside it are one
 process-wide appender behind no object, and the port's shape on every platform
 is an appender an app holds, so a call site moves once and then reads like the
-[Kotlin](#from-the-c-projects-java) below. Every one of them is on
+[Kotlin](#from-the-c-project-s-java) below. Every one of them is on
 [the configuration page](/xlog/configuration), in the spelling of every platform.
 `TAppenderMode` is `AppenderMode`, `TCompressMode` is `CompressMode` and
 `TLogLevel` is `LogLevel`.

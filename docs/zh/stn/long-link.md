@@ -7,7 +7,7 @@
 |---|---|---|---|---|
 | 它连到哪里 | `set_longlink_svr_addr` | `setLongLinkServerAddress` | `setLonglinkSvrAddr` | `mars_stn_set_longlink_svr_addr` |
 | 短连接去哪里 | `set_shortlink_svr_addr` | `setShortLinkServerAddress` | `setShortlinkSvrAddr` | `mars_stn_set_shortlink_svr_addr` |
-| 强制连一次 | `make_sure_long_link_connected` | `makeSureLongLinkConnected` | `makesureLongLinkConnected` | `mars_stn_makesure_longlink_connected` |
+| 强制连一次 | `make_sure_default_long_link_connected` | `makeSureLongLinkConnected` | `makesureLongLinkConnected` | `mars_stn_makesure_longlink_connected` |
 | 强制连一次你命名的那条 | `make_sure_long_link_connected` | `makeSureLongLinkConnected(name:)` | `makesureLongLinkConnectedExt` | `mars_stn_makesure_longlink_connected_ext` |
 | 再开一条有名的 | `create_long_link` | `createLongLink` | `createLonglink` | `mars_stn_create_longlink` |
 | 丢掉那条有名的 | `destroy_long_link` | `destroyLongLink` | `destroyLonglink` | `mars_stn_destroy_longlink` |
