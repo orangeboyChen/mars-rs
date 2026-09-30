@@ -939,7 +939,8 @@ impl LongLink {
             self.profile.conn_reason = reason;
             self.status = LongLinkStatus::ConnectIdle;
             self.disconnect_code = DisconnectInternalCode::None;
-            self.server_triggered_off = false;
+            // `svr_trig_off_` was cleared on the way in, so it is not cleared
+            // again here
             // what the C++'s `__RunReadWrite` starts with: a run asks the
             // identify check again and sends its first heartbeat at once. Its
             // `alarmnoopinterval`, `alarmnooptimeout` and `first_noop_sent` are
