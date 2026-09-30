@@ -929,6 +929,15 @@ mod tests {
             true
         }
 
+        /// `TrafficData` — the one the logic hands over without a core, so it
+        /// is the one that says the bridge is wired to the app at all.
+        fn traffic_data(&mut self, send: i64, recv: i64) {
+            self.asked
+                .lock()
+                .unwrap()
+                .push(format!("traffic {send} {recv}"));
+        }
+
         fn req2buf(
             &mut self,
             taskid: u32,
@@ -1472,14 +1481,20 @@ mod tests {
 
     #[test]
     fn a_traffic_report_goes_to_the_app_through_the_bridge() {
+        let asked = Arc::new(Mutex::new(Vec::new()));
         let mut logic = StnLogic::new();
         logic.set_callback(Rec {
-            asked: Arc::new(Mutex::new(Vec::new())),
+            asked: Arc::clone(&asked),
         });
 
         // the C++ counts its own log tag only, so what is here is the report
         // itself, which the app is the one that answers
         logic.traffic_data(100, 200);
+        assert_eq!(
+            asked_of(&asked),
+            vec!["traffic 100 200".to_string()],
+            "the bridge kept the report to itself"
+        );
     }
 
     #[test]
