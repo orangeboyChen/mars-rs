@@ -416,7 +416,7 @@ fn zstd_mode_is_accepted() {
 }
 
 #[test]
-fn appender_error_is_reported_not_panicked() {
+fn a_prefix_the_appender_refuses_is_reported_and_opens_nothing() {
     let _g = lock();
     let _close = CloseOnDrop;
     let dir = tempfile::tempdir().unwrap();
@@ -437,7 +437,19 @@ fn appender_error_is_reported_not_panicked() {
     // An instance is registered *under* its prefix, so an empty one has no
     // name to be registered under and gets no handle at all. The appender
     // itself is never asked, which is what the old `OK || ERR_APPENDER`
-    // assertion used to leave open.
+    // assertion used to leave open. "Never asked" is what the empty
+    // directory says: an appender that was opened for it has written the
+    // day-stamped file it opens, and a panic would not have — but a panic
+    // is not something this ABI can report, so what is asserted here is
+    // the half of it that is.
     assert_eq!(unsafe { mars_xlog_new_instance(&cfg, 0) }, 0);
+    let files: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert!(
+        files.is_empty(),
+        "no appender was opened for it, so nothing was written: {files:?}"
+    );
     close();
 }
