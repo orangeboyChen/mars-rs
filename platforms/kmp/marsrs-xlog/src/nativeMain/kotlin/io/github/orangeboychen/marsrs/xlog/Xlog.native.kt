@@ -89,7 +89,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
         // one appender for the whole process, so the question "is it open, and is
         // it this one" is one the registry the appender lives in already answers
         // — for a thread that did not open it as much as for the one that did.
-        get() = handle != NO_HANDLE && handle == mars_xlog_get_instance(namePrefix)
+        get() = openHandle() != NO_HANDLE
 
     public actual var level: LogLevel
         get() = LogLevel.of(mars_xlog_get_level(requireOpen()))
@@ -102,12 +102,15 @@ public actual class Xlog actual constructor(config: XlogConfig) {
             currentMode = value
         }
 
-    public actual fun isLoggable(level: LogLevel): Boolean =
-        isOpen && mars_xlog_is_enabled_for(handle, level.ordinal) != DISABLED
+    public actual fun isLoggable(level: LogLevel): Boolean {
+        val opened = openHandle()
+        return opened != NO_HANDLE && mars_xlog_is_enabled_for(opened, level.ordinal) != DISABLED
+    }
 
     public actual fun log(level: LogLevel, tag: String, message: String) {
-        if (isOpen) {
-            mars_xlog_write_instance(handle, level.ordinal, tag, EMPTY, EMPTY, NO_LINE, message)
+        val opened = openHandle()
+        if (opened != NO_HANDLE) {
+            mars_xlog_write_instance(opened, level.ordinal, tag, EMPTY, EMPTY, NO_LINE, message)
         }
     }
 
@@ -124,14 +127,16 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     public actual fun f(tag: String, message: String) = log(LogLevel.FATAL, tag, message)
 
     public actual fun requestFlush() {
-        if (isOpen) {
-            mars_xlog_request_flush_instance(handle)
+        val opened = openHandle()
+        if (opened != NO_HANDLE) {
+            mars_xlog_request_flush_instance(opened)
         }
     }
 
     public actual fun flushNow() {
-        if (isOpen) {
-            mars_xlog_flush_now_instance(handle)
+        val opened = openHandle()
+        if (opened != NO_HANDLE) {
+            mars_xlog_flush_now_instance(opened)
         }
     }
 
@@ -144,7 +149,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     }
 
     public actual fun close() {
-        if (!isOpen) {
+        if (openHandle() == NO_HANDLE) {
             return
         }
         mars_xlog_release_instance(namePrefix)
@@ -163,11 +168,30 @@ public actual class Xlog actual constructor(config: XlogConfig) {
      * appender every other part of the process writes through.
      */
     private fun requireOpen(): Long {
-        check(isOpen) {
+        val opened = openHandle()
+        check(opened != NO_HANDLE) {
             "no appender of this Xlog is open ('$namePrefix'): Xlog.open(XlogConfig(...)) another to log again"
         }
-        return handle
+        return opened
     }
+
+    /**
+     * The handle of this appender, [NO_HANDLE] when it is closed, read once:
+     * [handle] is what `mars_xlog_new_instance` answered, and the registry is
+     * what says the handle is still this [Xlog]'s — an [Xlog] of the same
+     * [namePrefix] is closed with this one, and the registry is where that
+     * shows.
+     *
+     * One read and not two, because the two it replaces are not one answer:
+     * `isOpen` and then `handle` is a window a [close] on another thread
+     * lands in, and what comes out of it is the `0` that [close] wrote — which
+     * is the process-wide appender to the C ABI, so a record meant for this
+     * appender is written through the one every other part of the process
+     * logs into, and a level this wrapper is moved to is *that* appender's.
+     * The Android `actual` of this `expect` reads it once the same way.
+     */
+    private fun openHandle(): Long =
+        handle.takeIf { it != NO_HANDLE && it == mars_xlog_get_instance(namePrefix) } ?: NO_HANDLE
 
     public actual companion object {
         /**
