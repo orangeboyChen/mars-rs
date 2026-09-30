@@ -105,7 +105,7 @@ type CachedClass = Global<JClass<'static>>;
 /// knows none of an app's classes, so a lookup made from a task thread answers
 /// `ClassNotFoundException` for every class named here. `JNI_OnLoad` runs on
 /// the thread that called `System.loadLibrary`, and the loader there is the
-/// app's — so the four are found once, there, and what is kept is a reference
+/// app's — so the five are found once, there, and what is kept is a reference
 /// any thread may use.
 ///
 /// A class of the platform's own is not one of them: those are what a lookup
@@ -114,6 +114,10 @@ type CachedClass = Global<JClass<'static>>;
 struct Classes {
     /// [`STN_CALLBACK`].
     stn_callback: CachedClass,
+    /// [`STN_CGI_PROFILE`] — the class of the object `onTaskEnd` is handed, and
+    /// a lookup of it that fails is an `onTaskEnd` that is never called: it is
+    /// asked for from the same attached thread every one of the thirteen is.
+    stn_cgi_profile: CachedClass,
     /// [`APP_LOGIC`].
     app_logic: CachedClass,
     /// [`PLATFORM_COMM`].
@@ -172,6 +176,7 @@ pub unsafe extern "system" fn JNI_OnLoad(
             };
             Ok::<_, jni::errors::Error>(Classes {
                 stn_callback: cached(STN_CALLBACK)?,
+                stn_cgi_profile: cached(STN_CGI_PROFILE)?,
                 app_logic: cached(APP_LOGIC)?,
                 platform_comm: cached(PLATFORM_COMM)?,
                 sdt_logic: cached(SDT_LOGIC)?,
@@ -1727,9 +1732,12 @@ fn bytes_of(env: &mut Env<'_>, stream: &JObject<'_>) -> Vec<u8> {
 /// the port writes one. Nor is the connect's `nettype`, which the Java class
 /// has no field for.
 fn cgi_profile<'a>(env: &mut Env<'a>, profile: &CgiProfile) -> Option<JObject<'a>> {
-    let Ok(class) = env.find_class(STN_CGI_PROFILE) else {
-        return None;
-    };
+    // The class [`JNI_OnLoad`] found, and not a lookup of it here: this runs
+    // under `attach_current_thread` of [`ask_java`], which is a thread with no
+    // Java frame behind it — see [`CLASSES`]. A `FindClass` of an app's own
+    // class made from one answers `ClassNotFoundException`, and a profile
+    // there is no class for is an `onTaskEnd` the app is never called on.
+    let class = class_of(|classes| &classes.stn_cgi_profile)?;
     let Ok(object) = env.new_object(class, jni_sig!("()V"), &[]) else {
         return None;
     };
