@@ -341,6 +341,22 @@ fn is_unwritten(file: &mut File) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the block of zeros has to be written over a file that measures
+/// `entry_len`, whose bytes are what `unwritten` asks.
+///
+/// A file shorter than a block has never been written through, so its length
+/// alone says it; one that measures the block is asked what its bytes are.
+/// `unwritten` is asked lazily, because reading the file is what answers it
+/// and a file the length has already answered for is not read at all.
+///
+/// What the caller does with a `true` is a write of zeros over a file that
+/// reads as zeros, which is a file no caller can tell from one that was left
+/// alone — so the decision is a function of its own: it is the part of the
+/// two that a test can ask about.
+fn needs_preallocation(entry_len: u64, unwritten: impl FnOnce() -> bool) -> bool {
+    entry_len < BUFFER_BLOCK_LENGTH as u64 || unwritten()
+}
+
 /// Opens (creating if needed) and maps the claimed cache file; falls back to a
 /// heap region on any error. Returns `(region, use_mmap)`.
 ///
@@ -367,7 +383,7 @@ fn open_region(file: &mut File, path: &Path) -> (Region, bool) {
     // `entry_len` is also the length a failed pre-allocation puts the file back
     // to.
     let entry_len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
-    let needs_preallocation = entry_len < BUFFER_BLOCK_LENGTH as u64 || is_unwritten(file);
+    let needs_preallocation = needs_preallocation(entry_len, || is_unwritten(file));
     if file.set_len(BUFFER_BLOCK_LENGTH as u64).is_err() {
         // Nothing can be written through the file, but what it holds is still
         // the only copy there is of a run that did not finish, so the heap
@@ -3200,6 +3216,12 @@ mod tests {
     /// The length is what the file claims and the zeros are what say nothing
     /// was stored, so one that measures the whole block and reads as nothing
     /// is pre-allocated like any other and not taken at its word.
+    ///
+    /// What is asked is the decision, and not what [`open_region`] does with
+    /// it: a file that already measures the block is left measuring it whether
+    /// the block was written over it or not, and a write of zeros over a file
+    /// that reads as zeros is a write no caller can see the difference between
+    /// — so the file is not what this test looks at afterwards.
     #[test]
     fn a_cache_file_that_measures_the_block_but_reads_as_zeros_is_filled() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3217,21 +3239,19 @@ mod tests {
             "a hole the length of the block reads as zeros"
         );
 
-        let (region, use_mmap) = open_region(&mut file, &path);
-        drop(region);
-        // What is asserted is the decision, and not the disk's bookkeeping: a
-        // filesystem that allocates late or compresses is free to answer the
-        // block count either way for a file of zeros, and that count is what
-        // stopped being asked. A mapping is the answer only when the
-        // pre-allocation ran through — a write of zeros it could not do sends
-        // `open_region` to the heap instead.
-        if use_mmap {
-            assert_eq!(
-                file.metadata().unwrap().len(),
-                BUFFER_BLOCK_LENGTH as u64,
-                "the pre-allocation wrote the block and left the file at the block"
-            );
-        }
+        let block = BUFFER_BLOCK_LENGTH as u64;
+        assert_eq!(file.metadata().unwrap().len(), block);
+        assert!(
+            needs_preallocation(block, || is_unwritten(&mut file)),
+            "a file that measures the block and reads as zeros is filled, and not taken \
+             at its word"
+        );
+        // ... and the length is what is asked first, so a file that is short
+        // of the block is filled without the file being read at all
+        assert!(
+            needs_preallocation(0, || panic!("the length answered this one already")),
+            "a file shorter than the block has never been written through"
+        );
     }
 
     /// The way round that costs records: a file that measures the block *and*
