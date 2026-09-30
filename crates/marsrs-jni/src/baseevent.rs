@@ -88,12 +88,20 @@ impl ActiveLogic {
     }
 
     /// `ActiveLogic::OnForeground(_isforeground)`.
-    fn on_foreground(&mut self, is_foreground: bool) {
+    ///
+    /// What it answers with is the state the caller owes the net core, and
+    /// [`None`] when the active state did not move and there is nothing to
+    /// tell it. Nothing is signalled from here, and that is the point: the net
+    /// core asks this logic whether the app is in front —
+    /// [`is_foreground_impl`] — while it holds its own lock
+    /// (`NetCore::start_task`), so a signal sent with this logic's lock held
+    /// would wait for an ask that waits for the signal.
+    fn on_foreground(&mut self, is_foreground: bool) -> Option<bool> {
         // the C++'s `if (_isforeground == isforeground_) return;`, and every
         // thing a change moves: a backgrounded app is active *again* until the
         // alarm says otherwise.
         if is_foreground == self.is_foreground {
-            return;
+            return None;
         }
         let was_active = self.is_active;
         self.is_active = true;
@@ -103,34 +111,28 @@ impl ActiveLogic {
         if !is_foreground {
             self.start_inactive_alarm();
         }
-        if was_active != self.is_active {
-            self.signal_active();
-        }
+        (was_active != self.is_active).then_some(self.is_active)
     }
 
     /// `ActiveLogic::__OnInActive()` — what the alarm runs. Ten minutes in the
     /// background is what makes the app inactive; in the foreground it never
     /// does, so the alarm has nothing to say.
-    fn on_inactive(&mut self) {
+    ///
+    /// The state it answers with is always signalled, because the C++'s
+    /// `SignalActive(isactive_)` is unconditional here too.
+    fn on_inactive(&mut self) -> bool {
         if !self.is_foreground {
             self.is_active = false;
         }
-        self.signal_active();
+        self.is_active
     }
 
     /// `ActiveLogic::SwitchActiveStateForDebug(_active)` — sets it and then
     /// runs `__OnInActive`, exactly like the C++, which is why a debug "active"
     /// in the background does not stay active.
-    fn switch_active_state_for_debug(&mut self, is_active: bool) {
+    fn switch_active_state_for_debug(&mut self, is_active: bool) -> bool {
         self.is_active = is_active;
-        self.on_inactive();
-    }
-
-    /// `SignalActive(isactive)` — the C++ broadcast, as a call to the one thing
-    /// that listened: the net core.
-    fn signal_active(&mut self) {
-        let is_active = self.is_active;
-        crate::stn::with_logic(|logic| logic.set_active(is_active));
+        self.on_inactive()
     }
 
     /// `alarm_.Start(INACTIVE_TIMEOUT)` plus `startAlarm(type_, seq, after)`:
@@ -175,6 +177,17 @@ fn instance() -> &'static Mutex<Option<ActiveLogic>> {
     LOGIC.get_or_init(|| Mutex::new(None))
 }
 
+/// `SignalActive(isactive)` — the C++ broadcast, as a call to the one thing
+/// that listened: the net core.
+///
+/// It is a free function and not a method of [`ActiveLogic`] because it takes
+/// the net core's lock, which the net core holds while it asks this logic
+/// whether the app is in front: the call is only safe from outside both, which
+/// is why the state it sends is what the methods under the lock answer with.
+fn signal_active(is_active: bool) {
+    crate::stn::with_logic(|logic| logic.set_active(is_active));
+}
+
 /// `ActiveLogic::Release()` — the state and the alarm with it are dropped.
 ///
 /// The C++ does **not** call this from `onDestroy` ("others use activelogic
@@ -192,7 +205,8 @@ pub fn release_impl() {
 /// on whatever thread drains the queue, so it reaches the state the way any
 /// other call does.
 fn on_inactive() {
-    with_active(ActiveLogic::on_inactive)
+    let is_active = with_active(ActiveLogic::on_inactive);
+    signal_active(is_active);
 }
 
 /// `BaseEvent.onCreate` — `mars::baseevent::OnCreate()`, which is the C++'s
@@ -224,7 +238,10 @@ pub fn on_destroy_impl() -> bool {
 /// `BaseEvent.onForeground` — `mars::baseevent::OnForeground(_isforeground)`,
 /// which is `ActiveLogic::OnForeground` in the C++.
 pub fn on_foreground_impl(is_foreground: bool) {
-    with_active(|logic| logic.on_foreground(is_foreground))
+    let signal = with_active(|logic| logic.on_foreground(is_foreground));
+    if let Some(is_active) = signal {
+        signal_active(is_active);
+    }
 }
 
 /// `BaseEvent.onNetworkChange` — `mars::baseevent::OnNetworkChange()`.
@@ -268,7 +285,8 @@ pub fn last_foreground_change_time_impl() -> u64 {
 
 /// `ActiveLogic::SwitchActiveStateForDebug(_active)`.
 pub fn switch_active_state_for_debug_impl(is_active: bool) {
-    with_active(|logic| logic.switch_active_state_for_debug(is_active))
+    let to_signal = with_active(|logic| logic.switch_active_state_for_debug(is_active));
+    signal_active(to_signal);
 }
 
 /// The id the inactivity alarm is waiting on — [`crate::alarm`]'s, which is
@@ -282,7 +300,14 @@ pub fn inactive_alarm_id_impl() -> i64 {
 mod tests {
     use super::*;
     use marsrs_comm::message_queue::{get_def_message_queue, RunLoop};
+    use std::sync::mpsc;
+    use std::thread;
     use std::time::Duration;
+
+    /// How many times the net core's thread asks whether the app is in front
+    /// while it holds its own lock — enough that an ask is waiting whenever
+    /// the signal is sent, and few enough that the ask is over in a moment.
+    const ASK_COUNT: usize = 4096;
 
     /// The state is process-wide, and so is the net core `onDestroy` drops: the
     /// samples take it in turn, and each one starts from a fresh
@@ -406,6 +431,42 @@ mod tests {
             on_signal_crash_impl(11);
             on_exception_crash_impl();
         })
+    }
+
+    /// The net core asks whether the app is in front — [`is_foreground_impl`]
+    /// — while it holds its own lock, so the state a move broadcasts has to
+    /// be broadcast with this logic's lock released: an ask that waits for the
+    /// state and a state that waits for the ask hold each other forever
+    /// otherwise, which is what this one is here for.
+    #[test]
+    fn the_state_is_broadcast_with_both_locks_free() {
+        let (in_here_tx, in_here_rx) = mpsc::channel();
+        let (signalled_tx, signalled_rx) = mpsc::channel();
+
+        // the net core's thread: one ask after another, so that an ask is
+        // waiting whenever the other thread reaches the signal
+        let asking = thread::spawn(move || {
+            crate::stn::with_logic(|_| {
+                in_here_tx.send(()).ok();
+                for _ in 0..ASK_COUNT {
+                    let _ = is_foreground_impl();
+                    thread::yield_now();
+                }
+            });
+        });
+        in_here_rx.recv().unwrap();
+
+        let signalling = thread::spawn(move || {
+            switch_active_state_for_debug_impl(false);
+            signalled_tx.send(()).ok();
+        });
+        assert_eq!(
+            signalled_rx.recv_timeout(Duration::from_secs(10)),
+            Ok(()),
+            "the signal waited for the ask that waited for the signal"
+        );
+        signalling.join().unwrap();
+        asking.join().unwrap();
     }
 
     #[test]
