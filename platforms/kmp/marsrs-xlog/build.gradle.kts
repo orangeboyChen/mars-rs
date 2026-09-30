@@ -235,8 +235,9 @@ afterEvaluate {
     //
     // A `native/` that is not there at all is the same failure, and it is the
     // one `listFiles()` answers `null` for.
-    val klibDirs = nativeDir.listFiles()?.filter { it.isDirectory && it.name != androidNativeDir.name } ?: emptyList()
-    val withoutArchive = if (klibDirs.isEmpty()) listOf(nativeDir) else klibDirs.filter { !File(it, "libmars_ffi.a").isFile }
+    val klibDirs = nativeDir.listFiles().orEmpty().filter { it.isDirectory && it.name != androidNativeDir.name }
+    val withoutArchive =
+        if (klibDirs.isEmpty()) listOf(nativeDir) else klibDirs.filter { !File(it, "libmars_ffi.a").isFile }
     if (withoutArchive.isNotEmpty()) {
         throw GradleException(
             "No libmars_ffi.a in ${withoutArchive.joinToString { it.name }}. " +

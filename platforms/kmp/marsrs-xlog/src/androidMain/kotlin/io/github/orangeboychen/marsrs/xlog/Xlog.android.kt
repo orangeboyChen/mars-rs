@@ -142,8 +142,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
      * `isOpen` and then `handle` is a window a [close] on another thread lands
      * in, and what comes out of it is the handle of an appender that is gone.
      */
-    private fun openHandle(): Long =
-        handle.takeIf { it != NO_HANDLE && it == openHandles[namePrefix] } ?: NO_HANDLE
+    private fun openHandle(): Long = handle.takeIf { it != NO_HANDLE && it == openHandles[namePrefix] } ?: NO_HANDLE
 
     /**
      * The handle of this appender, or [IllegalStateException] when there is none

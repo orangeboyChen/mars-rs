@@ -206,8 +206,9 @@ afterEvaluate {
     // one `listFiles()` answers `null` for: an empty list of targets is a check
     // that finds nothing missing in nothing, and a module whose every klib
     // links nothing is published.
-    val netDirs = nativeDir.listFiles()?.filter { it.isDirectory && it.name != androidNativeDir.name } ?: emptyList()
-    val withoutNet = if (netDirs.isEmpty()) listOf(nativeDir) else netDirs.filter { !File(it, "libmars_net_ffi.a").isFile }
+    val netDirs = nativeDir.listFiles().orEmpty().filter { it.isDirectory && it.name != androidNativeDir.name }
+    val withoutNet =
+        if (netDirs.isEmpty()) listOf(nativeDir) else netDirs.filter { !File(it, "libmars_net_ffi.a").isFile }
     if (withoutNet.isNotEmpty()) {
         throw GradleException(
             "No libmars_net_ffi.a in ${withoutNet.joinToString { it.name }}. " +
