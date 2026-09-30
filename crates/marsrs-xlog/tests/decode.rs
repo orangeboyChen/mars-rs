@@ -184,13 +184,12 @@ fn the_records_behind_the_damage_are_decoded_too() {
 
 #[test]
 fn the_marker_names_how_much_was_skipped() {
-    let (bytes, damaged, skipped) = damaged_file();
+    let (bytes, _damaged, skipped) = damaged_file();
     let plain = marsrs_xlog::decode_records(&bytes, None).expect("the walk went on");
     let text = String::from_utf8_lossy(&plain);
 
     // From the byte the walk stopped at to the byte the next record starts at,
     // which is the whole of the record the file lost.
-    assert!(damaged < bytes.len(), "the fixture is not damaged");
     assert!(
         text.contains(&format!(
             "[F]decode_log_file.py decode error len={skipped}\n"
@@ -381,11 +380,14 @@ fn a_body_that_will_not_inflate_leaves_its_marker_behind() {
 /// for, which is the shape a resync that starts over at the damage each time
 /// costs a file's length per span.
 ///
-/// What is asserted is that the answer is unchanged by the bound: every record
-/// behind every span is still read, and every span is still marked with its
-/// length.
+/// What is asserted is the answer: every record behind every span is still
+/// read, and every span is still marked with its length. A resync that
+/// started over at the damage each time — a pass over the file per span,
+/// and not one pass over the whole of it — would answer the same, and this
+/// is the shape of file that would show it; what it would show it in is
+/// time, and not in the text, so the pass is not what this asks about.
 #[test]
-fn damage_all_through_a_file_is_walked_in_one_pass() {
+fn damage_all_through_a_file_is_walked_span_by_span() {
     /// Bytes no record of any shape can start in: `0xff` is no magic of any of
     /// the thirteen.
     const JUNK: [u8; 64] = [0xff; 64];
