@@ -285,24 +285,21 @@ internal final class Xlog: NSObject {
         mars_xlog_set_max_alive_duration_instance(handle, native)
     }
 
-    /// `mars_xlog_release_instance`: closes the appender `open` made.
+    /// `mars_xlog_release_instance_of`: closes the appender `open` made.
     ///
     /// The prefix is released only while the appender of it is still the one
-    /// `open` was answered with: `mars_xlog_release_instance` closes the
-    /// appender of a *prefix*, so one another part of the app opened after
-    /// this one was closed would be theirs and would be closed by this.
+    /// `open` was answered with: a release is given a *prefix*, so one another
+    /// part of the app opened after this one was closed would be theirs and
+    /// would be closed by this. Naming the handle is what makes the question
+    /// and the release one call.
     @objc(close:)
     internal func close(_ namePrefix: String) {
         guard let handle = handles.removeValue(forKey: namePrefix) else {
             return
         }
-        let owns = namePrefix.withCString { prefix in
-            mars_xlog_get_instance(prefix) == handle
+        namePrefix.withCString { prefix in
+            mars_xlog_release_instance_of(prefix, handle)
         }
-        guard owns else {
-            return
-        }
-        namePrefix.withCString { mars_xlog_release_instance($0) }
     }
 
     /// Closes what `open` opened and `close` was not asked about: the module
@@ -310,13 +307,9 @@ internal final class Xlog: NSObject {
     /// holds open.
     deinit {
         for (namePrefix, handle) in handles {
-            let owns = namePrefix.withCString { prefix in
-                mars_xlog_get_instance(prefix) == handle
+            namePrefix.withCString { prefix in
+                mars_xlog_release_instance_of(prefix, handle)
             }
-            guard owns else {
-                continue
-            }
-            namePrefix.withCString { mars_xlog_release_instance($0) }
         }
         handles.removeAll()
     }
