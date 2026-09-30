@@ -650,18 +650,160 @@ unsafe fn path_at(
 mod tests {
     use super::*;
 
+    use std::fs;
+    use std::mem::offset_of;
+    use std::path::Path;
+
+    /// The header these tests are read against: the one a C caller includes,
+    /// and not a copy of it, which is what made the two below assert a number
+    /// the header had already stopped agreeing with.
+    fn header() -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("include/mars_xlog.h");
+        fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+    }
+
+    /// The value the header gives `variant`, of the enum it ends with `ty`.
+    ///
+    /// The block is found by the `} ty;` that closes it and not by the variant
+    /// alone, so a variant named after another one's beginning —
+    /// `MarsLevelVerbose` in `MarsLevelVerboseX` — is not taken for it.
+    fn header_enum_value(header: &str, ty: &str, variant: &str) -> c_int {
+        let end = header
+            .find(&format!("}} {ty};"))
+            .unwrap_or_else(|| panic!("include/mars_xlog.h declares no `{ty}`"));
+        let start = header[..end]
+            .rfind("typedef enum")
+            .unwrap_or_else(|| panic!("`{ty}` in include/mars_xlog.h is not a `typedef enum`"));
+        let block = &header[start..end];
+        let at = block
+            .find(&format!("{variant} ="))
+            .unwrap_or_else(|| panic!("`{ty}` in include/mars_xlog.h has no `{variant}`"));
+        let digits: String = block[at + variant.len() + 1..]
+            .trim_start()
+            .trim_start_matches('=')
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '-')
+            .collect();
+        assert!(
+            !digits.is_empty(),
+            "`{ty}`'s `{variant}` in include/mars_xlog.h has no value"
+        );
+        digits
+            .parse()
+            .unwrap_or_else(|e| panic!("`{ty}`'s `{variant}` is not an int: {digits} ({e})"))
+    }
+
+    /// The fields of `MarsXLogConfig` in the order the header declares them,
+    /// comments and all: a field whose comment names another field with a `;`
+    /// in it — `int mode; /* MarsAppenderMode; ... */` — is one a naive parse
+    /// read as two.
+    fn header_config_fields(header: &str) -> Vec<&str> {
+        let end = header
+            .find("} MarsXLogConfig;")
+            .unwrap_or_else(|| panic!("include/mars_xlog.h declares no `MarsXLogConfig`"));
+        let start = header[..end]
+            .rfind("typedef struct")
+            .unwrap_or_else(|| panic!("`MarsXLogConfig` is not a `typedef struct`"));
+        let block = &header[start + "typedef struct".len()..end];
+        let mut fields = Vec::new();
+        for line in block.lines() {
+            // The comment is what carries the `;` that is not a field's.
+            let code = match line.find("/*") {
+                Some(at) => &line[..at],
+                None => line,
+            };
+            let code = code.trim();
+            let Some(name) = code.strip_suffix(';') else {
+                continue;
+            };
+            // `const char* name_prefix`, and the type in front of it.
+            let name = name.rsplit([' ', '*']).next().unwrap_or(name);
+            assert!(!name.is_empty(), "a field of MarsXLogConfig has no name");
+            fields.push(name);
+        }
+        assert!(
+            !fields.is_empty(),
+            "no field of MarsXLogConfig found in include/mars_xlog.h"
+        );
+        fields
+    }
+
+    /// Every variant of the three enums is the integer the header spells for
+    /// it, which is the only place a C caller reads them from: an enum here
+    /// and a `typedef enum` there are the same numbers or a C caller asks for
+    /// `Sync` and gets `Async`.
     #[test]
     fn abi_enums_match_the_c_header() {
-        assert_eq!(MarsAppenderMode::Async as c_int, 0);
-        assert_eq!(MarsAppenderMode::Sync as c_int, 1);
-        assert_eq!(MarsCompressMode::Zlib as c_int, 0);
-        assert_eq!(MarsCompressMode::Zstd as c_int, 1);
-        assert_eq!(MarsLogLevel::Verbose as c_int, 0);
-        assert_eq!(MarsLogLevel::Debug as c_int, 1);
-        assert_eq!(MarsLogLevel::Info as c_int, 2);
-        assert_eq!(MarsLogLevel::Warn as c_int, 3);
-        assert_eq!(MarsLogLevel::Error as c_int, 4);
-        assert_eq!(MarsLogLevel::Fatal as c_int, 5);
+        let header = header();
+        for (ty, variant, value) in [
+            (
+                "MarsAppenderMode",
+                "MarsAppenderAsync",
+                MarsAppenderMode::Async as c_int,
+            ),
+            (
+                "MarsAppenderMode",
+                "MarsAppenderSync",
+                MarsAppenderMode::Sync as c_int,
+            ),
+            (
+                "MarsCompressMode",
+                "MarsCompressZlib",
+                MarsCompressMode::Zlib as c_int,
+            ),
+            (
+                "MarsCompressMode",
+                "MarsCompressZstd",
+                MarsCompressMode::Zstd as c_int,
+            ),
+            (
+                "MarsLogLevel",
+                "MarsLevelVerbose",
+                MarsLogLevel::Verbose as c_int,
+            ),
+            (
+                "MarsLogLevel",
+                "MarsLevelDebug",
+                MarsLogLevel::Debug as c_int,
+            ),
+            ("MarsLogLevel", "MarsLevelInfo", MarsLogLevel::Info as c_int),
+            ("MarsLogLevel", "MarsLevelWarn", MarsLogLevel::Warn as c_int),
+            (
+                "MarsLogLevel",
+                "MarsLevelError",
+                MarsLogLevel::Error as c_int,
+            ),
+            (
+                "MarsLogLevel",
+                "MarsLevelFatal",
+                MarsLogLevel::Fatal as c_int,
+            ),
+        ] {
+            assert_eq!(
+                header_enum_value(&header, ty, variant),
+                value as c_int,
+                "include/mars_xlog.h out of sync: `{ty}`'s `{variant}`"
+            );
+        }
+        // `MARS_LEVEL_NONE` is a `#define` beside the enum and not a variant of
+        // it, because no record carries it: it is a filter, and only a filter.
+        assert!(
+            header.contains("#define MARS_LEVEL_NONE 6"),
+            "include/mars_xlog.h out of sync: `MARS_LEVEL_NONE` is 6"
+        );
+        let none: c_int = header
+            .lines()
+            .find_map(|line| line.strip_prefix("#define MARS_LEVEL_NONE "))
+            .expect("include/mars_xlog.h has no `MARS_LEVEL_NONE`")
+            .trim()
+            .parse()
+            .expect("`MARS_LEVEL_NONE` in include/mars_xlog.h is not an int");
+        assert_eq!(
+            to_log_level(none),
+            None,
+            "`MARS_LEVEL_NONE` must not produce a record"
+        );
     }
 
     #[test]
@@ -691,25 +833,46 @@ mod tests {
         assert_eq!(opt_string("tag").as_deref(), Some("tag"));
     }
 
+    /// The fields of `MarsXLogConfig` are the header's, in the header's order:
+    /// an aggregate initialiser on the C side — `{ .mode = 1, .log_dir = dir }`
+    /// — names them by position, so a Rust field that moved is a config a C
+    /// caller reads as one it never wrote.
+    ///
+    /// The offsets are the compiler's, and not numbers written down beside the
+    /// struct: it is the order they are in that is asserted, and an order
+    /// written twice is one that is checked against itself.
     #[test]
     fn config_layout_is_c_compatible() {
-        // The C header's field order (`mode`, `log_dir`, `name_prefix`,
-        // `pub_key`, `compress_mode`, `compress_level`, `cache_dir`,
-        // `cache_days`) is what `mars::xlog::XLogConfig` uses too, so a C
-        // caller's aggregate initialiser lands on the right fields.
-        let cfg = MarsXLogConfig {
-            mode: 1,
-            log_dir: std::ptr::null(),
-            name_prefix: std::ptr::null(),
-            pub_key: std::ptr::null(),
-            compress_mode: 0,
-            compress_level: 6,
-            cache_dir: std::ptr::null(),
-            cache_days: 3,
+        let header = header();
+        let fields = header_config_fields(&header);
+        let offsets: Vec<(&str, usize)> = vec![
+            ("mode", offset_of!(MarsXLogConfig, mode)),
+            ("log_dir", offset_of!(MarsXLogConfig, log_dir)),
+            ("name_prefix", offset_of!(MarsXLogConfig, name_prefix)),
+            ("pub_key", offset_of!(MarsXLogConfig, pub_key)),
+            ("compress_mode", offset_of!(MarsXLogConfig, compress_mode)),
+            ("compress_level", offset_of!(MarsXLogConfig, compress_level)),
+            ("cache_dir", offset_of!(MarsXLogConfig, cache_dir)),
+            ("cache_days", offset_of!(MarsXLogConfig, cache_days)),
+        ];
+        let mine: Vec<&str> = {
+            let mut mine: Vec<(&str, usize)> = offsets.clone();
+            mine.sort_by_key(|(_, offset)| *offset);
+            mine.into_iter().map(|(name, _)| name).collect()
         };
-        assert_eq!(cfg.mode, MarsAppenderMode::Sync as c_int);
-        assert_eq!(cfg.compress_mode, MarsCompressMode::Zlib as c_int);
-        assert_eq!(cfg.cache_days, 3);
+        assert_eq!(
+            mine, fields,
+            "include/mars_xlog.h and src/abi.rs lay MarsXLogConfig out differently"
+        );
+        // One field, one offset: a struct the compiler padded into the same
+        // place twice is one the C side reads as a shorter config.
+        let unique: std::collections::BTreeSet<usize> =
+            offsets.iter().map(|(_, offset)| *offset).collect();
+        assert_eq!(
+            unique.len(),
+            offsets.len(),
+            "two fields of MarsXLogConfig are at the same offset"
+        );
     }
 
     #[test]
