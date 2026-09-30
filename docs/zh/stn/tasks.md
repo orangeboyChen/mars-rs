@@ -92,8 +92,10 @@ await 的任务上。见[那些问题](/zh/stn/callbacks)。
 那个循环是 App 的，一个发起了却一直没排空的任务会一直坐在队列里，直到进程结束。
 
 在 Rust 里一个调用就够了：`Driver::spawn(stn)` 起这个 crate 的一个线程，做的正是
-宿主那个循环做的事 —— 到点了 `run_pending()`，其间睡 `due_delay()` —— `Driver`
-被 drop 的时候这个线程被 join。那个 logic 是共享的、不是被搬走的，所以 App 留着自己
+宿主那个循环做的事 —— 每 20 ms 一片，片尾 `run_pending()`，然后睡满这一片 —— 这个
+睡眠**不是** `due_delay()` 回答的那个延迟：那是"被自己的 socket 唤醒的宿主可以等多
+久"，而这个 crate 的线程没有谁唤醒它 —— `Driver` 被 drop 的时候这个线程被 join；
+除非这次 drop 自己正握着线程要的那把 logic 锁，那时交给 stop 标志去结束。那个 logic 是共享的、不是被搬走的，所以 App 留着自己
 的 `Arc`，继续通过它发任务。已经有 `run_pending` 循环的宿主留着它就好，不需要
 `Driver`：一趟把某个任务跑完的时候，await 它的人会被唤醒，所以一个 `Driver` 和宿主
 自己的循环可以一起用。

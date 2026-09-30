@@ -24,13 +24,10 @@
 | `NET_CHECK_SHORT` | `NET_CHECK_SHORT` | `K_SHORT` | `.short` | `NET_CHECK_SHORT` | 一次 http：那个 net-check CGI，以及短连接的 hosts |
 
 它们按位或起来 —— `NET_CHECK_BASIC | NET_CHECK_LONG` 是跑三项的一趟 —— 而 `0` 是
-**一项都不跑**：计划是空的，这一趟不问任何探测，报告是 `{"details":[]}`。它不是“全
-部都跑”，全部都跑是 `1 | 2 | 4`，在 Swift 里是 `Mode.all`。
-
-空跑一趟是 Rust 和 Android 给 `0` 的答案。C ABI —— 以及 Swift、Kotlin/Native
-和其他所有走它的调用方 —— 直接拒绝一个没有任何 bit 的 mode：
-`mars_sdt_start_active_check` 回答 `MARS_SDT_ERR_BAD_ARG`，所以这些平台上
-`0` 换来的是“没启动”和一份拿不到的报告，而不是一份空报告。
+**一项都不跑**，而且没有哪个接口会跑它：三个 bit 一个都没有的 mode 在哪里都被拒绝 ——
+Rust 和共享 Kotlin 回答 `false`，Android 走的是同一个调用，C ABI 回答
+`MARS_SDT_ERR_BAD_ARG`。所以 `0` 在任何平台上换来的都是“没启动”和一份拿不到的报告，
+而不是一份空报告。它不是“全部都跑”，全部都跑是 `1 | 2 | 4`，在 Swift 里是 `Mode.all`。
 
 Swift 把它们当成一个集合来收，`mode: [.basic, .long]`；Objective-C 还是用那个整
 数：`mode: NET_CHECK_BASIC | NET_CHECK_LONG`。

@@ -40,10 +40,12 @@
 两次。取走就清空了 —— 下一次调用报的是这之后发生的事。
 
 在 Android 和共享 Kotlin 上报告是一个 `String?`，所以没有 buffer 要估大小。Swift
-的 `takeReport()` 从 4 KB 起、翻倍到 1 MB，只有没东西可拿的时候才回答 `nil`。
-`mars_sdt_take_report` 在报告塞不进 buffer 时回答 `MARS_SDT_ERR_NO_SPACE` —— 而且
-**结果留着**，所以调用方换一个更大的 buffer 再问一次，拿到的还是那次诊断，而不是
-一份空的。
+的 `takeReport()` 从 4 KB 起、翻倍到 1 MB，三种情况下回答 `nil`：没东西可拿；C ABI
+回答的不是 `MARS_SDT_ERR_NO_SPACE` 而是别的负码 —— panic、buffer 是 NULL、还有一
+趟在跑；或者报告连 1 MB 都装不下。只有第一种是"还没有诊断"，把每个 `nil` 都当第一种
+处理的 App 会丢掉一份它本来已经拿到的报告。`mars_sdt_take_report` 在报告塞不进
+buffer 时回答 `MARS_SDT_ERR_NO_SPACE` —— 而且**结果留着**，所以调用方换一个更大的
+buffer 再问一次，拿到的还是那次诊断，而不是一份空的。
 
 ## 取消，以及从头再来
 

@@ -6,13 +6,13 @@
 | 作用 | Rust | Swift | Android | Kotlin Multiplatform | Flutter / React Native | C | C++ | HarmonyOS | 默认值 |
 |---|---|---|---|---|---|---|---|---|---|
 | `.xlog` 文件写到哪；目录不存在会创建 | `logdir` | `logDirectory` | `logDir` | `logDir` | `logDir` | `log_dir` | `logDir` | `logDir` | **必填**（Rust 里是 `./log`） |
-| 每个文件名的开头，也是这个 appender 的名字 | `nameprefix` | `namePrefix` | `namePrefix` | `namePrefix` | `namePrefix` | `name_prefix` | `namePrefix` | `namePrefix` | `xlog` |
+| 每个文件名的开头，也是这个 appender 的名字 | `nameprefix` | `namePrefix` | `namePrefix` | `namePrefix` | `namePrefix` | `name_prefix` | `namePrefix` | `namePrefix` | `xlog`（C/C++ 没有默认值：前缀原样使用，空的就是空的） |
 | 记录要达到的级别 | 见[级别](#级别) | `level` | `level` | `level` | `level` | `mars_xlog_new_instance(&config, level)` | `level` | `level` | `info` |
 | 写入是否等落盘 | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | 异步 |
 | 异步缓存文件放哪 | `cachedir` | `cacheDirectory` | `cacheDir` | `cacheDir` | `cacheDir` | `cache_dir` | `cacheDir` | `cacheDir` | 和日志文件同一个目录 |
 | 在缓存目录里暂存的文件等几天再挪进日志目录 | `cache_days` | `cacheDays` | `cacheDays` | `cacheDays` | `cacheDays` | `cache_days` | `cacheDays` | `cacheDays` | `0` —— 不暂存：当天的文件直接写在日志目录里 |
 | 关闭的文件用什么压缩 | `compress_mode` | `compression` | `compressMode` | `compressMode` | `compressMode` | `compress_mode` | `compressMode` | `compressMode` | zlib |
-| 压缩到什么程度 | `compress_level` | `compressionLevel` | `compressLevel` | `compressLevel` | `compressLevel` | `compress_level` | `compressLevel` | `compressLevel` | `0` —— 用压缩器自己的（zlib 是 6）；Rust 是 `6` |
+| 压缩到什么程度 | `compress_level` | `compressionLevel` | `compressLevel` | `compressLevel` | `compressLevel` | `compress_level` | `compressLevel` | `compressLevel` | `0` —— 用 zstd 自己的（3）；zlib 不看这个级别，一律按 9 压；Rust 是 `6` |
 | 加密用的公钥 | `pub_key` | `publicKey` | `pubKey` | `pubKey` | `pubKey` | `pub_key` | `pubKey` | `pubKey` | 空 —— 不加密 |
 
 appender 接受不了的配置，在构造它的地方就被拒绝，而不是被库悄悄吞掉：
@@ -96,15 +96,17 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 默认是异步，因为文件比一条记录慢；同步用在一条记录等不了写线程的地方 ——
 崩溃日志，或者退出前的最后几行。
 
-两种模式都不是每条记录都进内核：都先攒着，攒到大约 4 KiB，或者 `close()` /
+两种模式都不是每条记录都进内核：同步先攒到大约 4 KiB；异步攒到它那个缓存块的三分之
+一 —— 150 KiB 的 mmap 里的 50 KiB —— 或者来了一条 `fatal`，或者到 `close()` /
 `flushNow()` 的时候才交给系统。异步攒着不丢东西 —— 记录同时在内核手里那份
 缓存文件里；同步后面什么都没有，进程被杀时攒着的那截就丢了。退出前要调的那一下，
 就是为这一截。
 
 ## 压缩与加密
 
-默认 `zlib`，`zstd` 压得更紧；两者都是按文件、在文件关闭时生效。级别是压缩器自己的旋钮：
-`0` 用默认值（zlib 是 6），zlib 的上限是 `9`，zstd 是 `22`。
+默认 `zlib`，`zstd` 压得更紧；两者都是按文件、在文件关闭时生效。级别是 zstd 那个
+后端的旋钮：`0` 用它的默认值（3），上限是 `22`；zlib 不看它，一律按 9 压，和 C++
+一样。
 
 给了 `pubKey`，每条记录的正文会用 ECDH + TEA 加密 —— 也就是 C++ 实现用的那个算法，
 密钥由写方和读方协商出来。这里填的是**公**钥，

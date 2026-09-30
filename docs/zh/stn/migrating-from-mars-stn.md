@@ -50,8 +50,9 @@ while (due != null) {
 `usleep(due * 1000)`。
 
 在 Rust 里一个调用就能起一个：`Driver::spawn(stn)` 起这个 crate 的一个线程排空
-队列 —— 到点了 `run_pending()`，其间睡 `due_delay()` —— `Driver` 被 drop 的时候把它
-join 掉。要 await 一个任务又没有自己循环的 App 用它；有循环的 App 留着那个循环，
+队列 —— 每 20 ms 一片，片尾 `run_pending()`，然后睡满这一片；这个睡眠不是
+`due_delay()` 回答的那个延迟，后者是宿主的数字、不是线程的数字 —— `Driver` 被 drop
+的时候把它 join 掉，除非这次 drop 自己正握着线程要的那把锁。要 await 一个任务又没有自己循环的 App 用它；有循环的 App 留着那个循环，
 因为一趟把某个任务跑完的时候，await 它的人会被唤醒。
 
 一个发起了却一直没排空的任务会一直待在它的队列里 —— `has_task` 对一个哪儿也去不了

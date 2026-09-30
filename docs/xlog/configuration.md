@@ -7,13 +7,13 @@ one with no default — the appender is not opened without somewhere to write.
 | what it does | Rust | Swift | Android | Kotlin Multiplatform | Flutter / React Native | C | C++ | HarmonyOS | default |
 |---|---|---|---|---|---|---|---|---|---|
 | where the `.xlog` files go; created when it is not there | `logdir` | `logDirectory` | `logDir` | `logDir` | `logDir` | `log_dir` | `logDir` | `logDir` | **required** (`./log` in Rust) |
-| what every file starts with, and the name the appender is known by | `nameprefix` | `namePrefix` | `namePrefix` | `namePrefix` | `namePrefix` | `name_prefix` | `namePrefix` | `namePrefix` | `xlog` |
+| what every file starts with, and the name the appender is known by | `nameprefix` | `namePrefix` | `namePrefix` | `namePrefix` | `namePrefix` | `name_prefix` | `namePrefix` | `namePrefix` | `xlog` (none in C/C++: the prefix is used verbatim, and an empty one stays empty) |
 | the level a record has to reach | see [levels](#levels) | `level` | `level` | `level` | `level` | `mars_xlog_new_instance(&config, level)` | `level` | `level` | `info` |
 | whether a write waits for the file | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | async |
 | where the async cache file goes | `cachedir` | `cacheDirectory` | `cacheDir` | `cacheDir` | `cacheDir` | `cache_dir` | `cacheDir` | `cacheDir` | next to the log files |
 | how many days a file staged in the cache directory waits before it is moved into the log directory | `cache_days` | `cacheDays` | `cacheDays` | `cacheDays` | `cacheDays` | `cache_days` | `cacheDays` | `cacheDays` | `0` — nothing is staged: the day's file is written in the log directory |
 | what a closed file is compressed with | `compress_mode` | `compression` | `compressMode` | `compressMode` | `compressMode` | `compress_mode` | `compressMode` | `compressMode` | zlib |
-| how hard the compressor tries | `compress_level` | `compressionLevel` | `compressLevel` | `compressLevel` | `compressLevel` | `compress_level` | `compressLevel` | `compressLevel` | `0` — the compressor's own (zlib: 6); `6` in Rust |
+| how hard the compressor tries | `compress_level` | `compressionLevel` | `compressLevel` | `compressLevel` | `compressLevel` | `compress_level` | `compressLevel` | `compressLevel` | `0` — the zstd default (3); zlib ignores the level and always compresses at 9; `6` in Rust |
 | the public key a record is encrypted with | `pub_key` | `publicKey` | `pubKey` | `pubKey` | `pubKey` | `pub_key` | `pubKey` | `pubKey` | empty — no encryption |
 
 A config the appender cannot honour is refused where you build it and not
@@ -105,9 +105,10 @@ Async is the default because the file is slower than the record; sync is what yo
 want when a record cannot wait for a writer thread — a crash log, or the last
 lines before an exit.
 
-What neither mode does is reach the kernel once per record: both hold what they
-have until roughly 4 KiB of it has piled up, or until `close()` or `flushNow()`
-runs. Async loses nothing by waiting — the record is in the
+What neither mode does is reach the kernel once per record: sync holds what it
+has until roughly 4 KiB of it has piled up, and async until its cache block is
+a third full — 50 KiB of the 150 KiB mmap — or a `fatal` record arrives, or
+until `close()` or `flushNow()` runs. Async loses nothing by waiting — the record is in the
 cache file the kernel holds as well — but sync has nothing behind it, so a
 process that is killed loses the tail it was still holding. That tail is the one
 thing an exit needs a call for.
@@ -115,8 +116,9 @@ thing an exit needs a call for.
 ## Compression and encryption
 
 `zlib` is the default and `zstd` compresses harder; both are per file, applied
-when the file is closed. The level is the compressor's own knob: `0` keeps the
-default (6 for zlib), `9` is the zlib ceiling and `22` the zstd one.
+when the file is closed. The level is the zstd backend's knob: `0` keeps its
+default (3) and `22` is its ceiling. zlib ignores it and always compresses at
+9, the way the C++ does.
 
 A `pubKey` encrypts each record's body with ECDH + TEA — the cipher the C++
 implementation uses, over a key the writer and the reader agree on. What you put there is

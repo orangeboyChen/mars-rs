@@ -67,7 +67,8 @@ let mut ask = Ask::new(|query| match query {
 
 // 3. the whole diagnosis: ping and dns, then tcp, over the network `1` names,
 //    which is what `comm::getNetInfo()` is in the C++. `None` is a check that
-//    is already in flight.
+//    did not start: one that is already in flight, or a mode with none of the
+//    three bits — `is_checking()` tells the two apart.
 let results = sdt
     .diagnose(
         &longlink, &shortlink, Mode::BASIC | Mode::LONG, 10_000, &mut ask, 1,

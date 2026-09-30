@@ -24,15 +24,11 @@ turned into a plan you can read before anything is probed.
 | `NET_CHECK_SHORT` | `NET_CHECK_SHORT` | `K_SHORT` | `.short` | `NET_CHECK_SHORT` | an http check: the net-check CGI, and the short link's hosts |
 
 They OR together — `NET_CHECK_BASIC | NET_CHECK_LONG` is a run of three checks —
-and `0` is **no checks at all**: the plan is empty, the run asks no probe and the
-report is `{"details":[]}`. It is not "run everything", which is `1 | 2 | 4` —
-`Mode.all` in Swift.
-
-An empty run is what Rust and Android give you for `0`. The C ABI — and Swift,
-Kotlin/Native and every other caller of it — refuses a mode with no bit in it
-outright: `mars_sdt_start_active_check` answers `MARS_SDT_ERR_BAD_ARG`, so what
-an app on those platforms gets for `0` is a start that did not happen and no
-report, and not an empty one.
+and `0` is **no checks at all**, and no seam runs it: a mode with none of the
+three bits in it is refused everywhere — Rust and the shared Kotlin answer
+`false`, Android through the same call, the C ABI `MARS_SDT_ERR_BAD_ARG`. What an
+app gets for `0` is a start that did not happen and no report at all, and not an
+empty one. It is not "run everything", which is `1 | 2 | 4` — `Mode.all` in Swift.
 
 Swift takes them as a set, `mode: [.basic, .long]`, and Objective-C keeps the
 integer: `mode: NET_CHECK_BASIC | NET_CHECK_LONG`.

@@ -52,8 +52,10 @@ no sleep of its own, so `wait` above is an `expect` the app writes —
 `Thread.sleep(due)` on Android and `usleep(due * 1000)` on the native targets.
 
 In Rust one call starts one: `Driver::spawn(stn)` starts a thread of this crate's
-that drains the queues — `run_pending()` when it is due, sleeping `due_delay()`
-meanwhile — and joins it when the `Driver` is dropped. An app that awaits a task
+that drains the queues — `run_pending()` at the end of every 20 ms slice, and a
+sleep of that slice between two passes, which is not the delay `due_delay()`
+answers, a host's number and not a thread's — and joins it when the `Driver` is
+dropped, unless the drop is holding the logic the thread wants. An app that awaits a task
 and has no loop of its own takes it; an app with a loop keeps the loop, because a
 pass that ends a task wakes whoever awaited it.
 

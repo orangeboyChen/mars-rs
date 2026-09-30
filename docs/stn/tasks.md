@@ -106,8 +106,12 @@ and a task that is started and never drained sits in its queue until the process
 ends.
 
 In Rust one call is enough: `Driver::spawn(stn)` starts a thread of this crate's
-that does what the host loop does — `run_pending()` when it is due, sleeping
-`due_delay()` meanwhile — and the thread is joined when the `Driver` is dropped.
+that does what the host loop does — `run_pending()` at the end of every 20 ms
+slice, and a sleep of that slice between two passes, which is *not* the delay
+`due_delay()` answers: that one is how long a host that is woken by its own
+sockets may wait, and a thread of this crate's is woken by nothing — and the
+thread is joined when the `Driver` is dropped, unless the drop is itself holding
+the logic the thread wants, in which case the stop flag ends it.
 The logic is shared and not moved, so an app keeps its own `Arc` and goes on
 starting tasks through it. A host that already has a `run_pending` loop keeps it
 and takes no `Driver`: a pass that ends a task wakes whoever awaited it, so a

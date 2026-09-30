@@ -64,7 +64,8 @@ let mut ask = Ask::new(|query| match query {
 });
 
 // 3. 一整趟诊断：先 ping 和 dns，再 tcp，跑在 `1` 说的那个网络之上 —— 也就是 C++
-//    里的 `comm::getNetInfo()`。`None` 是已经有一趟在跑了。
+//    里的 `comm::getNetInfo()`。`None` 是这一趟没启动：已经有一趟在跑，或者 mode
+//    三个 bit 一个都没有 —— `is_checking()` 能把这两种分开。
 let results = sdt
     .diagnose(
         &longlink, &shortlink, Mode::BASIC | Mode::LONG, 10_000, &mut ask, 1,

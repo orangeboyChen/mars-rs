@@ -42,10 +42,14 @@ twice. Taking it empties it — the next call reports what happened since.
 
 On Android and in the shared Kotlin the report is a `String?`, so there is no
 buffer to size. The Swift `takeReport()` starts at 4 KB and doubles up to 1 MB,
-and answers `nil` only when there was nothing to take. `mars_sdt_take_report`
-answers `MARS_SDT_ERR_NO_SPACE` when the report does not fit the buffer — and
-**keeps the results**, so a caller that asks again with a bigger one gets the
-diagnosis rather than an empty one.
+and answers `nil` in three cases: there was nothing to take, the C ABI answered
+a code other than `MARS_SDT_ERR_NO_SPACE` — a panic, a NULL buffer, a check
+still in flight — or the report still did not fit 1 MB. Only the first of them
+is "no diagnosis yet", so an app that treats every `nil` that way loses a
+report it already had. `mars_sdt_take_report` answers
+`MARS_SDT_ERR_NO_SPACE` when the report does not fit the buffer — and **keeps
+the results**, so a caller that asks again with a bigger one gets the diagnosis
+rather than an empty one.
 
 ## Cancelling, and starting over
 

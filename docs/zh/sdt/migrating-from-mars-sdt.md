@@ -22,7 +22,8 @@
 | 报告 | `Callback::ReportNetCheckResult` | `report_json(&results)` | `takeReport()`，或那个回调 | `takeReport()` | `mars_sdt_take_report(buf, len)` |
 
 mode 是同一套 bit —— 先 ping 和 DNS，再 TCP，再 net-check CGI 的那次 HTTP —— `0`
-还是一项都不跑：在 Rust 和 Android 上那是一趟空跑，在 C ABI 上是一次被拒的启动。
+还是一项都不跑，也还是没有哪个接口会跑它：Rust 和 Android 回答 `false`，C ABI 回答
+`MARS_SDT_ERR_BAD_ARG`。
 在 Rust 里这些 bit 有了名字：`Mode::NONE`、`BASIC`、`LONG`、
 `SHORT` 和 `ALL`，用 `|` 拼起来，`mode.bits()` 交回上游那个调用要的 `i32`。见
 [检查项](/zh/sdt/checks)。
