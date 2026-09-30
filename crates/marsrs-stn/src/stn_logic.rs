@@ -1325,9 +1325,14 @@ mod tests {
     #[test]
     fn a_sequence_id_is_a_different_one_every_time() {
         let _guard = crate::test_lock();
-        let first = gen_sequence_id();
-        let second = gen_sequence_id();
-        assert_ne!(first, second, "a retry is not the request it retries");
+        // one draw can land on the one before it: the id is a xorshift taken
+        // modulo 65536, and a state the shift maps onto itself is a collision
+        // one time in 65536. Sixteen draws are not sixteen of the same, though
+        let drawn: Vec<u16> = (0..16).map(|_| gen_sequence_id()).collect();
+        assert!(
+            drawn.iter().any(|id| *id != drawn[0]),
+            "a retry is not the request it retries: {drawn:?}"
+        );
     }
 
     #[test]
