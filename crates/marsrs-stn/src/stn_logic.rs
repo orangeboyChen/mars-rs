@@ -613,17 +613,34 @@ impl StnLogic {
     }
 
     /// `DestroyLonglink_ext(_name)`.
+    ///
+    /// What the link takes with it is every task that was going out on it, and
+    /// those are ended inside this call — so whoever awaited one of them is
+    /// woken here, the way [`StnLogic::touch_tasks_at`] wakes them: a task no
+    /// queue holds any more is not one a later pass is going to report, and an
+    /// app whose executor waits to be woken would wait for a pass that never
+    /// comes.
     pub fn destroy_long_link(&mut self, name: &str) -> bool {
-        self.core
+        let destroyed = self
+            .core
             .as_mut()
-            .is_some_and(|core| core.destroy_long_link(name))
+            .is_some_and(|core| core.destroy_long_link(name));
+        if destroyed {
+            self.flush();
+        }
+        destroyed
     }
 
     /// The same, with the reading handed in.
     pub fn destroy_long_link_at(&mut self, now: u64, name: &str) -> bool {
-        self.core
+        let destroyed = self
+            .core
             .as_mut()
-            .is_some_and(|core| core.destroy_long_link_at(now, name))
+            .is_some_and(|core| core.destroy_long_link_at(now, name));
+        if destroyed {
+            self.flush();
+        }
+        destroyed
     }
 
     /// `MarkMainLonglink_ext(_name)` — the long link whose errors and status the

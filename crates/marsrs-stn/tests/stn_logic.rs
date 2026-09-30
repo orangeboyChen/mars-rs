@@ -14,8 +14,9 @@
 
 use std::future::Future;
 use std::pin::pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll, Wake, Waker};
 
 use marsrs_stn::sent::{self, Answer, Failure};
 use marsrs_stn::task_profile::TaskFailHandleType;
@@ -679,6 +680,22 @@ fn settled(awaited: sent::Sent) -> Result<Answer, Failure> {
     }
 }
 
+/// A waker that counts: what an executor does with a wake is poll again, so
+/// a call that ends a task is a call that wakes whoever awaited it, and the
+/// count is the only thing that says so — polling again finds the end either
+/// way.
+struct Counting(AtomicUsize);
+
+impl Wake for Counting {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 /// A task an app awaits, on the long link, with the body the app handed.
 fn awaited(host: &mut Host, taskid: u32) -> sent::Sent {
     let mut task = Task::new(taskid, 12);
@@ -739,6 +756,50 @@ fn an_awaited_task_that_failed_ends_with_where_it_failed() {
             assert!(err_code < 0, "a task that failed says how: {err_code}");
         }
         other => panic!("the task failed, and not like this: {other:?}"),
+    }
+}
+
+/// `DestroyLonglink_ext` takes every task of the link with it, and those are
+/// ended inside the call — so the call is what wakes whoever awaited one of
+/// them, and not the next pass. An app's executor polls when it is woken and
+/// not on a timer, and a host whose [`StnLogic::due_delay`] came back `None`
+/// makes no pass at all.
+#[test]
+fn a_task_the_destroyed_link_took_with_it_wakes_whoever_awaited_it() {
+    let mut host = Host::new();
+    host.bring_up(MAIN, LongLinkStatus::Connected);
+    let awaited = awaited(&mut host, 7);
+
+    let counting = Arc::new(Counting(AtomicUsize::new(0)));
+    let waker = Waker::from(Arc::clone(&counting));
+    let mut awaited = pin!(awaited);
+    let mut context = Context::from_waker(&waker);
+
+    assert!(
+        awaited.as_mut().poll(&mut context).is_pending(),
+        "a task that is out is not one that ended"
+    );
+    assert_eq!(
+        counting.0.load(Ordering::SeqCst),
+        0,
+        "nothing has ended it yet"
+    );
+
+    assert!(host.logic.destroy_long_link_at(START + 100, MAIN));
+    assert!(!host.logic.has_task(7));
+    assert!(
+        counting.0.load(Ordering::SeqCst) > 0,
+        "no pass is going to end a task no queue holds"
+    );
+
+    match awaited.as_mut().poll(&mut context) {
+        Poll::Ready(Err(Failure::Ended {
+            err_type, err_code, ..
+        })) => {
+            assert_eq!(err_type, ErrCmdType::Local);
+            assert!(err_code < 0, "the link that went away is why: {err_code}");
+        }
+        other => panic!("the task ended with the link, and not like this: {other:?}"),
     }
 }
 
