@@ -174,7 +174,8 @@ fn simple(opts: &Opts) -> Result<(), String> {
     let data = unhex(opts.value("data").unwrap_or(""))?;
     let out = opts.value("out").ok_or("simple pack needs --out=PATH")?;
     let packed = match kind(opts)? {
-        Kind::Short => simple_short_pack(&data),
+        Kind::Short => simple_short_pack(&data)
+            .ok_or("a body two bytes cannot say the length of is not packed")?,
         Kind::Int => simple_int_pack(&data),
     };
     std::fs::write(out, packed).map_err(|err| format!("write {out}: {err}"))
