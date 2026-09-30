@@ -159,6 +159,36 @@ static char* ArgString(napi_env env, napi_callback_info info, size_t index) {
     return CopyString(env, argv[index]);
 }
 
+// The number argument at `index` as an `int32_t`, or false when it is not one
+// the C ABI's `int` can hold.
+//
+// `napi_get_value_int32` on its own is an ECMAScript `ToInt32`, and a `ToInt32`
+// wraps: a `NaN` into `0`, and 3 000 000 000 into a negative. `0` is the level
+// that logs everything, so a level ArkTS computed and came to no level with
+// was being given the widest one there is — and the appender was *moved* to
+// it, because that is what `SetLevel` does with a level it was handed. What is
+// read here is the double a `number` is, and what is refused is one that is
+// not finite, or that the 32 bits cannot hold: a level that does not exist is
+// not one the appender is set to, the way `Log` does not write a record of
+// one.
+static bool Int32Arg(napi_env env, napi_callback_info info, size_t index, int32_t* out) {
+    size_t argc = index + 1;
+    napi_value argv[4] = {NULL, NULL, NULL, NULL};
+    napi_value self = NULL;
+    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || argc <= index) {
+        return false;
+    }
+    double number = 0;
+    // Both comparisons are false for a NaN, so a NaN is refused as one would
+    // want and without a call of `isnan`.
+    if (napi_get_value_double(env, argv[index], &number) != napi_ok ||
+        !(number >= -2147483648.0 && number <= 2147483647.0)) {
+        return false;
+    }
+    *out = (int32_t)number;
+    return true;
+}
+
 // --- the table ------------------------------------------------------------
 
 // The handle of a prefix, or 0 when this module has no appender of that name —
@@ -354,7 +384,7 @@ static napi_value SetLevel(napi_env env, napi_callback_info info) {
     napi_value self = NULL;
     if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) == napi_ok && argc >= 2) {
         int32_t level = MarsLevelInfo;
-        if (napi_get_value_int32(env, argv[1], &level) == napi_ok) {
+        if (Int32Arg(env, info, 1, &level)) {
             mars_xlog_set_level_instance(handle, level);
         }
     }
@@ -375,7 +405,7 @@ static napi_value SetMode(napi_env env, napi_callback_info info) {
     napi_value self = NULL;
     if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) == napi_ok && argc >= 2) {
         int32_t mode = MarsAppenderAsync;
-        if (napi_get_value_int32(env, argv[1], &mode) == napi_ok) {
+        if (Int32Arg(env, info, 1, &mode)) {
             mars_xlog_set_mode_instance(handle, mode);
         }
     }
@@ -442,8 +472,18 @@ static napi_value SetMaxAliveTime(napi_env env, napi_callback_info info) {
     napi_value argv[2] = {NULL, NULL};
     napi_value self = NULL;
     if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) == napi_ok && argc >= 2) {
-        int32_t seconds = 0;
-        if (napi_get_value_int32(env, argv[1], &seconds) == napi_ok) {
+        double seconds = 0;
+        // Read as a `double` and narrowed, the way SetMaxFileSize reads a
+        // size, and not with `napi_get_value_int32`: that one is an ECMAScript
+        // `ToInt32`, so a number past 2^31 wraps into a negative — 3 000 000 000
+        // into -1 294 967 296 — and the C ABI clamps a negative to `0`, which
+        // is what every platform of the port reads as the C++'s own ten days.
+        // An app asking for ninety-five years was being given ten days, and
+        // nothing said so. A NaN and an infinity fail both comparisons, so
+        // neither is a limit the appender is handed, the way neither is a size
+        // it is handed in SetMaxFileSize.
+        if (napi_get_value_double(env, argv[1], &seconds) == napi_ok && seconds >= 0 &&
+            seconds < 9223372036854775808.0) {
             mars_xlog_set_max_alive_duration_instance(handle, (long long)seconds);
         }
     }
@@ -456,15 +496,8 @@ static napi_value IsLoggable(napi_env env, napi_callback_info info) {
     char* namePrefix = ArgString(env, info, 0);
     long long handle = HandleOf(namePrefix);
     free(namePrefix);
-    size_t argc = 2;
-    napi_value argv[2] = {NULL, NULL};
-    napi_value self = NULL;
-    if (handle == 0 ||
-        napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || argc < 2) {
-        return Boolean(env, false);
-    }
     int32_t level = MarsLevelInfo;
-    if (napi_get_value_int32(env, argv[1], &level) != napi_ok) {
+    if (handle == 0 || !Int32Arg(env, info, 1, &level)) {
         return Boolean(env, false);
     }
     return Boolean(env, mars_xlog_is_enabled_for(handle, level) != 0);
@@ -489,8 +522,10 @@ static napi_value Log(napi_env env, napi_callback_info info) {
     // drops a level that is not one of the six, so writing the default would be
     // a record at a level the caller did not ask for — the same answer
     // `IsLoggable` gives a level it cannot read, and the one every other
-    // method here gives an argument it cannot read.
-    if (napi_get_value_int32(env, argv[1], &level) != napi_ok) {
+    // method here gives an argument it cannot read. A `NaN` is one it cannot
+    // read either, and not the `0` a `ToInt32` would have made of it: `0` is
+    // the level that logs everything.
+    if (!Int32Arg(env, info, 1, &level)) {
         return Undefined(env);
     }
     char* tag = CopyString(env, argv[2]);
