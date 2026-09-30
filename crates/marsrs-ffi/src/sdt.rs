@@ -781,23 +781,119 @@ unsafe fn write_str_into(bytes: &[u8], out: *mut c_char, len: c_uint) -> c_int {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CString;
+    use std::ffi::{CStr, CString};
 
-    #[test]
-    fn a_query_round_trips_as_the_kind_the_checker_asked() {
-        let query = Query::Dns {
-            domain: "example.com".to_owned(),
-            timeout_ms: 3_000,
-        };
-        let (_, kind, port, timeout) = match &query {
-            Query::Dns { domain, timeout_ms } => {
-                (domain.as_str(), MarsSdtKind::Dns, 0, *timeout_ms)
+    /// What a probe was asked, copied out of the `MarsSdtQuery` before the
+    /// `CString` behind its `host` goes away.
+    struct Asked {
+        query: MarsSdtQuery,
+        host: [c_char; 64],
+    }
+
+    impl Default for Asked {
+        fn default() -> Self {
+            Self {
+                query: MarsSdtQuery {
+                    kind: MarsSdtKind::Nothing,
+                    host: std::ptr::null(),
+                    port: 0,
+                    timeout: 0,
+                },
+                host: [0; 64],
             }
-            _ => unreachable!(),
+        }
+    }
+
+    /// A probe that answers nothing but keeps the question it was asked.
+    extern "C" fn probe_records(
+        ctx: *mut c_void,
+        query: *const MarsSdtQuery,
+        answer: *mut MarsSdtAnswer,
+    ) {
+        // SAFETY: `ctx` is the `Asked` the test handed over and is alive for
+        // this call; `query` is the local `Probe::ask` built, and its `host`
+        // points at a `CString` that is alive for the call too — which is why
+        // the bytes are copied and not the pointer.
+        unsafe {
+            let asked = &mut *ctx.cast::<Asked>();
+            std::ptr::copy_nonoverlapping(query, addr_of_mut!(asked.query), 1);
+            let mut index = 0;
+            while index + 1 < asked.host.len() {
+                let byte = *(*query).host.add(index);
+                asked.host[index] = byte;
+                if byte == 0 {
+                    break;
+                }
+                index += 1;
+            }
+            (*answer).kind = MarsSdtKind::Nothing;
+        }
+    }
+
+    /// Every check asks its probe through the same four-arm match, and what
+    /// the C side is handed is what the probe is then asked: a timeout that
+    /// arrived in the wrong unit, or a tcp port that did not, is a question
+    /// no caller can answer.
+    #[test]
+    fn a_query_reaches_the_probe_as_the_kind_the_checker_asked() {
+        let mut asked = Asked::default();
+        let probe = Probe {
+            probe: probe_records,
+            ctx: addr_of_mut!(asked).cast::<c_void>(),
         };
-        assert_eq!(kind, MarsSdtKind::Dns);
-        assert_eq!(port, 0);
-        assert_eq!(timeout, 3_000);
+        let queries = [
+            (
+                Query::Dns {
+                    domain: "example.com".to_owned(),
+                    timeout_ms: 3_000,
+                },
+                MarsSdtKind::Dns,
+                "example.com",
+                0,
+                3_000,
+            ),
+            (
+                Query::Tcp {
+                    ip: "1.2.3.4".to_owned(),
+                    port: 8080,
+                    timeout_ms: 4_000,
+                },
+                MarsSdtKind::Tcp,
+                "1.2.3.4",
+                8080,
+                4_000,
+            ),
+            (
+                Query::Http {
+                    url: "http://example.com/netcheck".to_owned(),
+                    timeout_ms: 5_000,
+                },
+                MarsSdtKind::Http,
+                "http://example.com/netcheck",
+                0,
+                5_000,
+            ),
+            (
+                Query::Ping {
+                    host: "example.com".to_owned(),
+                    timeout_s: 2,
+                },
+                MarsSdtKind::Ping,
+                "example.com",
+                0,
+                2,
+            ),
+        ];
+        for (query, kind, host, port, timeout) in queries {
+            assert_eq!(probe.ask(query), Answer::Nothing);
+            assert_eq!(asked.query.kind, kind, "{kind:?}");
+            assert_eq!(asked.query.port, port);
+            assert_eq!(asked.query.timeout, timeout);
+            // SAFETY: the probe copied a NUL-terminated string into `host`,
+            // or left it as the empty one it started as.
+            let asked_host = unsafe { CStr::from_ptr(asked.host.as_ptr()) };
+            assert_eq!(asked_host.to_str(), Ok(host), "{kind:?}");
+        }
     }
 
     #[test]
