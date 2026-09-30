@@ -11,9 +11,9 @@ name: Compat
 # toolchain to build it with: minutes a commit to the Rust has nothing to say
 # about, and a red that would hold up every pull request for a clone of
 # somebody else's repository. So the job of it skips unless the commit touched
-# the harness or the crate it drives. `workflow_dispatch` is how a person asks
-# for it by hand, which — before this file existed — was the only way it ran at
-# all.
+# the harness, the crates whose answers the comparison reads, or this file;
+# `workflow_dispatch` is how a person asks for it by hand, which — before this
+# file existed — was the only way it ran at all.
 
 on:
   # Not filtered, for the reason written in every other workflow of the tree: a
@@ -38,11 +38,17 @@ env:
 
 jobs:
   # Whether the diff touched anything this workflow reads: the five scripts, the
-  # crate that gives them their Rust half, and this file. Not every crate the
-  # comparison reads — `crates/**` — because a leg of it begins by cloning
-  # upstream, and a gate that did that on every commit to the Rust would spend
-  # minutes a commit has not earned; `workflow_dispatch` is the answer for a
-  # change that reached into one of them.
+  # crate that gives them their Rust half, the crates that Rust half answers
+  # out of — the ones `marsrs-compat` and `marsrs-appender` are built from —
+  # and this file.
+  #
+  # Not `workflow_dispatch` as the answer for a change that reached into one of
+  # those crates: a divergence is a change to the Rust and not to a script, so
+  # a gate that skips every commit to the Rust is a gate that does not run on
+  # the commits that can break it — two divergences of this tree's own sat in a
+  # branch until a script happened to change beside them. What running on them
+  # costs is a shallow clone of upstream and a C++ build next to the Rust one,
+  # which is a minute of a leg, and the five legs run at once.
   changes:
     name: changes
     runs-on: ubuntu-latest
@@ -62,6 +68,10 @@ jobs:
         run: |
           .github/scripts/changed_paths.sh \
             'scripts/compat/**' 'crates/marsrs-compat/**' \
+            'crates/marsrs-core/**' 'crates/marsrs-crypt/**' \
+            'crates/marsrs-buffer/**' 'crates/marsrs-xlog/**' \
+            'crates/marsrs-appender/**' 'crates/marsrs-comm/**' \
+            'crates/marsrs-stn/**' 'crates/marsrs-sdt/**' \
             '.github/workflows/compat.yml'
 
   # One leg a script, and not one job of five scripts: a leg that fails names
