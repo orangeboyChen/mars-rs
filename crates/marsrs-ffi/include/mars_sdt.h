@@ -227,7 +227,9 @@ unsigned int mars_sdt_plan(MarsSdtCheck* out, unsigned int cap);
  * Runs the planned checks — one probe per check, in order — and reports what
  * they recorded. This is the `__RunOn` thread of the C++, driven by the caller.
  *
- * `probe` may be NULL, which is reported as MARS_SDT_ERR_NO_PROBE.
+ * `probe` may be NULL, which is reported as MARS_SDT_ERR_NO_PROBE; the request
+ * in flight is cancelled, so the next MARS_SDT_START is taken rather than
+ * answered MARS_SDT_ERR_BUSY for the life of the process.
  * `network_type` is the `comm::getNetInfo()` every check writes into its
  * profiles, which is the platform's to answer.
  *

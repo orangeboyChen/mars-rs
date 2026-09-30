@@ -376,8 +376,14 @@ fn a_null_probe_is_reported() {
         unsafe { mars_sdt_run_checks(std::ptr::null_mut(), None, NET_WIFI) },
         MARS_SDT_ERR_NO_PROBE
     );
-    // The request is still there: nothing ran, so nothing was refused.
-    assert_eq!(mars_sdt_is_checking(), 1);
+    // Nothing ran, and the request is not left in flight behind the run that
+    // could not ask anything: `MARS_SDT_ERR_NO_PROBE` is not a code a caller
+    // retries — it has no probe to retry with — so a request left `Checking`
+    // would answer `MARS_SDT_ERR_BUSY` to every start after it, for the life
+    // of the process.
+    assert_eq!(mars_sdt_is_checking(), 0);
+    // SAFETY: the hosts of `start` are alive for the call.
+    assert_eq!(unsafe { start(NET_CHECK_ALL) }, MARS_SDT_OK);
 }
 
 /// `MARS_SDT_ERR_BUSY` is the one code a caller retries — "a check is already

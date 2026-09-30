@@ -489,7 +489,8 @@ pub unsafe extern "C" fn mars_sdt_plan(out: *mut MarsSdtCheck, cap: c_uint) -> c
 /// profiles, which is the platform's to answer — on Android it is
 /// `PlatformComm.getNetInfo`, on iOS the caller's own.
 ///
-/// @return [`MARS_SDT_OK`], or [`MARS_SDT_ERR_NO_PROBE`],
+/// @return [`MARS_SDT_OK`], or [`MARS_SDT_ERR_NO_PROBE`] — `probe` was null, so
+/// nothing was asked and the request in flight was cancelled —
 /// [`MARS_SDT_ERR_NO_CHECK`] (nothing was in flight, so nothing ran) or
 /// [`MARS_SDT_ERR_PANIC`].
 ///
@@ -511,6 +512,20 @@ pub unsafe extern "C" fn mars_sdt_run_checks(
 ) -> c_int {
     guard(MARS_SDT_ERR_PANIC, || {
         let Some(probe) = probe else {
+            // A run that cannot ask anything is cancelled and not left in
+            // flight. The diagnosis is one process-wide value, so a request
+            // that was started and then never run answers
+            // `MARS_SDT_ERR_BUSY` to every start after it, for the life of
+            // the process — and `MARS_SDT_ERR_NO_PROBE` is not an answer a
+            // caller retries: it has no probe to retry with. Cancelling and
+            // running the cancelled request ends it the way a caller's own
+            // `mars_sdt_cancel_active_check` would, and asks no probe: a
+            // cancelled run stops before its first check.
+            with_state(|state| {
+                state.logic.cancel_active_check();
+                let mut ask = Ask::new(|_| Answer::Nothing);
+                let _ = state.logic.run_checks(&mut ask, network_type);
+            });
             return MARS_SDT_ERR_NO_PROBE;
         };
         let probe = Probe { probe, ctx };
