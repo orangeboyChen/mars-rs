@@ -221,9 +221,15 @@ public actual object StnLogic {
         mars_stn_create_longlink(config.native(this).ptr) == 0
     }
 
-    public actual fun destroyLonglink(name: String?): Boolean = mars_stn_destroy_longlink(name) != 0
+    // Both are `> 0` and not `!= 0`: the C ABI answers `1` for "a link of that
+    // name was there", `0` for "there was none" and `MARS_STN_ERR_PANIC` —
+    // which is `-1` — for a panic it caught inside the call. `!= 0` reads the
+    // panic as success, and an app is then told the link is gone when the call
+    // never reached the net core; `0` is what the JNI `actual` answers for the
+    // same question, so the two agree on either side of the seam.
+    public actual fun destroyLonglink(name: String?): Boolean = mars_stn_destroy_longlink(name) > 0
 
-    public actual fun markMainLonglink(name: String?): Boolean = mars_stn_mark_main_longlink(name) != 0
+    public actual fun markMainLonglink(name: String?): Boolean = mars_stn_mark_main_longlink(name) > 0
 
     public actual fun setSignallingStrategy(period: Long, keepTime: Long) {
         mars_stn_set_signalling_strategy(period, keepTime)
