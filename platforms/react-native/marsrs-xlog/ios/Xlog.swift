@@ -418,9 +418,11 @@ internal final class Xlog: NSObject {
     }
 
     /// What the caller sent for a file lifetime, and `nil` when it is not one:
-    /// the same trap in `Int64(_:)`, and `0` is the appender's own ten days, so
-    /// a lifetime of `NaN` was one the app never asked for rather than one it
-    /// was told had been refused.
+    /// the same trap in `Int64(_:)`, and `0` is the lifetime an appender opened
+    /// with none keeps — the C++'s own ten days, and not one a setter can ask
+    /// for, since a lifetime below a day is refused — so a lifetime of `NaN`
+    /// was one the app never asked for rather than one it was told had been
+    /// refused.
     private func int64(_ value: Double) -> Int64? {
         guard value.isFinite,
               value >= -9223372036854775808.0, value < 9223372036854775808.0 else {

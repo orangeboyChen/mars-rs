@@ -362,9 +362,10 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
         /**
          * The number JS sent for a size or a file lifetime, and `null` when it
          * is not one: the same three, over the `Long` the Kotlin takes. A
-         * `NaN` was answered as `0` — "never split" for a size, and the
-         * appender's own ten days for a lifetime — which is a setting an app
-         * never asked for and not one it was told had been refused.
+         * `NaN` was answered as `0` — "never split" for a size, and for a
+         * lifetime the one an appender opened with none keeps, the C++'s own
+         * ten days, which no setter can ask for either — and that is a setting
+         * an app never asked for and not one it was told had been refused.
          */
         private fun int64(value: Double): Long? {
             if (!value.isFinite() ||

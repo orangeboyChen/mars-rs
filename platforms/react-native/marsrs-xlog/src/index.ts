@@ -100,6 +100,12 @@ export interface XlogConfig {
  * `Xlog` cannot ask about afterwards. */
 const DEFAULT_NAME_PREFIX = 'xlog';
 
+/** The shortest lifetime of a file the appender takes, in seconds: one below it
+ * — `0` among them — is refused, and the appender keeps the lifetime it had.
+ * `MIN_LOG_ALIVE_TIME` of the Rust, which is the one place the number is
+ * written down. */
+const MIN_ALIVE_TIME_SECONDS = 86400;
+
 /** The prefix an appender opened with `config` is known by: `namePrefix`, or
  * [DEFAULT_NAME_PREFIX] when it is missing or blank. What is handed to the two
  * halves is this and not the string the caller gave, so the two of them agree
@@ -248,7 +254,10 @@ export class Xlog {
   }
 
   /** How long a log file is written to before the appender opens the next one,
-   * in seconds; `0` is the C++'s own ten days. */
+   * in seconds: `0` is the lifetime an appender opened with none keeps — the
+   * C++'s own ten days — and one below a day is a lifetime the appender
+   * refuses, so what this answers is the one it has and not the last one it
+   * was asked for. */
   get maxAliveTimeSeconds(): number {
     return this.currentMaxAliveTime;
   }
@@ -258,7 +267,12 @@ export class Xlog {
       return;
     }
     NativeXlog.setMaxAliveTime(this.namePrefix, seconds);
-    this.currentMaxAliveTime = seconds;
+    // Mirrored once it is a lifetime the appender took, and not before: a day
+    // is the shortest one it takes, and `0` is below it, so a mirror that took
+    // the number would answer a lifetime no appender is writing under.
+    if (seconds >= MIN_ALIVE_TIME_SECONDS) {
+      this.currentMaxAliveTime = seconds;
+    }
   }
 
   /** Whether a record at `level` is written: the appender's own answer, and the
