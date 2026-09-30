@@ -246,6 +246,12 @@ static bool UInt64Arg(napi_env env, napi_callback_info info, size_t index, unsig
 // The handle of a prefix, or 0 when this module has no appender of that name —
 // which is every method's answer for "the appender is closed": a call after
 // `close` is dropped, and not a use of a handle that was released.
+// The handle is used with `g_lock` released, which is what lets another thread
+// `close` the prefix in between: a handle whose appender is gone is a no-op to
+// the C ABI — the registry looks it up and finds nothing — so such a call
+// writes nothing rather than writing through an appender that is closed, and
+// that is why the call is made outside the lock instead of holding the lock
+// across the I/O of a write.
 static long long HandleOf(const char* namePrefix) {
     if (namePrefix == NULL) {
         return 0;
@@ -296,7 +302,7 @@ static int Remember(const char* namePrefix, long long handle) {
     return 1;
 }
 
-// `mars_xlog_release_instance`, and the table's own entry for the prefix: an
+// `mars_xlog_release_instance_of`, and the table's own entry for the prefix: an
 // appender closed here is a prefix the next `open` opens afresh, which is what
 // makes `close` and `open` of one prefix a pair and not a leak. The last entry
 // is moved into the hole, because the table is a set and not a list.
@@ -396,7 +402,7 @@ static napi_value Open(napi_env env, napi_callback_info info) {
         // answered `true` instead: the appender is there, and it was there
         // before this call was made.
         if (opened != 0) {
-            mars_xlog_release_instance(namePrefix);
+            mars_xlog_release_instance_of(namePrefix, handle);
             handle = 0;
         }
     }
@@ -680,8 +686,17 @@ static napi_value Close(napi_env env, napi_callback_info info) {
     if (namePrefix == NULL) {
         return Undefined(env);
     }
+    // The handle the table remembers and not the table alone: `Forget` drops an
+    // entry whoever opened the appender it names, and a release is given a
+    // *prefix*, so a `close` of one this module never opened — or of one it has
+    // closed already — released whichever appender another caller had there,
+    // and flushed its cache out from under it. Naming the handle releases this
+    // one's, and a second `close` releases nothing at all.
+    long long handle = HandleOf(namePrefix);
     Forget(namePrefix);
-    mars_xlog_release_instance(namePrefix);
+    if (handle != 0) {
+        mars_xlog_release_instance_of(namePrefix, handle);
+    }
     free(namePrefix);
     return Undefined(env);
 }
