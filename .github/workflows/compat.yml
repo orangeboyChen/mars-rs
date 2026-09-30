@@ -1,0 +1,96 @@
+name: Compat
+
+# The cross-read gate: every file one implementation writes has to be read by
+# the other one. It is the only thing in this repository that compares an answer
+# of the port with an answer of the C++ it ports — `tests/golden.rs` reads files
+# the C++ wrote once, and these five scripts write files both ways and read each
+# other's.
+#
+# It is a workflow of its own and not a job of rust.yml, because what it needs
+# beside a Rust toolchain is a checkout of upstream Tencent/mars and a C++
+# toolchain to build it with: minutes a commit to the Rust has nothing to say
+# about, and a red that would hold up every pull request for a clone of
+# somebody else's repository. So the job of it skips unless the commit touched
+# the harness or the crate it drives. `workflow_dispatch` is how a person asks
+# for it by hand, which — before this file existed — was the only way it ran at
+# all.
+
+on:
+  # Not filtered, for the reason written in every other workflow of the tree: a
+  # run that never starts answers no status at all. What decides whether the job
+  # of it does any work is `changes` below.
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # Whether the diff touched anything this workflow reads: the five scripts, the
+  # crate that gives them their Rust half, and this file. Not every crate the
+  # comparison reads — `crates/**` — because a leg of it begins by cloning
+  # upstream, and a gate that did that on every commit to the Rust would spend
+  # minutes a commit has not earned; `workflow_dispatch` is the answer for a
+  # change that reached into one of them.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      compat: ${{ steps.paths.outputs.compat }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The diff is against the base of the pull request, which is behind
+          # the tip of the branch it was cut from.
+          fetch-depth: 0
+      - id: paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.after || github.sha }}
+          OUTPUT_KEY: compat
+        run: |
+          .github/scripts/changed_paths.sh \
+            'scripts/compat/**' 'crates/marsrs-compat/**' \
+            '.github/workflows/compat.yml'
+
+  # One leg a script, and not one job of five scripts: a leg that fails names
+  # the script that failed, and the four that are still running are not
+  # cancelled by it — which is what `fail-fast: false` is for, and what tells
+  # you whether one harness broke or the C++ answer moved.
+  cross:
+    name: cross (${{ matrix.script }})
+    needs: changes
+    if: needs.changes.outputs.compat == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        script: [cross, comm, shortlink, stn, sdt]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      # Upstream's log buffers link zstd and its `strutil.cc` wants
+      # `openssl/md5.h`, and neither is a header a runner's image promises —
+      # which is the whole of what a C++ build of upstream needs from apt.
+      - name: The C++ the comparison is against
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libzstd-dev libssl-dev
+      # The checkout of upstream the scripts clone into `target/upstream` is
+      # not cached: it is a shallow clone of a branch that moves, and a cache
+      # would make the "C++ answer" of a run the answer of the day the key was
+      # first written, which is the one thing this gate is not allowed to be.
+      - name: cargo build
+        run: cargo build --manifest-path "$GITHUB_WORKSPACE/Cargo.toml" -p marsrs-compat --release
+      - run: sh scripts/compat/${{ matrix.script }}.sh
