@@ -138,6 +138,10 @@ fn a_port_the_c_reads_as_negative_is_cast_and_not_dropped() {
     // `(uint16_t)atoi("-1")`: the cast wraps, so a sign a URL had no business
     // carrying is a port and not a number that did not read
     assert_eq!(HttpUrlParser::new("http://1.2.3.4:-1/x").port(), 65535);
+    // the wrap is the number's, sign and all: 65536 below zero is 0 again,
+    // which is the default, and one less than that is 1
+    assert_eq!(HttpUrlParser::new("http://1.2.3.4:-65535/x").port(), 1);
+    assert_eq!(HttpUrlParser::new("http://1.2.3.4:-65536/x").port(), 80);
     // and a `+` is the number it stands in front of
     assert_eq!(HttpUrlParser::new("http://1.2.3.4:+8080/x").port(), 8080);
 }
