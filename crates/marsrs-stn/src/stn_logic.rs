@@ -300,6 +300,9 @@ impl StnLogic {
         };
         pre_change();
         core.on_network_change();
+        // Like [`StnLogic::touch_tasks_at`]: a change drops the tasks of every
+        // link it took down, and the await of one of those is answered here.
+        self.flush();
     }
 
     /// `ActiveLogic` — whether the app is in the foreground, which is what the
@@ -470,6 +473,7 @@ impl StnLogic {
     pub fn redo_tasks_at(&mut self, now: u64) {
         if let Some(core) = self.core.as_mut() {
             core.redo_tasks_at(now);
+            self.flush();
         }
     }
 
@@ -480,9 +484,16 @@ impl StnLogic {
     }
 
     /// The same, with the reading handed in.
+    ///
+    /// A pass that ends a task is the only thing that can answer a [`Sent`], and
+    /// this is a pass: a task it times out is one no later pass reports again,
+    /// so its await is answered here and not by the next
+    /// [`StnLogic::run_pending`] — which a host whose [`StnLogic::due_delay`]
+    /// came back `None` is not going to call at all.
     pub fn touch_tasks_at(&mut self, now: u64) {
         if let Some(core) = self.core.as_mut() {
             core.touch_tasks_at(now);
+            self.flush();
         }
     }
 
@@ -1043,6 +1054,17 @@ mod tests {
         Future::poll(Pin::new(sent), &mut context)
     }
 
+    /// A waker that counts: the poll of a [`Sent`] whose task has ended is
+    /// `Ready` whether or not anybody woke it, so what says an await was woken
+    /// is the wake and not the poll that follows it.
+    struct Counter(AtomicUsize);
+
+    impl std::task::Wake for Counter {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
     /// A logic with a core in it and an app that answers.
     fn logic() -> (StnLogic, Arc<Mutex<Vec<String>>>) {
         let asked = Arc::new(Mutex::new(Vec::new()));
@@ -1056,6 +1078,36 @@ mod tests {
 
     fn asked_of(cell: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
         cell.lock().unwrap().clone()
+    }
+
+    /// An await is woken by the pass that ended its task, and `run_pending`
+    /// is not the only pass that ends one: a queue's own timeouts end them
+    /// too, and a host whose `due_delay` came back `None` — nothing is due,
+    /// nothing is out — never calls another pass at all.
+    #[test]
+    fn a_task_a_touch_ended_wakes_whoever_awaited_it() {
+        let (mut logic, _asked) = logic();
+        let mut sent = logic.send_at(1_000, Task::new(7, 12), b"body".to_vec());
+        let wakes = Arc::new(Counter(AtomicUsize::new(0)));
+        let waker = Waker::from(Arc::clone(&wakes));
+        let mut context = Context::from_waker(&waker);
+        assert!(
+            Future::poll(Pin::new(&mut sent), &mut context).is_pending(),
+            "the task is out, so nothing has ended it yet"
+        );
+
+        // Ten minutes later: past every timeout a task that answered nothing
+        // runs into.
+        logic.touch_tasks_at(1_000 + 600_000);
+        assert_eq!(
+            wakes.0.load(Ordering::SeqCst),
+            1,
+            "the await of a task this pass ended was never woken"
+        );
+        assert!(
+            Future::poll(Pin::new(&mut sent), &mut context).is_ready(),
+            "the task ended, so its await has an answer"
+        );
     }
 
     #[test]
