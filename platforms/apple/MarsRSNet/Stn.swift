@@ -119,8 +119,9 @@ public final class MarsStn: NSObject {
     /// app is told in `ReportConnectStatus`.
     ///
     /// `.none` is a status the C ABI did not hand over: what an integer outside
-    /// these is read as, and what a question of another kind carries — which
-    /// Objective-C has no optional enum to say.
+    /// these is read as, which Objective-C has no optional enum to say. A
+    /// question of another kind is not one of them: the `net_status_all` it
+    /// carries is the `0` the struct starts with, and `0` is `.unavailable`.
     @objc(MarsStnNetStatus)
     public enum NetStatus: Int32 {
         /// Not known yet.
