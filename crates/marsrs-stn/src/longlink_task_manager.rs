@@ -3294,6 +3294,47 @@ mod tests {
             Timeout::ReadWrite.err_code(),
             crate::task_profile::LONG_READ_WRITE_TIMEOUT
         );
+
+        // The four above are the table the variants carry; this is the queue
+        // reading it, which is what the name is about: a task sent at `NOW`
+        // and never answered runs out of time, and the code the app is told
+        // is the one `Timeout::Task` names — not one the queue made up, and
+        // not the read timeout's, which is told about the channel instead.
+        let mut manager = manager();
+        let (_, ended, notified, _) = wire(&mut manager);
+        manager.start_task_at(NOW, task(7), Task::CHANNEL_LONG);
+        // Out, and never answered: every read wait a task owes runs out on it,
+        // and so does the wait it owes the queue for itself.
+        manager.on_send_at(NOW, 7);
+        manager.run_loop_at(NOW + task_timeout(&manager) + 1);
+
+        let ended = ended
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        assert_eq!(
+            ended,
+            vec![(
+                ErrCmdType::Local,
+                LOCAL_TASK_TIMEOUT,
+                TaskFailHandleType::TaskTimeout,
+                7
+            )]
+        );
+        // The read timeout of the same pass is told about the link and not
+        // about the task — the *last* of the three, which is what the queue's
+        // `batchMap` is: one code per channel, and the last task of a channel
+        // that timed out is the one the channel is failed with.
+        assert_eq!(
+            *notified
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![(
+                CHANNEL.to_string(),
+                ErrCmdType::NetMsgXp,
+                crate::task_profile::LONG_READ_WRITE_TIMEOUT
+            )]
+        );
     }
 
     #[test]
@@ -3323,7 +3364,14 @@ mod tests {
 
         assert_eq!(manager.len(), 1);
         assert!(!manager.is_empty());
+        assert!(manager.has_task(7));
         assert_eq!(manager.channels().len(), 1);
+        assert_eq!(manager.channels()[0].name, CHANNEL);
+        // The count is of the tasks *on* that channel: the one task is on the
+        // one channel there is, and a channel nobody asked for has none —
+        // which is the difference between the two counts and not one of them
+        // twice.
+        assert_eq!(manager.task_count(CHANNEL), 1);
         assert_eq!(manager.task_count("long.other.qq.com"), 0);
         assert!(format!("{manager:?}").contains("LongLinkTaskManager"));
     }
