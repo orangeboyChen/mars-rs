@@ -239,12 +239,12 @@ jobs:
         working-directory: demo/android
         run: ./gradlew assembleDebug
 
-  # No token on this job, and no fork gate, which is what the composite build
-  # buys: `demo/kmp/settings.gradle.kts` substitutes `platforms/kmp` for the
-  # published package, so GitHub Packages is never asked and a pull request
-  # from a fork reads this repository's packages no more than a push does.
   # The one demo that takes the port from the registry and not from the tree,
-  # and why: `platforms/kmp` does not build on a Linux runner. Under its own
+  # and it is the one job here a fork cannot answer — see the gate and the
+  # token below. The Android demo is the one a composite build buys that for:
+  # `demo/android/settings.gradle.kts` substitutes `platforms/android` for the
+  # published package. This one resolves GitHub Packages, and why is that
+  # `platforms/kmp` does not build on a Linux runner. Under its own
   # Gradle and its own Kotlin it fails to compile its own source —
   # `Cannot access 'val IO: CoroutineDispatcher': it is internal in
   # 'kotlinx.coroutines.Dispatchers'` — and `release.yml` publishes it from

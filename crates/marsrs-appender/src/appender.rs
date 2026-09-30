@@ -1923,7 +1923,10 @@ impl Appender {
             return Vec::new();
         }
 
-        let tv = now_secs().saturating_sub(timespan.saturating_mul(SECONDS_PER_DAY));
+        // `0` is today and no day is before it: a negative `timespan` would
+        // subtract a negative number of seconds and name a day that has not
+        // happened yet, which is an answer to no question an app asked.
+        let tv = now_secs().saturating_sub(timespan.max(0).saturating_mul(SECONDS_PER_DAY));
         let log_path = make_log_file_name(
             tv,
             &logdir,
@@ -1949,18 +1952,19 @@ impl Appender {
         );
 
         // The name of the day's file, and the cache-dir twin of it when that
-        // one is there: asking for a file that is not there yet is what
-        // `logFiles` is for, and what `logFileNames` is for is the name — the
-        // one an app is about to write, or is naming to someone else.
-        let mut paths = Vec::new();
-        if log_path.exists() {
-            paths.push(log_path.clone());
-        }
-        if cache_path.exists() {
+        // one is there: asking which files exist is `getfilepath_from_timespan`'s
+        // question, and what this one answers is the name — the one an app is
+        // about to write, or is naming to someone else. The log-dir name is
+        // answered whether or not the file is there, because that is the name
+        // the day is written under; the twin is answered only once it is a
+        // file, because a name for a file that will never be there is not one
+        // anybody asked for.
+        //
+        // A cache dir of the log dir's own is not a twin at all — it is the
+        // same path — so it is not answered twice.
+        let mut paths = vec![log_path.clone()];
+        if cache_path != log_path && cache_path.exists() {
             paths.push(cache_path);
-        }
-        if paths.is_empty() {
-            paths.push(log_path);
         }
         paths
     }
@@ -1976,7 +1980,8 @@ impl Appender {
             return Vec::new();
         }
 
-        let tv = now_secs().saturating_sub(timespan.saturating_mul(SECONDS_PER_DAY));
+        // Same clamp as `make_logfile_name`: a negative day is not a day.
+        let tv = now_secs().saturating_sub(timespan.max(0).saturating_mul(SECONDS_PER_DAY));
         let mut paths = get_file_paths_from_timeval(tv, &logdir, prefix, LOG_EXT);
         if let Some(cachedir) = cachedir {
             paths.extend(get_file_paths_from_timeval(tv, &cachedir, prefix, LOG_EXT));

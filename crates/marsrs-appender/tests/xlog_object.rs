@@ -15,6 +15,17 @@ use marsrs_appender::{
 use marsrs_crypt::magic;
 
 fn config(dir: &std::path::Path, nameprefix: &str) -> XLogConfig {
+    config_cached(dir, nameprefix, None)
+}
+
+/// [`config`] with a cache directory: the one branch of a day's names the
+/// other tests never take, and the one that used to be filtered by whether
+/// the file existed.
+fn config_cached(
+    dir: &std::path::Path,
+    nameprefix: &str,
+    cachedir: Option<std::path::PathBuf>,
+) -> XLogConfig {
     XLogConfig {
         mode: AppenderMode::Sync,
         logdir: dir.to_path_buf(),
@@ -22,7 +33,7 @@ fn config(dir: &std::path::Path, nameprefix: &str) -> XLogConfig {
         pub_key: String::new(),
         compress_mode: marsrs_buffer::CompressMode::Zlib,
         compress_level: 6,
-        cachedir: None,
+        cachedir,
         cache_days: 0,
     }
 }
@@ -222,4 +233,41 @@ fn a_config_the_appender_refuses_is_an_error() {
         LogLevel::Info,
     );
     assert!(matches!(xlog, Err(AppenderError(_))));
+}
+
+/// A day's *names* with a cache directory, which is the one branch the answer
+/// is two paths and not one: the name the day is written under in the log
+/// directory, and the twin the async cache file has in the cache directory.
+#[test]
+fn a_day_of_names_is_answered_before_the_files_are_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let xlog = Xlog::open(
+        config_cached(dir.path(), "cached", Some(cache.path().to_path_buf())),
+        LogLevel::Info,
+    )
+    .unwrap();
+
+    // The name of the day is answered before anything is written to it, and
+    // it is the log directory's: a *name* is not a file, and which files are
+    // there is `log_files`' question.
+    let names = xlog.log_file_names(0);
+    assert_eq!(names[0].parent(), Some(dir.path()), "{names:?}");
+
+    xlog.i("startup", "hello from mars");
+    xlog.flush_now();
+
+    // Now both are: the file in the log directory, and the cache-dir twin the
+    // async cache had while the record sat in it.
+    let files = xlog.log_files(0);
+    assert!(!files.is_empty(), "the record reached a file");
+    let names = xlog.log_file_names(0);
+    assert!(
+        names.contains(&files[0]),
+        "{names:?} does not name {files:?}"
+    );
+
+    // A day that has not happened yet is not one, and a negative `daysAgo`
+    // does not ask for it.
+    assert_eq!(xlog.log_file_names(-1), xlog.log_file_names(0));
 }

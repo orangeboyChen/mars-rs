@@ -534,10 +534,15 @@ private:
 
     /** Runs `body` with this appender's handle, and runs nothing at all once
      * `close()` has: handle `0` names no appender at all, so a call through it
-     * would silently write nothing. */
+     * would silently write nothing.
+     *
+     * `handle_ != 0` and not [`isOpen()`], which asks the C ABI whether the
+     * prefix is still registered: a record is the one thing on the hot path,
+     * and the write it guards already no-ops for a handle that is not one —
+     * so paying a lock and a string hash per record buys nothing. */
     template <typename Body>
     void withHandle(Body body) const {
-        if (isOpen()) {
+        if (handle_ != 0) {
             body(handle_);
         }
     }

@@ -92,9 +92,15 @@ public final class Xlog: NSObject {
     /// the app set is the one this answers with.
     @objc public var level: LogLevel {
         get {
-            // `-1` is what `mars_xlog_get_level` answers for a handle that is
-            // not one, and it is `(TLogLevel)-1`, the C++'s "log everything".
-            LogLevel(rawValue: mars_xlog_get_level(handle)) ?? .verbose
+            // A closed `Xlog` — one whose twin closed the appender they
+            // share — writes nothing, which is `none` and not "log
+            // everything": the `-1` `mars_xlog_get_level` answers for a
+            // handle that is not one is `(TLogLevel)-1`, the C++'s own
+            // spelling of the opposite.
+            guard isOpen else {
+                return .none
+            }
+            return LogLevel(rawValue: mars_xlog_get_level(handle)) ?? .verbose
         }
         set {
             withHandle { mars_xlog_set_level_instance($0, newValue.rawValue) }
@@ -159,7 +165,10 @@ public final class Xlog: NSObject {
         function: String = #function,
         line: Int32 = #line
     ) {
-        guard isOpen else {
+        // `handle != Self.noHandle` and not `isOpen`, which asks the C ABI
+        // whether the prefix is still registered: a record is the hot path,
+        // and the write below already no-ops for a handle that is not one.
+        guard handle != Self.noHandle else {
             return
         }
         // `cTag` and friends: the same four strings as C pointers, which is

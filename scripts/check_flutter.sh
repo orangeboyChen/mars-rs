@@ -22,19 +22,21 @@ declare -a packages=(
     "marsrs_xlog:platforms/flutter/marsrs-xlog"
 )
 
-# What Dart asks for: `_invoke<T>('name', …)` and `_send('name', …)`. The
-# file is read one line — the call and the name are not always on the same
-# one — so a folded copy is what the pattern is matched against.
+# What Dart asks for: `_invoke<T>('name', …)`, `_send('name', …)`, and the
+# `_channel.invokeMethod<T>('name', …)` of the one call that is not a member
+# yet — `open`, which every app makes first. The file is read as one line,
+# because the call and the name are not always on the same one.
+#
+# The generic in front of the name is not matched by shape — it holds one of
+# its own (`List<dynamic>`), so `>` is not the end of it — only by being the
+# thing between the call and the name.
 dart_methods() {
     local dir="$1"
     for file in "$dir"/lib/*.dart; do
         tr '\n' ' ' <"$file"
         echo
     done |
-        # The generic in front of the name is not matched by shape — it holds
-        # one of its own (`List<dynamic>`), so `>` is not the end of it —
-        # only by being the thing between the call and the name.
-        grep -hoE "_invoke[^']{0,40}'[A-Za-z]+'|_send\( *'[A-Za-z]+'" |
+        grep -hoE "(_invoke|invokeMethod|_send)[^(]*\( *'[A-Za-z]+'" |
         sed -nE "s/.*'([A-Za-z]+)'/\1/p" | sort -u
 }
 
@@ -52,6 +54,28 @@ objc_methods() {
     grep -hoE 'isEqualToString:@"[A-Za-z]+"' "$dir"/ios/Classes/*.m |
         grep -oE '"[A-Za-z]+"' | tr -d '"' | sort -u
 }
+
+# The methods the channel has to carry, written down rather than read out of
+# the three files: a name misspelled the same way in all six of them is
+# invisible to a check that only ever compares them with each other, and it is
+# the mistake a rename makes most easily.
+declare -a required=(
+    open
+    log
+    isLoggable
+    flush
+    requestFlush
+    setLevel
+    getLevel
+    setMode
+    setConsoleLogEnabled
+    setMaxFileSize
+    setMaxAliveTime
+    currentLogPath
+    logFiles
+    logFileNames
+    close
+)
 
 status=0
 previous=""
@@ -71,6 +95,21 @@ for entry in "${packages[@]}"; do
     fi
     echo "$name: $(echo "$dart" | wc -l | tr -d ' ') methods in Dart, $(echo "$kotlin" | wc -l | tr -d ' ') in Kotlin, $(echo "$objc" | wc -l | tr -d ' ') in Objective-C"
 
+    for method in "${required[@]}"; do
+        if ! echo "$dart" | grep -qx "$method" &&
+            ! echo "$kotlin" | grep -qx "$method" &&
+            ! echo "$objc" | grep -qx "$method"; then
+            echo "::error::$name: '$method' is gone from all three halves of the channel"
+            status=1
+        elif ! echo "$kotlin" | grep -qx "$method"; then
+            echo "::error::$name: the Kotlin half has no arm for '$method'"
+            status=1
+        elif ! echo "$objc" | grep -qx "$method"; then
+            echo "::error::$name: the Objective-C half has no branch for '$method'"
+            status=1
+        fi
+    done
+
     for method in $dart; do
         if ! echo "$kotlin" | grep -qx "$method"; then
             echo "::error::$name: '$method' has no arm in the Kotlin 'when (call.method)'"
@@ -79,6 +118,15 @@ for entry in "${packages[@]}"; do
         if ! echo "$objc" | grep -qx "$method"; then
             echo "::error::$name: '$method' has no branch in the Objective-C handleMethodCall"
             status=1
+        fi
+    done
+
+    # The other direction is only worth saying out loud: a handler no Dart
+    # member asks for is a channel method an app may still call by hand —
+    # `getLevel` is one today — and not a member this package's `Xlog` lacks.
+    for method in $(echo "$kotlin"$'\n'"$objc" | sort -u); do
+        if ! echo "$dart" | grep -qx "$method"; then
+            echo "::notice::$name: '$method' is on the channel but not asked for by lib/*.dart"
         fi
     done
 
