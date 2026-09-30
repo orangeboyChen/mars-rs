@@ -4,14 +4,17 @@
 //! hosts and ports the app set, the debug ip that overrides dns for one host
 //! or one cgi, the backup ips a host falls back to, and the history that says
 //! which pairs failed ([`SimpleIpPortSort`]). What it answers a caller is a
-//! [`Vec`] of [`IpPortItem`] — at most [`NUM_MAKE_COUNT`] ip/port pairs, in the
-//! order they should be tried in.
+//! [`Vec`] of [`IpPortItem`] — [`NUM_MAKE_COUNT`] ip/port pairs, or one more
+//! than that when a single host answered all of them, in the order they should
+//! be tried in.
 //!
 //! Two things decide the whole list: a host with a debug ip never reaches dns
 //! at all, and a pair that came from dns is sorted and filtered by its history
 //! while a pair that came from the backup list is only shuffled. The count
 //! each host is allowed to add is [`NUM_MAKE_COUNT`] while the app is in the
-//! foreground, and one fewer spread over the hosts while it is not.
+//! foreground — and [`NUM_MAKE_COUNT`] `+ 1` once one host has answered all of
+//! them by itself, which is how a list of that kind still gets a second kind
+//! of pair — and one fewer spread over the hosts while it is not.
 //!
 //! The dns, the network, and whether the app is in the foreground are three
 //! callbacks here ([`NewDns`], [`Dns`], [`NetInfo`], [`IsActive`]) — the port
@@ -1393,6 +1396,31 @@ mod tests {
                 .any(|item| item.ip == "5.5.5.5" && item.source_type == IpSourceType::Backup),
             "{:?}",
             items
+        );
+    }
+
+    #[test]
+    fn one_host_that_answered_all_five_by_itself_still_gets_a_sixth() {
+        // the `merge_type_count` ladder: a host that filled the list on its
+        // own has the count raised by one, so the list still gets a pair of a
+        // second kind — which is the sixth the module's own words promise
+        let mut source = NetSource::new_at(0);
+        source.set_longlink(vec!["long.example".to_string()], vec![80], "");
+        source.set_is_active(|| true);
+        source.set_net_info(|| 1);
+        source.set_new_dns(|_, _, _| {
+            ["1.1.1.1", "1.1.1.2", "1.1.1.3", "1.1.1.4", "1.1.1.5"]
+                .map(str::to_string)
+                .to_vec()
+        });
+        source.set_backup_ips("long.example", vec!["5.5.5.5".to_string()]);
+        source.set_random(|_| 0);
+
+        let items = source.get_longlink_items(&LonglinkConfig::new("main"));
+        assert_eq!(items.len(), NUM_MAKE_COUNT + 1, "{:?}", ips(&items));
+        assert_eq!(
+            items.last().map(|item| item.source_type),
+            Some(IpSourceType::Backup)
         );
     }
 

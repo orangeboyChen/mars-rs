@@ -53,9 +53,9 @@
 //!
 //! The eleventh slice is where an ip/port pair comes from ([`net_source`]): the
 //! hosts, ports, debug ips and backup ips the app set, and the history that
-//! says which pairs failed — at most five pairs per host list, sorted by their
-//! history when they came from dns and shuffled when they came from the backup
-//! list.
+//! says which pairs failed — five pairs per host list, or six when one host
+//! answered the five by itself, sorted by their history when they came from
+//! dns and shuffled when they came from the backup list.
 //!
 //! The twelfth slice is the race a link runs between its pairs
 //! ([`longlink_speed_test`]): the same noop goes out on all of them at once,
