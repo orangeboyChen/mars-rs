@@ -100,8 +100,12 @@ impl NetSourceTimerCheck {
         Self::new_at(gettickcount())
     }
 
-    /// The same, with the reading the C++'s `gettickcount()` would hand out.
-    pub fn new_at(_now: u64) -> Self {
+    /// The same, with the reading the C++'s `gettickcount()` would hand out:
+    /// the seed of the random pick too, which is what makes a check a test can
+    /// pin down — [`NetSource::new_at`] seeds from the reading it is handed as
+    /// well, and a check that read the clock besides the reading it was given
+    /// is one no reading of its own pins down.
+    pub fn new_at(now: u64) -> Self {
         Self {
             period_due: None,
             testing: false,
@@ -115,7 +119,7 @@ impl NetSourceTimerCheck {
             remove_long_ban_ip: None,
             speed_test: None,
             on_time_check_suc: None,
-            random: Box::new(crate::xorshift(marsrs_comm::tickcount::gettickcount())),
+            random: Box::new(crate::xorshift(now)),
         }
     }
 

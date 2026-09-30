@@ -183,7 +183,10 @@ impl LongLinkConnectMonitor {
             net_info: None,
             has_account: None,
             longlink_reset: None,
-            random: Box::new(crate::xorshift(marsrs_comm::tickcount::gettickcount())),
+            // the reading the monitor was made with and not the clock's own,
+            // so a monitor a test made at one tick picks the way it picked
+            // then
+            random: Box::new(crate::xorshift(now)),
         }
     }
 
