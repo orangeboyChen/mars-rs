@@ -226,8 +226,19 @@ fn lock_instances() -> MutexGuard<'static, Instances> {
 
 /// One instance, as an [`Arc`] clone: the same reason [`current`] hands out a
 /// clone instead of a reference.
-fn instance(id: AppenderId) -> Option<Arc<Appender>> {
+pub(crate) fn instance(id: AppenderId) -> Option<Arc<Appender>> {
     lock_instances().map.get(&id).cloned()
+}
+
+/// Every id [`appender_open_instance`] has handed out and
+/// [`appender_close_instance`] has not closed.
+///
+/// [`crate::category::every_appender`] needs it because an id is not a
+/// category: [`Xlog::open_unregistered`](crate::xlog::Xlog::open_unregistered)
+/// opens an appender nothing registers, and a "flush everything" that asked
+/// only the categories would leave that one's records in its cache file.
+pub(crate) fn instance_ids() -> Vec<AppenderId> {
+    lock_instances().map.keys().copied().collect()
 }
 
 /// The cache file an instance claimed, if any.
@@ -235,7 +246,7 @@ fn instance(id: AppenderId) -> Option<Arc<Appender>> {
 /// Which slot an instance got is decided by [`appender::claim_cache_slot`] at
 /// open time and is not a function of the config alone — another process can
 /// hold slot 0 — so the path has to be read back from the appender.
-fn instance_cache_path(id: AppenderId) -> Option<PathBuf> {
+pub(crate) fn instance_cache_path(id: AppenderId) -> Option<PathBuf> {
     instance(id).and_then(|appender| appender.claimed_cache_path())
 }
 
@@ -557,20 +568,13 @@ pub fn appender_get_current_log_cache_path() -> Option<PathBuf> {
 /// advisory lock on it for as long as the writer lives, so "no writer owns it"
 /// is something that can actually be answered — by trying to take that lock.
 pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
-    use crate::appender::{
-        cache_dir, cache_slot_path, dir_lock_path, mmap_file_path, MAX_CACHE_SLOTS,
-    };
+    use crate::appender::{cache_dir, cache_slot_path, mmap_file_path, MAX_CACHE_SLOTS};
 
     if config.logdir.as_os_str().is_empty() {
         return FileIoAction::OpenFailed;
     }
 
     let dir = cache_dir(config).to_path_buf();
-    // Whether a slot a dead writer left behind can be told from one a live
-    // writer is using — which is asked of the cache directory, because that is
-    // where the slots are. (The lock the drain itself is taken under is the
-    // log's: see `appender::output_lock_path`.)
-    let slot_lock_path = dir_lock_path(&dir, &config.nameprefix);
     let Ok(appender) = Appender::oneshot(
         config,
         MAX_FILE_SIZE.load(Ordering::Relaxed),
@@ -579,10 +583,16 @@ pub fn appender_oneshot_flush(config: &XLogConfig) -> FileIoAction {
         return FileIoAction::OpenFailed;
     };
 
-    // Without a lock a live cache file cannot be told from a dead one, so all
-    // that is left is the C++'s own behaviour: the single fixed name, drained
-    // only when no writer of *this* prefix and log directory is using it.
-    if !crate::sys::lock_excludes(&slot_lock_path) {
+    // Whether a slot a dead writer left behind can be told from one a live
+    // writer is using — which is asked of the cache directory, because that is
+    // where the slots are, and of the directory and not of a lock file in it,
+    // because `<prefix>.lock` is the file every writer of this log takes and
+    // gives up again: a probe of it asks who is holding it at this instant, and
+    // a drain that runs while a writer is inside a section would be answered
+    // "locking excludes nobody here" and read that writer's live cache file.
+    // (The lock the drain itself is taken under is the log's: see
+    // `appender::output_lock_path`.)
+    if !crate::sys::lock_excludes(&dir) {
         let path = mmap_file_path(config);
         // Scoped to the one file there is, and not to "an appender is open":
         // `appender_get_current_log_path` answers for any appender of the

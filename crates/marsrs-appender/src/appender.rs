@@ -1557,7 +1557,15 @@ impl Appender {
         // Whether advisory locking excludes anybody *where the cache files
         // live* decides the other thing `open` needs it for: whether a slot a
         // dead writer left behind can be told from one a live writer is using.
-        let locking = sys::lock_excludes(&dir_lock_path(&dir, &config.nameprefix));
+        //
+        // Asked of the directory and not of a lock file in it: `<prefix>.lock`
+        // is the file every writer of this log takes and gives up again around
+        // each section it protects, so a probe of it asks who is holding it at
+        // this instant — and the answer a writer that opens while another is
+        // inside a section gets is "locking excludes nobody here", which is the
+        // answer that turns the slots off and hands both writers one cache
+        // file.
+        let locking = sys::lock_excludes(&dir);
         {
             if let Some(file) = dir_lock.as_ref() {
                 sys::lock_exclusive(file);
@@ -3664,7 +3672,7 @@ mod tests {
         let dir = tmp.path();
         // The claim is built on advisory locking; where it excludes nobody the
         // C++ behaviour (one shared cache file) is all there is.
-        if !sys::lock_excludes(&dir_lock_path(dir, "Mars")) {
+        if !sys::lock_excludes(dir) {
             return;
         }
 
@@ -3695,7 +3703,7 @@ mod tests {
     fn every_slot_taken_leaves_the_next_writer_without_a_cache() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        if !sys::lock_excludes(&dir_lock_path(dir, "Mars")) {
+        if !sys::lock_excludes(dir) {
             return;
         }
 

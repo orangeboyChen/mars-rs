@@ -180,8 +180,8 @@ public final class Xlog: NSObject {
     /// builds a message that is expensive to build.
     @objc
     public func isEnabled(for level: LogLevel) -> Bool {
-        // The one reading [close()] was asked about: see [withHandle].
-        let opened = handle
+        // The one reading [close()] was asked about: see [openHandle].
+        let opened = openHandle()
         guard opened != Self.noHandle else {
             return false
         }
@@ -201,8 +201,8 @@ public final class Xlog: NSObject {
         function: String = #function,
         line: Int32 = #line
     ) {
-        // The one reading [close()] was asked about: see [withHandle].
-        let opened = handle
+        // The one reading [close()] was asked about: see [openHandle].
+        let opened = openHandle()
         guard opened != Self.noHandle else {
             return
         }
@@ -326,7 +326,7 @@ public final class Xlog: NSObject {
     public func flush() async {
         // The handle and not `self`: the closure runs on another thread, and
         // `Xlog` is not `Sendable`, so strict concurrency refuses the capture.
-        let opened = self.handle
+        let opened = openHandle()
         guard opened != Self.noHandle else {
             return
         }
@@ -343,24 +343,22 @@ public final class Xlog: NSObject {
     /// `namePrefix` answers `0`. Safe to call twice.
     @objc
     public func close() {
-        // The one reading [close()] was asked about: see [withHandle].
-        let opened = handle
+        // The one reading [close()] was asked about: see [openHandle].
+        let opened = openHandle()
         guard opened != Self.noHandle else {
             return
         }
         // A prefix is one appender to the C ABI, so two `Xlog`s of one prefix
         // hold one handle between them — and releasing takes the prefix and
-        // not the handle, which drops whatever the prefix answers *now*. Once
-        // this object's twin closed the appender and a third one reopened the
-        // prefix, releasing here would close an appender that is not ours.
-        let ownsPrefix = namePrefix.withCString { prefix in
-            mars_xlog_get_instance(prefix) == opened
+        // not the handle, which drops whatever the prefix answers *now*.
+        // [openHandle] asked the registry, so what is released here is the
+        // appender this handle names and not one a third `Xlog` opened in
+        // the meantime.
+        namePrefix.withCString { prefix in
+            mars_xlog_release_instance(prefix)
         }
-        if ownsPrefix {
-            namePrefix.withCString { prefix in
-                mars_xlog_release_instance(prefix)
-            }
-        }
+        handleLock.lock()
+        defer { handleLock.unlock() }
         handle = Self.noHandle
     }
 
@@ -534,7 +532,17 @@ public final class Xlog: NSObject {
     /// this appender is open, and [noHandle] once [close()] ran. `0` is the
     /// process-wide appender to the C ABI and never a failure of that call, so
     /// what the two have in common is that neither is a handle to write through.
+    ///
+    /// Read and written under [handleLock]: [close()] writes it from whichever
+    /// thread the app closed on, and every member reads it from whichever
+    /// thread the app logged on. Swift gives a plain property no ordering
+    /// between the two, so a thread that never observed the write would go on
+    /// logging through an appender that has been released — which is why the
+    /// Kotlin `actual` of this API marks the same field `@Volatile`. Swift has
+    /// no volatile, so a lock is what stands in for one.
     private var handle: Int64
+
+    private let handleLock = NSLock()
 
     /// What [mode] answers while this side is the only one that knows it.
     private var currentMode: AppenderMode
@@ -590,7 +598,9 @@ public final class Xlog: NSObject {
     /// the process logs through. Read once, and the reading [body] is handed
     /// is the one the registry answered for.
     private func openHandle() -> Int64 {
+        handleLock.lock()
         let opened = handle
+        handleLock.unlock()
         guard opened != Self.noHandle else {
             return Self.noHandle
         }
