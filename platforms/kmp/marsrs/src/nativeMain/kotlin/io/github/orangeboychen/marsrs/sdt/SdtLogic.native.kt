@@ -147,7 +147,12 @@ public actual object SdtLogic {
         return memScoped {
             val checks = allocArray<MarsSdtCheckVar>(count)
             val written = mars_sdt_plan(checks, count.toUInt()).toInt()
-            (0 until written).mapNotNull { index -> checkOf(checks[index].toInt()) }
+            // What `mars_sdt_plan` answers is how long the plan is, and not how
+            // much of it it wrote: a plan that grew between the two calls — a
+            // `startActiveCheck` on another thread — is one it filled the buffer
+            // with `count` of, and reading `written` of it would read past the
+            // array. What was written is at most what there was room for.
+            (0 until written.coerceAtMost(count)).mapNotNull { index -> checkOf(checks[index].toInt()) }
         }
     }
 
