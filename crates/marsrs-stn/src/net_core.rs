@@ -401,6 +401,14 @@ pub struct NetCore {
     /// through a callback they were handed at construction, and the core is
     /// the only thing that knows the answer: the C++'s is a member of a
     /// singleton both read directly.
+    ///
+    /// It starts `true`, the way `ActiveLogic::ActiveLogic()` starts it: an
+    /// app is not in front until its host says it is, but it is active from
+    /// the moment it starts, and what ends that is ten minutes in the
+    /// background. Starting it `false` would make every host list the short
+    /// one and every sync wait the half hour until a host happened to move
+    /// the app between foreground and background, which is a change most
+    /// apps make once and some never make at all.
     active: Arc<AtomicBool>,
     is_foreground: Option<Box<IsForeground>>,
     /// `ActiveLogic::Instance()->LastForegroundChangeTime()`.
@@ -441,7 +449,9 @@ impl NetCore {
             anti_avalanche: Arc::new(Mutex::new(AntiAvalanche::new_at(false, now))),
             zombie: Arc::new(Mutex::new(ZombieTaskManager::new_at(now))),
             pending: Arc::new(Mutex::new(VecDeque::new())),
-            active: Arc::new(AtomicBool::new(false)),
+            // `ActiveLogic::isactive_`, and `ActiveLogic::ActiveLogic()` made
+            // it `true`: see the field.
+            active: Arc::new(AtomicBool::new(true)),
             net_info: Arc::new(Mutex::new(Box::new(|| crate::NET_TYPE_WIFI))),
             hooks: Arc::new(Mutex::new(Hooks::default())),
             use_long_link,
@@ -465,9 +475,10 @@ impl NetCore {
             clock: None,
         };
         // `ActiveLogic::IsActive()`, which the C++'s `NetSource` and
-        // `TimingSync` ask of the singleton themselves: an app that never
-        // said it was active is one whose host lists are made the short way
-        // and whose sync waits half an hour, for the life of the process.
+        // `TimingSync` ask of the singleton themselves. The two of them hold
+        // a callback and not a copy of the flag, which is why a core that
+        // went inactive later is one they both see go: the cell is shared,
+        // and the core is what fills it.
         let active = Arc::clone(&core.active);
         core.timing_sync
             .set_is_active(move || active.load(Ordering::SeqCst));
@@ -4026,9 +4037,14 @@ mod tests {
 
     /// `ActiveLogic::IsActive()` is what the net source asks before it makes a
     /// host list, and it is the same flag: an app the core was told is active
-    /// gets a list made the long way, and one it was never told about gets the
+    /// gets a list made the long way, and one it was told is not gets the
     /// pairs shared out over the hosts — the background list, however long the
     /// app is in front.
+    ///
+    /// A core that was told nothing is the foreground case and not the
+    /// background one: `ActiveLogic` is active until ten minutes in the
+    /// background end it, so an app that never moved is one the long list is
+    /// made for.
     #[test]
     fn an_active_app_is_one_the_net_source_makes_the_foreground_list_for() {
         let (mut core, _rec) = wired();
@@ -4056,6 +4072,9 @@ mod tests {
         core.net_source().set_random(|_bound| 0);
 
         let config = LonglinkConfig::new(MAIN);
+        // a core nobody told anything, and then the two answers in turn
+        let untold = core.net_source().get_longlink_items(&config);
+        core.set_active_at(NOW, false);
         let background = core.net_source().get_longlink_items(&config);
         core.set_active_at(NOW, true);
         let foreground = core.net_source().get_longlink_items(&config);
@@ -4064,6 +4083,7 @@ mod tests {
         // is the `merge_type_count` ladder letting the second host in once
         // the first has filled the list — against four shared out between
         // them behind it
+        assert_eq!(untold.len(), 6, "an app that never went inactive");
         assert_eq!(background.len(), 4, "the quota shared out over two hosts");
         assert_eq!(foreground.len(), 6, "five from one host, and one more");
     }
