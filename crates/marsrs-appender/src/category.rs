@@ -28,7 +28,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Condvar, Mutex, OnceLock, RwLock};
+use std::sync::{Condvar, Mutex, MutexGuard, OnceLock, RwLock};
 
 use crate::{
     appender_close_instance, appender_flush_instance, appender_flush_now_instance,
@@ -349,7 +349,30 @@ pub fn get_xlogger_instance(nameprefix: &str) -> XloggerHandle {
 
 /// `mars::xlog::ReleaseXloggerInstance`.
 pub fn release_xlogger_instance(nameprefix: &str) {
-    let mut registry = registry().lock().unwrap_or_else(|e| e.into_inner());
+    release_locked(
+        registry().lock().unwrap_or_else(|e| e.into_inner()),
+        nameprefix,
+    );
+}
+
+/// [`release_xlogger_instance`] for a caller that knows which handle it holds:
+/// the prefix is released only while it still answers `handle`.
+///
+/// Releasing takes the prefix and not the handle, so asking the registry and
+/// then releasing is two answers and not one: a third `Xlog` opening this
+/// prefix in between is handed a new handle, and the release by prefix closes
+/// that one — the appender the caller was asking about is already gone and the
+/// one it just closed is not its own. This is the question and the release
+/// under one lock, so nothing can land between them.
+pub fn release_xlogger_instance_of(nameprefix: &str, handle: XloggerHandle) {
+    let registry = registry().lock().unwrap_or_else(|e| e.into_inner());
+    if registry.by_prefix.get(nameprefix).copied() != Some(handle) {
+        return;
+    }
+    release_locked(registry, nameprefix);
+}
+
+fn release_locked(mut registry: MutexGuard<'_, Registry>, nameprefix: &str) {
     let Some(handle) = registry.by_prefix.remove(nameprefix) else {
         return;
     };

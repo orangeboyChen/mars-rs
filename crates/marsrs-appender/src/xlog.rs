@@ -42,7 +42,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use crate::category::{
     current_log_path as category_current_log_path, flush as category_flush,
     flush_now as category_flush_now, get_level, get_xlogger_instance, is_enabled_for,
-    new_xlogger_instance, release_xlogger_instance, request_flush as category_request_flush,
+    new_xlogger_instance, release_xlogger_instance_of, request_flush as category_request_flush,
     set_appender_mode, set_console_log_open, set_level,
     set_max_alive_duration as category_set_max_alive_duration,
     set_max_file_size as category_set_max_file_size, xlogger_write, XloggerHandle, DEFAULT_HANDLE,
@@ -340,10 +340,11 @@ impl Xlog {
         // handle between them — and releasing takes the prefix and not the
         // handle, which drops whatever the prefix answers *now*. Once this
         // object's twin closed the appender and a third one reopened the
-        // prefix, releasing here would close an appender that is not ours.
-        if get_xlogger_instance(&self.name_prefix) == target.0 {
-            release_xlogger_instance(&self.name_prefix);
-        }
+        // prefix, releasing here would close an appender that is not ours, so
+        // the handle this object holds goes with the question: the release is
+        // the one the registry answers this handle for, and not two calls it
+        // answers one after the other.
+        release_xlogger_instance_of(&self.name_prefix, target.0);
         self.handle.store(DEFAULT_HANDLE, Ordering::Relaxed);
     }
 
