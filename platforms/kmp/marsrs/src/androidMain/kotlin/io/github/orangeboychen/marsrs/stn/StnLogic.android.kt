@@ -166,10 +166,10 @@ public actual object StnLogic {
         }
 
     @JvmStatic
-    private fun trafficData(send: Int, recv: Int) {
+    private fun trafficData(send: Long, recv: Long) {
         ask(Question.Kind.TrafficData) {
-            this.sent = send.toLong()
-            this.received = recv.toLong()
+            this.sent = send
+            this.received = recv
         }
     }
 

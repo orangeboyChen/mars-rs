@@ -1321,8 +1321,8 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: &JClass<'_>, question: Question) -> Ans
             let called = env.call_static_method(
                 class,
                 jni_str!("trafficData"),
-                jni_sig!("(II)V"),
-                &[JValue::Int(send as jint), JValue::Int(recv as jint)],
+                jni_sig!("(JJ)V"),
+                &[JValue::Long(send), JValue::Long(recv)],
             );
             void_of(env, called);
             Answer::Nothing

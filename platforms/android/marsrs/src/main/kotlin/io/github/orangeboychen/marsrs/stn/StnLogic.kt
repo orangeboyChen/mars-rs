@@ -345,6 +345,7 @@ object StnLogic {
         /**
          * The SDK asks the app to resolve a host name: the app may answer with ordinary DNS, or
          * with a host-to-IP mapping of its own
+         * @param host  the host name
          */
         fun onNewDns(host: String?): Array<String>?
 
@@ -385,8 +386,12 @@ object StnLogic {
 
         /**
          * The traffic statistics
+         *
+         * `Long`, because that is what the two counters are: `marsrs-jni` hands
+         * over the `i64` STN kept, and an `Int` is a counter that wraps — a
+         * session over 2GiB is answered as a negative one.
          */
-        fun trafficData(send: Int, recv: Int)
+        fun trafficData(send: Long, recv: Long)
 
         /**
          * A notice of the connection state
@@ -773,7 +778,7 @@ object StnLogic {
 
     /** Reports the traffic the signalling used */
     @JvmStatic
-    private fun trafficData(send: Int, recv: Int) {
+    private fun trafficData(send: Long, recv: Long) {
         try {
             val imp = callBack
             if (imp == null) {

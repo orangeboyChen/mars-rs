@@ -47,7 +47,9 @@ pub enum Question {
         /// `host`
         host: String,
     },
-    /// `trafficData(int, int)`.
+    /// `trafficData(long, long)` — the two counters as the `i64` STN keeps
+    /// them: an `int` is a counter that wraps, and a session that moved more
+    /// than 2GiB is one that reports a negative number.
     TrafficData {
         /// `_send`
         send: i64,
@@ -475,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn what_went_out_and_came_in_is_handed_to_java_as_two_ints() {
+    fn what_went_out_and_came_in_is_handed_to_java_as_two_longs() {
         let (questions, mut app) = app(Answer::Nothing);
         app.traffic_data(1024, 4096);
         assert_eq!(
