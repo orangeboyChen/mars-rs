@@ -98,13 +98,23 @@ for f in $C_SRCS; do
     cc -O2 -w $INC -c "$f" -o "$OBJ/c_$(basename "$f").o"
 done
 
+# `mars/comm/strutil.h` says `uint8_t` and `uint64_t` without including
+# `<cstdint>`, which is a header a gcc of 13 no longer reaches through another
+# one: every declaration it makes of those types is dropped, and what a reader
+# sees of it is that `http::HeaderFields` has no member named `ContentLength`
+# — the member is there, declared `uint64_t`. Forced in on every C++ line, and
+# not patched into the checkout: this repository does not own the file, and
+# `-include` is a flag a clone of the day it was built on cannot undo. The C
+# lines get none, for which `cstdint` is not a header at all.
+CXXINC="-include cstdint"
+
 for f in $CXX_SRCS "$SRC"; do
-    c++ -std=c++14 -O2 -w $INC -c "$f" -o "$OBJ/cxx_$(basename "$f").o"
+    c++ -std=c++14 -O2 -w $CXXINC $INC -c "$f" -o "$OBJ/cxx_$(basename "$f").o"
 done
 
 # The file-protection attribute helper is Objective-C++, and Apple-only.
 if [ "$OS" = "Darwin" ]; then
-    c++ -x objective-c++ -std=c++14 -O2 -w $INC -c "$UP"/mars/comm/objc/data_protect_attr.mm \
+    c++ -x objective-c++ -std=c++14 -O2 -w $CXXINC $INC -c "$UP"/mars/comm/objc/data_protect_attr.mm \
         -o "$OBJ/objc_protect.o"
     LIBS="$LIBS -framework Foundation"
 fi
