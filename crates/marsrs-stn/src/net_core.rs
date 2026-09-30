@@ -360,7 +360,14 @@ pub struct NetCore {
     hooks: Arc<Mutex<Hooks>>,
 
     /// `need_use_longlink_`.
-    use_long_link: bool,
+    ///
+    /// Shared, and not a `bool` the closures below copy: `SetNeedUseLongLink`
+    /// sets a member of the C++'s own (`net_core.cc:1316`), and a queue's
+    /// callback there reads it when it runs. A copy is what made this setter
+    /// re-wire the whole core to change it, and a re-wire puts the channel
+    /// hooks of [`NetCore::wire_longlink_channels`] back — over any a host
+    /// installed on the queue itself.
+    use_long_link: Arc<AtomicBool>,
     /// `already_release_net_`.
     released: bool,
     /// `shortlink_error_count_`.
@@ -454,7 +461,7 @@ impl NetCore {
             active: Arc::new(AtomicBool::new(true)),
             net_info: Arc::new(Mutex::new(Box::new(|| crate::NET_TYPE_WIFI))),
             hooks: Arc::new(Mutex::new(Hooks::default())),
-            use_long_link,
+            use_long_link: Arc::new(AtomicBool::new(use_long_link)),
             released: false,
             shortlink_error_count: 0,
             shortlink_try_flag: false,
@@ -574,13 +581,13 @@ impl NetCore {
 
         let hooks = Arc::clone(&self.hooks);
         let zombie = Arc::clone(&self.zombie);
-        let use_long_link = self.use_long_link;
+        let use_long_link = Arc::clone(&self.use_long_link);
         self.shortlink
             .set_callback(move |err_type, err_code, handle, task, cost, profile| {
                 call_back(
                     &hooks,
                     &zombie,
-                    use_long_link,
+                    use_long_link.load(Ordering::Relaxed),
                     gettickcount(),
                     CallFrom::Short,
                     err_type,
@@ -594,13 +601,13 @@ impl NetCore {
 
         let hooks = Arc::clone(&self.hooks);
         let zombie = Arc::clone(&self.zombie);
-        let use_long_link = self.use_long_link;
+        let use_long_link = Arc::clone(&self.use_long_link);
         self.longlink
             .set_callback(move |err_type, err_code, handle, task, cost, profile| {
                 call_back(
                     &hooks,
                     &zombie,
-                    use_long_link,
+                    use_long_link.load(Ordering::Relaxed),
                     gettickcount(),
                     CallFrom::Long,
                     err_type,
@@ -1211,7 +1218,7 @@ impl NetCore {
         // link that is already up is not woken either. What the monitor makes
         // of the question is its own, ladder and all: this is the pass, not a
         // connect.
-        if self.use_long_link
+        if self.use_long_link()
             && task.channel_select & Task::CHANNEL_LONG != 0
             && self.long_link_is_down(&task.channel_name)
             && self.is_foreground()
@@ -1228,7 +1235,8 @@ impl NetCore {
         // `IsSvrTrigOff()` answers `false` whatever it was set to
         // (`longlink.h:172-176`).
         let foreground = self.is_foreground();
-        if self.use_long_link && task.channel_select & Task::CHANNEL_MINOR_LONG != 0 && foreground {
+        if self.use_long_link() && task.channel_select & Task::CHANNEL_MINOR_LONG != 0 && foreground
+        {
             let hosts = task.minorlong_host_list.clone();
             if let Some(host) = hosts.first().cloned() {
                 if !self.links.contains_key(&host) {
@@ -1255,7 +1263,7 @@ impl NetCore {
                 // task as it came in, so what a retry of it goes out on is
                 // whatever the app put there — for a task that put nothing,
                 // nowhere at all
-                if self.use_long_link {
+                if self.use_long_link() {
                     task.shortlink_fallback_hostlist = task.shortlink_host_list.clone();
                 }
                 self.shortlink.start_task_at(now, task, prepare)
@@ -1272,7 +1280,7 @@ impl NetCore {
             );
             return false;
         }
-        if self.use_long_link {
+        if self.use_long_link() {
             self.zombie().on_net_core_start_task_at(now);
         }
         true
@@ -1284,7 +1292,7 @@ impl NetCore {
     /// told not to use the long link asks neither of them, whatever is still
     /// queued on them from before.
     pub fn stop_task(&mut self, taskid: u32) -> bool {
-        if self.use_long_link {
+        if self.use_long_link() {
             if self.longlink.stop_task(taskid) {
                 return true;
             }
@@ -1308,7 +1316,7 @@ impl NetCore {
     /// not the same as forgetting those tasks, since `StopTask` and
     /// `ClearTasks` leave them where they are.
     pub fn has_task(&self, taskid: u32) -> bool {
-        if self.use_long_link {
+        if self.use_long_link() {
             let saved = self.zombie.lock().unwrap_or_else(poisoned).has_task(taskid);
             if saved || self.longlink.has_task(taskid) {
                 return true;
@@ -1330,7 +1338,7 @@ impl NetCore {
     pub fn clear_tasks(&mut self) -> Vec<u32> {
         let mut cleared = self.shortlink.task_ids();
         self.shortlink.clear_tasks();
-        if self.use_long_link {
+        if self.use_long_link() {
             cleared.extend(self.longlink.task_ids());
             self.longlink.clear_tasks();
             cleared.extend(self.zombie().task_ids());
@@ -1347,7 +1355,7 @@ impl NetCore {
     /// The same, with the reading handed in.
     pub fn redo_tasks_at(&mut self, now: u64) {
         self.net_source.clear_cache();
-        if self.use_long_link {
+        if self.use_long_link() {
             self.longlink.redo_tasks_at(now);
             self.redo_zombies_at(now);
         }
@@ -1377,7 +1385,7 @@ impl NetCore {
         // the queues hold the same timeout the core does, so one reset is the
         // C++'s `dynamic_timeout_->ResetStatus()`
         self.dynamic_timeout.reset();
-        if self.use_long_link {
+        if self.use_long_link() {
             self.timing_sync.on_network_change_at(now);
             // the C++'s `longlink_task_manager_->OnNetworkChange()` asks each
             // channel's own monitor, which drops the link and asks for a new
@@ -1415,7 +1423,7 @@ impl NetCore {
     ) {
         self.shortlink
             .retry_tasks_at(now, err_type, err_code, handle, src_taskid);
-        if self.use_long_link {
+        if self.use_long_link() {
             self.longlink
                 .retry_tasks_at(now, err_type, err_code, handle, src_taskid, user_id);
         }
@@ -1427,7 +1435,7 @@ impl NetCore {
         if channel_select == Task::CHANNEL_SHORT {
             return self.shortlink.connect_profile(taskid).unwrap_or_default();
         }
-        if self.use_long_link
+        if self.use_long_link()
             && (channel_select == Task::CHANNEL_LONG
                 || channel_select == Task::CHANNEL_MINOR_LONG
                 || channel_select == Task::CHANNEL_BOTH)
@@ -1673,7 +1681,7 @@ impl NetCore {
         call_back(
             &Arc::clone(&self.hooks),
             &Arc::clone(&self.zombie),
-            self.use_long_link,
+            self.use_long_link(),
             now,
             from,
             err_type,
@@ -1716,7 +1724,7 @@ impl NetCore {
         ip: &str,
         port: u16,
     ) {
-        if !self.use_long_link || self.released {
+        if !self.use_long_link() || self.released {
             return;
         }
         let continuous_fail = self.longlink.tasks_continuous_fail_count();
@@ -1781,7 +1789,7 @@ impl NetCore {
         }
         self.conn_status_call_back();
 
-        if self.use_long_link && err_type == ErrCmdType::Ok {
+        if self.use_long_link() && err_type == ErrCmdType::Ok {
             self.redo_zombies_at(now);
         }
 
@@ -1811,7 +1819,7 @@ impl NetCore {
 
     /// The same, with the reading handed in.
     pub fn on_longlink_status_changed_at(&mut self, now: u64, status: LongLinkStatus) {
-        if !self.use_long_link {
+        if !self.use_long_link() {
             return;
         }
         self.timing_sync.on_longlink_status_changed_at(now, status);
@@ -1831,7 +1839,7 @@ impl NetCore {
         // a core that does not use the long link has nothing to ask: the app's
         // answer is the short link's, and the long link stays "nothing has
         // tried yet"
-        if !self.use_long_link {
+        if !self.use_long_link() {
             let all = match self.shortlink_error_count {
                 count if count >= SHORTLINK_ERR_TIME => NetStatus::ServerFailed,
                 _ => NetStatus::Connected,
@@ -1897,7 +1905,7 @@ impl NetCore {
     /// metadata around it. [`None`] is a core that does not use the long link,
     /// or a config the factory would not make one for.
     pub fn create_long_link(&mut self, config: LonglinkConfig) -> Option<Arc<Mutex<LongLink>>> {
-        if !self.use_long_link {
+        if !self.use_long_link() {
             return None;
         }
         let name = config.name.clone();
@@ -1932,7 +1940,7 @@ impl NetCore {
 
     /// The same, with the reading handed in.
     pub fn destroy_long_link_at(&mut self, now: u64, name: &str) -> bool {
-        if !self.use_long_link || !self.links.contains_key(name) {
+        if !self.use_long_link() || !self.links.contains_key(name) {
             return false;
         }
         self.longlink.remove_long_link_at(now, name);
@@ -2042,7 +2050,7 @@ impl NetCore {
         taskid: u32,
         code: DisconnectInternalCode,
     ) -> bool {
-        if !self.use_long_link {
+        if !self.use_long_link() {
             return false;
         }
         self.longlink.disconnect_by_taskid(taskid, code)
@@ -2074,17 +2082,16 @@ impl NetCore {
             .set_ip_connect_timeout(v4_timeout, v6_timeout);
     }
 
-    /// `SetNeedUseLongLink(flag)` — and the wiring that goes with it: the
-    /// queues' callbacks are the ones that decide whether a task is saved as a
-    /// zombie.
+    /// `SetNeedUseLongLink(flag)` — `need_use_longlink_ = flag`
+    /// (`net_core.cc:1316`), and nothing else: the flag is shared, so the
+    /// callbacks the queues hold read the new one the next time they run.
     pub fn set_need_use_long_link(&mut self, use_long_link: bool) {
-        self.use_long_link = use_long_link;
-        self.wire();
+        self.use_long_link.store(use_long_link, Ordering::Relaxed);
     }
 
     /// `UseLongLink()`.
     pub fn use_long_link(&self) -> bool {
-        self.use_long_link
+        self.use_long_link.load(Ordering::Relaxed)
     }
 
     /// `ReleaseNet()` — the tasks are dropped and the links are gone.
@@ -2135,7 +2142,7 @@ impl NetCore {
     /// is a `nullptr` too: in both cases the C++ asks no question of the
     /// network and lets the task out.
     fn long_link_is_down(&self, name: &str) -> bool {
-        self.use_long_link
+        self.use_long_link()
             && self.long_link(name).is_some_and(|link| {
                 link.lock().unwrap_or_else(poisoned).connect_status() != LongLinkStatus::Connected
             })
@@ -2220,7 +2227,7 @@ impl NetCore {
             longlink_ok = false;
         }
 
-        if !self.use_long_link {
+        if !self.use_long_link() {
             return Task::CHANNEL_SHORT;
         }
 
@@ -2277,7 +2284,7 @@ impl Default for NetCore {
 impl std::fmt::Debug for NetCore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NetCore")
-            .field("use_long_link", &self.use_long_link)
+            .field("use_long_link", &self.use_long_link())
             .field("released", &self.released)
             .field("default_link", &self.default_link)
             .field("links", &self.links.keys().collect::<Vec<_>>())

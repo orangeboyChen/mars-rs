@@ -12,6 +12,7 @@
 //! two queues' loops, hand the answers back, and drain what the queues asked
 //! for ([`NetCore::run_pending`] is the C++'s message queue thread).
 
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use marsrs_stn::longlink_task_manager::Response as LongAnswer;
@@ -980,6 +981,41 @@ fn a_task_goes_out_on_the_link_the_core_made_and_not_on_a_channel_nobody_wired()
         queued[0].1
     );
     assert!(core.longlink().has_task(7), "the queue still waits on it");
+}
+
+/// `SetNeedUseLongLink` is one assignment in the C++ (`net_core.cc:1316`), and
+/// it is one here: a setter that re-wired the core to change the flag put the
+/// channel hooks of `wire_longlink_channels` back over the ones the host had
+/// installed on the queue itself, which is what that function's own comment
+/// promises it does not do.
+#[test]
+fn setting_the_flag_leaves_the_hooks_of_the_queue_alone() {
+    let mut core = NetCore::new_at(START);
+    core.set_net_info(|| NET_TYPE_WIFI);
+    core.set_clock(|| NOW_SECS);
+    core.longlink()
+        .set_req2buf(|task, _channel| Ok(task.cgi.clone().into_bytes()));
+
+    let asked = Arc::new(AtomicUsize::new(0));
+    let counting = Arc::clone(&asked);
+    core.longlink().set_make_sure_connected(move |_| {
+        counting.fetch_add(1, AtomicOrdering::SeqCst);
+        true
+    });
+
+    core.set_need_use_long_link(true);
+
+    let mut task = Task::new(7, 12);
+    task.cgi = "/cgi-bin/7".to_string();
+    task.channel_select = Task::CHANNEL_LONG;
+    task.total_timeout = 10 * 60 * 1000;
+    assert!(core.start_task_at(START, task));
+
+    assert_eq!(
+        asked.load(AtomicOrdering::SeqCst),
+        1,
+        "the queue asked the hook the app gave it, and not one a re-wire put back"
+    );
 }
 
 #[test]
