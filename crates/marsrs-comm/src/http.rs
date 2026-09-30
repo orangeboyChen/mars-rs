@@ -521,6 +521,15 @@ impl HeaderFields {
         self.get(CONTENT_LENGTH).map(to_u64).unwrap_or(0)
     }
 
+    /// Whether the peer said how long the body is at all.
+    ///
+    /// Not [`Self::content_length`] being `0`, which is the two things a
+    /// parser has to tell apart: an absent field is a body whose length is
+    /// the socket, and `Content-Length: 0` is a body that is already over.
+    pub fn has_content_length(&self) -> bool {
+        self.get(CONTENT_LENGTH).is_some()
+    }
+
     /// `KeepAliveTimeout()` — how long the peer will keep the socket, in
     /// seconds; [`DEFAULT_KEEP_ALIVE_TIMEOUT`] when it did not say, or when
     /// what it said is not a timeout between nothing and a minute.
@@ -1180,8 +1189,12 @@ impl Parser {
 
         let buffered = self.buffer.len() as u64;
         let have = self.body.len() as u64;
-        // a body the peer closes the socket at the end of has no length
-        let close_terminated = self.fields.is_connection_close() && content_length == 0;
+        // a body the peer closes the socket at the end of has no length — and
+        // no *field*, which is not the same as a field saying `0`: an answer
+        // that names its length as zero is over at its head, and one that
+        // names none at all is the body the socket is the length of.
+        let close_terminated =
+            self.fields.is_connection_close() && !self.fields.has_content_length();
         let append = if close_terminated {
             // a body the peer closes the socket at the end of has no length
             buffered
@@ -1215,13 +1228,16 @@ impl Parser {
         self.body.extend_from_slice(&self.buffer[..append]);
         self.consume(append);
         // A body the peer closes the socket at the end of has no length for
-        // the bytes so far to satisfy: `content_length` is 0, so
+        // the bytes so far to satisfy: no field said how long, so
         // `have + append` is 0 the moment the head is whole and nothing else
         // came with it — which is every head that arrives in a read of its
         // own, and that is how a socket hands one over. Ending there is an
         // empty answer with the body stranded in the buffer, and what can
         // end such an answer — [`Parser::peer_hung_up`] — never runs. The
         // socket is the length, so this waits for bytes like any other body.
+        //
+        // A length of `0` the peer *did* name does not reach here: it is an
+        // answer that is over at its head, however the socket behaves.
         if close_terminated {
             return self.buffer.is_empty();
         }

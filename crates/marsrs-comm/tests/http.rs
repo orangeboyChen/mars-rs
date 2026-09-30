@@ -255,6 +255,23 @@ fn a_close_terminated_answer_ends_at_the_socket_and_not_at_its_head() {
     assert!(parser.is_success());
 }
 
+/// An answer that *names* its length as zero is over at its head, whether or
+/// not the peer means to close the socket. The length being nothing is not
+/// the same thing as no length being named: the parser used to read
+/// `Content-Length: 0` as "the socket is the length", so an empty answer on a
+/// `Connection: close` socket sat in `Body` until the peer hung up — and for
+/// good, if it never did.
+#[test]
+fn a_length_of_zero_the_peer_named_ends_the_answer_at_its_head() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"),
+        RecvStatus::End
+    );
+    assert_eq!(parser.body(), b"");
+    assert!(parser.is_success());
+}
+
 /// A parser that is done takes no more bytes: `run` has no state left that
 /// could use them, so what it was given would sit in `buffered()` and grow
 /// for as long as the caller kept handing over what the socket gave it.
