@@ -77,7 +77,7 @@
 //! of both, in a file that still decodes end to end.
 //!
 //! Everything else has a counterpart: the per-prefix instance table lives in
-//! [`category`], and the hex dump of a binary blob in [`xlogger_memory_dump`]
+//! [`category`], and the hex dump of a binary blob in [`xlogger_memory_dump`].
 
 // Only `appender::map_region` uses `unsafe` (memmap2 requires it); see the
 // SAFETY comment there. Everything else is safe Rust.

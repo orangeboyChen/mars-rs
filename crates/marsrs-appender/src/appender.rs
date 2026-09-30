@@ -498,10 +498,11 @@ pub(crate) const MAX_CACHE_SLOTS: usize = 8;
 /// * `O_EXCL` decides who owns a slot — atomic across processes and across
 ///   copies of this crate in one process, which is the case the C++ cannot
 ///   tell apart either;
-/// * the lock held on it for the appender's lifetime is what a later
-///   the recovery path that drains a dead process's cache reads to tell a slot a *dead* process
-///   left behind from one a live writer is still using. Nothing else can: a
-///   process that was killed leaves exactly the file a running one has.
+/// * the lock held on it for the appender's lifetime is what the recovery
+///   path — the one that drains a dead process's cache — reads to tell a
+///   slot a *dead* process left behind from one a live writer is still
+///   using. Nothing else can: a process that was killed leaves exactly the
+///   file a running one has.
 struct CacheSlot {
     path: PathBuf,
     /// Held open for as long as the appender lives. Dropping it — including
