@@ -62,7 +62,7 @@ cargo build -p marsrs-ffi --release --target aarch64-apple-ios
 MarsXLogConfig cfg = {
     .mode          = MarsAppenderSync,      /* or MarsAppenderAsync */
     .log_dir       = "/tmp/marslog",
-    .name_prefix   = "Mars",                /* may be NULL -> "Mars" */
+    .name_prefix   = "Mars",                /* must not be NULL or empty */
     .pub_key       = NULL,                  /* NULL/"" -> no encryption */
     .compress_mode = MarsCompressZlib,      /* or MarsCompressZstd */
     .compress_level = 0,                    /* <= 0 -> appender default (6) */

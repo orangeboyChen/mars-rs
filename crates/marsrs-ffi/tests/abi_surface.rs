@@ -394,10 +394,10 @@ fn the_file_questions_are_answered_by_the_instance() {
     );
 }
 
-/// The three setters the C ABI carries and no getter answers for — the mode,
-/// the console and the two sizes — are the three no test called. They are
-/// asked for here, and what is asserted is the one of the four whose effect
-/// can be seen from outside: a file that is closed once it reaches its size.
+/// The four setters the C ABI carries and no getter answers for — the mode, the
+/// console and the two sizes — are the four no test called. They are asked for
+/// here, and what is asserted is the one of the four whose effect can be seen
+/// from outside: a file that is closed once it reaches its size.
 #[test]
 fn the_setters_the_abi_has_no_getter_for_take_effect() {
     let _guard = serial();
