@@ -43,6 +43,13 @@ pub const MAX_HEADER_FIELDS: usize = 128 * 1024;
 pub const MAX_CONTENT_LENGTH: u64 = 4 * 1024 * 1024 * 1024;
 /// `kMaxChunkLength` — how big one chunk may be: 4g.
 pub const MAX_CHUNK_LENGTH: u64 = 4 * 1024 * 1024 * 1024;
+/// How long the line a chunk's size is written on may grow: the same
+/// [`MAX_FIRST_LINE`], which is the other line a peer writes before it writes
+/// bytes this parser keeps. It is a line of hexadecimal digits and of whatever
+/// `;`-extensions follow them, so nothing a server writes comes near it — but
+/// without a number here the wait for the `CRLF` that ends it is the one wait
+/// in the parser a peer can keep unsatisfied for as long as it writes.
+const MAX_CHUNK_SIZE_LINE: usize = MAX_FIRST_LINE;
 /// `KDefaultKeepAliveTimeout` — what a keep-alive without a timeout of its
 /// own gets: five seconds.
 pub const DEFAULT_KEEP_ALIVE_TIMEOUT: u32 = 5;
@@ -1068,6 +1075,15 @@ impl Parser {
 
     fn chunked_body(&mut self) -> bool {
         let Some(size_end) = find(&self.buffer, CRLF) else {
+            // The size is the one line this parser waits for with no cap of its
+            // own: `first_line`, `header_fields` and the trailer wait below all
+            // refuse one that never ends, and `recv` extends `buffer` on every
+            // read without asking how long it is. A peer that answers
+            // `Transfer-Encoding: chunked` and then writes a stream with no
+            // `CRLF` in it would grow it for as long as it wrote.
+            if self.buffer.len() > MAX_CHUNK_SIZE_LINE {
+                self.status = RecvStatus::BodyError;
+            }
             return true;
         };
         // the size of a chunk is hexadecimal
@@ -1793,6 +1809,26 @@ mod tests {
         head.recv(b"HTTP/1.1 200 OK\r\n");
         let fields = "X".repeat(MAX_HEADER_FIELDS + 1);
         assert_eq!(head.recv(fields.as_bytes()), RecvStatus::HeaderFieldsError);
+    }
+
+    #[test]
+    fn a_chunk_size_line_that_never_ends_is_an_error() {
+        let mut parser = Parser::new();
+        assert_eq!(
+            parser.recv(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"),
+            RecvStatus::Body
+        );
+        // a size line is what the parser is waiting for, so a peer that never
+        // ends one is the peer the cap is for: nothing here may keep the bytes
+        let line = "X".repeat(MAX_CHUNK_SIZE_LINE + 1);
+        assert_eq!(parser.recv(line.as_bytes()), RecvStatus::BodyError);
+        assert!(parser.is_error());
+
+        // and a stream of them: `recv` of a parser that has failed takes no
+        // more bytes, which is what keeps `buffer` where it was
+        let before = parser.buffered().len();
+        assert_eq!(parser.recv(line.as_bytes()), RecvStatus::BodyError);
+        assert_eq!(parser.buffered().len(), before);
     }
 
     #[test]
