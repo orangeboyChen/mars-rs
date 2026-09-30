@@ -15,6 +15,8 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::OnceLock;
 
+use crate::file_util::private_file;
+
 /// The OS thread id of the calling thread.
 ///
 /// The C++ stamps the real OS tid into every `XLoggerInfo`; the port used to
@@ -373,11 +375,14 @@ pub(crate) fn unwritable_file() -> Option<File> {
 /// probe of that name, and removed again on the way out.
 pub fn lock_excludes(path: &Path) -> bool {
     let probe = probe_path(path);
-    let Ok(first) = File::options()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(&probe)
+    // Created the way every other file of the port's is — [`private_file`] —
+    // and not with the process default: a probe is a file in the directory the
+    // logs are in, and `create_private_dir` only sets the mode of a directory
+    // it makes. One an app made before this port was linked, or one it hands
+    // over with a mode of its own, is a directory the probe would otherwise
+    // come out readable by every uid on the device.
+    let Ok(first) =
+        private_file(File::options().read(true).write(true).create_new(true)).open(&probe)
     else {
         return false;
     };
