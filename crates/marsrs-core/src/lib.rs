@@ -1,15 +1,18 @@
 //! `marsrs-core` — foundation primitives for the Rust port of Mars xlog.
 //!
-//! This crate is a faithful, dependency-free port of the byte-buffer types in
-//! `mars/comm` that the xlog pipeline is built on:
+//! This crate is a faithful port of the byte-buffer types in `mars/comm` that
+//! the xlog pipeline is built on:
 //!
 //! | C++                        | Rust                              |
 //! |----------------------------|-----------------------------------|
 //! | `mars::comm::PtrBuffer`    | [`ptrbuffer::PtrBuffer`]          |
 //! | `mars::comm::AutoBuffer`   | [`autobuffer::AutoBuffer`]        |
 //!
-//! Keeping these in a leaf crate means the compression, crypto and appender
-//! layers can be ported (and reviewed) independently.
+//! and of the wall-clock the appender reads when it names a file
+//! ([`localtime`]) — which is why the crate is not dependency-free: `chrono`
+//! is what `LocalTime` is worked out with. Keeping these in a leaf crate means
+//! the compression, crypto and appender layers can be ported (and reviewed)
+//! independently.
 
 #![deny(unsafe_code)]
 
