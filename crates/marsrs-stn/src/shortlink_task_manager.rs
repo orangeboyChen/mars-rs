@@ -1147,12 +1147,19 @@ impl ShortLinkTaskManager {
 
             // `first->task.client_sequence_id = …GenSequenceId()` — one per
             // try, and before `Req2Buf`, which is what the app is handed the
-            // request to write with: a retry goes out under a new one
-            let sequence_id = self.sequence_id();
-            self.tasks[i].task.client_sequence_id = sequence_id;
-            // what the C++ makes the worker from is the task it just drew on,
-            // not a copy one number behind it
-            task.client_sequence_id = sequence_id;
+            // request to write with: a retry goes out under a new one. One per
+            // *try* and not one per pass of the loop, which is what
+            // `antiavalanche_checked` is — a task that was weighed once is not
+            // weighed again, and the number that ties it to the server's own
+            // report does not change under a host that runs the loop often.
+            let checked = self.tasks[i].antiavalanche_checked;
+            if !checked {
+                let sequence_id = self.sequence_id();
+                self.tasks[i].task.client_sequence_id = sequence_id;
+                // what the C++ makes the worker from is the task it just drew
+                // on, not a copy one number behind it
+                task.client_sequence_id = sequence_id;
+            }
 
             // `begin_req2buf_time` and `end_req2buf_time` — the app has the
             // task to write its request now, and this is what
@@ -1183,7 +1190,14 @@ impl ShortLinkTaskManager {
                 }
             };
 
-            if !self.allowed(&task, &body) {
+            // The two gates of `mars/stn/src/anti_avalanche.cc`, which are
+            // what the flag is named for: once, and for the try and not for
+            // the pass. `__AntiAvalancheCheck` charges the body it is given —
+            // the mobile funnel is filled by it, and the table of one body's
+            // sends is counted up by it — so a task that waits through many
+            // passes for a run it never got filled the funnel with one body
+            // per pass, and the tasks behind it were then refused their own.
+            if !checked && !self.allowed(&task, &body) {
                 let ended = self.single_resp_handle_at(
                     now,
                     i,
@@ -1197,6 +1211,7 @@ impl ShortLinkTaskManager {
                 }
                 continue;
             }
+            self.tasks[i].antiavalanche_checked = true;
 
             // a cgi that was answered already: the C++ asks here too, and
             // what it asks answers `false` whatever it has, so nothing comes
@@ -1380,6 +1395,11 @@ impl ShortLinkTaskManager {
 
         let profile = &mut self.tasks[at];
         profile.init_send_param_at(now);
+        // and the try to come is weighed again: it draws a sequence id of its
+        // own and it goes through the two gates, which is what a retry of the
+        // short link is — a whole new request, unlike a long-link task's, whose
+        // one body is put on the wire again under the id it was given
+        profile.antiavalanche_checked = false;
         profile.retry_start_time = if fail_handle == TaskFailHandleType::SessionTimeout {
             0
         } else {
@@ -2198,6 +2218,88 @@ mod tests {
             *reported.lock().unwrap(),
             vec![(ErrCmdType::EnDecode, -500, String::new(), 0)],
             "and not the -1 that only says the task is to be tried again"
+        );
+    }
+
+    /// A task whose run never begins waits in the queue, and a host that runs
+    /// the loop often asks about it often. What is one try's and not one
+    /// pass's is the number the server ties the request to and the one weighing
+    /// of the body: the encoder is handed the same sequence id every pass, and
+    /// the two gates are asked once — a funnel filled with one body per pass
+    /// is a funnel the tasks behind this one are refused out of.
+    #[test]
+    fn a_task_that_waits_for_a_run_is_weighed_once_and_not_once_a_pass() {
+        let mut manager = ShortLinkTaskManager::new();
+        // a host with no socket operator: the run is never begun
+        manager.set_start_run(|_task, _request| None);
+        let mut next: u16 = 0;
+        manager.set_gen_sequence_id(move || {
+            next += 1;
+            next
+        });
+
+        let encoded: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&encoded);
+        manager.set_req2buf(move |task, _channel| {
+            recorder.lock().unwrap().push(task.client_sequence_id);
+            Ok(b"body".to_vec())
+        });
+        let weighed: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&weighed);
+        manager.set_anti_avalanche_check(move |_task, body| {
+            recorder.lock().unwrap().push(body.to_vec());
+            true
+        });
+
+        manager.start_task_at(100_000, task(7), prepare());
+        manager.run_loop_at(100_100);
+        manager.run_loop_at(100_200);
+
+        assert!(manager.has_task(7), "the task is still waiting for a run");
+        assert_eq!(
+            *encoded.lock().unwrap(),
+            vec![1, 1, 1],
+            "one number for the try, and not a new one for every pass"
+        );
+        assert_eq!(
+            *weighed.lock().unwrap(),
+            vec![b"body".to_vec()],
+            "and the gates were asked about the body once"
+        );
+    }
+
+    /// A retry is a whole new request, so it is weighed again and it goes out
+    /// under a number of its own — which is the one thing the short link does
+    /// differently from the long link, whose one body goes on the wire again
+    /// under the number it was first given.
+    #[test]
+    fn a_task_that_is_tried_again_is_weighed_again_and_under_a_new_number() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        let mut next: u16 = 0;
+        manager.set_gen_sequence_id(move || {
+            next += 1;
+            next
+        });
+        let weighed: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+        let recorder = Arc::clone(&weighed);
+        manager.set_anti_avalanche_check(move |_task, _body| {
+            *recorder.lock().unwrap() += 1;
+            true
+        });
+        manager.set_buf2resp(|_task, _body, _channel| (-500, TaskFailHandleType::Default));
+
+        manager.start_task_at(100_000, task(7), prepare());
+        assert_eq!(manager.tasks()[0].task.client_sequence_id, 1);
+        manager.on_response_at(100_500, RunId(7), answered(b"hello"));
+
+        assert!(manager.has_task(7), "the task is tried again");
+        // the pass the retry goes out on, once its wait is up
+        manager.run_loop_at(110_000);
+        assert_eq!(*weighed.lock().unwrap(), 2, "once for each try");
+        assert!(
+            manager.tasks()[0].task.client_sequence_id > 1,
+            "and the try to come goes out under a number of its own"
         );
     }
 
