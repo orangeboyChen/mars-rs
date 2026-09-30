@@ -1,6 +1,7 @@
 package io.github.orangeboychen.marsrs.sdt
 
 import io.github.orangeboychen.marsrs.Held
+import io.github.orangeboychen.marsrs.net.ffi.MARS_SDT_ERR_NO_CHECK
 import io.github.orangeboychen.marsrs.net.ffi.MARS_SDT_ERR_NO_SPACE
 import io.github.orangeboychen.marsrs.net.ffi.MARS_SDT_OK
 import io.github.orangeboychen.marsrs.net.ffi.MarsSdtAnswer
@@ -157,7 +158,11 @@ public actual object SdtLogic {
         mars_sdt_cancel_active_check()
     }
 
-    public actual fun isChecking(): Boolean = mars_sdt_is_checking() != 0
+    // `> 0` and not `!= 0`, the way every other question of this kind is
+    // asked in this tree: the C ABI answers `0` for no and `1` for yes, and
+    // `MARS_SDT_ERR_PANIC` — `-1` — for a panic it caught inside the call,
+    // which `!= 0` reads back as a check in flight.
+    public actual fun isChecking(): Boolean = mars_sdt_is_checking() > 0
 
     public actual fun plan(): List<Check>? {
         val count = mars_sdt_plan(null, 0u).toInt()
@@ -208,7 +213,13 @@ public actual object SdtLogic {
             // is one no later `takeReport` finds: the copy is what lets an app
             // that installed a callback still ask, which is the same answer the
             // Android `actual` gives it.
-            if (ran == MARS_SDT_OK) {
+            // A run of no checks answers `MARS_SDT_ERR_NO_CHECK`, and it is a
+            // run the Android `actual` reports: the bridge hands the callback
+            // the results the run produced, which for none is the document of
+            // no results, so an app that listened is told its run was over
+            // and not left waiting for a report that never comes. It is
+            // [takeReport] that answers `null` for that document.
+            if (ran == MARS_SDT_OK || ran == MARS_SDT_ERR_NO_CHECK) {
                 val report = drainReport()
                 if (report != null) {
                     putBy(report)
