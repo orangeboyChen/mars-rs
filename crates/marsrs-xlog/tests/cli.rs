@@ -11,6 +11,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use marsrs_crypt::{HEADER_LEN, TAILER_LEN};
 
@@ -30,8 +31,24 @@ fn xlog() -> Command {
     Command::new(env!("CARGO_BIN_EXE_xlog"))
 }
 
+/// A directory of this test's own, whose files no other test writes: two
+/// tests of one binary run in threads of one process, and a name a test is
+/// given is not a name it is the only one given.
+///
+/// Emptied first, because what it is named by is a process id as well, and a
+/// run that is given the id a run before it had is a run that finds that
+/// run's files — the `.xlog` an encode that was refused did not write, for
+/// one, is here for a test that asserts it is not.
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("marsrs-xlog-cli-{name}-{}", std::process::id()));
+    // A counter and not the name alone: two tests that happen to be given the
+    // same name are two tests in one directory.
+    static CALLS: AtomicU32 = AtomicU32::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "marsrs-xlog-cli-{name}-{}-{}",
+        std::process::id(),
+        CALLS.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("a scratch directory");
     dir
 }
