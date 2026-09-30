@@ -222,5 +222,4 @@ fn without_a_host_nothing_is_asked_for() {
     // what the C++'s destructor does
     logic.cancel_active_check();
     assert_eq!(*cancelled.lock().unwrap_or_else(|e| e.into_inner()), 1);
-    assert!(format!("{logic:?}").contains("NetCheckLogic"));
 }

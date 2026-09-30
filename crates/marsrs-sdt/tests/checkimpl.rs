@@ -83,7 +83,7 @@ fn a_seam_nobody_filled_in_answers_nothing() {
     let ask = Ask::default();
     // the answerer is not something a caller can look at, so all there is to
     // show is that one was made — and that it prints as one
-    assert!(format!("{ask:?}").starts_with("Ask"));
+    assert_eq!(format!("{ask:?}"), "Ask { .. }");
 }
 
 #[test]

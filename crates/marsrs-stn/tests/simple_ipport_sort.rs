@@ -205,7 +205,7 @@ fn with_no_network_nothing_is_learned_and_nothing_is_banned() {
         .collect();
     let items = sort.sort_and_filter_at(0, items, 4, false);
     assert_eq!(items.len(), 4);
-    assert!(format!("{sort:?}").contains("SimpleIpPortSort"));
+    assert!(format!("{sort:?}").contains("records: 0"));
 }
 
 #[test]

@@ -73,7 +73,7 @@ fn the_methods_that_take_no_reading_ask_the_clock_themselves() {
     intercept.add_intercept_task("task", b"the answer".to_vec());
     assert_eq!(intercept.intercept_task_info("task"), None);
     assert_eq!(intercept.intercept_task_info("other"), None);
-    assert!(format!("{intercept:?}").contains("TaskIntercept"));
+    assert!(format!("{intercept:?}").contains("name: \"task\""));
 
     let info = TaskInterceptInfo {
         name: "task".to_string(),

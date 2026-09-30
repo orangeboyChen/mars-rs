@@ -185,7 +185,7 @@ fn the_counters_of_a_monitor_are_what_it_reports() {
     assert_eq!(same.wifi_send(), 10);
     assert_eq!(same.mobile_recv(), 20);
     assert!(
-        format!("{monitor:?}").contains("NetCheckTrafficMonitor"),
+        format!("{monitor:?}").contains("wifi_send: 10"),
         "{monitor:?}"
     );
 }

@@ -156,5 +156,5 @@ fn the_methods_that_take_no_reading_ask_the_clock_themselves() {
     sync.on_network_change();
     sync.on_longlink_status_changed(LongLinkStatus::Connected);
     assert_eq!(sync.due_time(), None);
-    assert!(format!("{sync:?}").contains("TimingSync"));
+    assert!(format!("{sync:?}").contains("due: None"));
 }

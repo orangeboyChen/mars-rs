@@ -507,6 +507,6 @@ mod tests {
     #[test]
     fn the_ask_is_debug_without_the_answerer_it_holds() {
         let ask = Ask::new(|_| Answer::Nothing);
-        assert!(format!("{ask:?}").contains("Ask"));
+        assert_eq!(format!("{ask:?}"), "Ask { .. }");
     }
 }

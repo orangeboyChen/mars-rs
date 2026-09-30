@@ -204,7 +204,8 @@ fn without_the_app_the_tasks_are_still_kept() {
     manager.redo_tasks_at(10);
     assert!(manager.is_empty(), "started and forgotten");
     manager.on_timer_check_at(10);
-    assert!(format!("{manager:?}").contains("ZombieTaskManager"));
+    // the queue is empty, and the check it armed went with it
+    assert!(format!("{manager:?}").contains("tasks: 0"));
 }
 
 #[test]

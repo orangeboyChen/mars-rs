@@ -256,5 +256,7 @@ fn without_a_host_nothing_is_asked_for() {
     assert!(!check.try_connect_at(0));
     check.cancel_connect();
     check.stop_check();
-    assert!(format!("{check:?}").contains("NetSourceTimerCheck"));
+    // no test is running: `stop_check` of one that was never started is
+    // the C++'s own early return, and the post it armed keeps coming
+    assert!(format!("{check:?}").contains("testing: false"));
 }

@@ -195,9 +195,10 @@ fn a_parser_is_the_url_it_was_given() {
     assert_eq!(same.host(), url.host());
     assert_eq!(same.port(), url.port());
     assert_eq!(same.path(), url.path());
-    assert!(
-        format!("{url:?}").contains("HttpUrlParser"),
-        "{}",
-        format!("{url:?}")
-    );
+    // the url it was given and the three parts it was split into
+    let debug = format!("{url:?}");
+    assert!(debug.contains("url: \"http://1.2.3.4:8080/x\""), "{debug}");
+    assert!(debug.contains("host: \"1.2.3.4\""), "{debug}");
+    assert!(debug.contains("port: 8080"), "{debug}");
+    assert!(debug.contains("path: \"/x\""), "{debug}");
 }
