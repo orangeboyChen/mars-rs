@@ -426,7 +426,7 @@ pub struct MarsStnDnsProfile {
 ///
 /// Every field is read for the [`MarsStnQuestionKind`] in `kind` and left alone
 /// for the others, so a caller switches on the kind and reads what it names:
-/// `host` is the host of `MakesureAuthed`, `OnNewDns` and
+/// `host` is the host of `MakesureAuthed`, `Req2Buf`, `OnNewDns` and
 /// `ShortLinkNetworkError`; `ip` / `port` the pair of the two network errors;
 /// `channel_id` the link of `OnPush`, `IdentifyCheckBuffer` and
 /// `IdentifyResponse`; `body` what was pushed, what came back and what the
@@ -437,7 +437,8 @@ pub struct MarsStnDnsProfile {
 pub struct MarsStnQuestion {
     /// Which question.
     pub kind: MarsStnQuestionKind,
-    /// The host: `MakesureAuthed`, `OnNewDns`, `ShortLinkNetworkError`.
+    /// The host: `MakesureAuthed`, `Req2Buf`, `OnNewDns`,
+    /// `ShortLinkNetworkError`.
     pub host: *const c_char,
     /// The user: `MakesureAuthed`, `Req2Buf`, `Buf2Resp`, `OnTaskEnd`.
     pub user_id: *const c_char,
