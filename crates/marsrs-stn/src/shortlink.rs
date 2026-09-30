@@ -444,12 +444,24 @@ mod tests {
         assert_eq!(answer(&failed).unwrap().status(), 500);
     }
 
+    /// The bytes the C++ writes for one request, which is the whole of what
+    /// the packer is for: a `POST` of the cgi, the five fields of its own,
+    /// the `Content-Length`, and then the body.
     #[test]
     fn the_packer_a_link_holds_is_the_one_that_writes() {
         let headers = Headers::new();
+        let request = default_packer()("/cgi", &headers, b"hello");
+        assert_eq!(request, pack("/cgi", &headers, b"hello"));
         assert_eq!(
-            default_packer()("/cgi", &headers, b"hello"),
-            pack("/cgi", &headers, b"hello")
+            String::from_utf8_lossy(&request),
+            "POST /cgi HTTP/1.1\r\n\
+             Accept: */*\r\n\
+             Cache-Control: no-cache\r\n\
+             Connection: close\r\n\
+             Content-Length: 5\r\n\
+             Content-Type: application/octet-stream\r\n\
+             User-Agent: MicroMessenger Client\r\n\
+             \r\nhello"
         );
     }
 
