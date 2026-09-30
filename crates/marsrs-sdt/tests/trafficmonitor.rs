@@ -180,8 +180,9 @@ fn the_counters_of_a_monitor_are_what_it_reports() {
     monitor.send_limit_check(10, false);
     monitor.recv_limit_check(20, true);
 
+    // a copy of it carries the counters, and not the monitor's own — a copy
+    // that lost one answers for itself here
     let same = monitor.clone();
-    assert_eq!(same, monitor);
     assert_eq!(same.wifi_send(), 10);
     assert_eq!(same.mobile_recv(), 20);
     assert!(

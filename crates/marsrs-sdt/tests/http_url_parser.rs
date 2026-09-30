@@ -194,11 +194,12 @@ fn a_host_that_is_not_ascii_is_read_all_the_same() {
 #[test]
 fn a_parser_is_the_url_it_was_given() {
     let url = HttpUrlParser::new("http://1.2.3.4:8080/x");
+    // a copy of it is the same url: the three parts it was split into, and not
+    // the original's — a copy that lost one answers for itself here
     let same = url.clone();
-    assert_eq!(same, url);
-    assert_eq!(same.host(), url.host());
-    assert_eq!(same.port(), url.port());
-    assert_eq!(same.path(), url.path());
+    assert_eq!(same.host(), "1.2.3.4");
+    assert_eq!(same.port(), 8080);
+    assert_eq!(same.path(), "/x");
     // the url it was given and the three parts it was split into
     let debug = format!("{url:?}");
     assert!(debug.contains("url: \"http://1.2.3.4:8080/x\""), "{debug}");

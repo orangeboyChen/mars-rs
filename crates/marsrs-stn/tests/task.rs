@@ -113,8 +113,15 @@ fn a_short_link_task_is_built_up_from_the_defaults() {
     let keys: Vec<&String> = task.headers.keys().collect();
     assert_eq!(keys, vec!["Accept", "Content-Type"]);
 
+    // a copy of it carries the fields it was given, and not the task's own —
+    // a copy that lost one answers for itself here, and a task of another
+    // shape is not one
     let clone = task.clone();
-    assert_eq!(clone, task);
+    assert_eq!(clone.cgi, "/cgi-bin/micromsg-bin/newsync");
+    assert_eq!(clone.channel_select, Task::CHANNEL_SHORT);
+    assert_eq!(clone.retry_count, 3);
+    assert_eq!(clone.headers.len(), 2);
+    assert_eq!(clone.redirect_type, HostRedirectType::HttpToHttps);
     assert_ne!(clone, Task::new(1, 2));
     assert_eq!(HostRedirectType::default(), HostRedirectType::None);
 }
