@@ -209,7 +209,7 @@ jobs:
   # GitHub Packages: `marsrs-kmp` and `xlog-kmp`, one publication per module.
   # This is the one job that builds, because a Kotlin Multiplatform publication
   # is one artifact per Kotlin target of one module — the module metadata names
-  # all fourteen, so a publication that left one out is one Gradle cannot
+  # all thirteen, so a publication that left one out is one Gradle cannot
   # resolve for the platform it forgot — and macOS is where all of them can be
   # built. What it does not build is the natives: those are the release's own,
   # `marsrs-kmp-native.zip`, so there is no Rust and no NDK in this job.

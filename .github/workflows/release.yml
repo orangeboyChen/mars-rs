@@ -672,9 +672,9 @@ jobs:
   #
   # One job on macOS and not one per target, because a Kotlin Multiplatform
   # publication is one artifact per target of one module: the module metadata of
-  # `xlog-kmp` names all fourteen of them, so a publication that left
+  # `xlog-kmp` names all thirteen of them, so a publication that left
   # one out is a publication Gradle cannot resolve for the platform it forgot.
-  # macOS is where all fourteen can be built, and it is the only place an Apple
+  # macOS is where all thirteen can be built, and it is the only place an Apple
   # one can.
   kmp:
     needs: [version, android, kmp-apple, kmp-host]
