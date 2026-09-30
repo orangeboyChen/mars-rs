@@ -584,8 +584,10 @@ impl ShortLink {
         self.quic_rw_timeout = Some(Box::new(timeout));
     }
 
-    /// `mars::comm::getNetTypeForStatistics` — unset leaves the profile's
-    /// `nettype_for_report` where it is.
+    /// `mars::comm::getNetTypeForStatistics` — unset answers [`K_WIFI`], so a
+    /// run on a host that never gave one is counted as a wifi one. The `-1`
+    /// the profile starts at is what a reader sees before the connect writes
+    /// this over it, and not what an unset host answers.
     pub fn set_net_type_for_report(&mut self, net_type: impl FnMut() -> i32 + Send + 'static) {
         self.net_type_for_report = Some(Box::new(net_type));
     }
@@ -632,7 +634,13 @@ impl ShortLink {
             return Err(ConnectFail::NoAddress);
         }
 
-        // a debug ip is where the link goes, so there is no proxy to speak of
+        // a debug pair is where the link goes, so there is no proxy to speak
+        // of
+        //
+        // What is asked here is the *pair*, and not the debug ip: a pair whose
+        // source is [`IpSourceType::Debug`] is one the net source put on the
+        // list for the host or for the cgi, and the debug ip the app set for
+        // the host is only one of the ways a pair like that gets there.
         //
         // An http proxy is the one a link both dials at the proxy's own
         // address and writes its request for — [`crate::shortlink::request_url`]
@@ -1412,6 +1420,11 @@ impl ShortLink {
 
     /// `mars::comm::getNetTypeForStatistics` — the network for the report, which
     /// the C++ only asks for once, before the connect.
+    ///
+    /// Unset answers [`K_WIFI`], the one network a link that was never told
+    /// reports: what an app reads out of `nettype_for_report` after a connect
+    /// is therefore never the `-1` the profile starts at. See
+    /// [`ShortLink::set_net_type_for_report`].
     fn net_type_for_report(&mut self) -> i32 {
         match self.net_type_for_report.as_mut() {
             Some(net_type) => net_type(),
