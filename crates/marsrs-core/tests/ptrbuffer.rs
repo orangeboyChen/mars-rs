@@ -100,7 +100,10 @@ fn writes_are_truncated_and_reads_stop_at_the_logical_length() {
 #[test]
 fn write_at_grows_the_length_without_moving_the_cursor() {
     let mut region = [0u8; 8];
-    // `write_at` asserts that the position is inside the logical length
+    // Two of logical length over eight of region, so that `pos` 2 is past the
+    // length and inside the region: `write_at` grows the length to cover what
+    // it wrote, and it is a `pos` past the *region* that writes nothing and
+    // answers `0`.
     let mut buffer = PtrBuffer::attach(&mut region, 2);
     assert_eq!(buffer.write_at(2, b"xy"), 2);
     assert_eq!(buffer.len(), 4, "the length covers the hole");
