@@ -133,6 +133,15 @@ class XlogPlugin :
      * is answered with, rather than a handle nothing was opened for.
      */
     private fun open(call: MethodCall, result: Result) {
+        // The message the Dart doc of `Xlog.open` promises for an empty
+        // `logDir`, and the one the iOS half answers: `Xlog.open` below
+        // refuses a blank one too, but with the single message `marsrs-jni`
+        // has for every refusal, which names neither the field nor the
+        // reason.
+        if (call.string("logDir").isBlank()) {
+            result.error(ERROR, "logDir is empty", null)
+            return
+        }
         val config = XlogConfig(
             logDir = call.string("logDir"),
             namePrefix = call.string("namePrefix").ifBlank { DEFAULT_NAME_PREFIX },
