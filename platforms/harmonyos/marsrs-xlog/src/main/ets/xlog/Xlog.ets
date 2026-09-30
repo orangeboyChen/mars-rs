@@ -187,11 +187,12 @@ export class Xlog {
     }
   }
 
-  /** How long a log file is written to before the appender opens the next one,
-   * in seconds: `0` is the lifetime an appender opened with none keeps — the
-   * C++'s own ten days — and one below a day is a lifetime the appender
-   * refuses, so what this answers is the one it has and not the last one it
-   * was asked for. */
+  /** How many seconds a log file of this appender is kept before the sweep
+   * deletes it — and not how long one is written to, which is what the day's
+   * turn and [maxFileSizeBytes] decide: `0` is the lifetime an appender
+   * opened with none keeps, the C++'s own ten days, and one below a day is a
+   * lifetime the appender refuses, so what this answers is the one it has and
+   * not the last one it was asked for. */
   get maxAliveTimeSeconds(): number {
     return this.currentMaxAliveTime;
   }
