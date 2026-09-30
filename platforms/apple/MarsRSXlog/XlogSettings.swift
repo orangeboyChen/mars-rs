@@ -22,16 +22,16 @@ internal enum XlogSettings {
     /// The four settings of one appender, at what a fresh one is opened with.
     internal struct Values {
         /// Whether a write reaches the file before it returns.
-        var mode: AppenderMode = .async
+        internal var mode: AppenderMode = .async
 
         /// Whether the console prints the record too.
-        var consoleLogEnabled = false
+        internal var consoleLogEnabled = false
 
         /// How many bytes a file may reach before it is closed; `0`, never split.
-        var fileSizeLimit: UInt64 = 0
+        internal var fileSizeLimit: UInt64 = 0
 
         /// How many seconds a file is kept; `0`, the C++'s own ten days.
-        var aliveTimeLimit: Int64 = 0
+        internal var aliveTimeLimit: Int64 = 0
     }
 
     /// What the appender of `namePrefix` was last given, or what a fresh one is
