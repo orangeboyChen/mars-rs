@@ -872,9 +872,11 @@ impl Parser {
     /// which is the whole call: what is not used yet stays for the
     /// next one.
     ///
-    /// A read of nothing is the peer hanging up, which is how a body with
-    /// no `Content-Length` — the answer of a `Connection: close` — comes to
-    /// an end.
+    /// A read of nothing is the peer hanging up, which is how the body of a
+    /// `Connection: close` answer comes to an end — the one no
+    /// `Content-Length` was named for above all, since nothing else ends
+    /// that one — and how one that named a length and was cut short ends as
+    /// well.
     pub fn recv(&mut self, bytes: &[u8]) -> RecvStatus {
         if bytes.is_empty() {
             self.peer_hung_up();
@@ -920,8 +922,14 @@ impl Parser {
 
     /// A read of nothing on a `Connection: close` whose body is being read
     /// is the end of the answer: the body is however many bytes came in
-    /// before the peer hung up, and there is no `Content-Length` to say
-    /// when it stops otherwise.
+    /// before the peer hung up, and anything the head said about the length
+    /// is beside the point — one that named five bytes and was cut short at
+    /// three ends too, with the three it got and nothing said about the two
+    /// it did not.
+    ///
+    /// Which is what the C++ does (`http.cc:714`): it asks whether the
+    /// connection closes and whether a body is being read, and not whether a
+    /// length was ever named.
     fn peer_hung_up(&mut self) {
         if self.fields.is_connection_close() && self.status == RecvStatus::Body {
             self.status = RecvStatus::End;
