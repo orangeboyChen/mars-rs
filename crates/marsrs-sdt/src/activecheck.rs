@@ -19,7 +19,7 @@
 use crate::checkimpl::{Answer, Ask, Query};
 use crate::constants::{
     DEFAULT_DNS_TIMEOUT, DEFAULT_HTTP_HOST, DEFAULT_PING_COUNT, DEFAULT_PING_HOST,
-    DEFAULT_TCP_CONN_TIMEOUT, UNUSE_TIMEOUT,
+    DEFAULT_TCP_CONN_TIMEOUT, HTTP_DEFAULT_TIMEOUT, UNUSE_TIMEOUT,
 };
 use crate::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
 use crate::sdt::{CheckIPPorts, CheckStatus, NetCheckType, TcpErrCode};
@@ -315,12 +315,15 @@ impl Check {
                 }
                 profile.url = url.clone();
 
-                // `SendHttpQuery` gets the timeout as the request has it,
-                // default and all: the C++ hands `_check_request.total_timeout`
-                // over without a fallback of its own.
+                // `SendHttpQuery` gets the timeout the way every other probe
+                // does — the request's, and the default of its kind when the
+                // request has none. Handing it `total_timeout` itself is what
+                // asked an app's HTTP probe for `UNUSE_TIMEOUT`, twenty-four
+                // days, on a run started with no timeout at all, and for `0`
+                // on one whose budget a probe before it had spent.
                 let answer = ask.ask(Query::Http {
                     url,
-                    timeout_ms: self.remaining,
+                    timeout_ms: self.probe_timeout(HTTP_DEFAULT_TIMEOUT),
                 });
                 let (error_code, status_code, rtt) = answer.http();
                 profile.error_code = error_code;

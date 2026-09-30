@@ -10,8 +10,8 @@ use marsrs_sdt::sdt::{Callback, CheckIPPort, CheckIPPorts, CheckStatus, NetCheck
 use marsrs_sdt::sdt_core::{CancelHandle, SdtCore};
 use marsrs_sdt::sdt_logic::SdtLogic;
 use marsrs_sdt::{
-    DEFAULT_DNS_TIMEOUT, DEFAULT_HTTP_HOST, DEFAULT_PING_COUNT, DEFAULT_PING_HOST, NET_CHECK_BASIC,
-    NET_CHECK_SHORT, UNUSE_TIMEOUT,
+    DEFAULT_DNS_TIMEOUT, DEFAULT_HTTP_HOST, DEFAULT_PING_COUNT, DEFAULT_PING_HOST,
+    HTTP_DEFAULT_TIMEOUT, NET_CHECK_BASIC, NET_CHECK_SHORT, UNUSE_TIMEOUT,
 };
 
 /// The hosts of one link: the name they are filed under, the ip, and the port.
@@ -503,16 +503,58 @@ fn the_url_of_the_http_check_is_the_host_and_the_cgi() {
     // of one that has no scheme
     assert_eq!(urls[0], format!("http://{DEFAULT_HTTP_HOST}/netcheck"));
     assert_eq!(urls[1], "http://short.host/netcheck");
-    // the C++ hands `SendHttpQuery` the timeout as the request has it
+    // `SendHttpQuery` gets the timeout the request has, and the default of
+    // its kind when the request has none — the same reading every other probe
+    // is asked under, and not `UNUSE_TIMEOUT` itself, which is twenty-four
+    // days of it
     assert_eq!(
         asked.lock().unwrap()[1],
         Query::Http {
             url: "http://short.host/netcheck".to_owned(),
-            timeout_ms: UNUSE_TIMEOUT
+            timeout_ms: HTTP_DEFAULT_TIMEOUT
         }
     );
     assert_eq!(request.checkresult_profiles[0].status_code, 200);
     assert_eq!(request.checkresult_profiles[0].rtt, 100);
+}
+
+/// The budget a probe before it spent is no reason to ask the HTTP probe for
+/// no time at all: `0` is a probe that cannot answer, which the check files as
+/// the network being down, and not one that was given the default.
+#[test]
+fn an_http_check_with_nothing_left_asks_for_the_default() {
+    // two hosts, one port each: `spend` breaks the port loop, and the host
+    // loop walks on
+    let shortlink = link(&[("short.a", "1.1.1.1", 80), ("short.b", "2.2.2.2", 80)]);
+    // ten milliseconds, and every probe of `slow` takes a hundred
+    let mut request = request_of(CheckIPPorts::new(), shortlink, 10);
+    let (mut ask, asked) = stub(slow);
+    let mut check = check_of(&request);
+
+    assert!(check.start_do_check(
+        NetCheckType::HttpCheck,
+        &mut request,
+        &mut ask,
+        1,
+        "/netcheck"
+    ));
+    assert_eq!(check.remaining(), 0, "the first probe spent the budget");
+
+    let asked = asked.lock().unwrap().clone();
+    assert_eq!(
+        asked,
+        vec![
+            Query::Http {
+                url: "http://short.a/netcheck".to_owned(),
+                timeout_ms: 10
+            },
+            Query::Http {
+                url: "http://short.b/netcheck".to_owned(),
+                timeout_ms: HTTP_DEFAULT_TIMEOUT
+            },
+        ],
+        "the second host is asked anyway, and not for nothing"
+    );
 }
 
 #[test]
