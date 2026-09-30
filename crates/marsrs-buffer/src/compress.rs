@@ -56,22 +56,6 @@ impl Compressor {
         }
     }
 
-    /// `Compress(src, inLen, dst, outLen)` — compresses `src` into `dst`,
-    /// flushing the stream afterwards (`Z_SYNC_FLUSH` / `ZSTD_e_flush`), and
-    /// returns the number of bytes written to `dst`.
-    ///
-    /// Returns `None` when the backend fails; the C++ signals that with
-    /// `(size_t)-1`.
-    ///
-    /// Note that, exactly like the C++, input that does not fit in `dst` is
-    /// dropped rather than buffered — and that the port reports that rather
-    /// than passing it off as a write: `None` is what a `dst` that filled
-    /// before every byte of `src` was in the stream answers, and so is
-    /// `Some(0)`, which is "no room" and not "no work" — a flush that could
-    /// put nothing in `dst` left the bytes of `src` in the stream's own window
-    /// and wrote no record. Neither is a record anybody can read, which is why
-    /// [`LogBuffer::write`](crate::LogBuffer::write) answers `false` for both
-    /// instead of reporting a record it had cut.
     /// The most bytes a stream of `mode` can make of `srclen` bytes of input,
     /// which is the size a caller has to have room for if it wants the whole
     /// record written and not the part that fits: a compressor that is handed
@@ -89,6 +73,22 @@ impl Compressor {
         }
     }
 
+    /// `Compress(src, inLen, dst, outLen)` — compresses `src` into `dst`,
+    /// flushing the stream afterwards (`Z_SYNC_FLUSH` / `ZSTD_e_flush`), and
+    /// returns the number of bytes written to `dst`.
+    ///
+    /// Returns `None` when the backend fails; the C++ signals that with
+    /// `(size_t)-1`.
+    ///
+    /// Note that, exactly like the C++, input that does not fit in `dst` is
+    /// dropped rather than buffered — and that the port reports that rather
+    /// than passing it off as a write: `None` is what a `dst` that filled
+    /// before every byte of `src` was in the stream answers, and so is
+    /// `Some(0)`, which is "no room" and not "no work" — a flush that could
+    /// put nothing in `dst` left the bytes of `src` in the stream's own window
+    /// and wrote no record. Neither is a record anybody can read, which is why
+    /// [`LogBuffer::write`](crate::LogBuffer::write) answers `false` for both
+    /// instead of reporting a record it had cut.
     pub fn compress(&mut self, src: &[u8], dst: &mut [u8]) -> Option<usize> {
         match self {
             Self::Zlib(stream) => {
