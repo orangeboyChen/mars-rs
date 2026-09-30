@@ -35,7 +35,12 @@ public expect object SdtLogic {
      * @param mode the [CheckMode] bits, which is what the plan is made of
      * @param timeout milliseconds, or `0` — or less, which is read as `0` — for
      *   a run with no timeout of its own: every probe keeps the default of its kind
-     * @return `false` when a check is already in flight
+     * @return `false` when no check was started: one that is already in flight,
+     *   or a `mode` with no check in it. [isChecking] tells the two apart —
+     *   `true` is a check of somebody else's to wait for, and `false` is a
+     *   request that was never taken. The C ABI the Kotlin/Native `actual`
+     *   calls is the seam that answers with the reason instead:
+     *   `MARS_SDT_ERR_BUSY` and `MARS_SDT_ERR_BAD_ARG`.
      */
     public fun startActiveCheck(longLink: Array<Link>, shortLink: Array<Link>, mode: Int, timeout: Int): Boolean
 

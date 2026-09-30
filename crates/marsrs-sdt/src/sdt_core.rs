@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::activecheck::Check;
 use crate::checkimpl::Ask;
-use crate::constants::{mode_basic, mode_long, mode_short};
+use crate::constants::{has_check, mode_basic, mode_long, mode_short};
 use crate::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
 use crate::sdt::{CheckIPPorts, CheckStatus, NetCheckStatus, NetCheckType};
 
@@ -131,7 +131,13 @@ impl SdtCore {
     /// `SdtCore::StartCheck(longlink_items, shortlink_items, mode, timeout)`.
     ///
     /// `false` when a check is already in flight: the C++ takes the lock, sees
-    /// `checking_` and returns without touching the request.
+    /// `checking_` and returns without touching the request. And `false` for a
+    /// mode with none of the three `NET_CHECK_*` bits in it, which is a plan
+    /// of nothing: the run behind it would check nothing and report nothing,
+    /// and a caller that asked for a diagnosis would be told it has one. What
+    /// the C ABI answers for the same request is `MARS_SDT_ERR_BAD_ARG`, which
+    /// is the one seam that says *why*; the seams that answer a bool say no,
+    /// and say it alike.
     pub fn start_check(
         &mut self,
         longlink_items: &CheckIPPorts,
@@ -139,7 +145,7 @@ impl SdtCore {
         mode: i32,
         timeout: u32,
     ) -> bool {
-        if self.is_checking() {
+        if self.is_checking() || !has_check(mode) {
             return false;
         }
         self.init_check_request(longlink_items, shortlink_items, mode, timeout);

@@ -153,7 +153,8 @@ pub fn http_netcheck_cgi_impl() -> String {
     with_state(|state| state.logic.http_netcheck_cgi().to_owned())
 }
 
-/// `StartActiveCheck` — `false` when a check is already in flight.
+/// `StartActiveCheck` — `false` when no check was started: one that is
+/// already in flight, or a `mode` with no check in it.
 ///
 /// The C++'s Java declares no such call: there the diagnosis is started from
 /// inside the C++, which has the sockets and the threads a run needs. The port

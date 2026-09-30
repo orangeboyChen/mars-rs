@@ -32,8 +32,7 @@ use marsrs_sdt::checkimpl::{Answer, Ask, PingStatus, Query};
 use marsrs_sdt::netchecker_profile::CheckResultProfile;
 use marsrs_sdt::sdt_core::CancelHandle;
 use marsrs_sdt::{
-    report_json, Callback, CheckIPPort, CheckIPPorts, NetCheckType, SdtLogic, NET_CHECK_BASIC,
-    NET_CHECK_LONG, NET_CHECK_SHORT,
+    has_check, report_json, Callback, CheckIPPort, CheckIPPorts, NetCheckType, SdtLogic,
 };
 
 use crate::cstr;
@@ -396,8 +395,11 @@ pub unsafe extern "C" fn mars_sdt_start_active_check(
         }
         // A mode with none of the three `NET_CHECK_*` bits in it is a request
         // with an empty plan: it runs nothing and reports nothing, which is
-        // not what a caller that asked for a diagnosis meant.
-        if mode & (NET_CHECK_BASIC | NET_CHECK_LONG | NET_CHECK_SHORT) == 0 {
+        // not what a caller that asked for a diagnosis meant. Asked before
+        // the request is taken, because the core refuses it too and answers
+        // `false` either way — which is [`MARS_SDT_ERR_BUSY`] here, and a
+        // caller that retries a busy check would retry this one forever.
+        if !has_check(mode) {
             return MARS_SDT_ERR_BAD_ARG;
         }
         // SAFETY: forwarded to `hosts_from_c`, whose contract the caller

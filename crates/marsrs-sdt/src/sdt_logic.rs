@@ -133,8 +133,9 @@ impl SdtLogic {
     /// [`SdtLogic::run_checks`] and the report, which is what the C++ does in
     /// `StartActiveCheck` and on the `__RunOn` thread it starts behind it.
     ///
-    /// [`None`] is a check that is already in flight, which is the `false` of
-    /// the upstream call. The results are also handed to the app's
+    /// [`None`] is a request that was not taken: a check that is already in
+    /// flight, or a mode of no checks at all, which is the `false` of the
+    /// upstream call. The results are also handed to the app's
     /// [`Callback`], the way they are when an app makes the three calls itself.
     ///
     /// What it is not is a future: every check is a probe that runs to its own
@@ -161,7 +162,9 @@ impl SdtLogic {
 
     /// `StartActiveCheck(longlink_check_item, shortlink_check_item, mode, timeout)`.
     ///
-    /// `false` when a check is already in flight.
+    /// `false` when no check was started: one that is already in flight, or a
+    /// `mode` with none of the three `NET_CHECK_*` bits in it, which is a plan
+    /// of nothing. [`SdtLogic::is_checking`] tells the two apart.
     ///
     /// A `timeout` of `0` is a run with no timeout of its own: every probe is
     /// asked with the default of its kind, and nothing breaks the plan off for
