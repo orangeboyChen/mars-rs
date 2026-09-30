@@ -132,7 +132,12 @@ internal final class Xlog: NSObject {
         guard let handle = handles[namePrefix] else {
             return Double(MARS_LEVEL_NONE)
         }
-        return Double(mars_xlog_get_level(handle))
+        // A handle the C ABI has dropped — one a twin of this prefix has
+        // closed — is answered with `-1`, and `-1` is a level no filter
+        // admits and none of the six `src/index.ts` names: `MARS_LEVEL_NONE`
+        // is the answer this one already gives a prefix it has no handle for.
+        let level = mars_xlog_get_level(handle)
+        return Double(level < 0 ? MARS_LEVEL_NONE : level)
     }
 
     /// `mars_xlog_request_flush_instance`: tells the writer thread it may take what is
