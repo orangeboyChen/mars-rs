@@ -759,18 +759,26 @@ impl NetSource {
 
         // the C++ reads `front()` of a list it never checked: an app that set a
         // debug ip but no host gets the empty host here, not a crash
-        let (ip, host) = match config.link_type {
-            Task::CHANNEL_LONG if !self.longlink_debugip.is_empty() => (
-                self.longlink_debugip.clone(),
-                hosts.first().cloned().unwrap_or_default(),
-            ),
-            Task::CHANNEL_MINOR_LONG if !self.minorlong_debugip.is_empty() => (
-                self.minorlong_debugip.clone(),
-                hosts.first().cloned().unwrap_or_default(),
-            ),
-            _ => return None,
-        };
-        Some(debug_items(&ip, &host, &self.longlink_ports))
+        let host = hosts.first().cloned().unwrap_or_default();
+        match config.link_type {
+            Task::CHANNEL_LONG if !self.longlink_debugip.is_empty() => Some(debug_items(
+                &self.longlink_debugip,
+                &host,
+                &self.longlink_ports,
+            )),
+            // The minor-long pair is the pair it was set as, and not the long
+            // link's ip on the long link's ports: its port came in with its
+            // ip, and an app that set one but no long-link ports got a link
+            // with no pairs at all out of the ports it never set.
+            Task::CHANNEL_MINOR_LONG if !self.minorlong_debugip.is_empty() => {
+                Some(vec![debug_item(
+                    &self.minorlong_debugip,
+                    self.minorlong_port,
+                    &host,
+                )])
+            }
+            _ => None,
+        }
     }
 
     /// `__GetShortlinkDebugIPPort(_hostlist, _ipport_items, _cgi)`.
@@ -1161,18 +1169,19 @@ mod tests {
         assert_eq!(ips(&items), vec!["7.7.7.7".to_string()]);
         assert_eq!(items[0].source_type, IpSourceType::Debug);
 
-        // a minor long link has one of its own
+        // a minor long link has one of its own, and it is the pair it was
+        // given: one item on the port that came in with the ip, and not one
+        // per long-link port
         let mut source = a_source();
-        source.set_minorlong_debug_ip("8.8.8.8", 0);
+        source.set_minorlong_debug_ip("8.8.8.8", 5223);
         let mut config = LonglinkConfig::new("minor");
         config.link_type = Task::CHANNEL_MINOR_LONG;
         config.host_list = vec!["minor.example".to_string()];
         let items = source.get_longlink_items(&config);
-        assert_eq!(
-            ips(&items),
-            vec!["8.8.8.8".to_string(), "8.8.8.8".to_string()]
-        );
+        assert_eq!(ips(&items), vec!["8.8.8.8".to_string()], "one pair");
+        assert_eq!(items[0].port, 5223, "the port that came with the ip");
         assert_eq!(items[0].host, "minor.example");
+        assert_eq!(items[0].source_type, IpSourceType::Debug);
     }
 
     #[test]
