@@ -3369,7 +3369,7 @@ mod tests {
         assert_eq!(
             *answers.lock().unwrap_or_else(poisoned),
             vec![true],
-            "the app is called while the zombie queue is locked, so an app that comes back into the core hangs"
+            "the app is called with the zombie queue unlocked, so an app that comes back into the core is not hung"
         );
         assert_eq!(
             core.zombie().len(),
