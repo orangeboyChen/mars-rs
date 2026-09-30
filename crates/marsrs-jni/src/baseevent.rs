@@ -13,8 +13,9 @@
 //! [`crate::stn`] — `onCreate`, `onDestroy`, `onNetworkChange`,
 //! `onInitConfigBeforeOnCreate` — and the one `ActiveLogic` there is, whose
 //! state is what `onForeground` moves and what `SignalActive` used to
-//! broadcast. The two crash calls close the appender, which is
-//! `marsrs_appender`'s own business here.
+//! broadcast. The two crash calls reach nothing: what they closed upstream was
+//! the process-wide appender, and there is none here — an appender is the
+//! app's own, and one it closed is one it closes.
 //!
 //! `ActiveLogic` is the small machine behind "is the app still in the
 //! foreground?": it starts out backgrounded but active, a move to the

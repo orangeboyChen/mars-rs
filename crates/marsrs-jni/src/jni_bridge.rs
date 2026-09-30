@@ -2063,7 +2063,9 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onNetworkCh
 }
 
 /// `BaseEvent.onSingalCrash` — the signal number is not the port's to handle,
-/// so it is not read; what the crash does is close the appender.
+/// so it is not read, and what the signal reached upstream — closing the
+/// process-wide appender — is nothing here: an appender is the app's own, and
+/// one it closed is one it closes.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onSingalCrash<'local>(
     _env: EnvUnowned<'local>,

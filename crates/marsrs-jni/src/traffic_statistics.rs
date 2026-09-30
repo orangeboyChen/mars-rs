@@ -239,6 +239,20 @@ mod tests {
         statistics
     }
 
+    /// The same, made the way an app makes one: `new` and `with_report` read
+    /// the clock themselves, so what the ten seconds are counted from is
+    /// theirs to say and not the test's.
+    fn counting_from_now(reported: &Reported) -> TrafficStatistics {
+        let sink = Arc::clone(reported);
+        let mut statistics = TrafficStatistics::with_report(10_000, 10 * 1024);
+        statistics.set_report_flow(move |wifi_recv, wifi_send, mobile_recv, mobile_send| {
+            sink.lock()
+                .unwrap()
+                .push((wifi_recv, wifi_send, mobile_recv, mobile_send));
+        });
+        statistics
+    }
+
     #[test]
     fn bytes_are_counted_for_the_network_the_device_is_on() {
         // `kMobile != getNetInfo()` — everything that is not the mobile network
@@ -411,18 +425,32 @@ mod tests {
 
     #[test]
     fn a_statistics_counts_from_the_clock_it_was_given() {
-        // `new()` and `with_report()` read the clock themselves, so the timeout
-        // is ten seconds from now and not from a tick count of zero
-        let mut statistics = TrafficStatistics::new();
-        statistics.data_at(1, 1, 0);
-        statistics.flush_at(0);
-        assert!(format!("{statistics:?}").contains("TrafficStatistics"));
+        // `new()` and `with_report()` read the clock themselves, so the ten
+        // seconds start when the statistics is made: one that counted from a
+        // tick count of zero would find the timeout up at once and report the
+        // first bytes as soon as it counted them.
+        let reported = reported();
+        let mut statistics = counting_from_now(&reported);
+        let now = gettickcount();
+        on_network(NetInfo::Wifi, || statistics.data_at(1, 1, now));
+        assert!(
+            reported.lock().unwrap().is_empty(),
+            "the counters were reported before the ten seconds were up"
+        );
 
-        let mut statistics = TrafficStatistics::with_report(10_000, 10 * 1024);
-        statistics.data(1, 1);
-        assert!(gettickcount() >= statistics.last_report_time);
+        // ten seconds and a millisecond later they are
+        on_network(NetInfo::Wifi, || statistics.data_at(1, 1, now + 10_001));
+        assert_eq!(*reported.lock().unwrap(), vec![(2, 2, 0, 0)]);
+
+        // and a reading from before the last report is not ten seconds of
+        // anything, so what it counted waits for the next one
+        on_network(NetInfo::Wifi, || statistics.data_at(1, 1, 0));
+        assert_eq!(*reported.lock().unwrap(), vec![(2, 2, 0, 0)]);
 
         let statistics = TrafficStatistics::default();
-        assert!(statistics.last_report_time <= gettickcount());
+        assert!(
+            gettickcount().saturating_sub(statistics.last_report_time) < 1_000,
+            "`Default` is a statistics whose clock was never read"
+        );
     }
 }

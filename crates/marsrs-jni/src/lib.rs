@@ -341,7 +341,16 @@ mod tests {
     fn a_panic_inside_a_body_is_the_default_value() {
         let panicked: u64 = guard(|| panic!("no JVM to unwind into"));
         assert_eq!(panicked, 0);
-        let panicked: () = guard(|| panic!("no JVM to unwind into"));
-        assert_eq!(panicked, ());
+
+        // a `()` body cannot be told apart by what it answers — the default
+        // of `()` is the only value there is — so what is asserted is that
+        // the body ran and the line after it was reached: the panic was
+        // caught here, and not unwound into the JVM
+        let mut ran = false;
+        let _: () = guard(|| {
+            ran = true;
+            panic!("no JVM to unwind into")
+        });
+        assert!(ran);
     }
 }
