@@ -33,6 +33,21 @@ pub type MessageQueueId = u64;
 /// `MessageQueue::KInvalidQueueID`, spelled the way Rust spells a constant.
 pub const INVALID_QUEUE_ID: MessageQueueId = 0;
 
+/// A thousand years: the deadline a message is given when the one it asked
+/// for is farther out than an [`Instant`] can hold. `now + duration` past
+/// that ceiling panics, and a message queue is not the place for a panic
+/// over a delay nobody outlives.
+const UNREACHABLE_WAIT: Duration = Duration::from_secs(60 * 60 * 24 * 365 * 1000);
+
+/// An [`Instant`] `duration` from now, or as far out as the clock can hold
+/// when it cannot hold that: a deadline that is missed by a thousand years
+/// is one that is never missed, which is the same wait the caller asked for.
+fn deadline_after(duration: Duration) -> Instant {
+    Instant::now()
+        .checked_add(duration)
+        .unwrap_or_else(|| Instant::now() + UNREACHABLE_WAIT)
+}
+
 /// `MessageQueue::KDefQueueID` — the queue messages are posted to when no
 /// queue is named.
 pub const DEFAULT_QUEUE_ID: MessageQueueId = 1;
@@ -735,10 +750,7 @@ pub fn wait_message(post: &MessagePost, timeout_ms: i64) -> bool {
     };
     let deadline = (timeout_ms >= 0)
         .then(|| Duration::from_millis(timeout_ms as u64))
-        // A deadline the clock cannot hold is not one that panics the wait:
-        // what was asked for is longer than forever, and `None` is the
-        // "wait forever" this already answers for a negative timeout.
-        .and_then(|duration| Instant::now().checked_add(duration));
+        .map(deadline_after);
     let mut state = queue.lock();
     loop {
         if !state.messages.iter().any(|m| m.post == *post) && !state.running_posts.contains(post) {
@@ -823,9 +835,7 @@ impl RunLoop {
         // the end of the wait: only the deadline or a due message is,
         // otherwise a spurious wake-up reports "nothing to do" before an
         // `After` message is due.
-        // A timeout the clock cannot hold is no deadline at all, which is the
-        // case this already makes for a caller that asked for none.
-        let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
+        let deadline = timeout.map(deadline_after);
         // The post this dispatch is running, which is taken out of
         // `running_posts` once its handlers are done.
         let post;
@@ -872,7 +882,7 @@ impl RunLoop {
             let addressed = entry.post.reg.seq;
             let is_broadcast = addressed == 0;
             if let Some(period) = entry.period {
-                entry.due = Some(Instant::now() + period);
+                entry.due = Some(deadline_after(period));
                 state.messages.push_back(entry.clone_for_next_run());
             }
             let handlers: Vec<Arc<HandlerFn>> = state
@@ -932,9 +942,9 @@ impl Drop for RunningPost<'_> {
 fn first_due(timing: &MessageTiming) -> (Option<Instant>, Option<Duration>) {
     match *timing {
         MessageTiming::Immediate => (None, None),
-        MessageTiming::After(after) => (Some(Instant::now() + Duration::from_millis(after)), None),
+        MessageTiming::After(after) => (Some(deadline_after(Duration::from_millis(after))), None),
         MessageTiming::Period { after, period } => (
-            Some(Instant::now() + Duration::from_millis(after)),
+            Some(deadline_after(Duration::from_millis(after))),
             Some(Duration::from_millis(period)),
         ),
     }
@@ -996,6 +1006,51 @@ mod tests {
             wait_message(&post, 100),
             "the post is running for good, so the wait never ends"
         );
+        destroy_message_queue(id);
+    }
+
+    /// An `Instant` has a ceiling, and `now + duration` past it panics rather
+    /// than overflowing: a delay that far out is one nothing outlives, so the
+    /// message is put where the clock can hold it and waits there, which is
+    /// the wait the caller asked for.
+    ///
+    /// How much fits depends on the platform — a `u64::MAX` of milliseconds
+    /// is inside an `Instant` of seconds and well outside one of nanoseconds,
+    /// which is what Apple's is — so what this pins is the wait and not the
+    /// panic.
+    #[test]
+    fn a_message_posted_farther_out_than_the_clock_holds_waits_there() {
+        let id = create_message_queue();
+        let handler = install_message_handler(|_: &mut Message| {}, false, id);
+
+        let far = post_message(
+            &handler,
+            Message::new(MessageTitle(7), "far"),
+            MessageTiming::After(u64::MAX),
+        );
+        assert!(found_message(&far), "the post is there, and not due");
+        assert!(
+            !RunLoop::dispatch_timeout(id, Duration::ZERO),
+            "nothing ran: the message is a thousand years out"
+        );
+        assert!(cancel_message(&far), "and it is the caller's to take back");
+
+        // a periodic one runs at once and is armed again for `period` after
+        // that, which is the other addition a `u64::MAX` used to overflow
+        let periodic = post_message(
+            &handler,
+            Message::new(MessageTitle(8), "periodic"),
+            MessageTiming::Period {
+                after: 0,
+                period: u64::MAX,
+            },
+        );
+        assert!(
+            RunLoop::dispatch_timeout(id, Duration::from_millis(100)),
+            "the first run is due now"
+        );
+        assert!(found_message(&periodic), "re-armed, and not due again");
+        assert!(cancel_message(&periodic));
         destroy_message_queue(id);
     }
 }
