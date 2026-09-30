@@ -1255,7 +1255,10 @@ impl ShortLinkTaskManager {
                     err_code,
                     fail_handle,
                     &task,
-                    cost as u32,
+                    // `u32` is what the app is handed, as in the C++: a cost
+                    // past 49.7 days is the largest one there is rather than
+                    // one that wrapped into a small one.
+                    u32::try_from(cost).unwrap_or(u32::MAX),
                     &reported,
                 )
             });

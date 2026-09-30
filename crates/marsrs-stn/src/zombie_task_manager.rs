@@ -313,12 +313,16 @@ impl ZombieTaskManager {
     /// …)`.
     fn fail(&mut self, zombie: &ZombieTask, spent: u64) {
         if let Some(callback) = self.callback.as_mut() {
+            // `u32` is what the app is handed, as in the C++, and `spent` is
+            // measured over the life of a task and not over the life of a
+            // clock: a cost past 49.7 days is the largest one there is
+            // rather than one that wrapped into a small one.
             callback(
                 ErrCmdType::Local,
                 LOCAL_TASK_TIMEOUT,
                 TaskFailHandleType::TaskEnd,
                 &zombie.task,
-                spent as u32,
+                u32::try_from(spent).unwrap_or(u32::MAX),
             );
         }
     }
@@ -575,9 +579,14 @@ mod tests {
         let mut task = a_task(1);
         task.total_timeout = 1_000;
         assert!(manager.save_task_at(0, &task, 0));
+        assert_eq!(manager.len(), 1, "kept, although nothing will start it");
+        assert!(manager.has_task(1));
+        assert_eq!(manager.due_time(), Some(TIMER_INTERVAL), "the check is armed");
+
         manager.redo_tasks_at(10);
         assert!(manager.is_empty(), "started and forgotten");
         manager.on_timer_check_at(10);
-        assert!(format!("{manager:?}").contains("ZombieTaskManager"));
+        assert!(manager.is_empty());
+        assert_eq!(manager.due_time(), None, "the check cancels itself");
     }
 }
