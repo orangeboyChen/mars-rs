@@ -61,6 +61,7 @@
 //! and the pair it happened on.
 
 use std::collections::VecDeque;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use marsrs_comm::local_ipstack::LocalIpStack;
 use marsrs_comm::{ProxyInfo, ProxyType, SocketAddress};
@@ -222,6 +223,9 @@ pub type LocalStack = dyn FnMut() -> LocalIpStack + Send;
 pub type NetLabel = dyn FnMut() -> String + Send;
 /// `getNetInfo()` — the same, as the number the smart heartbeat wants.
 pub type NetType = dyn FnMut() -> i32 + Send;
+/// `time(NULL)` — the unix second the smart heartbeat stamps the record of a
+/// network with. Unset is the clock of the machine the port runs on.
+pub type Clock = dyn FnMut() -> u64 + Send;
 /// `socket_address::getsockname(_sock)` — the near end of a socket.
 pub type LocalAddress = dyn FnMut(SocketFd) -> SocketAddress + Send;
 /// `fun_network_report_` without its `__LINE__`.
@@ -582,6 +586,7 @@ pub struct LongLink {
     on_link_status: Option<Box<LinkStatus>>,
     on_noop_alarm_received: Option<Box<NoopAlarmReceived>>,
     on_network_data_changed: Option<Box<NetworkDataChanged>>,
+    clock: Option<Box<Clock>>,
 }
 
 impl LongLink {
@@ -638,6 +643,7 @@ impl LongLink {
             on_link_status: None,
             on_noop_alarm_received: None,
             on_network_data_changed: None,
+            clock: None,
         }
     }
 
@@ -826,6 +832,22 @@ impl LongLink {
     /// `getNetInfo` — unset answers `0`.
     pub fn set_net_type(&mut self, net_type: impl FnMut() -> i32 + Send + 'static) {
         self.net_type = Some(Box::new(net_type));
+    }
+
+    /// `time(NULL)` — what the smart heartbeat stamps a network's record with,
+    /// and what a week of those is measured against. Unset is the clock of the
+    /// machine the port runs on.
+    pub fn set_clock(&mut self, clock: impl FnMut() -> u64 + Send + 'static) {
+        self.clock = Some(Box::new(clock));
+    }
+
+    /// `time(NULL)`, as the smart heartbeat wants it: the second, and not the
+    /// tick a run was measured with.
+    fn unix_secs(&mut self) -> i64 {
+        match self.clock.as_mut() {
+            Some(clock) => clock() as i64,
+            None => unix_secs() as i64,
+        }
     }
 
     /// `socket_address::getsockname` — unset leaves the near end of the socket
@@ -1713,8 +1735,11 @@ impl LongLink {
             noop.noop_cost = now.saturating_sub(noop.noop_starttime);
             noop.success = success;
         }
+        // the record of a network is kept across runs of the app, so what it is
+        // stamped with is the second and not the tick the run was measured with
+        let second = self.unix_secs();
         if let Some(heartbeat) = self.heartbeat.as_mut() {
-            heartbeat.on_heart_result(success, fail_of_timeout, seconds(now));
+            heartbeat.on_heart_result(success, fail_of_timeout, second);
         }
     }
 
@@ -1885,7 +1910,7 @@ impl LongLink {
                 }
             }
             LongLinkStatus::ConnectFailed | LongLinkStatus::DisConnected => {
-                let now = now_seconds();
+                let now = self.unix_secs();
                 if let Some(heartbeat) = self.heartbeat.as_mut() {
                     heartbeat.on_longlink_disconnect(now);
                 }
@@ -1926,15 +1951,15 @@ impl LongLink {
     }
 }
 
-/// `SmartHeartbeat::OnLongLinkDisconnect` wants seconds, which is what the
-/// C++'s `gettickcount() / 1000` is.
-fn now_seconds() -> i64 {
-    (marsrs_comm::tickcount::gettickcount() / 1000) as i64
-}
-
-/// The same, for a reading the host handed in.
-fn seconds(now: u64) -> i64 {
-    (now / 1000) as i64
+/// `time(NULL)` — the unix second, which is what the record of a network is
+/// stamped with: a host that keeps one between runs of the app hands it back
+/// with a [`LongLink::set_clock`] of its own, and this is what a link without
+/// one falls back to.
+fn unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or(0)
 }
 
 impl std::fmt::Debug for LongLink {
@@ -2651,6 +2676,37 @@ mod tests {
         // `OnLongLinkDisconnect` is `OnHeartResult(false, false)` and then a
         // success count of zero: whatever the network did is forgotten
         assert_eq!(link.heartbeat().unwrap().info().succ_heart_count, 0);
+    }
+
+    /// The record of a network is one a host keeps between runs of the app, so
+    /// what it is stamped with is `time(NULL)` — and not the tick the run was
+    /// measured with, which is a few thousand seconds at most and which would
+    /// leave every record a week away from being probed again.
+    #[test]
+    fn a_heartbeat_stamps_its_record_with_the_second_the_host_says() {
+        // the interval is one value for the whole process
+        let _lock = crate::test_lock();
+        let (mut link, _) = link();
+        link.set_clock(|| 1_700_000_000);
+        link.set_net_label(|| "wifi".to_string());
+        link.set_smart_heartbeat(SmartHeartbeat::new());
+        link.make_sure_connected();
+        assert!(link.connect_at(1_000).is_ok());
+
+        // `NetStableTestCount` heartbeats and one to settle the count: it is
+        // only past them that a result is written into the record at all
+        for round in 0..=crate::config::NET_STABLE_TEST_COUNT {
+            let now = 2_000 + u64::from(round) * 1_000;
+            assert!(link.send_heartbeat_at(now, false, false));
+            written(&mut link);
+            assert!(link.noop_resp_at(now + 500, NOOP_CMDID, Task::NOOP_TASK_ID, b""));
+        }
+
+        assert_eq!(
+            link.heartbeat().unwrap().info().last_modify_time,
+            1_700_000_000,
+            "the second the host said, and not `gettickcount() / 1000`"
+        );
     }
 
     /// A link that is up: what every heartbeat test starts from.
