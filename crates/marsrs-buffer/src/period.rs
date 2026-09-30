@@ -328,7 +328,15 @@ mod tests {
         assert_eq!(begin, 0);
         assert_eq!(end, bytes.len() as u64);
 
-        // A window that ends before the record's hour finds nothing.
-        assert!(get_period_logs(&path, 0, 1).is_err() || hour == 0);
+        // A window the record's hour is not in finds nothing. The window is
+        // picked off the hour rather than fixed, because the hour is whenever
+        // the test happens to run: one fixed at `[0, 1)` is the hour of a run
+        // that starts at midnight, and a scan that found the record in it
+        // would have been excused rather than caught.
+        let (empty_begin, empty_end) = if hour < 12 { (20, 21) } else { (2, 3) };
+        assert!(
+            get_period_logs(&path, empty_begin, empty_end).is_err(),
+            "a record of hour {hour} is not in [{empty_begin}, {empty_end})"
+        );
     }
 }
