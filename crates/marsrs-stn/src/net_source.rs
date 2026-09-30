@@ -467,10 +467,12 @@ impl NetSource {
         } else {
             config.host_list.clone()
         };
-        if let Some(items) = self.longlink_debug_ip_port(config) {
+        // the same list the caller would resolve, and not the one the app set
+        // on the link: the debug ip of a host that came with the config is a
+        // debug ip too, and a link tried on it never reaches dns
+        if let Some(items) = self.longlink_debug_ip_port(config, &hosts) {
             return items;
         }
-
         if hosts.is_empty() {
             return Vec::new();
         }
@@ -737,12 +739,16 @@ impl NetSource {
     /// debug ip but no ports gets a link with no pairs at all, not a dns
     /// lookup.
     ///
-    /// The host debug ip of any of the hosts the app set wins, one item per
-    /// long-link port. After that it is the link's own debug ip: the long-link
-    /// one for `Task::CHANNEL_LONG` and the minor-long one for
+    /// The host debug ip of any of the hosts the link would be tried on wins,
+    /// one item per long-link port. After that it is the link's own debug ip:
+    /// the long-link one for `Task::CHANNEL_LONG` and the minor-long one for
     /// `Task::CHANNEL_MINOR_LONG`, with the first host of the list as the host.
-    fn longlink_debug_ip_port(&self, config: &LonglinkConfig) -> Option<Vec<IpPortItem>> {
-        for host in &self.longlink_hosts {
+    fn longlink_debug_ip_port(
+        &self,
+        config: &LonglinkConfig,
+        hosts: &[String],
+    ) -> Option<Vec<IpPortItem>> {
+        for host in hosts {
             if let Some(ip) = self.host_debugip.get(host) {
                 return Some(debug_items(ip, host, &self.longlink_ports));
             }
@@ -753,11 +759,11 @@ impl NetSource {
         let (ip, host) = match config.link_type {
             Task::CHANNEL_LONG if !self.longlink_debugip.is_empty() => (
                 self.longlink_debugip.clone(),
-                self.longlink_hosts.first().cloned().unwrap_or_default(),
+                hosts.first().cloned().unwrap_or_default(),
             ),
             Task::CHANNEL_MINOR_LONG if !self.minorlong_debugip.is_empty() => (
                 self.minorlong_debugip.clone(),
-                config.host_list.first().cloned().unwrap_or_default(),
+                hosts.first().cloned().unwrap_or_default(),
             ),
             _ => return None,
         };
@@ -1185,6 +1191,33 @@ mod tests {
         source.set_new_dns(|_, _, _| vec!["1.1.1.1".to_string(), "2001:db8::1".to_string()]);
         source.set_random(|_| 0);
         source
+    }
+
+    #[test]
+    fn a_host_of_the_config_with_a_debug_ip_never_reaches_dns() {
+        // what the debug scan looks at is the hosts the link would be tried
+        // on, which are the config's: a debug ip for one of those is a debug
+        // ip too, and the host it is labelled with is that host
+        let mut source = a_source();
+        source.set_debug_ip("other.example", "9.9.9.9");
+        let mut config = LonglinkConfig::new("main");
+        config.host_list = vec!["other.example".to_string()];
+        let items = source.get_longlink_items(&config);
+        assert_eq!(
+            ips(&items),
+            vec!["9.9.9.9".to_string(), "9.9.9.9".to_string()],
+            "one item per long-link port, and dns was not asked"
+        );
+        assert!(items.iter().all(|item| item.host == "other.example"));
+
+        // ... and the link's own debug ip is labelled with the host of the
+        // same list, and not with one the app set on the link and never asked
+        // about here
+        let mut source = a_source();
+        source.set_longlink(vec!["long.example".to_string()], vec![80], "7.7.7.7");
+        let items = source.get_longlink_items(&config);
+        assert_eq!(ips(&items), vec!["7.7.7.7".to_string()]);
+        assert_eq!(items[0].host, "other.example");
     }
 
     #[test]
