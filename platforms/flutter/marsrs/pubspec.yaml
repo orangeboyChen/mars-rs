@@ -1,5 +1,5 @@
 # The Flutter plugin of the whole port: the one an app takes when it wants more
-# than logging. Today more than logging is nothing — the C ABI is 16
+# than logging. Today more than logging is nothing — the C ABI is 17
 # `mars_xlog_*` symbols and nothing else, and `scripts/build_xcframework.sh`
 # fails the day it is not — so this plugin and `marsrs_xlog` are the same
 # package under two names, and `Xlog` is the class both of them hand out, the
