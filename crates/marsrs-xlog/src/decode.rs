@@ -45,10 +45,7 @@ use std::path::Path;
 
 use marsrs_crypt::{magic, CLIENT_PUBKEY_LEN, HEADER_LEN, TAILER_LEN, TEA_BLOCK_LEN};
 
-/// The round count `LogCrypt::CryptAsyncLog` loops the blocks of a body
-/// through — the half of the cipher a sync record never gets: its body is
-/// copied verbatim, so this is the count the async one is decrypted with
-/// here and nothing else.
+/// The round count both halves of `LogCrypt::CryptSyncLog` loop over.
 const TEA_ROUNDS: u32 = 16;
 const TEA_DELTA: u32 = 0x9e37_79b9;
 
@@ -673,10 +670,12 @@ fn xor(bytes: &[u8], key: u8) -> Vec<u8> {
 /// The body of a `NEW_MAGIC_COMPRESS_CRYPT_START1` record: `while (readPos <
 /// length)` over one `uint16_t singleLogLen` and its bytes per log line.
 ///
-/// A chunk whose declared length runs past the body ends the walk instead of
-/// being read. The C `memcpy`s those bytes out of the buffer all the same — an
-/// overread of whatever stands behind the record — and lands in the same place,
-/// because its `readPos += singleLogLen + 2` leaves the loop either way.
+/// A chunk whose declared length runs past the body ends the *chunking* and
+/// not the walk: the record yields the lines read up to it, and the records
+/// behind it are still read — which is what the C lands in as well, because
+/// its `readPos += singleLogLen + 2` leaves the loop either way. The C
+/// `memcpy`s those bytes out of the buffer all the same — an overread of
+/// whatever stands behind the record.
 fn unchunk(body: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut read = 0;
