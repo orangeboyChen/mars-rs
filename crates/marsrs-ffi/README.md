@@ -144,9 +144,13 @@ is its second argument, and not a second call — and `logWrite` becomes one
 
 * **No panic ever unwinds into C.** Every entry point wraps its body in
   `catch_unwind`; a panic is reported as `MARS_XLOG_ERR_PANIC` (or swallowed for
-  the `void` symbols) and the message still reaches stderr. No symbol takes a
-  callback, so there is no `extern "C"` frame here that is not one of these
-  entry points — which is the whole of the unwind surface.
+  the `void` symbols) and the message still reaches stderr. No `mars_xlog_*`
+  symbol takes a callback, so the xlog half has no `extern "C"` frame that is
+  not one of its own entry points. The diagnosis and the pipeline do take one —
+  `MarsSdtProbe` and `MarsStnAsk` are C function pointers the port calls — and
+  each of them is asked from inside the same `catch_unwind`, so a probe of the
+  app's own that panics is a reported panic and not an unwind through the app's
+  frame.
 * **No null dereference.** Every incoming pointer is null-checked; null and
   invalid UTF-8 degrade to an empty string. `mars_xlog_new_instance` has no
   code to answer with, so it gives back handle `0` — which no symbol asks an
@@ -160,7 +164,14 @@ is its second argument, and not a second call — and `logWrite` becomes one
 
 ## Where `unsafe` lives
 
-This is the only crate in the workspace allowed `unsafe`, and it is confined to
-[`src/cstr.rs`](src/cstr.rs) (three `CStr` / raw-pointer reads) and the
-`slice::from_raw_parts_mut` of the three path-answering symbols. Every block
+This is the one crate in the workspace that allows `unsafe` at the top
+(`#![allow(unsafe_code)]` in `lib.rs`), because a C ABI cannot be written
+without it — and it is not confined to [`src/cstr.rs`](src/cstr.rs), which is
+only where the *reading of the caller's strings* lives. Ninety blocks sit
+outside it: 15 in `abi.rs`, 21 in `sdt.rs` and 54 in `stn.rs`, almost all of
+them the `CStr` / raw-pointer read of an argument the caller owns and the
+`slice::from_raw_parts_mut` of an out-parameter it owns. `marsrs-appender` is
+the only other crate that allows it anywhere, and only inside three fences: the
+platform queries of its `sys` module, the counting allocator of its own tests,
+and the one mapping that cannot be written without `unsafe`. Every block here
 carries a `// SAFETY:` note, and `#![deny(unsafe_op_in_unsafe_fn)]` is on.
