@@ -89,8 +89,11 @@ const MAX_INFLATED_LEN: usize = 64 * 1024 * 1024;
 /// comes near: a block is 150 KiB, so this is the text of some 1 700 of them,
 /// and a file that decodes to more is not a log one wrote. What it stops is a
 /// file built to make the decoder work — a bomb per record is a bomb per file
-/// too — and what the walk does about it is stop and say so, keeping the text
-/// it read before the line was crossed: see [`DecodeError::recovered`].
+/// too, and a file of damage is a marker per span, which is longer than the
+/// span it names — and what the walk does about it is stop and say so, keeping
+/// the text it read before the line was crossed: see
+/// [`DecodeError::recovered`]. Every arm that writes asks, and not only the one
+/// that writes a record's own text.
 const MAX_PLAIN_LEN: usize = 4 * MAX_INFLATED_LEN;
 
 /// `MAGIC_CRYPT_START` — the oldest record start `decode_log_file.c` reads, and
@@ -184,6 +187,17 @@ impl std::error::Error for DecodeError {}
 /// private key at all: [`DecodeError::recovered`] is what was read before
 /// either.
 pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>, DecodeError> {
+    decode_records_within(data, privkey, MAX_PLAIN_LEN)
+}
+
+/// [`decode_records`] with the ceiling the caller names instead of
+/// [`MAX_PLAIN_LEN`]: the ceiling is 256 MiB, and a file that reaches it is not
+/// one a test can build, so what a test asks about the ceiling it asks here.
+fn decode_records_within(
+    data: &[u8],
+    privkey: Option<&[u8; 32]>,
+    max_plain: usize,
+) -> Result<Vec<u8>, DecodeError> {
     let mut plain = Vec::new();
     let mut offset = 0;
     let mut blocks = 0;
@@ -197,16 +211,16 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
         }
         match record_text(data, offset, privkey) {
             Ok((text, next)) => {
-                mark_missing_seq(&mut plain, data, offset, &mut lastseq);
                 // [`MAX_PLAIN_LEN`]: a record's own text is bounded, and the
                 // file's is too, or a file of records that each stop just
                 // short of that bound would be one the decoder grows into
                 // without end. The record that crossed the line is not
                 // written, and the reason is what ends the walk.
-                if plain.len().saturating_add(text.len()) > MAX_PLAIN_LEN {
-                    break Some(format!("more than {MAX_PLAIN_LEN} bytes of text decoded"));
+                if !mark_missing_seq(&mut plain, data, offset, &mut lastseq, max_plain)
+                    || !push_plain(&mut plain, &text, max_plain)
+                {
+                    break Some(too_long(max_plain));
                 }
-                plain.extend_from_slice(&text);
                 offset = next;
                 blocks += 1;
             }
@@ -222,7 +236,16 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
             Err(Failure::Damaged(reason)) => match next_record_start(data, offset) {
                 Some(next) => {
                     let skipped = next - offset;
-                    plain.extend_from_slice(format!("{DAMAGE_MARKER}{skipped}\n").as_bytes());
+                    // A marker per span, and a span can be one byte: the cap
+                    // is asked here too, or a file of junk is a file that
+                    // grows the text several times over.
+                    if !push_plain(
+                        &mut plain,
+                        format!("{DAMAGE_MARKER}{skipped}\n").as_bytes(),
+                        max_plain,
+                    ) {
+                        break Some(too_long(max_plain));
+                    }
                     offset = next;
                 }
                 // Nothing behind the damage is a record either, so the walk
@@ -238,9 +261,12 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
                 // The C reads the sequence and writes its marker before it
                 // tries the body, so a record whose text is not recoverable
                 // still names the hole standing in front of it.
-                mark_missing_seq(&mut plain, data, offset, &mut lastseq);
-                plain.extend_from_slice(marker.as_bytes());
-                plain.push(b'\n');
+                if !mark_missing_seq(&mut plain, data, offset, &mut lastseq, max_plain)
+                    || !push_plain(&mut plain, marker.as_bytes(), max_plain)
+                    || !push_plain(&mut plain, b"\n", max_plain)
+                {
+                    break Some(too_long(max_plain));
+                }
                 offset = next;
                 blocks += 1;
             }
@@ -249,7 +275,7 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
             // standing in front of it: what was read before the record that
             // ended it includes that marker.
             Err(Failure::Fatal(reason)) => {
-                mark_missing_seq(&mut plain, data, offset, &mut lastseq);
+                mark_missing_seq(&mut plain, data, offset, &mut lastseq, max_plain);
                 break Some(reason);
             }
         }
@@ -268,6 +294,27 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
             reason,
         }),
     }
+}
+
+/// What ends the walk when [`MAX_PLAIN_LEN`] is crossed: the text read before
+/// the line is kept, and this is the reason.
+fn too_long(max_plain: usize) -> String {
+    format!("more than {max_plain} bytes of text decoded")
+}
+
+/// Appends `bytes` to the text the walk has decoded, and answers `false`
+/// without appending when [`MAX_PLAIN_LEN`] is what it would cross.
+///
+/// Every arm that writes asks, and not only the one that writes a record's own
+/// text: a file of damage is mostly markers — one per span, and a span can be
+/// a single byte — so the markers a hostile file asks for are more text than
+/// the file itself holds, and a cap on records alone is no cap at all.
+fn push_plain(plain: &mut Vec<u8>, bytes: &[u8], max_plain: usize) -> bool {
+    if plain.len().saturating_add(bytes.len()) > max_plain {
+        return false;
+    }
+    plain.extend_from_slice(bytes);
+    true
 }
 
 /// Why the record at an offset produced no text, and what the walk does about
@@ -303,12 +350,21 @@ enum Failure {
 /// every sync record, and `1`, which is the first record of most files — the
 /// walk starts at `lastseq = 0`, and `seq != 1` is what keeps a file opening
 /// on 1 from being read as having lost everything before it.
-fn mark_missing_seq(out: &mut Vec<u8>, data: &[u8], offset: usize, lastseq: &mut u16) {
+///
+/// `false` when [`MAX_PLAIN_LEN`] is what the marker would cross, which is the
+/// one way this does not write: the caller ends the walk.
+fn mark_missing_seq(
+    out: &mut Vec<u8>,
+    data: &[u8],
+    offset: usize,
+    lastseq: &mut u16,
+    max_plain: usize,
+) -> bool {
     // A record with no sequence in its header takes no part in the numbering:
     // the two oldest magics are the length and nothing else, so there is no
     // hole for them to name.
     let Some(seq) = seq_at(data, offset) else {
-        return;
+        return true;
     };
     let previous = *lastseq;
     if seq != 0 {
@@ -320,16 +376,18 @@ fn mark_missing_seq(out: &mut Vec<u8>, data: &[u8], offset: usize, lastseq: &mut
     // order they were written — is not a hole either, and `6-1 is missing`
     // names nothing at all.
     if seq == 0 || seq == 1 || previous == 0 || u32::from(seq) <= u32::from(previous) + 1 {
-        return;
+        return true;
     }
-    out.extend_from_slice(
+    push_plain(
+        out,
         format!(
             "{MISSING_SEQ_MARKER}{}-{} is missing\n",
             u32::from(previous) + 1,
             u32::from(seq) - 1
         )
         .as_bytes(),
-    );
+        max_plain,
+    )
 }
 
 /// The text of the record at `offset`, and the offset of the record behind it.
@@ -777,4 +835,57 @@ fn tea_key(
         *word = u32::from_le_bytes(le);
     }
     Ok(key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One record of the shortest kind there is — `MAGIC_CRYPT_START`, a
+    /// four-byte length of zero, and the tailer: six bytes that hold no text,
+    /// and the shortest record `decode_log_file.c` reads.
+    const EMPTY_RECORD: [u8; 6] = [MAGIC_CRYPT_START, 0, 0, 0, 0, marsrs_crypt::magic::END];
+
+    /// A file of damage is mostly markers: one per span the walk skipped, and a
+    /// span can be a single byte, so a marker per byte is several times more
+    /// text than the file that asked for it — which is why [`MAX_PLAIN_LEN`] is
+    /// asked on the way past the damage and not only on a record's own text.
+    #[test]
+    fn a_file_of_damage_does_not_grow_the_text_without_end() {
+        let mut file = Vec::new();
+        for _ in 0..32 {
+            file.extend_from_slice(&EMPTY_RECORD);
+            file.push(0x00);
+        }
+
+        let err = decode_records_within(&file, None, 64).expect_err("the ceiling was crossed");
+        assert_eq!(err.reason, "more than 64 bytes of text decoded");
+        assert!(
+            err.recovered.len() <= 64,
+            "nothing past the ceiling is written: {}",
+            err.recovered.len()
+        );
+        assert!(
+            !err.recovered.is_empty(),
+            "and the text read before the ceiling comes back"
+        );
+        // the marker is longer than the span it names, so what crossed the
+        // ceiling is the text of the damage and not of a record
+        assert!(String::from_utf8_lossy(&err.recovered).contains(DAMAGE_MARKER));
+    }
+
+    /// The ceiling is not a refusal to read: a file that stays under it is a
+    /// file that decodes, damage and all.
+    #[test]
+    fn a_file_under_the_ceiling_is_decoded_whole() {
+        // the junk byte is between two records: one at the end of the file is a
+        // tail too short to hold a record, and not a span to mark
+        let mut file = Vec::new();
+        file.extend_from_slice(&EMPTY_RECORD);
+        file.push(0x00);
+        file.extend_from_slice(&EMPTY_RECORD);
+
+        let plain = decode_records_within(&file, None, 1_024).expect("the walk went on");
+        assert!(String::from_utf8_lossy(&plain).contains(DAMAGE_MARKER));
+    }
 }
