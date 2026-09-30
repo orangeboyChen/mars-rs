@@ -34,6 +34,19 @@
 -keepclasseswithmembernames class io.github.orangeboychen.marsrs.sdt.** {
     native <methods>;
 }
+# `BaseEvent` is the one `external` of `src/androidMain` that is in neither
+# subpackage: it is `io.github.orangeboychen.marsrs.BaseEvent`, the class the
+# app calls `onForeground` and `onNetworkChange` on, and the two symbols of
+# `libmarsrsxlog.so` they are are
+# `Java_io_github_orangeboychen_marsrs_BaseEvent_*` — the two a rule over
+# `stn.**` and `sdt.**` does not reach. Nothing else here keeps it either, so
+# R8 was free to write a name the runtime resolves no method for, and the app
+# died in `UnsatisfiedLinkError` on the first call — in a release build, which
+# is the one an app ships. The file of `platforms/android/marsrs` never had
+# the hole: its rule is over `io.github.orangeboychen.marsrs.**`.
+-keepclasseswithmembernames class io.github.orangeboychen.marsrs.BaseEvent {
+    native <methods>;
+}
 
 ## 2. native -> Kotlin
 ##
