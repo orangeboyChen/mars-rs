@@ -309,8 +309,14 @@ class Xlog {
     if (_closing != null) {
       return;
     }
-    _maxFileSizeBytes = bytes;
     _send('setMaxFileSize', <String, Object?>{'bytes': bytes});
+    // Mirrored once it is a size the platform side took, and not before: a
+    // negative one is not a size either half hands to the C ABI, which reads
+    // it as an `unsigned long long`. `0` is a size and not an absence —
+    // "never split" — so it is mirrored like any other.
+    if (bytes >= 0) {
+      _maxFileSizeBytes = bytes;
+    }
   }
 
   /// How many seconds a log file is kept: `0` is the lifetime an appender
