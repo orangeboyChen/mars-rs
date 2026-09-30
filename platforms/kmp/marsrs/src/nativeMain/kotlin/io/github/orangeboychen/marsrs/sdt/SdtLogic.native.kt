@@ -83,15 +83,20 @@ public actual object SdtLogic {
      * leaves is what it pays on Android today — a run of two links' hosts is a
      * few hundred bytes — and [reset] is what throws them away.
      *
+     * One document and not one per run: two runs since the last [takeReport]
+     * are two documents the C ABI answered, and what the common API promises
+     * is one — which is why [putBy] merges the [details] of the one it is
+     * given into the one that is already here and not append it to a list.
+     *
      * Replaced whole and never written into, and an [AtomicReference] of an
-     * immutable [List] and not a `MutableList` two threads share: a run puts a
-     * report by on the thread that ran it and a [takeReport] takes one on the
-     * thread that asked, and there is nothing here to lock the two with —
+     * immutable [String] and not a `MutableList` two threads share: a run puts
+     * a report by on the thread that ran it and a [takeReport] takes one on
+     * the thread that asked, and there is nothing here to lock the two with —
      * `synchronized` is the JVM's, `platform.posix` has no mutex on
      * `mingwX64`, and a coroutine's `Mutex` is one only a `suspend` function
      * can wait on.
      */
-    private val pending = AtomicReference<List<String>>(emptyList())
+    private val pending = AtomicReference("")
 
     /**
      * Whether the thread this is read on is inside a run of the checks, which
@@ -246,27 +251,48 @@ public actual object SdtLogic {
         return (takePending() ?: drainReport())?.takeUnless { it == NO_RESULTS }
     }
 
-    /** Puts [report] by for the [takeReport] that comes looking for it. */
+    /**
+     * Puts [report] by for the [takeReport] that comes looking for it, merged
+     * into the document that is already here and not kept beside it: the
+     * [details] of two runs are one array of checks in the answer an app is
+     * given, the way the Android `actual` gives it, and a list of documents is
+     * an answer of one run at a time.
+     */
     private fun putBy(report: String) {
         while (true) {
             val waiting = pending.load()
-            if (pending.compareAndSet(waiting, waiting + report)) {
+            if (pending.compareAndSet(waiting, mergeReports(waiting, report))) {
                 return
             }
         }
     }
 
-    /** The oldest report nothing has taken yet, or `null` when there is none. */
+    /** Every report nothing has taken yet, or `null` when there is none. */
     private fun takePending(): String? {
         while (true) {
             val waiting = pending.load()
             if (waiting.isEmpty()) {
                 return null
             }
-            if (pending.compareAndSet(waiting, waiting.drop(1))) {
-                return waiting.first()
+            if (pending.compareAndSet(waiting, "")) {
+                return waiting
             }
         }
+    }
+
+    /**
+     * The [details] of [report] behind the ones of [into]: a report is
+     * `{"details":[ … ]}` and nothing beside it, so one document of two runs
+     * is the comma between the two arrays.
+     */
+    private fun mergeReports(into: String, report: String): String {
+        val added = report.removePrefix(DETAILS).removeSuffix("]}")
+        if (added.isEmpty()) {
+            return into
+        }
+        val had = into.removePrefix(DETAILS).removeSuffix("]}")
+        val details = if (had.isEmpty()) added else "$had,$added"
+        return "$DETAILS$details]}"
     }
 
     /**
@@ -307,7 +333,7 @@ public actual object SdtLogic {
         // which is what `mars_sdt_reset` says and what an app that resets before
         // it asks expects: a report of a run it threw away is not one it is
         // handed afterwards.
-        pending.store(emptyList())
+        pending.store("")
         mars_sdt_reset()
     }
 
@@ -374,6 +400,9 @@ public actual object SdtLogic {
      * answers `null` for.
      */
     private const val NO_RESULTS = "{\"details\":[]}"
+
+    /** What every report starts with, and the whole of one of no results. */
+    private const val DETAILS = "{\"details\":["
 
     /**
      * One string the port reads, as a NUL-terminated copy in this scope: a
