@@ -113,11 +113,13 @@ fn extract_n_bits(records: u32, start_pos: u32, n: u32) -> u32 {
         start_pos = 1;
     }
     // The window is `start_pos` to `start_pos + n - 1`, so it fits while that
-    // last bit is one of the thirty-two. `start_pos + n > 32` — the test the
+    // last bit is one of the thirty-two: `start_pos + n > 32` — the test the
     // C++ used to make — clamps a window that reaches exactly to the end, and
-    // a request for the eight newest tasks then comes back with seven.
+    // a request for the eight newest tasks then comes back with seven. What
+    // the clamp has to leave is `33 - start_pos` bits and not `32 -`: the
+    // last bit of the window is the thirty-second, and not the one past it.
     if start_pos + n > 33 {
-        n = 32 - start_pos;
+        n = 33 - start_pos;
     }
     if n == 0 {
         return 0;
@@ -635,10 +637,15 @@ mod tests {
             1
         );
 
-        // a start position past the end of the window leaves nothing, which is
-        // the shift of thirty-two the C++ leaves undefined
-        assert_eq!(extract_n_bits(records, 32, 8), 0);
+        // a window that runs off the end keeps the bits there are, which is
+        // what the C++ leaves undefined: it does the shift of thirty-two the
+        // clamp kept it from doing
+        assert_eq!(extract_n_bits(records, 32, 8), records & 1);
+        assert_eq!(extract_n_bits(records, 31, 8), records & 0b11);
         assert_eq!(extract_n_bits(records, 0, 8), extract_n_bits(records, 1, 8));
+        // ... and the window this logic asks for reaches exactly to the end,
+        // which is the eight newest tasks and the whole of the recent one
+        assert_eq!(extract_n_bits(records, 25, 8), records & 0xFF);
     }
 
     #[test]
