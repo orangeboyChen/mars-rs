@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use marsrs_sdt::activecheck::Check;
 use marsrs_sdt::checkimpl::{Answer, Ask, PingStatus, Query};
 use marsrs_sdt::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
+use marsrs_sdt::report::report_json;
 use marsrs_sdt::sdt::{Callback, CheckIPPort, CheckIPPorts, CheckStatus, NetCheckType, TcpErrCode};
 use marsrs_sdt::sdt_core::{CancelHandle, SdtCore};
 use marsrs_sdt::sdt_logic::SdtLogic;
@@ -478,6 +479,39 @@ fn a_ping_that_did_not_come_back_has_no_status() {
     // host's ip and not `DEFAULT_PING_HOST`: the ip is an empty string only
     // when the item has none
     assert_eq!(profile.ip, "1.2.3.4");
+}
+
+/// A status that is not a number: every probe lost, so the average of the
+/// round trips that came back is one over none of them.
+#[test]
+fn a_status_that_is_not_a_number_is_left_out_of_the_report() {
+    let mut request = request_of(
+        link(&[("long.host", "1.2.3.4", 80)]),
+        CheckIPPorts::new(),
+        5000,
+    );
+    let (mut ask, _) = stub(|query| match query {
+        Query::Ping { .. } => Answer::Ping {
+            error_code: 0,
+            rtt: 2,
+            status: Some(PingStatus::new(f32::NAN, f32::INFINITY)),
+        },
+        _ => Answer::Nothing,
+    });
+    let mut check = check_of(&request);
+    assert!(check.start_do_check(NetCheckType::PingCheck, &mut request, &mut ask, 1, ""));
+
+    let profile = &request.checkresult_profiles[0];
+    assert_eq!(profile.error_code, 0);
+    assert!(profile.loss_rate.is_empty());
+    assert!(profile.rtt_str.is_empty());
+    assert_eq!(profile.rtt, 0);
+    // `NaN` and `inf` are not JSON, and the report is one document the app
+    // parses: a number that is not one in a single field of it is a whole
+    // diagnosis the app cannot read.
+    let json = report_json(&request.checkresult_profiles);
+    assert!(!json.contains("NaN"), "{json}");
+    assert!(!json.contains("inf"), "{json}");
 }
 
 #[test]

@@ -420,14 +420,28 @@ impl Check {
                 // the C++'s `if (0 == ret) { GetPingStatus(); snprintf(...) }`
                 if let Some(status) = status.filter(|_| error_code == 0) {
                     // `snprintf(loss_rate, 16, "%f", ...)` — six decimals, like `%f`
-                    profile.loss_rate = format!("{:.6}", status.loss_rate);
-                    profile.rtt_str = format!("{:.6}", status.avgrtt);
-                    // `rtt_str` is this number as a string, so the field the
-                    // report prints beside it carries it too. `avgrtt` is an
-                    // average of floats and the field is an integer, so the
-                    // cast truncates: the report reads `"rtt":12` next to
-                    // `"rttStr":"12.500000"`, and not `0` next to it.
-                    profile.rtt = status.avgrtt as u64;
+                    //
+                    // A float that is not a number is left out: an average
+                    // taken over no probe that came back is `NaN`, and one
+                    // the host summed past `f32::MAX` is `inf`, and neither
+                    // is a JSON number — the report this goes into is one
+                    // document the app parses, and a `NaN` in the middle of
+                    // it is a report the app cannot read at all. The field a
+                    // measurement was not written into is the one a check
+                    // that measured nothing has.
+                    if status.loss_rate.is_finite() {
+                        profile.loss_rate = format!("{:.6}", status.loss_rate);
+                    }
+                    if status.avgrtt.is_finite() {
+                        profile.rtt_str = format!("{:.6}", status.avgrtt);
+                        // `rtt_str` is this number as a string, so the field
+                        // the report prints beside it carries it too.
+                        // `avgrtt` is an average of floats and the field is
+                        // an integer, so the cast truncates: the report
+                        // reads `"rtt":12` next to `"rttStr":"12.500000"`,
+                        // and not `0` next to it.
+                        profile.rtt = status.avgrtt as u64;
+                    }
                 }
 
                 request.checkresult_profiles.push(profile);
