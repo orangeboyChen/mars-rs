@@ -61,13 +61,6 @@ abis=(
     "x86_64:x86_64-unknown-linux-ohos:x86_64-linux-ohos"
 )
 
-# What the caller asked for (`-D warnings` in CI), kept apart so that the `-L`
-# of one ABI is not still on the flags when the next one is built: an
-# `-L…/aarch64-linux-ohos` left in front of `-lunwind` is an aarch64 libunwind.a
-# handed to an arm link, and `is incompatible with armelf_linux_eabi` is all the
-# explanation lld gives for it.
-base_rustflags="${RUSTFLAGS:-}"
-
 source="$root/platforms/harmonyos/marsrs-xlog/src/main/cpp/napi_init.cpp"
 include="$root/crates/marsrs-ffi/include"
 test -f "$source" || { echo "::error::$source is missing"; exit 1; }
@@ -81,8 +74,20 @@ for entry in "${abis[@]}"; do
     sdk_target="$(cut -d: -f3 <<< "$entry")"
 
     # The staticlib of the C ABI, which is what is linked in. `cargo build` is
-    # idempotent, so this is free when scripts/build_harmony.sh just built it,
-    # and it is what makes this script runnable on its own.
+    # idempotent, so this is cheap when scripts/build_harmony.sh ran first, and
+    # it is what makes this script runnable on its own — but it is not free:
+    # that one builds `--features sdt,stn` for a `.so` and this one the default
+    # set for a staticlib, so the crate's own unit is compiled again either
+    # way.
+    #
+    # What is deliberately *not* carried over is that script's `-C link-arg`.
+    # A staticlib is not linked, so the two it sets — the `-L` that finds
+    # libunwind and the one that keeps it out of the dynamic table — do nothing
+    # here; and a `RUSTFLAGS` that differs from the build that script just did
+    # fingerprints every unit of the graph away from it, which is the whole
+    # dependency graph compiled a second time for all three targets. The `-L`
+    # goes to the `clang` below instead, where there is a link for it to do
+    # something to.
     echo "building marsrs-ffi for $target ($abi)"
     clang="$native/llvm/bin/$target-clang"
     flat="$(printf '%s' "$target" | tr '-' '_')"
@@ -91,7 +96,6 @@ for entry in "${abis[@]}"; do
     export "AR_${flat}=$native/llvm/bin/llvm-ar"
     export "CARGO_TARGET_${upper}_LINKER=$clang"
     export PATH="$native/llvm/bin:$PATH"
-    export RUSTFLAGS="$base_rustflags -C link-arg=-L$native/llvm/lib/$sdk_target"
     cargo build --release -p marsrs-ffi --target "$target"
 
     archive="$root/target/$target/release/libmars_ffi.a"
