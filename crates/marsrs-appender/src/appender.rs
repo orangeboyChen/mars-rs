@@ -369,7 +369,13 @@ fn open_region(file: &mut File, path: &Path) -> (Region, bool) {
     let entry_len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
     let needs_preallocation = entry_len < BUFFER_BLOCK_LENGTH as u64 || is_unwritten(file);
     if file.set_len(BUFFER_BLOCK_LENGTH as u64).is_err() {
-        return (Region::heap(), false);
+        // Nothing can be written through the file, but what it holds is still
+        // the only copy there is of a run that did not finish, so the heap
+        // region below reads it: those records reach the log on the next
+        // flush, and only then does `close()` empty the file. An empty heap
+        // region here would let `close()` truncate the file over records no
+        // log holds.
+        return (Region::heap_with_cache(path), false);
     }
     if needs_preallocation {
         let ok = file
@@ -383,11 +389,11 @@ fn open_region(file: &mut File, path: &Path) -> (Region, bool) {
             // the length of a cache file is what a reader of the cache
             // directory — the heap fallback below, a decoder, or the C++
             // still linked into the same app — takes for how much of it is
-            // real. A `set_len` that fails too is ignored: nothing is written
-            // through the file either way, the heap region below does not read
-            // it, and the length is the only thing at stake.
+            // real. A `set_len` that fails too is ignored: the region below
+            // reads what the file still holds, and that is bounded by the
+            // length either way.
             let _ = file.set_len(entry_len);
-            return (Region::heap(), false);
+            return (Region::heap_with_cache(path), false);
         }
     }
 
@@ -3243,6 +3249,44 @@ mod tests {
             first,
             [1u8],
             "the record the appender has not drained yet is still in the file"
+        );
+    }
+
+    /// The other way a cache file ends up on the heap: one whose `set_len`
+    /// failed, which is the same fallback by a different door.
+    ///
+    /// `close()` empties the cache file whenever there is no mapping (see
+    /// [`clear_cache_file_if_heap`]), and that is only right because the
+    /// records were drained out of the region first. A region seeded with
+    /// nothing drains nothing, and the file is then truncated over the only
+    /// copy of a crashed run's records that exists.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_cache_file_that_could_not_be_grown_is_still_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = records_in_cache(tmp.path());
+        let cached = fs::read(&path).unwrap();
+        // The way a test can read a file whose `set_len` refuses: `ftruncate`
+        // asks for a descriptor that is open for writing.
+        let mut file = OpenOptions::new().read(true).open(&path).unwrap();
+        assert!(
+            file.set_len(BUFFER_BLOCK_LENGTH as u64).is_err(),
+            "this test needs a `set_len` that fails"
+        );
+
+        let (region, use_mmap) = open_region(&mut file, &path);
+        assert!(!use_mmap);
+        let Region::Heap(bytes) = region else {
+            panic!("heap, and not a mapping");
+        };
+        assert!(
+            cached.iter().any(|byte| *byte != 0),
+            "the fixture leaves a record behind, and not a hole of zeros"
+        );
+        assert_eq!(
+            &bytes[..8],
+            &cached[..8],
+            "the record of the file is in the region, so `close()` may empty the file"
         );
     }
 
