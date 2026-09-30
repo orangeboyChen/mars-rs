@@ -435,12 +435,13 @@ internal class ProbeBox(private val probe: SdtLogic.IProbe) {
     /** What one query asked, and what the app answered: written into [out]. */
     fun answer(query: MarsSdtQuery, out: CPointer<MarsSdtAnswer>) {
         held.clear()
-        // The same guard the stn callback above it has, for the same reason:
-        // this runs under a `staticCFunction`, so an exception the probe
-        // throws goes into C with no frame above it to catch it, and
-        // Kotlin/Native ends the process on one. A probe that threw is
-        // answered the way the Android actual answers it — printed, and
-        // then not answered at all.
+        // The same guard the stn callback has, for the same reason: this runs
+        // under a `staticCFunction`, so an exception the probe throws goes
+        // into C with no frame above it to catch it, and Kotlin/Native ends
+        // the process on one. A probe that threw is answered the way the
+        // Android actual answers it — printed, and then not answered at all.
+        // A `Throwable` and not an `Exception`, which is what the stn half
+        // catches: an app's `Error` is as fatal here as its exception.
         val host = query.host?.toKString() ?: ""
         val timeout = query.timeout.toInt()
         val answered = try {
@@ -451,11 +452,22 @@ internal class ProbeBox(private val probe: SdtLogic.IProbe) {
                 PROBE_PING -> probe.ping(host, timeout)
                 else -> ProbeAnswer.None
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
             ProbeAnswer.None
         }
-        write(answered, out)
+        // Its own guard, the way the stn callback has it, and for the reason
+        // written there: the half that allocates is this one — `held.strings`
+        // and `held.bytes` take `nativeHeap.allocArray`, and what that throws
+        // when there is nothing left to give is an `OutOfMemoryError`, which
+        // an `Exception` does not catch. An `Error` that escapes a
+        // `staticCFunction` ends the process, so what the struct holds is
+        // what `write` put into it first, which is nothing answered at all.
+        try {
+            write(answered, out)
+        } catch (e: Throwable) {
+            e.printStackTrace()
+        }
     }
 
     fun dispose() {
