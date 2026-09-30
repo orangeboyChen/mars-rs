@@ -649,6 +649,7 @@ impl LongLinkTaskManager {
                 }
             }
             // one error for the whole channel it came in on
+            let name = response.name.clone();
             self.batch_error_resp_handle_at(
                 now,
                 response.name,
@@ -662,9 +663,12 @@ impl LongLinkTaskManager {
             );
             // The C++ answers nothing; the port says whether there is still a
             // task waiting, which for an error with no task id of its own is
-            // any task on the channel.
+            // any task of the channel it came in on and not any task of the
+            // queue: the error was handed to that channel's tasks and to no
+            // other's, so a task of another channel is not one still waiting
+            // for an answer this error was not about.
             let waiting = if taskid == Task::INVALID_TASK_ID {
-                !self.tasks.is_empty()
+                self.task_count(&name) > 0
             } else {
                 self.has_task(taskid)
             };
@@ -2409,6 +2413,34 @@ mod tests {
             vec![Task::CHANNEL_MINOR_LONG, Task::CHANNEL_MINOR_LONG],
             "every try is encoded for the link the task is queued on"
         );
+    }
+
+    #[test]
+    fn an_error_for_no_task_in_particular_waits_on_its_own_channel() {
+        let mut manager = manager();
+        let mut minor = LonglinkConfig::new(MINOR);
+        minor.link_type = Task::CHANNEL_MINOR_LONG;
+        assert!(manager.add_long_link(minor));
+        let _ = wire(&mut manager);
+
+        // a task of the other channel, which is where the queue's only task
+        // is once the error below has been handed out
+        let mut on_minor = task(8);
+        on_minor.minorlong_host_list = vec![MINOR.to_string()];
+        manager.start_task_at(NOW, on_minor, Task::CHANNEL_MINOR_LONG);
+        let mut no_retry = task(7);
+        no_retry.retry_count = 0;
+        manager.start_task_at(NOW, no_retry, Task::CHANNEL_LONG);
+
+        assert_eq!(
+            manager.on_response_at(
+                NOW + 10,
+                failed(Task::INVALID_TASK_ID, ErrCmdType::Socket, -5001)
+            ),
+            Some(RespHandle::Ended),
+            "a task of another channel is not one the error was handed to"
+        );
+        assert_eq!(manager.task_count(MINOR), 1, "and it is still waiting");
     }
 
     #[test]
