@@ -367,7 +367,9 @@ public final class MarsSdt: NSObject {
     /// which is what the overload below takes and what Objective-C reaches.
     ///
     /// - Returns: `MARS_SDT_OK`, or `MARS_SDT_ERR_BUSY` when a check is already
-    ///   in flight, or `MARS_SDT_ERR_PANIC`.
+    ///   in flight, or `MARS_SDT_ERR_BAD_ARG` when the mode names no check at
+    ///   all — the set a `Mode` starts out as, and the answer the C ABI gives
+    ///   for a mode with no `NET_CHECK_*` bit in it — or `MARS_SDT_ERR_PANIC`.
     @discardableResult
     public static func startActiveCheck(
         longLink: [Link],
