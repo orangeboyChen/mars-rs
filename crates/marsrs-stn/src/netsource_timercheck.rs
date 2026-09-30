@@ -102,9 +102,9 @@ impl NetSourceTimerCheck {
 
     /// The same, with the reading the C++'s `gettickcount()` would hand out:
     /// the seed of the random pick too, which is what makes a check a test can
-    /// pin down — [`NetSource::new_at`] seeds from the reading it is handed as
-    /// well, and a check that read the clock besides the reading it was given
-    /// is one no reading of its own pins down.
+    /// pin down — [`crate::net_source::NetSource::new_at`] seeds from the
+    /// reading it is handed as well, and a check that read the clock besides
+    /// the reading it was given is one no reading of its own pins down.
     pub fn new_at(now: u64) -> Self {
         Self {
             period_due: None,
