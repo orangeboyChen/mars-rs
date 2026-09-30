@@ -334,7 +334,9 @@ object StnLogic {
      * Created by caoshaokun on 16/2/1.
      *
      * An app that uses the signalling channel has to implement this interface — the port asks the
-     * app the fifteen questions below.
+     * app thirteen of the fourteen questions below. `isLogoned` is the one it is not asked: the
+     * state it names is one STN keeps and answers itself, so no question crosses into the app for
+     * it, and an app that answers it is answering a question nobody put to it.
      */
     interface ICallBack {
         /**
