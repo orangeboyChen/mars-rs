@@ -327,7 +327,11 @@ pub struct Fastest {
 /// pair and one [`Socket`] per item.
 pub struct LongLinkSpeedTest {
     items: Vec<SpeedTestItem>,
-    sockets: Vec<Socket>,
+    /// One slot per candidate, and [`None`] is a slot whose socket is not
+    /// open: a race that has been run before closed the sockets of the pairs
+    /// that lost, and a slot is what keeps the one a pair is stepped on from
+    /// being another pair's.
+    sockets: Vec<Option<Socket>>,
     open: Option<Box<Open>>,
     select: Option<Box<Select>>,
 }
@@ -388,7 +392,7 @@ impl LongLinkSpeedTest {
     /// How many sockets are still open. The C++ closes the ones that lost, so
     /// after a race this is one at most.
     pub fn open_sockets(&self) -> usize {
-        self.sockets.len()
+        self.sockets.iter().flatten().count()
     }
 
     /// `GetFastestSocket` — runs the race, reading the clock again after every
@@ -415,15 +419,22 @@ impl LongLinkSpeedTest {
         // has already spent, which is a race that gives up on its first
         // `EINTR`.
         let mut retries = 0;
-        while self.sockets.len() < self.items.len() {
+        // one slot for every candidate, and then a socket for every slot that
+        // has none: an open socket is the one the pair in that slot was made
+        // for, and not one an earlier race left in a shorter list
+        self.sockets.resize_with(self.items.len(), || None);
+        for index in 0..self.items.len() {
+            if self.sockets[index].is_some() {
+                continue;
+            }
             let Some(open) = self.open.as_mut() else {
                 break;
             };
             let (ip, port) = {
-                let item = &self.items[self.sockets.len()];
+                let item = &self.items[index];
                 (item.pair.ip.clone(), item.pair.port)
             };
-            self.sockets.push(open(&ip, port));
+            self.sockets[index] = Some(open(&ip, port));
         }
 
         loop {
@@ -489,14 +500,14 @@ impl LongLinkSpeedTest {
                 Need::Nothing => need,
                 Need::Write => {
                     let bytes = item.pending().to_vec();
-                    let written = match self.sockets.get_mut(index) {
+                    let written = match self.sockets.get_mut(index).and_then(Option::as_mut) {
                         Some(socket) => (socket.send)(&bytes),
                         None => -1,
                     };
                     item.on_sent(written)
                 }
                 Need::Read => {
-                    let bytes = match self.sockets.get_mut(index) {
+                    let bytes = match self.sockets.get_mut(index).and_then(Option::as_mut) {
                         Some(socket) => (socket.recv)(),
                         None => Vec::new(),
                     };
@@ -533,13 +544,14 @@ impl LongLinkSpeedTest {
             .items
             .iter()
             .position(|item| item.state() == SpeedTestState::Suc);
-        let mut sockets = std::mem::take(&mut self.sockets);
-        self.sockets = socket
-            .filter(|index| *index < sockets.len())
-            .map(|index| sockets.remove(index))
-            .into_iter()
-            .collect();
-        drop(sockets);
+        // every slot but the winner's is emptied, which is what closes those
+        // sockets: what stays open is the pair that was answered, in the slot
+        // it was made for
+        for (index, slot) in self.sockets.iter_mut().enumerate() {
+            if Some(index) != socket {
+                *slot = None;
+            }
+        }
 
         socket.map(|index| Fastest {
             pair: self.items[index].pair().clone(),
@@ -794,6 +806,44 @@ mod tests {
         assert_eq!(
             test.results().map(|(_, state)| state).collect::<Vec<_>>(),
             vec![SpeedTestState::Resp, SpeedTestState::Suc]
+        );
+    }
+
+    /// A race that is run again opens the socket of the pair that lost it, and
+    /// not the winner's a second time: a slot is a candidate's, so the socket a
+    /// pair is stepped on is the one that was opened for that pair — and not
+    /// one a shorter list moved into its place.
+    #[test]
+    fn a_race_run_again_opens_the_socket_of_the_pair_that_lost() {
+        let _guard = crate::test_lock();
+        let mut test = LongLinkSpeedTest::new_at(0, [pair("1.1.1.1", 80), pair("2.2.2.2", 80)]);
+        test.set_select(select(vec![
+            vec![SocketEvent::Writable, SocketEvent::Writable],
+            vec![SocketEvent::Nothing, SocketEvent::Readable],
+        ]));
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        let recording = Arc::clone(&opened);
+        let mut answering = host(|index| index == 1);
+        test.set_open(move |ip, port| {
+            recording
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(ip.to_string());
+            answering(ip, port)
+        });
+
+        let fastest = test.fastest_at(0).expect("the second pair answers");
+        assert_eq!(fastest.socket, 1);
+        assert_eq!(*opened.lock().unwrap(), vec!["1.1.1.1", "2.2.2.2"]);
+
+        // the winner kept its slot and the loser's is empty, so the second run
+        // opens one socket — and it is the first pair's
+        let again = test.fastest_at(0).expect("the second pair answered");
+        assert_eq!(again.pair.ip, "2.2.2.2");
+        assert_eq!(
+            *opened.lock().unwrap(),
+            vec!["1.1.1.1", "2.2.2.2", "1.1.1.1"],
+            "a pair is stepped on the socket that was opened for it"
         );
     }
 
