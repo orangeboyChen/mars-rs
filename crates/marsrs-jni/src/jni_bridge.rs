@@ -281,7 +281,7 @@ fn string_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> String {
     })
 }
 
-/// Reads `io.github.orangeboychen.marsrs.xlog.Xlog$XLogConfig`.
+/// Reads `io.github.orangeboychen.marsrs.xlog.XLogConfigJni`.
 fn config_from_java(env: &mut Env<'_>, config: &JObject<'_>) -> Option<(XLogConfig, LogLevel)> {
     if config.is_null() {
         return None;

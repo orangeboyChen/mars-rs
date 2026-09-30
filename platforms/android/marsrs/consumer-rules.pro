@@ -79,7 +79,9 @@
 # link the app was answered `false` for.
 -keep,allowoptimization class io.github.orangeboychen.marsrs.stn.StnLogic$LonglinkConfig { *; }
 
-# `jni_bridge.rs`: what `appenderOpen` and `logWrite` read out of their argument
+# `jni_bridge.rs`: what `newXlogInstance` reads out of its argument. The config
+# is the top-level `XLogConfigJni` and not a nested `Xlog$XLogConfig` — no class
+# of that name is declared here — and `write` takes its level, tag and body as
+# three arguments, so there is no `XLoggerInfo` for R8 to keep either.
 -keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.Xlog { *; }
--keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.Xlog$XLogConfig { *; }
--keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.Xlog$XLoggerInfo { *; }
+-keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.XLogConfigJni { *; }
