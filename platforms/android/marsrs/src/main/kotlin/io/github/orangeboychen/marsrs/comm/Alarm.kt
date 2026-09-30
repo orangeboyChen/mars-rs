@@ -200,6 +200,18 @@ class Alarm : BroadcastReceiver() {
                         cancelAlarmMgr(context, next.pendingIntent)
                         iterator.remove()
                         requestCodes.remove(id)
+                        // The receiver [start] put on the air comes off it with
+                        // the last alarm it was put there for: nothing is
+                        // waiting for a broadcast any more, and a receiver
+                        // Android keeps registered is one it keeps for the
+                        // process — a `BroadcastReceiver` it wakes for
+                        // `ALARM_ACTION` for as long as this one is on the
+                        // air, and a context it holds for the same span. A
+                        // later [start] registers another.
+                        if (alarmWaitingSet.isEmpty()) {
+                            bcAlarm?.let { context.unregisterReceiver(it) }
+                            bcAlarm = null
+                        }
                         return true
                     }
                 }
