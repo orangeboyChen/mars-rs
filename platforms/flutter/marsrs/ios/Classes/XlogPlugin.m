@@ -365,7 +365,7 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   XlogAnswer(result, nil);
 }
 
-/// `mars_xlog_release_instance`: closes the appender `open` made.
+/// `mars_xlog_release_instance_of`: closes the appender `open` made.
 - (void)close:(FlutterMethodCall *)call result:(FlutterResult)result {
   NSString *namePrefix = XlogString(call.arguments, @"namePrefix");
   NSNumber *handle = self.instances[namePrefix];
@@ -375,13 +375,13 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   }
   long long opened = handle.longLongValue;
   [self.instances removeObjectForKey:namePrefix];
-  // The prefix is released only while the appender of it is still the one
-  // `open` was answered with: releasing takes the prefix and not the handle, so
-  // one another part of the app opened after this one was closed would be
-  // theirs, and releasing by prefix would close it.
-  if (mars_xlog_get_instance(namePrefix.UTF8String) == opened) {
-    mars_xlog_release_instance(namePrefix.UTF8String);
-  }
+  // `mars_xlog_release_instance_of` and not `mars_xlog_release_instance`: a
+  // release is given a prefix, so what it closes is whichever appender the
+  // prefix answers *at that moment* — one another part of the app opened
+  // after this one was closed. Naming the handle makes the question and the
+  // release one call, which a `mars_xlog_get_instance` before a release is
+  // not: a `close` on another thread lands between the two.
+  mars_xlog_release_instance_of(namePrefix.UTF8String, opened);
   XlogAnswer(result, nil);
 }
 
