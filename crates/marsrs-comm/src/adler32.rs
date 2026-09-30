@@ -1,9 +1,8 @@
 //! `mars/comm/adler32.c` — the Adler-32 checksum, the Mark Adler reference
 //! implementation in the arithmetic of `unsigned long`.
 //!
-//! [`adler32`] is the seed-0 call STN keys its avalanche table on
-//! (`marsrs-stn`'s `FrequencyLimit`, and this crate's own
-//! `frequency_limit`); [`adler32_seeded`] is the hash continued over more
+//! [`adler32`] is the seed-0 call `marsrs-stn`'s `FrequencyLimit` keys its
+//! avalanche table on; [`adler32_seeded`] is the hash continued over more
 //! bytes, which is what [`basepacker`](crate::basepacker) does with the
 //! checksum of a package it has already started.
 //!
