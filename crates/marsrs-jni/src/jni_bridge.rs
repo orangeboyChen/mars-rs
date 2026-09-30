@@ -434,10 +434,15 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_write<'loca
     log: JString<'local>,
 ) {
     guard_env(&mut env, |env| {
-        let log = log
-            .mutf8_chars(env)
-            .map(|value| value.to_str().into_owned())
-            .unwrap_or_default();
+        let borrowed = log.mutf8_chars(env);
+        // A record whose text the JVM would not lend is not written at all:
+        // `""` in its place is a line in the log file that reads like one the
+        // app wrote and carries none of what it was given, and a reader of
+        // the file cannot tell the two apart.
+        let Ok(log) = clear_pending(env, borrowed) else {
+            return;
+        };
+        let log = log.to_str().into_owned();
         // Borrowed from the JVM: a `String` per record is an allocation
         // `Java2C_Xlog.cc` never makes.
         let tag = java_string_handle(env, tag.as_ref());
