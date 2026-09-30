@@ -882,15 +882,38 @@ impl RunLoop {
         };
 
         {
-            let mut message = message.lock().unwrap();
+            // A handler that unwinds is a dispatch that is over, so the post
+            // it was running is out of `running_posts` either way: a post left
+            // in there is a [`found_message`] that answers `true` for good and
+            // a [`wait_message`] that never answers at all. The C++ has no
+            // unwinding to guard against and takes it out where the loop ends.
+            let _running = RunningPost { queue, post };
+            // The message is the app's to hold, and poisoning the mutex a
+            // handler panicked behind would only fail the next dispatch of a
+            // periodic one: what the panic wrote is the message's own, and
+            // the next run of this message starts from the record it is given.
+            let mut message = message
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             message.execute_time = gettickcount();
             for handler in handlers {
                 handler(&mut message);
             }
         }
-
-        queue.clear_running(post);
         true
+    }
+}
+
+/// Takes a post out of the running ones when the dispatch of it ends, whichever
+/// way it ends; see [`RunLoop::dispatch`].
+struct RunningPost<'a> {
+    queue: &'a Arc<Queue>,
+    post: MessagePost,
+}
+
+impl Drop for RunningPost<'_> {
+    fn drop(&mut self) {
+        self.queue.clear_running(self.post);
     }
 }
 
@@ -928,5 +951,39 @@ mod tests {
             1,
             "it wrapped to 0, which is no post"
         );
+    }
+
+    /// A handler that unwinds is a dispatch that is over, and the post it was
+    /// running is out of the running ones either way: left in there, it is a
+    /// [`found_message`] that answers `true` for good and a [`wait_message`]
+    /// that never answers at all. The C++ has no unwinding, so nothing there
+    /// says what a message a handler never returned from leaves behind.
+    #[test]
+    fn a_handler_that_unwinds_is_a_dispatch_that_is_over() {
+        let id = create_message_queue();
+        let handler = install_message_handler(
+            |_: &mut Message| panic!("the app's handler unwound"),
+            false,
+            id,
+        );
+        let post = post_message(
+            &handler,
+            Message::new(MessageTitle(7), "unwinds"),
+            MessageTiming::Immediate,
+        );
+
+        // The panic is the point of the test and not its output.
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let ran = std::panic::catch_unwind(|| RunLoop::dispatch_timeout(id, Duration::ZERO));
+        std::panic::set_hook(hook);
+
+        assert!(ran.is_err(), "the handler was asked and did not unwind");
+        assert!(!found_message(&post), "the post is still running");
+        assert!(
+            wait_message(&post, 100),
+            "the post is running for good, so the wait never ends"
+        );
+        destroy_message_queue(id);
     }
 }
