@@ -34,8 +34,15 @@ public enum class LogLevel {
 
     /**
      * Whether an appender sitting at this level writes a record of [level].
+     *
+     * A record of [NONE] is the one exception: it is not a severity a record
+     * can have, so no appender writes one whatever it is sitting at, and
+     * `ordinal <= level.ordinal` — which is the rule for every other level —
+     * answers `true` for it. An app that asks before it builds a message and
+     * is told `true` spends the cost of building one and gets silence.
      */
-    public fun isEnabledFor(level: LogLevel): Boolean = ordinal <= level.ordinal
+    public fun isEnabledFor(level: LogLevel): Boolean =
+        level != NONE && ordinal <= level.ordinal
 
     public companion object {
         /**
