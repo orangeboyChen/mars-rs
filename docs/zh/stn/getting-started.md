@@ -21,7 +21,7 @@ STN 是 mars 里跟服务器说话的那一半。**任务**是一个工作单位
 | 你的 App 是 | 谁带着 STN | 怎么拿到它 |
 |---|---|---|
 | Rust | `marsrs`（`marsrs-xlog` 里一点都没有） | `marsrs::stn` |
-| iOS / watchOS，Swift | `MarsRSNet` 这个 product，或 `MarsRS` | `MarsStn` |
+| iOS / watchOS，Swift 或 Objective-C | `MarsRSNet` 这个 product 或 pod，或 `MarsRS` | `MarsStn` |
 | Android，Kotlin 或 Java | JitPack 上的 `marsrs`，不是 `xlog` | `io.github.orangeboychen.marsrs.stn.StnLogic` |
 | Kotlin Multiplatform | `marsrs-kmp`，不是 `xlog-kmp` | `io.github.orangeboychen.marsrs.stn.StnLogic` |
 | 有 C FFI 的任何东西 | `include/mars_stn.h` | `mars_stn_*` |
@@ -196,15 +196,54 @@ MarsStn.start(task)
 
 // 3. 循环 —— `dueTime` 是这一趟还能等多少毫秒，没有要等的东西时是 `nil`
 while let wait = MarsStn.dueTime {
-    Thread.sleep(forTimeInterval: Double(wait) / 1000)
+    Thread.sleep(forTimeInterval: wait.doubleValue / 1000)
     MarsStn.runPending()
 }
 ```
 
-`MarsStn` 是一个 `enum`，装的是 C ABI 那套 `mars_stn_*` 上的 static，pod 是同一个
-framework 上的同一份 Swift。Objective-C 看不见它：只有 static 成员的 Swift
-`enum`，Objective-C import 不了，所以跑任务的 App 得把那部分写在 Swift
-里。
+`MarsStn` 是一个类，装的是 C ABI 那套 `mars_stn_*` 上的 static，pod 是同一个
+framework 上的同一份 Swift —— 所以 Objective-C 写的 App 跑的是同一条流水线，只是
+用的是编译器写进 `MarsRSNet-Swift.h` 的那个头文件：
+
+```objc
+@import MarsRSNet;
+
+// 1. App 就是一个 block：一个问题进，一个回答出
+[MarsStn setApp:^StnAnswer *(StnQuestion *question) {
+    switch (question.kind) {
+    case StnQuestionKindReq2Buf:
+        return [StnAnswer encoded:[self encodeTask:question.task]];
+    case StnQuestionKindBuf2Resp:
+        [self handleBody:question.body];
+        return [StnAnswer decodedWithErrorCode:0 handle:MarsStnFailHandleNormal];
+    case StnQuestionKindOnTaskEnd:
+        return [StnAnswer endedWithErrorCode:0];
+    default:
+        return [StnAnswer nothing];
+    }
+}];
+
+// 2. 一个任务
+StnTask *task = [[StnTask alloc] initWithChannelSelect:MarsStnChannelShort];
+task.taskID = [MarsStn generateTaskID];
+task.cgi = @"/cgi-bin/hello";
+task.shortLinkHosts = @[@"example.com"];
+task.totalTimeout = 10_000;
+[MarsStn start:task];
+
+// 3. 循环 —— `dueTime` 是这一趟还能等多少毫秒，没有要等的东西时是 nil
+NSNumber *wait = MarsStn.dueTime;
+while (wait) {
+    [NSThread sleepForTimeInterval:wait.doubleValue / 1000];
+    [MarsStn runPending];
+    wait = MarsStn.dueTime;
+}
+```
+
+九个回答是 `StnAnswer` 的九个类方法 —— `[StnAnswer encoded:]`、`[StnAnswer
+decodedWithErrorCode:handle:]` —— 而不是对“带值的 case”做 switch，因为 Objective-C
+没有那种写法。任务的 `channelSelect` 同理是一个 `MarsStnChannel`：`.both` 就是短连
+接加长连接，因为 Objective-C 没有标志位的集合。
 
 ## Android
 
