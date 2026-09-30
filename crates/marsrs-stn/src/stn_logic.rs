@@ -291,12 +291,15 @@ impl StnLogic {
 
     /// `OnNetworkChange(pre_change)` — the host's own change first, then the
     /// net core's, which is the order the C++ binds them in. Neither runs when
-    /// there is no core, which is the C++'s `if (net_core_ && !released)`.
+    /// there is no core, which is the C++'s `if (net_core_ && !released)`:
+    /// a core that was let go of has no tasks and no links left in it, so a
+    /// change of network is not one it has anything to redo.
     pub fn on_network_change(&mut self, pre_change: impl FnOnce()) {
-        if let Some(core) = self.core.as_mut() {
-            pre_change();
-            core.on_network_change();
-        }
+        let Some(core) = self.core.as_mut().filter(|core| !core.is_released()) else {
+            return;
+        };
+        pre_change();
+        core.on_network_change();
     }
 
     /// `ActiveLogic` — whether the app is in the foreground, which is what the
@@ -1053,6 +1056,27 @@ mod tests {
 
     fn asked_of(cell: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
         cell.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn a_core_that_was_let_go_of_is_not_one_a_network_change_reaches() {
+        let (mut logic, asked) = logic();
+        assert!(logic.start_task_at(1_000, Task::new(7, 12)));
+        logic.release();
+        assert!(logic.net_core().is_some_and(|core| core.is_released()));
+
+        let before = asked_of(&asked);
+        let mut pre = 0;
+        logic.on_network_change(|| pre += 1);
+        assert_eq!(
+            pre, 0,
+            "the host's own change is bound to the core's, and neither runs"
+        );
+        assert_eq!(
+            asked_of(&asked),
+            before,
+            "no task is encoded again for a core that let them all go"
+        );
     }
 
     #[test]
