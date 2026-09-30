@@ -71,7 +71,10 @@ typedef struct {
 } Instance;
 
 // What `mars_xlog_new_instance` answered, by name prefix. Guarded by a mutex:
-// every method may be called from any thread, and `Xlog` of the ArkTS says so.
+// every method may be called from any thread, and the mutex is the only thing
+// that makes it so — `Xlog` of the ArkTS says nothing about threads either way,
+// so a claim that the class is the one holding it up would be a claim nothing
+// in the tree keeps.
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static Instance* g_instances = NULL;
 static size_t g_instances_count = 0;
