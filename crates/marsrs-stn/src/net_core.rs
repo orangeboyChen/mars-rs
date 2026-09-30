@@ -3807,13 +3807,19 @@ mod tests {
             .create_long_link(LonglinkConfig::new("second"))
             .is_none());
         assert!(core.long_link(MAIN).is_none());
-        // the same config twice does not make two links
+        // the same config twice does not make two links: what comes back the
+        // second time is the link itself, and not a second one that happens
+        // to be in the state the first is in
         let mut core = NetCore::new_at(NOW);
-        let first = core.create_long_link(LonglinkConfig::new("second"));
-        let again = core.create_long_link(LonglinkConfig::new("second"));
-        assert_eq!(
-            first.map(|link| link.lock().unwrap_or_else(poisoned).connect_status()),
-            again.map(|link| link.lock().unwrap_or_else(poisoned).connect_status())
+        let first = core
+            .create_long_link(LonglinkConfig::new("second"))
+            .expect("the link");
+        let again = core
+            .create_long_link(LonglinkConfig::new("second"))
+            .expect("the link");
+        assert!(
+            Arc::ptr_eq(&first, &again),
+            "a name the core has a link for is answered with that link"
         );
         assert_eq!(core.longlink().channels().len(), 2);
     }
