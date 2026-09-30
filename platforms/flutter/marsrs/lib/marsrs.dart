@@ -212,6 +212,17 @@ class Xlog {
       }
       await closing;
     }
+    // Read the map again, and not the [opened] this call started with: the
+    // await above is a place another [open] of this prefix ran in, and the
+    // [Xlog] that one left here is the appender that is open now. Opening
+    // over it would be two [Xlog]s of one appender, which is what this map
+    // is here to keep from happening, and the one displaced is the one
+    // [close] no longer takes out of it: `close` removes the [Xlog] the map
+    // holds, and not the one the app was handed.
+    final current = _opened[prefix];
+    if (current != null && current._closing == null) {
+      return current;
+    }
     await _channel.invokeMethod<void>('open', config.toMap());
     final xlog = Xlog._(prefix, config.level, config.mode);
     _opened[prefix] = xlog;
