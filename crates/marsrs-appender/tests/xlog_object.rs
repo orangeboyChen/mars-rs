@@ -172,6 +172,22 @@ fn two_objects_of_one_prefix_are_one_appender() {
     let one = Xlog::open(config(dir.path(), "shared"), LogLevel::Info).unwrap();
     let two = Xlog::open(config(dir.path(), "shared"), LogLevel::Info).unwrap();
 
+    // The four the appender has no getter for are this object's own answer and
+    // not the appender's, which is what `Xlog`'s own doc says of them: `one`
+    // set the alive time on the appender it shares with `two`, and `two` goes
+    // on answering what `two` last set itself, which is nothing — `0`, the
+    // ten days. An app that reads the value back out of a second `Xlog` of a
+    // prefix is told its logs are kept ten days whatever the first one asked
+    // for, and no platform of the port can do better: there is nothing to
+    // read the value back from.
+    one.set_max_alive_time_seconds(3 * 24 * 60 * 60);
+    assert_eq!(one.max_alive_time_seconds(), 3 * 24 * 60 * 60);
+    assert_eq!(
+        two.max_alive_time_seconds(),
+        0,
+        "the mirror is this object's and not the appender's"
+    );
+
     // The second is the appender the first opened, and not a second one.
     assert!(two.is_open());
     one.close();
