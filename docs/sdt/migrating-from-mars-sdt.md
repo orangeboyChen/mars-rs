@@ -22,10 +22,10 @@ and the checks, run them, take the report — and the report is the same
 | the net-check CGI | `SetHttpNetcheckCGI(cgi)` | `set_http_netcheck_cgi(cgi)` | `setHttpNetcheckCGI(cgi)` | `setHTTPNetCheckCGI(cgi)` | `mars_sdt_set_http_netcheck_cgi(cgi)` |
 | the report | `Callback::ReportNetCheckResult` | `report_json(&results)` | `takeReport()`, or the callback | `takeReport()` | `mars_sdt_take_report(buf, len)` |
 
-The mode is the same bit set — ping and DNS, then TCP, then the HTTP check of the
-net-check CGI — and `0` is still no checks at all, and still nothing any seam
-runs: Rust and Android answer `false` for it, and the C ABI
-`MARS_SDT_ERR_BAD_ARG`. In Rust the bits have names:
+The mode is the same bit set — ping and DNS, then the HTTP check of the
+net-check CGI, then TCP — and `0` is still no checks at all, and still
+nothing any seam runs: Rust and Android answer `false` for it, and the C
+ABI `MARS_SDT_ERR_BAD_ARG`. In Rust the bits have names:
 `Mode::NONE`, `BASIC`, `LONG`, `SHORT` and `ALL`, put together with `|`, and
 `mode.bits()` hands back the `i32` the upstream call takes. See
 [the checks](/sdt/checks).

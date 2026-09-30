@@ -21,7 +21,7 @@
 | net-check 的 CGI | `SetHttpNetcheckCGI(cgi)` | `set_http_netcheck_cgi(cgi)` | `setHttpNetcheckCGI(cgi)` | `setHTTPNetCheckCGI(cgi)` | `mars_sdt_set_http_netcheck_cgi(cgi)` |
 | 报告 | `Callback::ReportNetCheckResult` | `report_json(&results)` | `takeReport()`，或那个回调 | `takeReport()` | `mars_sdt_take_report(buf, len)` |
 
-mode 是同一套 bit —— 先 ping 和 DNS，再 TCP，再 net-check CGI 的那次 HTTP —— `0`
+mode 是同一套 bit —— 先 ping 和 DNS，再 net-check CGI 的那次 HTTP，再 TCP —— `0`
 还是一项都不跑，也还是没有哪个接口会跑它：Rust 和 Android 回答 `false`，C ABI 回答
 `MARS_SDT_ERR_BAD_ARG`。
 在 Rust 里这些 bit 有了名字：`Mode::NONE`、`BASIC`、`LONG`、
