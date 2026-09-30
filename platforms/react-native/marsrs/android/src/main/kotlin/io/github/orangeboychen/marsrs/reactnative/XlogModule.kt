@@ -114,7 +114,8 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * too.
      */
     override fun log(namePrefix: String, level: Double, tag: String, message: String) {
-        appender(namePrefix)?.log(LogLevel.of(level.toInt()), tag, message)
+        val native = int32(level) ?: return
+        appender(namePrefix)?.log(LogLevel.of(native), tag, message)
     }
 
     /** `Xlog.currentLogPath`: the directory this appender writes its files
@@ -122,18 +123,24 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
     override fun currentLogPath(namePrefix: String): String? = appender(namePrefix)?.currentLogPath
 
     /** `Xlog.logFiles`: the day's files that are there. */
-    override fun logFiles(namePrefix: String, daysAgo: Double): WritableArray? =
-        appender(namePrefix)?.logFiles(daysAgo.toLong())?.let { Arguments.fromList(it) }
+    override fun logFiles(namePrefix: String, daysAgo: Double): WritableArray? {
+        val day = int32(daysAgo) ?: return Arguments.createArray()
+        return appender(namePrefix)?.logFiles(day.toLong())?.let { Arguments.fromList(it) }
             ?: Arguments.createArray()
+    }
 
     /** `Xlog.logFileNames`: the day's names, whether or not they are there yet. */
-    override fun logFileNames(namePrefix: String, daysAgo: Double): WritableArray? =
-        appender(namePrefix)?.logFileNames(daysAgo.toLong())?.let { Arguments.fromList(it) }
+    override fun logFileNames(namePrefix: String, daysAgo: Double): WritableArray? {
+        val day = int32(daysAgo) ?: return Arguments.createArray()
+        return appender(namePrefix)?.logFileNames(day.toLong())?.let { Arguments.fromList(it) }
             ?: Arguments.createArray()
+    }
 
     /** `Xlog.isLoggable`: whether a record of the level would be written. */
-    override fun isLoggable(namePrefix: String, level: Double): Boolean =
-        appender(namePrefix)?.isLoggable(LogLevel.of(level.toInt())) ?: false
+    override fun isLoggable(namePrefix: String, level: Double): Boolean {
+        val native = int32(level) ?: return false
+        return appender(namePrefix)?.isLoggable(LogLevel.of(native)) ?: false
+    }
 
     /** `Xlog.level`, read: what `marsrs-jni` answers, and not what JS holds. */
     override fun getLevel(namePrefix: String): Double =
@@ -166,12 +173,14 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
 
     /** `Xlog.level`. */
     override fun setLevel(namePrefix: String, level: Double) {
-        appender(namePrefix)?.level = LogLevel.of(level.toInt())
+        val native = int32(level) ?: return
+        appender(namePrefix)?.level = LogLevel.of(native)
     }
 
     /** `Xlog.mode`. */
     override fun setMode(namePrefix: String, mode: Double) {
-        appender(namePrefix)?.mode = appenderModeOf(mode.toInt())
+        val native = int32(mode) ?: return
+        appender(namePrefix)?.mode = appenderModeOf(native)
     }
 
     /** `Xlog.consoleLogEnabled`. */
@@ -182,12 +191,14 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
     /** `Xlog.maxFileSizeBytes`. A `Double` and not a `Long`: the module carries
      * every JS number as one, and a file size is below 2^53. */
     override fun setMaxFileSize(namePrefix: String, bytes: Double) {
-        appender(namePrefix)?.maxFileSizeBytes = bytes.toLong()
+        val native = int64(bytes) ?: return
+        appender(namePrefix)?.maxFileSizeBytes = native
     }
 
     /** `Xlog.maxAliveTimeSeconds`. */
     override fun setMaxAliveTime(namePrefix: String, seconds: Double) {
-        appender(namePrefix)?.maxAliveTimeSeconds = seconds.toLong()
+        val native = int64(seconds) ?: return
+        appender(namePrefix)?.maxAliveTimeSeconds = native
     }
 
     /** `Xlog.close`: releases the appender `open` made. */
@@ -233,6 +244,44 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
         fun compressModeOf(ordinal: Int): CompressMode = when (ordinal) {
             CompressMode.ZSTD.ordinal -> CompressMode.ZSTD
             else -> CompressMode.ZLIB
+        }
+
+        /**
+         * The number JS sent for a level, a mode or a day, and `null` when it
+         * is not one: a `NaN`, an infinity, and anything the `Int` the C ABI
+         * takes cannot hold.
+         *
+         * `Double.toInt()` answers `0` for a `NaN`, and `LogLevel.of` answers
+         * `VERBOSE` for a `0`, so a level JS computed and came to no level
+         * with — a sum with an `undefined` in it — was one the appender was
+         * *moved* to, and the one it was moved to is the level that logs
+         * everything: an app that meant to log nothing logged all of it. The
+         * iOS half of this module read the same number with a trap rather
+         * than a `0` — `Int32(_:)` on a `NaN` ends the app — and neither is
+         * an answer, so both leave the appender alone now.
+         */
+        private fun int32(value: Double): Int? {
+            if (!value.isFinite() || value < Int.MIN_VALUE.toDouble() || value > Int.MAX_VALUE.toDouble()) {
+                return null
+            }
+            return value.toInt()
+        }
+
+        /**
+         * The number JS sent for a size or a file lifetime, and `null` when it
+         * is not one: the same three, over the `Long` the Kotlin takes. A
+         * `NaN` was answered as `0` — "never split" for a size, and the
+         * appender's own ten days for a lifetime — which is a setting an app
+         * never asked for and not one it was told had been refused.
+         */
+        private fun int64(value: Double): Long? {
+            if (!value.isFinite() ||
+                value < Long.MIN_VALUE.toDouble() ||
+                value >= Long.MAX_VALUE.toDouble()
+            ) {
+                return null
+            }
+            return value.toLong()
         }
     }
 }

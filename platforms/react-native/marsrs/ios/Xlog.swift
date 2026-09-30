@@ -102,12 +102,12 @@ internal final class Xlog: NSObject {
     /// empty: there is no JS frame to name, and the C++ writes an empty one too.
     @objc(log:level:tag:message:)
     internal func log(_ namePrefix: String, level: Double, tag: String, message: String) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = handles[namePrefix], let native = int32(level) else {
             return
         }
         tag.withCString { cTag in
             message.withCString { cMessage in
-                mars_xlog_write_instance(handle, Int32(level), cTag, nil, nil, 0, cMessage)
+                mars_xlog_write_instance(handle, native, cTag, nil, nil, 0, cMessage)
             }
         }
     }
@@ -152,10 +152,10 @@ internal final class Xlog: NSObject {
     /// to build.
     @objc(isLoggable:level:)
     internal func isLoggable(_ namePrefix: String, level: Double) -> Bool {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = handles[namePrefix], let native = int32(level) else {
             return false
         }
-        return mars_xlog_is_enabled_for(handle, Int32(level)) != 0
+        return mars_xlog_is_enabled_for(handle, native) != 0
     }
 
     /// `mars_xlog_get_level`: what the appender answers, and not what JS holds.
@@ -222,19 +222,19 @@ internal final class Xlog: NSObject {
     /// `mars_xlog_set_level_instance`.
     @objc(setLevel:level:)
     internal func setLevel(_ namePrefix: String, level: Double) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = handles[namePrefix], let native = int32(level) else {
             return
         }
-        mars_xlog_set_level_instance(handle, Int32(level))
+        mars_xlog_set_level_instance(handle, native)
     }
 
     /// `mars_xlog_set_mode_instance`.
     @objc(setMode:mode:)
     internal func setMode(_ namePrefix: String, mode: Double) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = handles[namePrefix], let native = int32(mode) else {
             return
         }
-        mars_xlog_set_mode_instance(handle, Int32(mode))
+        mars_xlog_set_mode_instance(handle, native)
     }
 
     /// `mars_xlog_set_console_log_instance`.
@@ -251,19 +251,19 @@ internal final class Xlog: NSObject {
     /// 2^53.
     @objc(setMaxFileSize:bytes:)
     internal func setMaxFileSize(_ namePrefix: String, bytes: Double) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = handles[namePrefix], let native = uint64(bytes) else {
             return
         }
-        mars_xlog_set_max_file_size_instance(handle, UInt64(bytes))
+        mars_xlog_set_max_file_size_instance(handle, native)
     }
 
     /// `mars_xlog_set_max_alive_duration_instance`.
     @objc(setMaxAliveTime:seconds:)
     internal func setMaxAliveTime(_ namePrefix: String, seconds: Double) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = handles[namePrefix], let native = int64(seconds) else {
             return
         }
-        mars_xlog_set_max_alive_duration_instance(handle, Int64(seconds))
+        mars_xlog_set_max_alive_duration_instance(handle, native)
     }
 
     /// `mars_xlog_release_instance`: closes the appender `open` made.
@@ -333,6 +333,42 @@ internal final class Xlog: NSObject {
     private func int(_ config: [AnyHashable: Any], _ key: String, _ fallback: Int32) -> Int32 {
         (config[key] as? NSNumber)?.int32Value ?? fallback
     }
+
+    /// What the caller sent for a level or a mode, and `nil` when it is not one:
+    /// a `Double`, because JS has one number type, and `Int32(_:)` traps on a
+    /// `NaN`, an infinity and a number out of `Int32`'s range — a trap on the
+    /// JS thread is the app dying, where a level nobody asked for is a record
+    /// that is not written. What it answers for a number with a fraction in it
+    /// is the number without one, which is the same truncation the Kotlin half
+    /// of this module does.
+    private func int32(_ value: Double) -> Int32? {
+        guard value.isFinite, value >= Double(Int32.min), value <= Double(Int32.max) else {
+            return nil
+        }
+        return Int32(value)
+    }
+
+    /// What the caller sent for a file size, and `nil` when it is not one: a
+    /// `UInt64` a `NaN`, a negative number or one above `UInt64.max` is not,
+    /// and `UInt64(_:)` traps on all three.
+    private func uint64(_ value: Double) -> UInt64? {
+        guard value.isFinite, value >= 0, value < 18446744073709551616.0 else {
+            return nil
+        }
+        return UInt64(value)
+    }
+
+    /// What the caller sent for a file lifetime, and `nil` when it is not one:
+    /// the same trap in `Int64(_:)`, and `0` is the appender's own ten days, so
+    /// a lifetime of `NaN` was one the app never asked for rather than one it
+    /// was told had been refused.
+    private func int64(_ value: Double) -> Int64? {
+        guard value.isFinite,
+              value >= -9223372036854775808.0, value < 9223372036854775808.0 else {
+            return nil
+        }
+        return Int64(value)
+    }
     /// What `read` writes into the buffer it is handed, as a string; `nil` when
     /// it wrote nothing — a negative code, or a path of no length.
     ///
@@ -353,17 +389,19 @@ internal final class Xlog: NSObject {
     /// there is nothing at that index: the list the C++ fills a `std::vector`
     /// with, asked one at a time.
     ///
-    /// `daysAgo` is a `Double` because JS has one number type, and it is
-    /// converted with `Int32(exactly:)` and not `Int32(_:)`: the latter traps
-    /// on a value it cannot represent — `NaN`, `Infinity`, a number out of
-    /// `Int32`'s range — and a trap on the JS thread is the app dying, where
-    /// a day nobody asked for is an empty list.
+    /// `daysAgo` is a `Double` because JS has one number type, and it is read
+    /// with [`int32`] and not `Int32(_:)`: the latter traps on a value it
+    /// cannot represent — `NaN`, `Infinity`, a number out of `Int32`'s range
+    /// — and a trap on the JS thread is the app dying, where a day nobody
+    /// asked for is an empty list. [`int32`] truncates a fraction the way the
+    /// Kotlin half of this module does, so `1.5` days ago is yesterday on both
+    /// of them and not yesterday on one and nothing on the other.
     private func dayPaths(
         of namePrefix: String,
         daysAgo: Double,
         at symbol: (Int64, Int32, UInt32, UnsafeMutablePointer<CChar>, UInt32) -> Int32
     ) -> [String] {
-        guard let handle = handles[namePrefix], let timespan = Int32(exactly: daysAgo) else {
+        guard let handle = handles[namePrefix], let timespan = int32(daysAgo) else {
             return []
         }
         var walked: [String] = []
