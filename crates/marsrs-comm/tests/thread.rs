@@ -20,8 +20,16 @@ fn thread_util_exposes_the_current_thread() {
 
 #[test]
 fn runnable_wraps_a_closure() {
-    let mut runnable = runnable(|| {});
+    let ran = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&ran);
+    let mut runnable = runnable(move || {
+        count.fetch_add(1, Ordering::SeqCst);
+    });
+    assert_eq!(ran.load(Ordering::SeqCst), 0, "nothing has run yet");
     runnable.run();
+    assert_eq!(ran.load(Ordering::SeqCst), 1, "the closure ran");
+    runnable.run();
+    assert_eq!(ran.load(Ordering::SeqCst), 2, "and again when asked again");
 }
 
 #[test]
