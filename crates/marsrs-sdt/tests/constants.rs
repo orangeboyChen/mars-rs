@@ -63,14 +63,25 @@ fn the_timeouts_match_the_header() {
     assert_eq!(UNUSE_TIMEOUT, i32::MAX as u32);
 }
 
+/// `constants.h` picks one literal per platform, so what the port has to get
+/// right is that the one it built is the one that suits the platform it built
+/// for: an Android build's user agent is an Android one, and so on.
 #[test]
 fn the_user_agent_is_picked_for_this_platform() {
-    // `constants.h` picks one literal per platform; which one is a property of
-    // the build, so all this can assert is that it is one of the three.
-    let known = [
-        "Mozilla/5.0  (Linux; Android 4.1.1; Nexus 7 Build/JRO03S) AppleWebKit/535.19 (KHTML,  like Gecko) Chrome/18.0.1025.166 Safari/535.19",
-        "Mozilla/5.0  (iPhone; CPU iPhone OS 6_0 like Mac OS X) AppleWebKit/536.26 (KHTML,  like Gecko) Version/6.0 Mobile/10A403 Safari/8536.25",
-        "Mozilla/5.0 (compatible; MSIE9.0 Windows NT 6.1; WOW64; Trident/5.0)",
-    ];
-    assert!(known.contains(&USER_AGENT));
+    assert!(
+        USER_AGENT.starts_with("Mozilla/5.0"),
+        "a user agent of this shape: {USER_AGENT:?}"
+    );
+    let platform = if cfg!(target_os = "android") {
+        "Android"
+    } else if cfg!(target_vendor = "apple") {
+        "iPhone"
+    } else {
+        "Windows NT"
+    };
+    assert!(
+        USER_AGENT.contains(platform),
+        "{platform} is the platform this was built for: {USER_AGENT:?}"
+    );
+    assert!(!USER_AGENT.is_empty());
 }
