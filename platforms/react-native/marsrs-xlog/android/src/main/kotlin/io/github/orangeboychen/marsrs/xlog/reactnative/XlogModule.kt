@@ -74,6 +74,13 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * cross back into JS as a crash. Both are inside the `try` below for that
      * reason, and answered as `false`: the caller's mistake to throw on, and
      * not one to take the app with.
+     *
+     * Not theirs alone, though: `ReadableMap` throws an exception of React
+     * Native's own — a `RuntimeException` and not an
+     * `IllegalArgumentException` — for a field JS sent as `null`, or as a
+     * number where a string belongs, which a caller that crossed from plain
+     * JS does. The same crash either way, so the `try` catches every
+     * `Exception`.
      */
     override fun open(config: ReadableMap): Boolean {
         val namePrefix = config.string("namePrefix").ifBlank { DEFAULT_NAME_PREFIX }
@@ -84,7 +91,9 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
             // The configuration is built in here and not above the `try`: its
             // own `require`s — the blank `logDir`, the level out of range —
             // throw the same `IllegalArgumentException` `Xlog.open` does, and
-            // one that escapes into JS is a crash rather than a `false`.
+            // one that escapes into JS is a crash rather than a `false`. So is
+            // the exception `ReadableMap` throws for a field of the wrong
+            // type, which is why the catch below is wider than theirs.
             Xlog.open(
                 XlogConfig(
                     logDir = config.string("logDir"),
@@ -98,7 +107,7 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
                     cacheDays = config.int("cacheDays", NO_CACHE_DAYS)
                 )
             )
-        } catch (e: IllegalArgumentException) {
+        } catch (e: Exception) {
             return false
         }
         appenders[namePrefix] = xlog
