@@ -225,10 +225,10 @@ pub fn available_space(path: &Path) -> Option<u64> {
 /// this process did not let go in time. Either way the section the caller
 /// wanted to lock runs unlocked, which is what the C++ does anyway.
 ///
-/// The lock is released when `file` is dropped — including when the process
-/// the property the appender relies on: a lock no longer held is how the next
-/// start tells a cache file some *other* process is still writing through from
-/// one a dead process left behind.
+/// The lock is released when `file` is dropped — and by the kernel when the
+/// process dies, which is the property the appender relies on: a lock no
+/// longer held is how a later start tells a cache file some *other* process
+/// is still writing through from one a dead process left behind.
 pub fn lock_exclusive(file: &File) -> bool {
     lock(file, false)
 }
