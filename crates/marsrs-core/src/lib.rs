@@ -68,6 +68,12 @@ mod tests {
         let mut buf = [0u8; 8];
         write_u16(&mut buf, 0, 0x1234);
         write_u32(&mut buf, 2, 0xdead_beef);
+        // the bytes, and not only what reads them back: a round trip
+        // through the same pair of helpers agrees with itself whichever
+        // way round they write them, and the order is the whole of what
+        // these pin down
+        assert_eq!(&buf[..2], &[0x34, 0x12]);
+        assert_eq!(&buf[2..6], &[0xef, 0xbe, 0xad, 0xde]);
         assert_eq!(read_u16(&buf, 0), 0x1234);
         assert_eq!(read_u32(&buf, 2), 0xdead_beef);
     }
