@@ -195,7 +195,7 @@ impl SignallingKeeper {
     /// its `keepTime` has not run out, the next buffer is posted `period`
     /// later; once it has, the signalling stops.
     ///
-    /// The reading is the data's, and not this call's: [`NetCore::feed_signalling`]
+    /// The reading is the data's, and not this call's: `NetCore::feed_signalling`
     /// carries it here a turn later than the link that saw it, so it can be an
     /// older one than the touch the `keepTime` is measured from. What ends the
     /// signalling is the `keepTime` running out, so a reading from before the

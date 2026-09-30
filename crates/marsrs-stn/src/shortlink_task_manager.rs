@@ -488,7 +488,7 @@ impl ShortLinkTaskManager {
     /// The same, with the reading handed in.
     ///
     /// The sockets are cleaned before the queue asks whether it has anything
-    /// to do, and not inside [`Self::run_on_timeout_at`]: what a run cached
+    /// to do, and not inside `run_on_timeout_at`: what a run cached
     /// outlives the run, so a queue without a task still holds a keep-alive
     /// socket, and one whose five seconds are up is a connection the pool is
     /// holding open for nobody.
