@@ -327,10 +327,10 @@ fn open_region(file: &mut File, path: &Path) -> (Region, bool) {
     // turns that store into SIGBUS, killing the host. `mars/comm/mmap_util.cc`
     // pre-allocates by writing zeros and falls back to the heap path if that
     // write fails; do the same.
-    let needs_preallocation = file
-        .metadata()
-        .map(|meta| meta.len() < BUFFER_BLOCK_LENGTH as u64)
-        .unwrap_or(true);
+    // What the file measured on entry: the length a failed pre-allocation
+    // puts it back to.
+    let entry_len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    let needs_preallocation = entry_len < BUFFER_BLOCK_LENGTH as u64;
     if file.set_len(BUFFER_BLOCK_LENGTH as u64).is_err() {
         return (Region::heap(), false);
     }
@@ -341,6 +341,15 @@ fn open_region(file: &mut File, path: &Path) -> (Region, bool) {
             .and_then(|()| file.flush())
             .is_ok();
         if !ok {
+            // A failed pre-allocation is put back the way the file was found:
+            // what it leaves behind is a length the file does not hold, and
+            // the length of a cache file is what a reader of the cache
+            // directory — the heap fallback below, a decoder, or the C++
+            // still linked into the same app — takes for how much of it is
+            // real. A `set_len` that fails too is ignored: nothing is written
+            // through the file either way, the heap region below does not read
+            // it, and the length is the only thing at stake.
+            let _ = file.set_len(entry_len);
             return (Region::heap(), false);
         }
     }
@@ -850,7 +859,6 @@ impl AppenderInner {
             let region = self.region.as_mut_slice();
             self.buff.write(region, data)
         });
-
         if self.buff.len() >= BUFFER_BLOCK_LENGTH / 3 || level_fatal {
             self.notify();
         }
@@ -953,7 +961,6 @@ impl AppenderInner {
         if open_success && !self.is_sync() {
             write_success |= self.closed_after_a_failed_write();
         }
-
         if !write_success {
             if open_success && self.is_sync() {
                 self.close_log_file();
