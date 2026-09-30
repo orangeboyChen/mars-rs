@@ -133,6 +133,15 @@ pub(crate) fn release_instance_impl(prefix: &str) {
 /// either, because Java has no `__FILE__` — the C++ project's `Log` passed
 /// `""` and `0` for them, and always did.
 pub(crate) fn write_impl(instance: u64, level: LogLevel, tag: Cow<'_, str>, log: &str) -> bool {
+    // `Xlog.LEVEL_NONE` — `kLevelNone` — is what a level is *set* to when
+    // nothing is to be logged, and it is not a level a record can have: the
+    // C ABI writes no record of it either, and the level filter lets one
+    // through because `level_ <= kLevelNone` holds for every level there is.
+    // A caller that passes it to `write` means the record to be dropped, and
+    // this is the one seam that can say so: `is_enabled_for` cannot.
+    if level == LogLevel::None {
+        return false;
+    }
     if !is_enabled_for(instance, level) {
         return false;
     }
@@ -335,6 +344,37 @@ mod tests {
             Some(AppenderMode::Sync)
         );
         assert_eq!(appender_mode_from_java(99), None);
+    }
+
+    /// A record of the level that means "log nothing" is not written:
+    /// `Xlog.LEVEL_NONE` is what `setLevel` is given to stop logging, and a
+    /// `write` that carries it drops the record — which is what the C ABI does
+    /// with the same level, and what `is_enabled_for` cannot do, since
+    /// `level_ <= kLevelNone` holds for every level there is.
+    #[test]
+    fn a_record_of_the_level_that_disables_logging_is_not_written() {
+        let _guard = crate::test_lock();
+        let dir = logdir("level-none");
+
+        let instance = new_instance_impl(config(&dir), LogLevel::Verbose) as u64;
+        assert!(
+            !write_impl(instance, LogLevel::None, "Net".into(), "not logged"),
+            "a record of kLevelNone is not written"
+        );
+        assert!(write_impl(instance, LogLevel::Info, "Net".into(), "logged"));
+        flush_now_impl(instance);
+
+        let files = log_files_impl(instance, 0);
+        assert!(!files.is_empty(), "the day has the file the record went to");
+        // The body is compressed, so what is readable of the file is the
+        // header and not the record — the one thing that is certain is that
+        // the appender wrote one record and not two.
+        let bytes = std::fs::read(&files[0]).expect("the file reads");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!text.contains("not logged"), "{text}");
+
+        release_instance_impl("Mars");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A panic inside a body is the default value of its answer, and not an
