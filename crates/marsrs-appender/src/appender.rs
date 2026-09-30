@@ -1302,7 +1302,15 @@ impl AppenderInner {
                     .as_mut()
                     .is_some_and(|file| file.write_all(tmp_buff.as_slice()).is_ok());
                 if wrote {
-                    self.flushed_len += err_len as u64;
+                    // The file was rolled back to `start` and the error
+                    // record is what follows it, so that is how long it is —
+                    // and not [`Self::flushed_len`] plus the record, which is
+                    // the same number only while this appender is the file's
+                    // only writer. Another one that appended since the last
+                    // flush leaves `flushed_len` behind the file's end, and
+                    // the length the port remembers is what the rotation
+                    // check and the next rollback both measure.
+                    self.flushed_len = start + err_len as u64;
                 }
 
                 // Kept for one more attempt — but only one: see
