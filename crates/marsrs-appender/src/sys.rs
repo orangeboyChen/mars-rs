@@ -220,8 +220,12 @@ pub fn available_space(path: &Path) -> Option<u64> {
 
 /// Takes the exclusive advisory lock on `file`, waiting for it.
 ///
-/// `false` when this platform has no advisory locking at all. The lock is
-/// released when `file` is dropped — including when the process dies, which is
+/// `false` when this platform has no advisory locking at all, and — on
+/// Windows, where the wait is a poll with a give-up — when a holder inside
+/// this process did not let go in time. Either way the section the caller
+/// wanted to lock runs unlocked, which is what the C++ does anyway.
+///
+/// The lock is released when `file` is dropped — including when the process
 /// the property the appender relies on: a lock no longer held is how the next
 /// start tells a cache file some *other* process is still writing through from
 /// one a dead process left behind.
@@ -492,16 +496,25 @@ fn lock(file: &File, non_blocking: bool) -> bool {
             event: 0,
         };
 
-        // `LockFileEx` does not make a process wait for itself: a request that
-        // overlaps a lock this process already holds — through another handle,
-        // which is what a second appender of one prefix has — fails at once
-        // with ERROR_LOCK_VIOLATION, whether LOCKFILE_FAIL_IMMEDIATELY is set
-        // or not. Two copies of this crate in one process are a case the port
-        // supports, so the waiting is done here instead: immediate requests,
-        // retried until the lock is free. The give-up is what keeps a writer
-        // that never lets go from stalling the process — it is orders of
-        // magnitude more than a section below takes.
+        // A blocking request is what `flock(fd, LOCK_EX)` does on unix, and it
+        // is the one that takes a lock another *process* is holding: the moment
+        // that one lets go, this one has it. What it cannot do is wait for this
+        // process: a request that overlaps a lock this process already holds —
+        // through another handle, which is what a second appender of one prefix
+        // has — fails at once with ERROR_LOCK_VIOLATION, whether
+        // LOCKFILE_FAIL_IMMEDIATELY is set or not. Two copies of this crate in
+        // one process are a case the port supports, so *that* one is waited for
+        // below, and a request that fails here for any other reason is retried
+        // there too: what the failure costs is five seconds, and what the
+        // alternative costs is a section that runs with no lock at all.
         if !non_blocking {
+            // SAFETY: as below.
+            let taken =
+                unsafe { LockFileEx(file.as_raw_handle(), EXCLUSIVE, 0, 1, 0, &mut overlapped) };
+            if taken != 0 {
+                return true;
+            }
+
             use std::time::{Duration, Instant};
 
             /// Five seconds: a cache-file move is milliseconds.
@@ -522,6 +535,11 @@ fn lock(file: &File, non_blocking: bool) -> bool {
                 if taken != 0 {
                     return true;
                 }
+                // The give-up is what keeps a writer of this process that never
+                // lets go from stalling it forever. Giving up is answered
+                // `false`, and the caller then runs its section unprotected —
+                // the way the C++ runs it, and the only answer left that does
+                // not drop the records the section was going to write.
                 if Instant::now() >= deadline {
                     return false;
                 }
