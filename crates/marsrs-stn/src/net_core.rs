@@ -2060,7 +2060,24 @@ impl NetCore {
     /// stays `Pending` for the life of the process. [`crate::StnLogic::release`] is
     /// that caller.
     pub fn release(&mut self) -> Vec<u32> {
-        let cleared = self.clear_tasks();
+        let mut cleared = self.clear_tasks();
+        // The follow-ups go as well, and the task of a `Start` is reported
+        // like one a queue held: a zombie that is going to be started again
+        // is in no queue yet, so `clear_tasks` did not see it, and the
+        // follow-up is never run after this — a released core starts nothing,
+        // so what it would have done is drop the task without ending it.
+        let follow_ups: Vec<FollowUp> = self
+            .pending
+            .lock()
+            .unwrap_or_else(poisoned)
+            .drain(..)
+            .collect();
+        cleared.extend(follow_ups.iter().filter_map(|follow_up| match follow_up {
+            FollowUp::Start(task) => Some(task.taskid),
+            FollowUp::Retry { .. }
+            | FollowUp::LongLinkError { .. }
+            | FollowUp::ShortLinkError { .. } => None,
+        }));
         self.links.clear();
         self.channels.lock().unwrap_or_else(poisoned).clear();
         self.default_link = None;
@@ -3771,6 +3788,36 @@ mod tests {
         assert!(rec.status().is_empty());
         assert!(rec.long_err().is_empty());
         assert!(rec.short_err().is_empty());
+    }
+
+    /// A task that is going to be started again is a task of its own, and it
+    /// is not in a queue: it is a follow-up, and a core that is released runs
+    /// none of those — so the id has to come out of the release, or the await
+    /// of that task never hears the end it is waiting for.
+    #[test]
+    fn a_release_reports_the_task_a_follow_up_was_going_to_start() {
+        let (mut core, _rec) = wired();
+        up(&core, LongLinkStatus::Connected);
+        core.longlink()
+            .set_buf2resp(|_task, _body, _channel| (9, TaskFailHandleType::TaskTimeout));
+        assert!(core.start_task_at(NOW, task(7)));
+        core.longlink()
+            .on_response_at(NOW + 100, long_answer(7, profile_of("1.2.3.4")));
+        assert_eq!(core.zombie().len(), 1);
+
+        // what the host would have run: the link came back, so the zombie is
+        // taken out of the queue and posted to be started again — the task is
+        // in the follow-ups and in no queue
+        core.on_longlink_status_changed_at(NOW + 500, LongLinkStatus::Connected);
+        assert!(core.has_pending());
+        assert_eq!(core.zombie().len(), 0);
+
+        assert_eq!(core.release(), vec![7]);
+        assert!(!core.has_pending());
+        // and the core starts nothing of what is left behind
+        core.run_pending_at(NOW + 600);
+        assert!(!core.has_task(7));
+        assert_eq!(core.zombie().len(), 0);
     }
 
     #[test]
