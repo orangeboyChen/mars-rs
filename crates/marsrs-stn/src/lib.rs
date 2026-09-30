@@ -204,6 +204,7 @@ pub mod config;
 pub mod dynamic_timeout;
 pub mod flow_limit;
 pub mod frequency_limit;
+pub(crate) mod hook;
 pub mod long_link;
 pub mod longlink;
 pub mod longlink_connect_monitor;

@@ -38,12 +38,11 @@
 //!   here: the run is the host's, so the queue draws the sequence and times
 //!   the encode and keeps those counts itself.
 
-use std::sync::{Arc, Mutex};
-
 use marsrs_comm::tickcount::gettickcount;
 
 use crate::config::{DYN_TIME_TASK_FAILED_PKG_LEN, MOBILE_PACKAGE_INTERVAL, WIFI_PACKAGE_INTERVAL};
 use crate::dynamic_timeout::{DynamicTimeout, DynamicTimeoutStatus, NetworkKind};
+use crate::hook::Hook;
 use crate::long_link::{ECT_SOCKET_MAKE_SOCKET_PREPARED, ECT_SOCKET_SHUTDOWN};
 use crate::shortlink::is_keep_alive;
 use crate::simple_ipport_sort::IpPortItem;
@@ -976,17 +975,21 @@ impl ShortLinkTaskManager {
     /// closure is the pool's as well: a pool with no `closefunc` of its own
     /// drops them instead, and a dropped fd is one the host never gets back.
     pub fn set_close_socket(&mut self, close: impl FnMut(SocketFd) + Send + 'static) {
-        let close: Arc<Mutex<dyn FnMut(SocketFd) + Send>> = Arc::new(Mutex::new(close));
-        let pooled = Arc::clone(&close);
+        // One `closefunc` for the two of them, and out of its cell while the
+        // app is called: a close that comes back into the queue closes a
+        // socket from inside this one, and a mutex taken twice on one thread
+        // never lets go. A close that panicked is put back, and a poisoned
+        // cell is recovered — an fd the port never closes again is one the
+        // host does not get back.
+        let shared: Hook<CloseSocket> = Hook::default();
+        shared.set(Box::new(close));
+        let pooled = shared.clone();
         self.socket_pool.set_close(move |socket| {
-            if let Ok(mut close) = pooled.lock() {
-                close(socket);
-            }
+            let _ = pooled.run(|close| close(socket));
         });
+        let queue = shared.clone();
         self.close = Some(Box::new(move |socket| {
-            if let Ok(mut close) = close.lock() {
-                close(socket);
-            }
+            let _ = queue.run(|close| close(socket));
         }));
     }
 
@@ -1675,6 +1678,7 @@ fn timed_out(profile: &TaskProfile, now: u64, network: NetworkKind) -> Option<Ti
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use crate::long_link::ECT_SOCKET_SHUTDOWN;
@@ -2414,6 +2418,51 @@ mod tests {
         manager.run_loop_at(5_000);
         assert_eq!(manager.socket_pool().len(), 0);
         assert_eq!(*closed.lock().unwrap(), vec![SocketFd(3)]);
+    }
+
+    #[cfg(panic = "unwind")]
+    #[test]
+    fn a_socket_is_closed_again_after_the_close_the_app_gave_panicked() {
+        // An fd the port never closes again is one the host does not get
+        // back, and the close the app gave is its own code: what it panicked
+        // in is a cell the port recovers, and a callback it put back, so the
+        // socket after it is closed like the socket before it.
+        let mut manager = ShortLinkTaskManager::new();
+        let closed: Arc<Mutex<Vec<SocketFd>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = closed.clone();
+        let closes = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&closes);
+        manager.set_close_socket(move |socket| {
+            let so_far = count.fetch_add(1, Ordering::SeqCst);
+            assert!(
+                so_far > 0,
+                "the app's own close panicked on the first socket"
+            );
+            recorder
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(socket);
+        });
+        manager.socket_pool().add_cache(CachedSocket::new_at(
+            0,
+            IpPortItem::new("1.1.1.1", 80),
+            SocketFd(3),
+            5,
+        ));
+
+        let panicked =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| manager.run_loop_at(5_000)));
+        assert!(panicked.is_err(), "the close the app gave panicked");
+
+        // the socket is still there — the clean it panicked in never took it
+        // out — so the next pass closes it, through the same close as before
+        manager.run_loop_at(5_000);
+        assert_eq!(manager.socket_pool().len(), 0);
+        assert_eq!(
+            *closed.lock().unwrap_or_else(|e| e.into_inner()),
+            vec![SocketFd(3)],
+            "the socket after the panic is closed the way the one in it was not"
+        );
     }
 
     #[test]

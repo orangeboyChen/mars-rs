@@ -61,6 +61,7 @@ use marsrs_comm::tickcount::gettickcount;
 
 use crate::anti_avalanche::AntiAvalanche;
 use crate::dynamic_timeout::{DynamicTimeout, NetworkKind};
+use crate::hook::Hook;
 use crate::long_link::LongLink;
 use crate::longlink_identify_checker::{
     GetIdentifyCheckBuffer, IdentifyBuffer, OnIdentifyResponse,
@@ -264,66 +265,6 @@ enum FollowUp {
         host: String,
         port: u16,
     },
-}
-
-/// One of [`Hooks`], behind a lock of its own and taken out for the call.
-///
-/// Nothing the app is given runs with the lock the hooks are kept in held:
-/// an app that answers one by calling back into the net core — a task it
-/// starts from `on_task_end` that fails at once, say — comes back into the
-/// very callback it is in, and a mutex taken twice on one thread never lets
-/// go. Out of the cell for as long as it runs, the call it comes back into
-/// finds nothing set and goes on without it.
-struct Hook<F: ?Sized> {
-    cell: Arc<Mutex<Option<Box<F>>>>,
-}
-
-impl<F: ?Sized> Hook<F> {
-    /// `… = …`.
-    fn set(&self, hook: Box<F>) {
-        *self.cell.lock().unwrap_or_else(poisoned) = Some(hook);
-    }
-
-    /// Whether the app is given this one at all.
-    fn is_set(&self) -> bool {
-        self.cell.lock().unwrap_or_else(poisoned).is_some()
-    }
-
-    /// Call the app, and put the callback back when the call is over, an
-    /// unwind included. [`None`] is an unset hook, and one that is being
-    /// called already.
-    fn run<R>(&self, run: impl FnOnce(&mut F) -> R) -> Option<R> {
-        let taken = self.cell.lock().unwrap_or_else(poisoned).take()?;
-        let mut back = PutBack(self, Some(taken));
-        Some(run(back.1.as_deref_mut()?))
-    }
-}
-
-impl<F: ?Sized> Clone for Hook<F> {
-    fn clone(&self) -> Self {
-        Self {
-            cell: Arc::clone(&self.cell),
-        }
-    }
-}
-
-impl<F: ?Sized> Default for Hook<F> {
-    fn default() -> Self {
-        Self {
-            cell: Arc::new(Mutex::new(None)),
-        }
-    }
-}
-
-/// What puts a callback back into its cell when the call to the app is over.
-struct PutBack<'a, F: ?Sized>(&'a Hook<F>, Option<Box<F>>);
-
-impl<F: ?Sized> Drop for PutBack<'_, F> {
-    fn drop(&mut self) {
-        if let Some(hook) = self.1.take() {
-            self.0.set(hook);
-        }
-    }
 }
 
 /// The hooks the two queues reach themselves, without the net core being asked:
@@ -3162,26 +3103,6 @@ mod tests {
         );
         assert!(rec.ended().is_empty());
         assert!(!core.has_task(7));
-    }
-
-    #[test]
-    fn a_hook_is_not_held_while_the_app_is_called() {
-        let cell: Hook<dyn FnMut() -> bool + Send> = Hook::default();
-        let asked = cell.clone();
-        cell.set(Box::new(move || {
-            // What an app that answers a callback by calling back into the
-            // core does: it comes back into the very hook it is in, and a
-            // mutex taken twice on one thread never lets go — a hang, and
-            // not a failure anyone sees reported. So the hook is out of its
-            // cell while the app is called, and `try_lock` is how this asks.
-            asked.cell.try_lock().is_ok()
-        }));
-
-        assert_eq!(
-            cell.run(|hook| hook()),
-            Some(true),
-            "the hook is held while the app is called, so an app that calls back into the core hangs"
-        );
     }
 
     #[test]
