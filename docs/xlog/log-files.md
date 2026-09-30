@@ -166,8 +166,8 @@ above do it, and so does an app that closes its appender.
 | knob | what it does | default |
 |---|---|---|
 | `maxFileSizeBytes` | a file is closed and a new one opened once it reaches this many bytes | `0` — never split |
-| `maxAliveTimeSeconds` | a file older than this many seconds is dropped | `0` — keep it (the C++ keeps its own ten days) |
-| `cacheDays` | an async cache file older than this many days is dropped | `0` — keep every one |
+| `maxAliveTimeSeconds` | a file older than this many seconds is dropped | `0` — ten days (anything under a day is raised to ten) |
+| `cacheDays` | an async cache file older than this many days is dropped | `0` — no cache file at all: async records go straight to the log |
 
 ## Reading a file back
 
