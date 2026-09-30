@@ -166,16 +166,14 @@ fn instance_cache_path(id: AppenderId) -> Option<PathBuf> {
     instance(id).and_then(|appender| appender.claimed_cache_path())
 }
 
-/// Opens an appender that is *not* the process-wide default.
+/// Opens the appender of an instance.
 ///
 /// Every instance gets its own log directory, prefix, key, mode and cache
 /// file, like the C++ `XloggerAppender::NewInstance`. Like the C++, an
-/// instance is **not** given the process-wide settings: `NewInstance(_config,
-/// 0)` builds it with no split size, and `appender_set_console_log` /
-/// `appender_set_max_file_size` / `appender_set_max_alive_duration` are the
-/// default appender's, so an instance keeps its own 10 day expiry and starts
-/// with console logging off. Use the `*_instance` functions below to change
-/// that.
+/// instance is **not** given the process-wide settings the C++ keeps for its
+/// own default: `NewInstance(_config, 0)` builds it with no split size, so an
+/// instance keeps its own 10 day expiry and starts with console logging off.
+/// Use the `*_instance` functions below to change that.
 ///
 /// # Errors
 ///
@@ -328,8 +326,9 @@ pub fn current_log_file_names(handle: XloggerHandle, timespan: i64) -> Vec<PathB
 pub(crate) mod test_lock {
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
-    /// The appender is a process-wide singleton, so the tests that open, close
-    /// or assert on it must not run concurrently with each other.
+    /// The instance table and the files under it are process-wide, so the
+    /// tests that open, close or assert on them must not run concurrently with
+    /// each other.
     pub(crate) fn serial() -> MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))

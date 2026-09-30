@@ -49,19 +49,12 @@ HarmonyOS is the Kotlin spelling in a different case: `LogLevel.Verbose` and not
 `none` writes nothing, not even `fatal` — it is how an appender is quieted
 without being closed.
 
-An assert is the one record the level does not gate: it is written at `fatal`
-whatever the appender's level is, because what an assert names is a condition
-that is not supposed to be possible.
-
-Neither call ends the process, and that is the one thing the C++ does here that
-this port does not: upstream raises `SIGTRAP` on Android and calls
-`__assert_rtn` on Apple once the record is written. An app that wants its
-process stopped on an assert stops it itself — `std::process::abort()`, or a
-platform trap — after the write.
-
-There is no `xlogger_Assert` spelling in the port any more: `mars_xlog_assert`
-was the process-wide appender's, and an app that wants one writes the record
-itself — `xlog.f(tag, message)` — and stops the process after it.
+There is no assert in the port: `mars_xlog_assert` was the process-wide
+appender's, and it went with it. What an app that wants one writes is the
+record itself — `xlog.f(tag, message)` — and stops the process after it,
+`std::process::abort()` or a platform trap; upstream raises `SIGTRAP` on Android
+and calls `__assert_rtn` on Apple once the record is written, and nothing here
+does either.
 
 A message that is expensive to build is worth asking about first, because a
 record the level drops still costs the caller the string:

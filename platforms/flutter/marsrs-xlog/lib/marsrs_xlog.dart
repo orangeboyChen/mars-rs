@@ -291,8 +291,18 @@ class Xlog {
   /// method channel is a message and an answer, and there is no blocking on
   /// this side of one. What a caller that wants the drain and cannot hold a
   /// thread calls is this.
-  /// The file this appender is writing to, or `null` when it has none open yet
-  /// — the first record of the day is what opens one.
+  Future<void> flush() async {
+    if (_closing != null) {
+      return;
+    }
+    await _invoke<void>('flush');
+  }
+
+  /// The directory this appender writes its files into, or `null` once it is
+  /// closed.
+  ///
+  /// A directory and not a file, because that is what the C++
+  /// `GetCurrentLogPath` answers; the day's file is the question under it.
   Future<String?> currentLogPath() => _invoke<String?>(
         'currentLogPath',
         {'namePrefix': namePrefix},
@@ -316,13 +326,6 @@ class Xlog {
       {'namePrefix': namePrefix, 'daysAgo': daysAgo},
     );
     return found?.cast<String>() ?? const [];
-  }
-
-  Future<void> flush() async {
-    if (_closing != null) {
-      return;
-    }
-    await _invoke<void>('flush');
   }
 
   /// Drains what is left and closes this appender. Writing through it afterwards

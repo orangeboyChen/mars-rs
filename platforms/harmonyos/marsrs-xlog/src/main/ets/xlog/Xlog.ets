@@ -178,13 +178,13 @@ export class Xlog {
     this.currentMaxAliveTime = seconds;
   }
 
-  /** `mars_xlog_current_log_path_instance`: the file this appender is writing
-   * to, or `undefined` when it has none open — the first record of the day is
-   * what opens one.
+  /** `mars_xlog_current_log_path_instance`: the *directory* this appender
+   * writes its files into, or `undefined` once it is closed.
    *
-   * A day is one file, so this is the path an app hands to something that reads
-   * the log while it is being written. What an app that uploads a whole day
-   * asks for is `logFiles`. */
+   * A directory and not a file, because that is what the C++ answers
+   * (`GetCurrentLogPath` hands back `sg_logdir`); the day's file is what
+   * [`logFiles`] names. There is no "before the first record" state — `open`
+   * answers a directory from the moment it succeeds. */
   get currentLogPath(): string | undefined {
     if (!this.opened) {
       return undefined;

@@ -5,7 +5,7 @@
 // and jsi types. Neither has a Swift spelling: Swift's C++ interop stops at
 // templates and at the standard library. So what is here is the three things
 // React Native asks a module for and cannot read out of `Xlog.swift`, and the
-// eleven methods are there and not here.
+// fourteen methods are there and not here.
 //
 //   * `RCT_EXTERN_MODULE` registers the Swift class, which Swift cannot do for
 //     itself — registration is a constructor the runtime runs, and a Swift class

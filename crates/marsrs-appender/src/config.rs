@@ -147,10 +147,10 @@ impl Default for XLoggerInfo<'_> {
     }
 }
 
-/// The error type of the open of an appender.
+/// The error type of [`crate::Xlog::open`].
 ///
-/// The C++ the open of an appender returns `void` and silently ignores failures; the
-/// Rust port reports them instead.
+/// The C++ `XloggerAppender::Open` returns `void` and silently ignores
+/// failures; the Rust port reports them instead.
 #[derive(Debug, Clone)]
 pub struct AppenderError(pub String);
 

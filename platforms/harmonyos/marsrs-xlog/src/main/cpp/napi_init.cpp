@@ -52,6 +52,11 @@
 // unspelled lands on the same appender either way.
 static const char* const kDefaultNamePrefix = "xlog";
 
+// How many files a day's answer may hold: a day of records is a handful — a file
+// is split for size only — and a bound is what keeps the walk from running away
+// if the C ABI's list grows while it is being read.
+static const unsigned int kMaxDayFiles = 64;
+
 // The buffer the path symbols write into, and the one the two that answer a list
 // write into for one index at a time. A path never fills it: what a symbol
 // answers is how many bytes it wrote, so a path longer than this is an error
@@ -509,13 +514,18 @@ typedef int (*PathAt)(long long, int, unsigned int, char*, unsigned int);
 // walk is this module's and not the app's: what an app wants is the day's
 // files, and what the C ABI answers is one of them.
 static napi_value Paths(napi_env env, napi_callback_info info, PathAt pathAt) {
+    // The array is made first, so that every path out of this function answers
+    // one and not `undefined`: the declarations say `string[]`, and a caller
+    // that walks the answer is not prepared for a value that is not there.
+    napi_value list = NULL;
+    if (napi_create_array(env, &list) != napi_ok) {
+        return NULL;
+    }
     size_t argc = 2;
     napi_value argv[2] = {NULL, NULL};
     napi_value self = NULL;
-    napi_value list = NULL;
-    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || argc < 2 ||
-        napi_create_array(env, &list) != napi_ok) {
-        return Undefined(env);
+    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || argc < 2) {
+        return list;
     }
     char* namePrefix = CopyString(env, argv[0]);
     long long handle = HandleOf(namePrefix);
@@ -528,15 +538,22 @@ static napi_value Paths(napi_env env, napi_callback_info info, PathAt pathAt) {
         return list;
     }
     char buffer[kPathBufferSize] = {0};
-    for (unsigned int index = 0;; ++index) {
+    unsigned int walked = 0;
+    for (unsigned int index = 0; index < kMaxDayFiles; ++index) {
         int written = pathAt(handle, daysAgo, index, buffer, kPathBufferSize);
         if (written <= 0) {
             break;
         }
         napi_value path = NULL;
-        if (napi_create_string_utf8(env, buffer, (size_t)written, &path) == napi_ok) {
-            napi_set_element(env, list, index, path);
+        // A path that will not become a string ends the walk rather than leaving
+        // a hole in an array the caller reads as `string[]`.
+        if (napi_create_string_utf8(env, buffer, (size_t)written, &path) != napi_ok) {
+            break;
         }
+        if (napi_set_element(env, list, walked, path) != napi_ok) {
+            break;
+        }
+        walked++;
     }
     return list;
 }
@@ -553,9 +570,13 @@ static napi_value LogFileNames(napi_env env, napi_callback_info info) {
     return Paths(env, info, mars_xlog_make_logfile_name_instance);
 }
 
-// `mars_xlog_current_log_path_instance`: the file this appender is writing to,
-// or `undefined` when it has none open — the first record of the day is what
-// opens one.
+// `mars_xlog_current_log_path_instance`: the *directory* this appender is
+// writing its files into, or `undefined` once the appender is closed. It is a
+// directory and not a file, because that is what the C++ answers
+// (`XloggerAppender::GetCurrentLogPath` hands back `sg_logdir`); the day's file
+// is what `mars_xlog_getfilepath_from_timespan_instance` names. There is no
+// "before the first record" state: `open` answers a directory from the moment
+// it succeeds, so this is a string until `close`.
 static napi_value CurrentLogPath(napi_env env, napi_callback_info info) {
     char* namePrefix = ArgString(env, info, 0);
     long long handle = HandleOf(namePrefix);

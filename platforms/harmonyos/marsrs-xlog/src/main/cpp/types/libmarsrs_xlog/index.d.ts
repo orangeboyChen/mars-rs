@@ -66,8 +66,9 @@ export const requestFlush: (namePrefix: string) => void;
  * no promise — the wait is the call. */
 export const flushNow: (namePrefix: string) => void;
 
-/** `mars_xlog_current_log_path_instance`: the file the appender of `namePrefix`
- * is writing to, or `undefined` when it has none open yet. */
+/** `mars_xlog_current_log_path_instance`: the *directory* the appender of
+ * `namePrefix` is writing its files into — the C++ hands back `sg_logdir`, not a
+ * file. `undefined` once the appender is closed; a string from `open` on. */
 export const currentLogPath: (namePrefix: string) => string | undefined;
 
 /** `mars_xlog_getfilepath_from_timespan_instance`: the log files of `daysAgo`

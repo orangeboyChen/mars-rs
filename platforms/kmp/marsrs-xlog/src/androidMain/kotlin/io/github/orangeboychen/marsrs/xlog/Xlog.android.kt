@@ -78,10 +78,10 @@ public actual class Xlog actual constructor(config: XlogConfig) {
         get() = if (isOpen) getCurrentLogPath(handle) else null
 
     public actual fun logFiles(daysAgo: Long): List<String> =
-        if (isOpen) logFiles(handle, daysAgo).toList() else emptyList()
+        if (isOpen) logFiles(handle, daysAgo)?.toList().orEmpty() else emptyList()
 
     public actual fun logFileNames(daysAgo: Long): List<String> =
-        if (isOpen) logFileNames(handle, daysAgo).toList() else emptyList()
+        if (isOpen) logFileNames(handle, daysAgo)?.toList().orEmpty() else emptyList()
 
     public actual fun isLoggable(level: LogLevel): Boolean =
         isOpen && LogLevel.of(getLogLevel(handle)).isEnabledFor(level)
@@ -165,9 +165,9 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
     private external fun getCurrentLogPath(handle: Long): String?
 
-    private external fun logFiles(handle: Long, timespan: Long): Array<String>
+    private external fun logFiles(handle: Long, timespan: Long): Array<String>?
 
-    private external fun logFileNames(handle: Long, timespan: Long): Array<String>
+    private external fun logFileNames(handle: Long, timespan: Long): Array<String>?
 
     private external fun setLogLevel(handle: Long, level: Int)
 

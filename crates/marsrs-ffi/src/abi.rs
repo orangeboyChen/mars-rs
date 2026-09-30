@@ -151,12 +151,11 @@ unsafe fn to_xlog_config(cfg: &MarsXLogConfig) -> Result<XLogConfig, c_int> {
     })
 }
 
-/// The instance's spelling of the same question.
+/// The directory the appender of `instance` writes its files into.
 ///
-/// The only spelling an app that holds an instance has: the process-wide
-/// question is about the appender the JNI bridge installs from Rust, and no
-/// symbol of this ABI opens one, so an app that opened its logger with
-/// [`mars_xlog_new_instance`] has no answer to it at all.
+/// The only spelling there is: a process-wide question would be about an
+/// appender no symbol of this ABI opens, so `0` — and every handle no
+/// appender is open for — answers [`MARS_XLOG_ERR_NO_PATH`].
 ///
 /// @return the number of bytes written excluding the terminating NUL, or
 /// [`MARS_XLOG_ERR_NULL_OUT`], [`MARS_XLOG_ERR_NO_SPACE`] (including `len == 0`)
@@ -351,12 +350,11 @@ pub unsafe extern "C" fn mars_xlog_release_instance(name_prefix: *const c_char) 
     });
 }
 
-/// Writes through a specific instance (`0` = the process-wide appender).
+/// Writes through a specific instance.
 ///
-/// A non-zero instance's own level decides: a record below it is dropped, and a
-/// handle that is not one writes nothing. `0` is the C++'s `xlogger_Write`,
-/// which filters nothing — the level [`mars_xlog_set_level_instance`] set for
-/// `0` is the one [`mars_xlog_is_enabled_for`] answers from.
+/// The instance's own level decides: a record below it is dropped. A handle
+/// that is not one writes nothing, `0` among them — no symbol of this ABI
+/// installs a process-wide appender for it to write through.
 ///
 /// # Safety
 ///
@@ -446,10 +444,9 @@ pub extern "C" fn mars_xlog_get_level(instance: c_longlong) -> c_int {
     })
 }
 
-/// `mars::xlog::SetLevel` for an instance: `0` is the process-wide appender,
-/// which the JNI bridge installs from Rust and no symbol of this ABI opens,
-/// so this is also how that one's level is set — and the level
-/// [`mars_xlog_get_level`] and [`mars_xlog_is_enabled_for`] answer.
+/// `mars::xlog::SetLevel` for an instance: the level [`mars_xlog_get_level`]
+/// and [`mars_xlog_is_enabled_for`] answer, and the one the instance's own
+/// writes are filtered against. A no-op for `0`, which is no instance.
 ///
 /// `kLevelNone` (6) and anything above it disables the instance, and a
 /// negative level logs everything: the C++ casts the value straight to
@@ -463,8 +460,7 @@ pub extern "C" fn mars_xlog_set_level_instance(instance: c_longlong, level: c_in
     });
 }
 
-/// `mars::xlog::SetAppenderMode` for an instance; `0` is the process-wide
-/// appender, so this is also how that one's mode is switched.
+/// `mars::xlog::SetAppenderMode` for an instance.
 #[no_mangle]
 pub extern "C" fn mars_xlog_set_mode_instance(instance: c_longlong, mode: c_int) {
     let _ = guard(0, || {
@@ -481,9 +477,9 @@ pub extern "C" fn mars_xlog_set_mode_instance(instance: c_longlong, mode: c_int)
 /// Drains one instance, signalled: the writer thread is told it may take what
 /// is in the cache to the file, and this returns at once.
 ///
-/// The instances matter: each of them owns an appender of its own, so a caller
-/// that asks the process-wide appender alone misses their records. `0` is the
-/// process-wide appender, and a handle that is not one drains nothing.
+/// The instance matters: each of them owns an appender of its own, so a drain
+/// asked of one instance is nobody else's records. A handle that is not one —
+/// `0` among them — drains nothing.
 #[no_mangle]
 pub extern "C" fn mars_xlog_request_flush_instance(instance: c_longlong) {
     let _ = guard(0, || {
@@ -494,7 +490,7 @@ pub extern "C" fn mars_xlog_request_flush_instance(instance: c_longlong) {
 
 /// Drains one instance on the calling thread: that instance's records are on
 /// the disk when this returns, which [`mars_xlog_request_flush_instance`] does
-/// not promise. `0` is the process-wide appender.
+/// not promise. A handle that is not one — `0` among them — drains nothing.
 #[no_mangle]
 pub extern "C" fn mars_xlog_flush_now_instance(instance: c_longlong) {
     let _ = guard(0, || {
@@ -503,7 +499,7 @@ pub extern "C" fn mars_xlog_flush_now_instance(instance: c_longlong) {
     });
 }
 
-/// `mars::xlog::SetConsoleLogOpen` for an instance (`0` = the default logger).
+/// `mars::xlog::SetConsoleLogOpen` for an instance.
 #[no_mangle]
 pub extern "C" fn mars_xlog_set_console_log_instance(instance: c_longlong, open: c_int) {
     guard((), || set_console_log_open(instance as u64, open != 0));

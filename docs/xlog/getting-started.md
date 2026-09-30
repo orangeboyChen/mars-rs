@@ -66,7 +66,7 @@ xlog.flush_now();   // the records are on disk when this returns
 ```
 
 `Xlog::open` answers the appender, which is the `Xlog.open(config)` of Kotlin, of
-Dart and of TypeScript and the `Xlog(config:)` of Swift: one object, held, and
+Dart and of TypeScript and the `Xlog(config)` of Swift: one object, held, and
 written through — a second logger is a second `Xlog` of a prefix of its own.
 Every option is on [the configuration page](/xlog/configuration). A record is a
 level, a tag and a message — `xlog.log(level, tag, message)`, or `xlog.i(tag,
@@ -247,9 +247,9 @@ xlog.close()
 
 This is the `Xlog` of Android — same members, same names — so a shared module
 that moves between `xlog-kmp` and `xlog` renames nothing. What a `common`
-declaration can only be is the intersection of the two bridges: the process-wide
-calls of the C ABI are not in it, because the JNI bridge exports no equivalent,
-and a caller who wants them writes them in that platform's source set.
+declaration can only be is the intersection of the two bridges, and both of
+them are the whole API: the JNI bridge and the cinterop one export the same
+symbols, so there is nothing a platform source set has to write for itself.
 
 ## Flutter
 

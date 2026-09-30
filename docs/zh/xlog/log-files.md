@@ -147,7 +147,7 @@ xlog.flushNow()
 ```
 
 ```c [C]
-mars_xlog_flush_now_instance(0);
+mars_xlog_flush_now_instance(handle);
 ```
 
 :::
@@ -156,8 +156,8 @@ mars_xlog_flush_now_instance(0);
 
 | 调用 | 做什么 |
 |---|---|
-| `requestFlush()` —— `xlog.request_flush()`、`mars_xlog_request_flush_instance(0)` | 提出一次排空，然后立刻返回：它返回了，不代表记录已经在文件里，它也不说排空什么时候结束 |
-| `flushNow()` —— `xlog.flush_now()`、`mars_xlog_flush_now_instance(0)` | 占着调用方线程排空：它返回时记录已经在磁盘上 |
+| `requestFlush()` —— `xlog.request_flush()`、`mars_xlog_request_flush_instance(handle)` | 提出一次排空，然后立刻返回：它返回了，不代表记录已经在文件里，它也不说排空什么时候结束 |
+| `flushNow()` —— `xlog.flush_now()`、`mars_xlog_flush_now_instance(handle)` | 占着调用方线程排空：它返回时记录已经在磁盘上 |
 | `await flush()` —— `xlog.flush().await`、`flush(handle)` | 同一次排空，交给别的线程：await 到它完成时，记录已经在磁盘上 |
 
 三个调用的分别只在**谁等**，以及谁拿得到“排完了”这句话。`requestFlush()` 谁也不等

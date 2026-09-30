@@ -4,14 +4,12 @@
 //! expected signature, so a signature drift fails the build instead of the
 //! FFI crate downstream.
 //!
-//! What is checked is the shape an app sees, and it is three things: the
-//! [`Xlog`] an app holds, the process-wide `appender_open` / the close of an appender
-//! the C ABI installs the default logger with, and the handle of
+//! What is checked is the shape an app sees, and it is two things: the
+//! [`Xlog`] an app holds, and the handle of
 //! [`marsrs_appender::category`] — a handle and not an object, because neither
-//! the C ABI nor JNI has one to hold. The write, the drain and the four setters
-//! of the process-wide appender are deliberately *not* here: they are the
-//! category's at `DEFAULT_HANDLE`, and a second spelling of them is what this
-//! test would otherwise pin down twice.
+//! the C ABI nor JNI has one to hold. There is no process-wide appender to
+//! pin down beside them: nothing installs one, so the only spelling of the
+//! write, the drain and the four setters is the handle-taking one.
 
 use std::borrow::Cow;
 use std::path::PathBuf;

@@ -14,12 +14,12 @@ prefix is what the appender is known by: two appenders that share one share the
 file, and closing one of them closes what the other writes through. Give a part
 of an app whose logs are read apart from the rest a prefix of its own.
 
-Where the file that is being written right now is:
+Where the appender writes:
 
 ::: code-group
 
 ```rust [Rust]
-xlog.current_log_path()                  // Option<PathBuf>
+xlog.current_log_path()                  // Option<PathBuf>, and it is the directory
 ```
 
 ```swift [Swift]
@@ -54,9 +54,9 @@ xlog.currentLogPath
 :::
 
 Every package here answers it, and every one of them answers it about the `Xlog`
-the file belongs to. The rest leave
-the app to name the file itself, which is the two things it gave the config: the
-directory and the prefix, with the day in between.
+the file belongs to — and what every one of them answers is the **directory**,
+which is what the C++'s `GetCurrentLogPath` hands back; the day's file is the
+question under it.
 
 A whole *day* of files is what an app that uploads yesterday's asks for, and
 there are two calls for it: the files that are there, and the names the day is
@@ -110,7 +110,7 @@ xlog.logFileNames(1)
 
 `0` is today and `1` is yesterday. Rust and Swift answer the day's list in one
 call, and out of the `Xlog` the day belongs to; the C ABI answers one index of it
-at a time, and the two Swift calls are that walk. Names answer two where files answer one when a cache dir is given and
+at a time, and the two C calls are that walk. Names answer two where files answer one when a cache dir is given and
 the file is there: the log-dir file and its twin in the cache dir.
 
 ## Async: the record may still be in the cache
@@ -153,7 +153,7 @@ xlog.flushNow()
 ```
 
 ```c [C]
-mars_xlog_flush_now_instance(0);
+mars_xlog_flush_now_instance(handle);
 ```
 
 :::
@@ -162,8 +162,8 @@ The drain is three calls and not one with a flag:
 
 | call | what it does |
 |---|---|
-| `requestFlush()` — `xlog.request_flush()`, `mars_xlog_request_flush_instance(0)` | asks for the drain and returns at once: nothing answers when it is over, and the records are not in the file when it returns |
-| `flushNow()` — `xlog.flush_now()`, `mars_xlog_flush_now_instance(0)` | drains on the calling thread: the records are on disk when it returns |
+| `requestFlush()` — `xlog.request_flush()`, `mars_xlog_request_flush_instance(handle)` | asks for the drain and returns at once: nothing answers when it is over, and the records are not in the file when it returns |
+| `flushNow()` — `xlog.flush_now()`, `mars_xlog_flush_now_instance(handle)` | drains on the calling thread: the records are on disk when it returns |
 | `await flush()` — `xlog.flush().await`, `flush(handle)` | the same drain, handed to another thread: it answers when the records are on disk |
 
 `requestFlush()` is the one a timer calls: it asks for the drain and answers

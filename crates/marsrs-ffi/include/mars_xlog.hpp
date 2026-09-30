@@ -9,12 +9,13 @@
  * `mars_xlog_*` call, so nothing here is a behaviour the C ABI does not have.
  *
  * A caller that would rather name the C symbols takes `mars_xlog.h`, which this
- * includes; handle `0` in them names the process-wide appender, which the JNI
- * bridge installs from Rust and no symbol of this ABI opens — an app that
- * wants one of its own calls `mars_xlog_new_instance`.
+ * includes. No symbol there installs a process-wide appender, so handle `0`
+ * names no logger at all — an app that wants one of its own calls
+ * `mars_xlog_new_instance` and holds the handle it answers.
  *
- * The header is header-only and needs C++17: `std::string_view` is what the
- * console sink is handed, and `std::future<void>` is what `flush()` answers.
+ * The header is header-only and needs C++17: `std::optional<std::string>` and
+ * `std::vector<std::string>` are what the three file questions answer, and
+ * `std::future<void>` is what `flush()` answers.
  * It throws, because that is what the platforms do — Swift throws an
  * `XlogError`, Kotlin's `XlogConfig` throws on a config it cannot honour — and
  * `Xlog` is move-only, because a prefix is one appender to the C ABI and two

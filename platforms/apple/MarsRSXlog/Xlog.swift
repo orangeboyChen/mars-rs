@@ -10,15 +10,14 @@
 // C strings, `int` modes and a config struct that has to be filled field by
 // field. This file is that surface in Swift — `String`s, an `XlogConfig` with
 // defaults and a value an app writes through — and it re-exports the C module,
-// so `mars_xlog_open(&config)` and friends stay reachable for whoever prefers
-// them.
+// so `mars_xlog_new_instance(&config, level)` and friends stay reachable for
+// whoever prefers them.
 //
 // The shape is the one the Android `Xlog` has, and the one the C ABI spells with
 // a handle: `Xlog.open(config)` opens an appender of its own and answers it, and
 // the app writes through what it was given. Nothing here is deprecated, because
-// there is no older Swift API to keep — the process-wide appender
-// `mars_xlog_open` opens is a set of C symbols, and `import MarsRSFFI` reaches
-// them. Every question about a file is asked of the `Xlog` it belongs to —
+// there is no older Swift API to keep — an instance is the only way in, and
+// `import MarsRSFFI` reaches the symbols behind it. Every question about a file is asked of the `Xlog` it belongs to —
 // [`currentLogPath`], [`logFiles(daysAgo:)`] and [`logFileNames(daysAgo:)`] —
 // which is the shape the Kotlin Multiplatform module has: `Xlog.open` is the one
 // call that is not an appender's own.
@@ -331,8 +330,8 @@ public final class Xlog: NSObject {
     /// and so on.
     ///
     /// This is a day of files and not the file being written: what
-    /// [`currentLogPath`] answers is one, and this is the day of *this* appender
-    /// — its own prefix, and the directory it writes into.
+    /// [`currentLogPath`] answers is the directory, and this names the day's
+    /// files in it — the day of *this* appender, its own prefix and directory.
     @objc
     public func logFiles(daysAgo: Int) -> [String] {
         guard isOpen else {

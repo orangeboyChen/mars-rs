@@ -136,6 +136,14 @@ class Xlog(config: XlogConfig, context: Context? = null) {
             field = seconds
         }
 
+    /**
+     * The handle [close] takes away, and the one every member is forwarded
+     * through. Volatile because [close] may run on another thread than the
+     * writes it stops: a non-volatile `Long` is two 32-bit stores to the
+     * memory model, so a writer thread can read a handle that is half of the
+     * old one and half of the new.
+     */
+    @Volatile
     private var handle: Long = NO_HANDLE
 
     private var currentMode: AppenderMode = config.mode
@@ -176,9 +184,11 @@ class Xlog(config: XlogConfig, context: Context? = null) {
      * The callback that flushes this [Xlog] when the app's UI is no longer on
      * screen; `null` when it was built without a [Context].
      */
+    @Volatile
     private var backgroundFlush: BackgroundFlush? = null
 
     /** The [Context] [backgroundFlush] was registered with, and what [close] unregisters it from. */
+    @Volatile
     private var registeredWith: Context? = null
 
     init {
@@ -208,8 +218,12 @@ class Xlog(config: XlogConfig, context: Context? = null) {
     fun isLoggable(level: LogLevel): Boolean = isOpen && LogLevel.of(getLogLevel(handle)).isEnabledFor(level)
 
     /**
-     * The file this appender is writing to, or `null` before the day's first
-     * record opens one.
+     * The directory this appender writes its files into, or `null` once it is
+     * closed.
+     *
+     * A directory and not a file, because that is what the C++
+     * `GetCurrentLogPath` answers; there is no "before the day's first record"
+     * state — an open appender has a directory from the moment it is opened.
      */
     val currentLogPath: String?
         get() = if (isOpen) getCurrentLogPath(handle) else null
@@ -224,7 +238,7 @@ class Xlog(config: XlogConfig, context: Context? = null) {
      * it.
      */
     fun logFiles(daysAgo: Long): List<String> =
-        if (isOpen) logFiles(handle, daysAgo).filterNotNull().toList() else emptyList()
+        if (isOpen) logFiles(handle, daysAgo)?.toList().orEmpty() else emptyList()
 
     /**
      * The names of the log files of the day `daysAgo` days ago, whether or not
@@ -232,7 +246,7 @@ class Xlog(config: XlogConfig, context: Context? = null) {
      * naming a file to someone else, asks for.
      */
     fun logFileNames(daysAgo: Long): List<String> =
-        if (isOpen) logFileNames(handle, daysAgo).filterNotNull().toList() else emptyList()
+        if (isOpen) logFileNames(handle, daysAgo)?.toList().orEmpty() else emptyList()
 
     /** Writes a record of [level]. */
     fun log(level: LogLevel, tag: String, message: String) {
@@ -301,11 +315,13 @@ class Xlog(config: XlogConfig, context: Context? = null) {
      * [namePrefix] answers `0`. Safe to call twice.
      *
      * [level], [mode], [consoleLogEnabled], [maxFileSizeBytes] and
-     * [maxAliveTimeSeconds] throw [IllegalStateException] afterwards: handle `0`
-     * is the process-wide appender to `marsrs-jni`, and a closed [Xlog] that
-     * went on forwarding it would read and move the appender every other part
-     * of the app writes through, rather than its own.
+     * [maxAliveTimeSeconds] throw [IllegalStateException] afterwards: a handle
+     * whose appender is gone is a no-op to `marsrs-jni`, so a closed [Xlog]
+     * that went on forwarding it would silently write nothing, and one whose
+     * prefix has since been re-opened would move an appender that is not its
+     * own.
      */
+    @Synchronized
     fun close() {
         // The callback goes before the [isOpen] guard and not after it: `isOpen`
         // is false once another `Xlog` of this prefix released the appender, and
@@ -329,10 +345,9 @@ class Xlog(config: XlogConfig, context: Context? = null) {
 
     /**
      * The handle of this appender, or [IllegalStateException] when there is
-     * none left to forward: handle `0` names the process-wide appender in this
-     * JNI API, so a closed [Xlog] that handed it on would read and move the
-     * appender every other part of the app writes through, and read a level that
-     * is not its own.
+     * none left to forward: a handle whose appender is gone is a no-op to
+     * `marsrs-jni`, so a closed [Xlog] that handed it on would silently write
+     * nothing, and read a level that is not its own.
      */
     private fun requireOpen(): Long {
         check(isOpen) {
@@ -361,9 +376,9 @@ class Xlog(config: XlogConfig, context: Context? = null) {
 
     private external fun getCurrentLogPath(handle: Long): String?
 
-    private external fun logFiles(handle: Long, timespan: Long): Array<String>
+    private external fun logFiles(handle: Long, timespan: Long): Array<String>?
 
-    private external fun logFileNames(handle: Long, timespan: Long): Array<String>
+    private external fun logFileNames(handle: Long, timespan: Long): Array<String>?
 
     private external fun setLogLevel(handle: Long, level: Int)
 
@@ -416,7 +431,7 @@ class Xlog(config: XlogConfig, context: Context? = null) {
          * another [Xlog] of the same [namePrefix] has been closed, which the
          * handle alone cannot — `marsrs-jni` answers both with the same one.
          */
-        val openHandles: ConcurrentHashMap<String, Long> = ConcurrentHashMap()
+        private val openHandles: ConcurrentHashMap<String, Long> = ConcurrentHashMap()
 
         /** The handle `marsrs-jni` answers for an appender it did not open. */
         const val NO_HANDLE = 0L

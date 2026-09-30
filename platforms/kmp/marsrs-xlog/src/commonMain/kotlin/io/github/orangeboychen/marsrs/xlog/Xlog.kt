@@ -66,11 +66,13 @@ public expect class Xlog(config: XlogConfig) {
     public fun log(level: LogLevel, tag: String, message: String)
 
     /**
-     * The file this appender is writing to, or `null` when it has none open yet
-     * — the first record of a day is what opens one.
+     * The directory this appender writes its files into, or `null` once it is
+     * closed.
      *
-     * A day is one file, so this is the path an app hands to something that
-     * reads the log while it is being written.
+     * A directory and not a file, because that is what the C++
+     * `GetCurrentLogPath` answers, and there is no "not yet" state: an open
+     * appender has a directory from the moment it is opened, and the day's file
+     * is what [logFiles] names inside it.
      */
     public val currentLogPath: String?
 
@@ -79,8 +81,8 @@ public expect class Xlog(config: XlogConfig) {
      * that uploads yesterday's asks for. Empty when the directory holds none of
      * that day's. `0` is today, `1` is yesterday, and so on.
      *
-     * This is a day of files and not the file being written: what
-     * [currentLogPath] answers is one, and this is this appender's own prefix
+     * This is a day of files and not the directory they are in: what
+     * [currentLogPath] answers is that, and this is this appender's own prefix
      * and directory.
      */
     public fun logFiles(daysAgo: Long): List<String>

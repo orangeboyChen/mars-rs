@@ -35,8 +35,8 @@ appender 在 `mars/xlog/appender.h` 里是一组选项构成的一个 struct 加
 |---|---|---|
 | `appender_open(const XLogConfig&)` | `Xlog::open(config, level)` | `mars_xlog_new_instance(&config, level)` |
 | `xlogger_Write(info, log)`，或 `xinfo2` 那一族 | `xlog.log(level, tag, message)` | `mars_xlog_write_instance(handle, ...)` |
-| `appender_flush()` | `xlog.request_flush()` | `mars_xlog_request_flush_instance(0)` |
-| `appender_flush_sync()` | `xlog.flush_now()` | `mars_xlog_flush_now_instance(0)` |
+| `appender_flush()` | `xlog.request_flush()` | `mars_xlog_request_flush_instance(handle)` |
+| `appender_flush_sync()` | `xlog.flush_now()` | `mars_xlog_flush_now_instance(handle)` |
 | `appender_close()` | `xlog.close()` | `mars_xlog_release_instance(prefix)` |
 | `xlogger_SetLevel(level)` | `xlog.set_level(level)` | `mars_xlog_set_level_instance(0, level)` |
 | `appender_setmode(mode)` | `xlog.set_mode(mode)` | `mars_xlog_set_mode_instance(0, mode)` |
@@ -56,7 +56,7 @@ Rust 那一列是 App 拿着的那个对象 —— Kotlin、Dart 和 TypeScript 
 结束；`flush` 这个名字留给会把“排完了”交回调用方的那两次：`flushNow()` 排完才返回，
 `await flush()` 排完时才完成 —— 见[日志文件](/zh/xlog/log-files)。C ABI 那一列是
 同一件事，而且整条缝都不收 `sync`：C++ 的 `appender_flush` 是
-`mars_xlog_request_flush_instance(0)`，`appender_flush_sync` 是 `mars_xlog_flush_now_instance(0)`；instance
+`mars_xlog_request_flush_instance(handle)`，`appender_flush_sync` 是 `mars_xlog_flush_now_instance(handle)`；instance
 那一对也拆成了两个 —— 以前写 `mars_xlog_flush_instance(handle, 0)` 或 `(handle, 1)`
 的地方，现在是 `mars_xlog_request_flush_instance(handle)` 或
 `mars_xlog_flush_now_instance(handle)`。进程级那一对原来的两个名字直接删掉了，

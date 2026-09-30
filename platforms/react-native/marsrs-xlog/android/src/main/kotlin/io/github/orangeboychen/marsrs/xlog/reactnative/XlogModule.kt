@@ -1,4 +1,4 @@
-// The Android half of `marsrs-react-native-xlog`: the thirteen methods of the
+// The Android half of `marsrs-react-native-xlog`: the sixteen methods of the
 // `Xlog` native module, each of them a straight call of a member of `Xlog` —
 // the Kotlin face of `libmarsrsxlog.so` in the `marsrs-xlog` AAR, and the same
 // class `platforms/kmp/marsrs-xlog` publishes to a Kotlin Multiplatform app
@@ -33,7 +33,6 @@ package io.github.orangeboychen.marsrs.xlog.reactnative
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
-import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.WritableArray
 import io.github.orangeboychen.marsrs.xlog.AppenderMode
@@ -110,18 +109,18 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
         appender(namePrefix)?.log(LogLevel.of(level.toInt()), tag, message)
     }
 
-    /** `Xlog.currentLogPath`: the file this appender is writing to, or `null`
-     * before the first record of the day opens one. */
+    /** `Xlog.currentLogPath`: the directory this appender writes its files
+     * into, or `null` once it is closed. */
     override fun currentLogPath(namePrefix: String): String? = appender(namePrefix)?.currentLogPath
 
     /** `Xlog.logFiles`: the day's files that are there. */
     override fun logFiles(namePrefix: String, daysAgo: Double): WritableArray? =
-        appender(namePrefix)?.logFiles(daysAgo.toLong())?.let { Arguments.fromList(it.filterNotNull()) }
+        appender(namePrefix)?.logFiles(daysAgo.toLong())?.let { Arguments.fromList(it) }
             ?: Arguments.createArray()
 
     /** `Xlog.logFileNames`: the day's names, whether or not they are there yet. */
     override fun logFileNames(namePrefix: String, daysAgo: Double): WritableArray? =
-        appender(namePrefix)?.logFileNames(daysAgo.toLong())?.let { Arguments.fromList(it.filterNotNull()) }
+        appender(namePrefix)?.logFileNames(daysAgo.toLong())?.let { Arguments.fromList(it) }
             ?: Arguments.createArray()
 
     /** `Xlog.isLoggable`: whether a record of the level would be written. */

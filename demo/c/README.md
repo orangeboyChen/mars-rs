@@ -1,6 +1,6 @@
 # The C demo
 
-A binary over the C ABI — `mars_xlog.h`, the 28 `mars_xlog_*` symbols
+A binary over the C ABI — `mars_xlog.h`, the 16 `mars_xlog_*` symbols
 `crates/marsrs-ffi` exports. No Rust, and no Kotlin, Swift or Dart anywhere in
 the build: one `demo.c` linked against a static library.
 
@@ -30,6 +30,6 @@ Linux.
   message)` — where a record was written goes *in* the record, and C is the one
   language that has to spell all three out.
 - `mars_xlog_current_log_path_instance` — the directory that instance writes
-  into. It takes the handle, unlike `mars_xlog_current_log_path`, which can
-  only answer for a process-wide appender a C caller never opened.
-- `mars_xlog_getfilepath_from_timespan` — the file of one day.
+  into, and the only spelling of the question: there is no process-wide
+  appender for a C caller to ask about.
+- `mars_xlog_getfilepath_from_timespan_instance` — the file of one day.

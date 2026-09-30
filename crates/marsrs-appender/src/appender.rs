@@ -1,6 +1,8 @@
 //! Port of `mars/xlog/src/xlogger_appender.h` / `appender.cc` — the
-//! `XloggerAppender` class plus the process-wide `sg_default_appender`
-//! singleton that `appender.cc` keeps in file scope.
+//! `XloggerAppender` class. What `appender.cc` keeps beside it in file scope —
+//! the process-wide `sg_default_appender` and the three statics next to it —
+//! has no counterpart here: no appender is installed for handle `0`, so every
+//! instance owns the appender it writes through.
 //!
 //! # Differences from the C++ (all deliberate, all documented inline)
 //!
@@ -1297,7 +1299,7 @@ struct Shared {
 pub(crate) struct Appender {
     shared: Arc<Shared>,
     /// `thread_async_`. Behind a `Mutex` of its own so that stopping the thread
-    /// needs `&self`: the process-wide slot hands out `Arc` clones, and a
+    /// needs `&self`: the instance table hands out `Arc` clones, and a
     /// `close()` that needed `&mut` could never be called on one.
     thread: Mutex<Option<JoinHandle<()>>>,
 }
@@ -1764,7 +1766,7 @@ impl Appender {
     /// `XloggerAppender::Close`.
     ///
     /// Idempotent: a second `close` — the one [`Appender::drop`] runs on an
-    /// appender [`crate::appender_close`] already closed — does nothing at all.
+    /// appender the instance table already dropped — does nothing at all.
     /// Re-running it used to be harmless too, except for the last line: zeroing
     /// the cache region again would wipe the region of *another* appender that
     /// has since mapped the same cache file, along with every record in it.

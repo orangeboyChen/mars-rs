@@ -4,10 +4,9 @@
 // whose statics are the symbols `marsrs-jni` exports, and that class is the only
 // door to the `.so`.
 //
-// They are named the way the Kotlin of this port already names things, which
-// is why `XlogConfig` sits next to `XLogConfigJni` and `LogLevel.INFO`
-// next to `Xlog.LEVEL_INFO`: the first of each pair is what new code writes,
-// the second is what the API the C++ project's Java spelled still answers.
+// They are named the way the Kotlin of this port names things, which is why
+// `XlogConfig` sits next to `XLogConfigJni`: the first of each pair is what an
+// app writes, the second is the struct `marsrs-jni` takes across the boundary.
 // Both reach one appender.
 
 package io.github.orangeboychen.marsrs.xlog
@@ -32,9 +31,8 @@ private object NativeLevel {
  * [VERBOSE] lets everything through and [NONE] lets nothing through.
  *
  * [native] is the number `marsrs-jni` speaks: the one `Xlog.getLogLevel`
- * answers with, the one `Xlog.setLogLevel` reads, and the one the
- * `Xlog.LEVEL_*` constants of the older API spell. [of] is the way back from
- * that number, for a level that arrives from somewhere else — a remote
+ * answers with, and the one `Xlog.setLogLevel` reads. [of] is the way back
+ * from that number, for a level that arrives from somewhere else — a remote
  * config, a saved preference.
  *
  * A record is written when the level of the appender it goes through is at

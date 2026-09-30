@@ -68,7 +68,9 @@ Native packages carry, member for member:
 
 A day is asked about out of this appender's own prefix and directory, so an app
 never has to name one itself: `currentLogPath` answers the directory the C++
-`GetCurrentLogPath` hands back, and `logFiles` names the file inside it.
+`GetCurrentLogPath` hands back, and `logFiles` names the files inside it.
+
+`Xlog.open` of a `namePrefix` that is already open answers the appender that is
 open and not a second one: the native side is one appender per prefix, so two
 `Xlog`s of one prefix are one appender, and `close` on either closes both.
 

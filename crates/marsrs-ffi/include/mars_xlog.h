@@ -30,9 +30,10 @@
  * Threading: every symbol may be called from any thread. The setters and the
  * instance lifecycle mutate shared state (exactly like the C++ globals) and
  * should be called from one place during start-up / shut-down. What no symbol
- * here does is install the process-wide appender: an app opens an instance
- * with `mars_xlog_new_instance`, and handle `0` — the process-wide one — is a
- * handle no installer in this ABI ever hands out.
+ * here does is install a process-wide appender: an app opens an instance with
+ * `mars_xlog_new_instance` and writes through the handle it answers. Handle
+ * `0` names no appender at all — it is what an open that failed answers, and
+ * every symbol asked of it is a no-op.
  *
  * Panics: no Rust panic ever crosses this boundary. Every entry point is
  * wrapped in `catch_unwind`; a panic is reported as `MARS_XLOG_ERR_PANIC` (or
@@ -106,33 +107,23 @@ typedef struct {
     int cache_days;        /* < 0 => 0; 0 => keep every file                 */
 } MarsXLogConfig;
 
-/* --- writing ------------------------------------------------------------- */
-
-/**
- * Replaces `appender_get_current_log_path(char*, unsigned int)` — the file the
- * process-wide appender is appending to.
- *
- * Writes the NUL-terminated path of the log file currently being appended to
- * into `out` (which must hold at least `len` bytes).
- *
- * @return the number of bytes written excluding the terminating NUL, or a
- *         negative MARS_XLOG_ERR_* code (`MARS_XLOG_ERR_NULL_OUT`,
- *         `MARS_XLOG_ERR_NO_SPACE`, `MARS_XLOG_ERR_NO_PATH`).
- */
-
 /* ---- logger instances (mars::xlog::NewXloggerInstance and friends) ----
  *
  * Each instance owns an appender: its own log directory, prefix, key, mode and
- * cache file. Handle 0 means "the process-wide appender", which no symbol here
- * installs: a C caller that wants a logger of its own opens an instance with
- * mars_xlog_new_instance.
+ * cache file. A C caller that wants a logger opens one with
+ * mars_xlog_new_instance and holds the handle it answers.
  *
- * Every call that can be asked of an instance exists only in this spelling: the
- * C++ has a free function for the process-wide appender and a handle-taking one
- * beside it, and a second spelling of the same operation here would be two ways
- * to say one thing. So the level, the mode, the console, the two sizes and the
- * drain of the process-wide appender are all asked for with a handle of `0`.
+ * Every call that can be asked of an instance exists only in this spelling:
+ * the C++ has a free function for its process-wide appender and a
+ * handle-taking one beside it, and a second spelling of the same operation
+ * here would be two ways to say one thing. There is no process-wide appender
+ * to install, so there is no free-function spelling either — and handle `0`,
+ * which is what a failed open answers, names no appender: the level, the mode,
+ * the console, the two sizes and the drain asked of it do nothing, and the
+ * questions answer "no" or `MARS_XLOG_ERR_NO_PATH`.
  */
+
+/* --- writing ------------------------------------------------------------- */
 
 /* Returns the instance handle, or 0 on a null/invalid config. */
 long long mars_xlog_new_instance(const MarsXLogConfig* config, int level);
@@ -158,24 +149,23 @@ int mars_xlog_is_enabled_for(long long instance, int level);
 /* The instance's level, or -1 for an unknown handle. */
 int mars_xlog_get_level(long long instance);
 
-/* SetLevel for an instance; `0` is the process-wide appender, so this is also
- * `xlogger_SetLevel` — the level `mars_xlog_get_level` and
- * `mars_xlog_is_enabled_for` answer, and the one a write through handle `0`
- * asks. */
+/* SetLevel for an instance: the level `mars_xlog_get_level` and
+ * `mars_xlog_is_enabled_for` answer, and the one a write through the same
+ * handle asks. A no-op for handle `0`, which is no instance at all. */
 void mars_xlog_set_level_instance(long long instance, int level);
 
-/* appender_setmode / SetAppenderMode; `0` is the process-wide appender. */
+/* appender_setmode / SetAppenderMode for an instance. */
 void mars_xlog_set_mode_instance(long long instance, int mode);
 
-/* Drains an instance (0 = the process-wide appender), requested: the writer
- * thread is told it may drain, and this returns at once. Nothing is in the file
- * because this returned, and nothing answers when the drain is over. The C++'s
- * name for this call is `appender_flush`, and "flush" there said which mode the
- * appender was opened in and not what the call does to the thread it was called
- * on: the port names the drain by what the caller gets back, and what this one
- * gives is no answer at all — hence "request", which is the one thing the two
- * drains that do answer, `mars_xlog_flush_now_instance` and the awaited
- * `flush()` every platform carries, do give. */
+/* Drains an instance, requested: the writer thread is told it may drain, and
+ * this returns at once. Nothing is in the file because this returned, and
+ * nothing answers when the drain is over. The C++'s name for this call is
+ * `appender_flush`, and "flush" there said which mode the appender was opened
+ * in and not what the call does to the thread it was called on: the port names
+ * the drain by what the caller gets back, and what this one gives is no answer
+ * at all — hence "request", which is the one thing the two drains that do
+ * answer, `mars_xlog_flush_now_instance` and the awaited `flush()` every
+ * platform carries, do give. */
 void mars_xlog_request_flush_instance(long long instance);
 
 /* Drains an instance on the calling thread, which is what
@@ -183,13 +173,7 @@ void mars_xlog_request_flush_instance(long long instance);
  * that is a promise the requested call above does not make. */
 void mars_xlog_flush_now_instance(long long instance);
 
-/* FlushAll, requested: every appender is told its writer thread may drain. */
-
-/* FlushAll on the calling thread: drains the process-wide appender *and* every
- * instance — each of which owns an appender of its own, so a caller that leaves
- * them out misses their records. */
-
-/* SetConsoleLogOpen for an instance (0 = the default logger). */
+/* SetConsoleLogOpen for an instance. */
 void mars_xlog_set_console_log_instance(long long instance, int open);
 
 /* SetMaxFileSize for an instance; 0 means "do not split". */
@@ -229,9 +213,9 @@ int mars_xlog_getfilepath_from_timespan_instance(long long instance,
 
 /* The directory the appender of `instance` is writing its files to, or a negative
  * MARS_XLOG_ERR_* code. A directory and not a file, which is what the C++'s
- * `XloggerAppender::GetCurrentLogPath` answers — `sg_logdir`. Handle `0` is the
- * process-wide appender, and no symbol of this ABI installs one, so it answers
- * MARS_XLOG_ERR_NO_PATH. */
+ * `XloggerAppender::GetCurrentLogPath` answers — `sg_logdir`. A handle no
+ * appender is open for — `0` among them, since no symbol of this ABI installs
+ * a process-wide one — answers MARS_XLOG_ERR_NO_PATH. */
 int mars_xlog_current_log_path_instance(long long instance, char* out, unsigned int len);
 
 #ifdef __cplusplus

@@ -15,13 +15,8 @@
 //! implementation writes, so `xlog decode` of the port's own CLI — the binary
 //! of `marsrs-xlog`, `cargo install marsrs-xlog` — reads them too.
 //!
-//! Two things this program deliberately does *not* show:
+//! One thing this program deliberately does *not* show:
 //!
-//! - **A second writer over one prefix.** [`Xlog::open_unregistered`] opens an
-//!   appender no prefix is registered for, which is what a second copy of the
-//!   library in one process needs — the JNI and the Kotlin side both opening,
-//!   say. This demo is one appender, because one is what an app that only logs
-//!   needs.
 //! - **Encryption.** `XLogConfig::pub_key` takes the 128 hex characters of a
 //!   public key, and an appender opened with one writes records only the
 //!   matching private key decrypts. The key pair is `xlog keygen`, and the

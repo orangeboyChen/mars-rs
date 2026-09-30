@@ -3,6 +3,7 @@ package io.github.orangeboychen.marsrs.xlog
 import io.github.orangeboychen.marsrs.xlog.ffi.MarsXLogConfig
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_current_log_path_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_flush_now_instance
+import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_get_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_get_level
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_getfilepath_from_timespan_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_is_enabled_for
@@ -73,8 +74,18 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
     private var currentMode: AppenderMode = config.mode
 
+    /**
+     * Whether this appender is still open: `false` after [close] — on this
+     * `Xlog` and on every other one of this `namePrefix`, which is the same
+     * appender and is closed with this one.
+     *
+     * Both halves are needed. A prefix is one appender to the C ABI, so two
+     * `Xlog`s of one prefix are answered the same handle and closing either
+     * releases it: the handle alone still looks open, and asking the C ABI
+     * alone answers a handle the prefix was re-opened under in the meantime.
+     */
     public actual val isOpen: Boolean
-        get() = handle != NO_HANDLE
+        get() = handle != NO_HANDLE && handle == mars_xlog_get_instance(namePrefix)
 
     public actual var level: LogLevel
         get() = LogLevel.of(mars_xlog_get_level(requireOpen()))
@@ -184,9 +195,10 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
     /**
      * The handle of this appender, or [IllegalStateException] when there is none
-     * left to forward: no handle is the process-wide appender of `mars_xlog_open`
-     * to the C ABI, so a closed [Xlog] that handed it on would read and move the
-     * appender every other part of the process writes through.
+     * left to forward: a handle whose appender is gone is a no-op to the C ABI,
+     * so a closed [Xlog] that handed it on would silently write nothing — and
+     * one whose prefix has since been re-opened would move an appender that is
+     * not this one's.
      */
     private fun requireOpen(): Long {
         check(isOpen) {

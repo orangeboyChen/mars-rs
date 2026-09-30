@@ -1,4 +1,4 @@
-// The Android half of the `marsrs_xlog` plugin: the twelve methods of
+// The Android half of the `marsrs_xlog` plugin: the fifteen methods of
 // the plugin's channel, each of them a straight call of a member of `Xlog` —
 // the Kotlin face of `libmarsrsxlog.so` in the `marsrs-xlog` AAR, and the same
 // class `platforms/kmp/marsrs-xlog` publishes to a Kotlin Multiplatform app
@@ -115,8 +115,8 @@ class XlogPlugin :
     }
 
     /**
-     * The file the appender of `namePrefix` is writing to, or `null` before the
-     * first record of the day opens one.
+     * The directory the appender of `namePrefix` writes its files into, or
+     * `null` once it is closed.
      */
     private fun currentLogPath(call: MethodCall, result: Result) {
         result.success(call.appender().currentLogPath)

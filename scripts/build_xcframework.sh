@@ -7,7 +7,7 @@
 #
 # Two artifacts and not one, because the feature set the library is built with
 # is what an app links and not what the crate happens to hold: `marsrs-xlog` is
-# `--no-default-features --features xlog`, so it is xlog's 28 `mars_xlog_*`
+# `--no-default-features --features xlog`, so it is xlog's 16 `mars_xlog_*`
 # symbols and nothing else, and `marsrs-net` is `--no-default-features --features
 # sdt,stn`, so it carries no `mars_xlog_*` at all. That is what lets an app that
 # only logs take the first and stop there, and an app that takes both link

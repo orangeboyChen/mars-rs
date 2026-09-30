@@ -1,4 +1,4 @@
-// The iOS half of `marsrs-react-native-xlog`: the eleven methods of the `Xlog`
+// The iOS half of `marsrs-react-native-xlog`: the fourteen methods of the `Xlog`
 // native module, each of them a straight call of a `mars_xlog_*` symbol — the
 // C ABI of `crates/marsrs-ffi`, in the `marsrs-xlog.xcframework` the pod carries.
 //
@@ -50,8 +50,8 @@ internal final class Xlog: NSObject {
     ///
     /// `false` is a configuration it refused — an empty `logDir` or
     /// `namePrefix`, or a directory it cannot write to — and it is what the JS
-    /// caller turns into a throw rather than a handle it would write through
-    /// the process-wide appender with.
+    /// caller turns into a throw rather than a handle nothing was opened
+    /// for.
     @objc(open:)
     internal func openAppender(_ config: [AnyHashable: Any]) -> Bool {
         let logDir = string(config, "logDir")

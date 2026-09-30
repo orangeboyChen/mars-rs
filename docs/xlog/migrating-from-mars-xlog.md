@@ -43,8 +43,8 @@ The appender is one struct of options and a handful of free calls in
 |---|---|---|
 | `appender_open(const XLogConfig&)` | `Xlog::open(config, level)` | `mars_xlog_new_instance(&config, level)` |
 | `xlogger_Write(info, log)`, or the `xinfo2` family | `xlog.log(level, tag, message)` | `mars_xlog_write_instance(handle, ...)` |
-| `appender_flush()` | `xlog.request_flush()` | `mars_xlog_request_flush_instance(0)` |
-| `appender_flush_sync()` | `xlog.flush_now()` | `mars_xlog_flush_now_instance(0)` |
+| `appender_flush()` | `xlog.request_flush()` | `mars_xlog_request_flush_instance(handle)` |
+| `appender_flush_sync()` | `xlog.flush_now()` | `mars_xlog_flush_now_instance(handle)` |
 | `appender_close()` | `xlog.close()` | `mars_xlog_release_instance(prefix)` |
 | `xlogger_SetLevel(level)` | `xlog.set_level(level)` | `mars_xlog_set_level_instance(0, level)` |
 | `appender_setmode(mode)` | `xlog.set_mode(mode)` | `mars_xlog_set_mode_instance(0, mode)` |
@@ -70,8 +70,8 @@ opened in; here a drain is named by what the caller gets back, and what this one
 gives is no answer at all. The three are side by side on [log
 files](/xlog/log-files). The C ABI column is the same story, and it takes no
 `sync` anywhere: the C++'s `appender_flush` is
-`mars_xlog_request_flush_instance(0)` and its `appender_flush_sync` is
-`mars_xlog_flush_now_instance(0)`, and the instance pair is two calls too — what a
+`mars_xlog_request_flush_instance(handle)` and its `appender_flush_sync` is
+`mars_xlog_flush_now_instance(handle)`, and the instance pair is two calls too — what a
 caller wrote as `mars_xlog_flush_instance(handle, 0)` or `(handle, 1)` is
 `mars_xlog_request_flush_instance(handle)` or
 `mars_xlog_flush_now_instance(handle)`. The two names the process-wide pair had

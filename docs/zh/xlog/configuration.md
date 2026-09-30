@@ -44,16 +44,10 @@ HarmonyOS 那一列也是 Kotlin 的拼法，只是大小写不同：`LogLevel.V
 
 `none` 什么都不写，连 `fatal` 也不写 —— 想让 appender 安静下来又不关掉它，用这个。
 
-assert 是唯一不受级别管的一条记录：不管 appender 开在哪一级，它都按 `fatal` 写进去
-—— assert 说的是一件不该发生的事。
-
-两个调用都不结束进程，这也是 C++ 在这里做了、而本移植没做的唯一一件事：上游写完这条
-记录之后会在 Android 上 `raise(SIGTRAP)`、在 Apple 上调 `__assert_rtn`。想让进程停在
-assert 上的 App 得自己停 —— `std::process::abort()`，或者平台自己的陷阱 —— 写完再停。
-
-移植里没有 `xlogger_Assert` 这个写法了：`mars_xlog_assert` 是进程级 appender
-的，跟着它一起没了。想要的 App 自己写那条记录 —— `xlog.f(tag, message)` ——
-写完再停进程。
+移植里没有 assert：`mars_xlog_assert` 是进程级 appender 的，跟着它一起没了。想要的
+App 自己写那条记录 —— `xlog.f(tag, message)` —— 写完再停进程，
+`std::process::abort()` 或者平台自己的陷阱；上游写完这条记录之后会在 Android 上
+`raise(SIGTRAP)`、在 Apple 上调 `__assert_rtn`，这里两个都不做。
 
 构造起来很贵的消息值得先问一句：被级别挡掉的记录也是一样 —— 那串字符串你已经拼好了。
 

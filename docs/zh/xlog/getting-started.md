@@ -59,7 +59,7 @@ xlog.flush_now();   // 返回时记录已经在磁盘上
 ```
 
 `Xlog::open` 回答的那个 appender，就是 Kotlin、Dart 和 TypeScript 的
-`Xlog.open(config)`，也是 Swift 的 `Xlog(config:)` —— 一个对象，拿着它，对着它写；
+`Xlog.open(config)`，也是 Swift 的 `Xlog(config)` —— 一个对象，拿着它，对着它写；
 第二个 logger 就是第二个 `Xlog`，给它自己的 prefix。每个选项都在
 [配置项](/zh/xlog/configuration)那页。一条记录就是级别、tag 和消息 ——
 `xlog.log(level, tag, message)`，或者某个级别自己的 `xlog.i(tag, message)` ——
@@ -227,9 +227,9 @@ xlog.close()
 ```
 
 这就是 Android 的那个 `Xlog` —— 成员一样、名字一样 —— 所以在 `xlog-kmp` 和 `xlog`
-之间换的共享模块什么都不用改名。`common` 声明只能是两座桥的交集：C ABI 那些进程级
-调用不在里面，因为 JNI bridge 没有导出对应的东西，要它们的调用方，写在那个平台的
-source set 里。
+之间换的共享模块什么都不用改名。`common` 声明只能是两座桥的交集，而两座桥就是整个
+API：JNI bridge 和 cinterop 导出的是同一批符号，所以没有哪个平台的 source set 需要
+自己补什么。
 
 ## Flutter
 
