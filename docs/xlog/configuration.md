@@ -141,8 +141,10 @@ every one of them takes effect from the next record:
 It answers a **directory** and not a file, which is what the C++'s
 `GetCurrentLogPath` hands back; the day's file is the row under it.
 
-`0` is "no limit" for both sizes and ages: a file is never split and never
-dropped — the C++ keeps its own ten days.
+`0` is "no limit" for the size: a file is never split. It is not "no limit" for
+the age: a value under a day is ignored, `0` included, so the appender keeps the
+age it already has — the ten days it was opened with, or whatever day or more it
+was last given. The C++ default is the same ten days.
 
 ## Where the console copy goes
 
