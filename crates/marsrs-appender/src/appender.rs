@@ -1907,10 +1907,35 @@ impl Appender {
     }
 
     /// `XloggerAppender::SetMaxAliveDuration`.
+    ///
+    /// What a limit does is decide which files the sweep takes, and the sweep
+    /// is one `open` runs and not one a thread of the port's own runs later —
+    /// see the comment on it. So a limit set after the appender is open is
+    /// applied here and now: the files the new one already excludes are the
+    /// ones that go, under the same directory lock `open` prunes under. A
+    /// setter that only moved a field would be a setting nobody reads.
+    ///
+    /// A value below [`MIN_LOG_ALIVE_TIME`] is refused, the way `open` refuses
+    /// one: an app that asks to keep logs for less than a day keeps them for
+    /// the C++'s own ten.
     pub(crate) fn set_max_alive_duration(&self, secs: u64) {
-        if secs as i64 >= MIN_LOG_ALIVE_TIME {
-            self.lock().max_alive_time = secs as i64;
+        // `try_from` and not `as`: a `u64` past `i64::MAX` cast that way comes
+        // out negative, and a negative limit is one the clamp never accepts.
+        let Ok(secs) = i64::try_from(secs) else {
+            return;
+        };
+        if secs < MIN_LOG_ALIVE_TIME {
+            return;
         }
+        let mut inner = self.lock();
+        inner.max_alive_time = secs;
+        inner.with_dir_lock(|me| {
+            let nameprefix = me.config.nameprefix.clone();
+            if let Some(cache) = me.config.cachedir.clone() {
+                del_timeout_file(&cache, secs, &nameprefix);
+            }
+            del_timeout_file(&me.config.logdir, secs, &nameprefix);
+        });
     }
 
     /// The prefix every file of this appender starts with.
