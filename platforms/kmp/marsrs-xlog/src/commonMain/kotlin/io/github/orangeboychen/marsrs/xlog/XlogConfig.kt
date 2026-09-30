@@ -51,7 +51,9 @@ public enum class CompressMode {
  *   writes it unencrypted, the way an empty key does in the C++.
  * @property compressMode how a closed log file is compressed.
  * @property compressLevel the level of that compression; `0` is what the C++
- *   passes on — 6, the appender's own default.
+ *   passes on — 6, the appender's own default. The ceiling is the compressor's
+ *   and not one number for both: `9` for [CompressMode.ZLIB] and `22` for
+ *   [CompressMode.ZSTD].
  * @property cacheDir where the mmap cache the appender keeps lives; `null` puts
  *   it in [logDir], as the C++ does.
  * @property cacheDays how many days of log files are kept; `0` keeps all of
@@ -72,8 +74,14 @@ public data class XlogConfig(
         require(logDir.isNotBlank()) { "logDir must not be blank: no appender is opened without one" }
         require(namePrefix.isNotBlank()) { "namePrefix must not be blank: it is what an appender is known by" }
         require(cacheDays >= 0) { "cacheDays must not be negative, was $cacheDays" }
-        require(compressLevel in DEFAULT_COMPRESS_LEVEL..MAX_COMPRESS_LEVEL) {
-            "compressLevel must be in $DEFAULT_COMPRESS_LEVEL..$MAX_COMPRESS_LEVEL, was $compressLevel"
+        // The ceiling is the compressor's, and not one number for both: zstd
+        // takes levels zlib has no meaning for, and a config that opens on
+        // every other platform of the port — the Android AAR's own, and
+        // Swift's, which reads `0...22` for zstd — was refused here for being
+        // above zlib's `9`.
+        val maxLevel = if (compressMode == CompressMode.ZSTD) MAX_ZSTD_COMPRESS_LEVEL else MAX_ZLIB_COMPRESS_LEVEL
+        require(compressLevel in DEFAULT_COMPRESS_LEVEL..maxLevel) {
+            "compressLevel must be in $DEFAULT_COMPRESS_LEVEL..$maxLevel for $compressMode, was $compressLevel"
         }
     }
 
@@ -84,7 +92,10 @@ public data class XlogConfig(
 
         const val DEFAULT_COMPRESS_LEVEL = 0
 
-        const val MAX_COMPRESS_LEVEL = 9
+        const val MAX_ZLIB_COMPRESS_LEVEL = 9
+
+        /** `ZSTD_maxCLevel()`, and what the appender refuses a level above. */
+        const val MAX_ZSTD_COMPRESS_LEVEL = 22
 
         const val NO_CACHE_DAYS = 0
     }
