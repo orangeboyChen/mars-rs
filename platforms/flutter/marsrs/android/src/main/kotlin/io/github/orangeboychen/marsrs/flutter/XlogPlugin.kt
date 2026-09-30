@@ -180,8 +180,15 @@ class XlogPlugin :
     private fun flush(call: MethodCall, result: Result) {
         val appender = call.appender()
         flushQueue.execute {
-            appender.flushNow()
-            mainHandler.post { result.success(null) }
+            // Answered either way: a `Result` is one reply and one only, and
+            // the Dart caller is awaiting this one — so a drain that throws is
+            // an `await` nothing ever settles, and a plugin that looks hung.
+            try {
+                appender.flushNow()
+                mainHandler.post { result.success(null) }
+            } catch (e: Exception) {
+                mainHandler.post { result.error(ERROR, e.message, null) }
+            }
         }
     }
 
@@ -246,8 +253,9 @@ class XlogPlugin :
      * it: `Xlog.close` is a drain of everything the appender is still holding,
      * and a write of the banner that ends the file, so an app that closes its
      * appender on the way out would hold the thread the UI draws on for as
-     * long as that takes. What a queue that was shut down already means is
-     * that [closeAll] ran, and with it this close.
+     * long as that takes. The one drain that stays on it is the one a queue
+     * that was shut down already refuses to take — what that means is that
+     * [closeAll] ran, and with it this close.
      */
     private fun close(call: MethodCall, result: Result) {
         val namePrefix = call.string("namePrefix")
@@ -261,10 +269,20 @@ class XlogPlugin :
         }
         try {
             flushQueue.execute {
-                appender.close()
-                mainHandler.post { result.success(null) }
+                // Answered either way, the way [flush] answers: what a
+                // `close()` is awaiting is the drain, and a drain that threw
+                // is not one that answered.
+                try {
+                    appender.close()
+                    mainHandler.post { result.success(null) }
+                } catch (e: Exception) {
+                    mainHandler.post { result.error(ERROR, e.message, null) }
+                }
             }
         } catch (e: RejectedExecutionException) {
+            // The one drain that is not off this thread: the queue is shut
+            // down, so there is no thread to hand it to, and an appender that
+            // is going away with the plugin is drained here or not at all.
             appender.close()
             result.success(null)
         }
