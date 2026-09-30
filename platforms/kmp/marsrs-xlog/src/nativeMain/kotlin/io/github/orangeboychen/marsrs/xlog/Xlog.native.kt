@@ -242,6 +242,12 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     }
 
     /**
+     * The handle the C ABI's registry answers for [namePrefix] today: the one
+     * an appender of this prefix is open under, whichever `Xlog` opened it.
+     */
+    private fun registryHandle(): Long = mars_xlog_get_instance(namePrefix)
+
+    /**
      * The handle of this appender, [NO_HANDLE] when it is closed, read once:
      * [handle] is what `mars_xlog_new_instance` answered, and the registry is
      * what says the handle is still this [Xlog]'s — an [Xlog] of the same
@@ -258,8 +264,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
      * was asked. A setter handed a `0` is quieter and no better: it moves
      * nothing and still answers that it took the setting.
      */
-    private fun openHandle(): Long =
-        handle.takeIf { it != NO_HANDLE && it == mars_xlog_get_instance(namePrefix) } ?: NO_HANDLE
+    private fun openHandle(): Long = handle.takeIf { it != NO_HANDLE && it == registryHandle() } ?: NO_HANDLE
 
     public actual companion object {
         /** What a path symbol writes into: a path never fills it, and a symbol

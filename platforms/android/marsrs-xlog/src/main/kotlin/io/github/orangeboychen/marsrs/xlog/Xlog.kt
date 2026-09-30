@@ -389,8 +389,7 @@ class Xlog(config: XlogConfig, context: Context? = null) {
      * setter handed no handle is quieter and no better: it moves nothing and
      * still answers that it took the setting.
      */
-    private fun openHandle(): Long =
-        handle.takeIf { it != NO_HANDLE && it == openHandles[namePrefix] } ?: NO_HANDLE
+    private fun openHandle(): Long = handle.takeIf { it != NO_HANDLE && it == openHandles[namePrefix] } ?: NO_HANDLE
 
     // The names `marsrs-jni` exports, and the signatures it reads them under.
     //

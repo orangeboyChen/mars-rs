@@ -188,8 +188,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
      * still answers that it took the setting. The Kotlin/Native `actual` of
      * this `expect` reads it once the same way.
      */
-    private fun openHandle(): Long =
-        handle.takeIf { it != NO_HANDLE && it == openHandles[namePrefix] } ?: NO_HANDLE
+    private fun openHandle(): Long = handle.takeIf { it != NO_HANDLE && it == openHandles[namePrefix] } ?: NO_HANDLE
 
     // The names `marsrs-jni` exports, and the signatures it reads them under.
     //
