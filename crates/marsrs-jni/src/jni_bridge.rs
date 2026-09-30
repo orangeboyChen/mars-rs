@@ -234,7 +234,8 @@ pub fn report_signal_detect_results(json: String) {
 
 fn int_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> i32 {
     guard(|| {
-        env.get_field(obj, name, jni_sig!("I"))
+        let field = env.get_field(obj, name, jni_sig!("I"));
+        clear_pending(env, field)
             .and_then(|value| value.i())
             .unwrap_or(0)
     })
@@ -242,7 +243,8 @@ fn int_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> i32 {
 
 fn long_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> i64 {
     guard(|| {
-        env.get_field(obj, name, jni_sig!("J"))
+        let field = env.get_field(obj, name, jni_sig!("J"));
+        clear_pending(env, field)
             .and_then(|value| value.j())
             .unwrap_or(0)
     })
@@ -276,7 +278,8 @@ fn borrowed_str<'a>(java_str: Option<&'a MUTF8Chars<'a, &JString<'a>>>) -> Cow<'
 
 fn string_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> String {
     guard(|| {
-        let Ok(field) = env.get_field(obj, name, jni_sig!("Ljava/lang/String;")) else {
+        let field = env.get_field(obj, name, jni_sig!("Ljava/lang/String;"));
+        let Ok(field) = clear_pending(env, field) else {
             return String::new();
         };
         let Ok(object) = field.l() else {
@@ -643,20 +646,19 @@ fn string_list(env: &mut Env<'_>, list: &JObject<'_>) -> Vec<String> {
     if list.is_null() {
         return Vec::new();
     }
-    let Ok(len) = env
-        .call_method(list, jni_str!("size"), jni_sig!("()I"), &[])
-        .and_then(|value| value.i())
-    else {
+    let called = env.call_method(list, jni_str!("size"), jni_sig!("()I"), &[]);
+    let Ok(len) = clear_pending(env, called).and_then(|value| value.i()) else {
         return Vec::new();
     };
     let mut values = Vec::new();
     for index in 0..len {
-        let Ok(element) = env.call_method(
+        let called = env.call_method(
             list,
             jni_str!("get"),
             jni_sig!("(I)Ljava/lang/Object;"),
             &[JValue::Int(index)],
-        ) else {
+        );
+        let Ok(element) = clear_pending(env, called) else {
             continue;
         };
         let Ok(element) = element.l() else {
@@ -677,66 +679,62 @@ fn string_map(env: &mut Env<'_>, map: &JObject<'_>) -> BTreeMap<String, String> 
     if map.is_null() {
         return out;
     }
-    let Ok(entries) = env.call_method(
-        map,
-        jni_str!("entrySet"),
-        jni_sig!("()Ljava/util/Set;"),
-        &[],
-    ) else {
+    let called = env.call_method(map, jni_str!("entrySet"), jni_sig!("()Ljava/util/Set;"), &[]);
+    let Ok(entries) = clear_pending(env, called) else {
         return out;
     };
     let Ok(entries) = entries.l() else {
         return out;
     };
-    let Ok(iterator) = env.call_method(
+    let called = env.call_method(
         &entries,
         jni_str!("iterator"),
         jni_sig!("()Ljava/util/Iterator;"),
         &[],
-    ) else {
+    );
+    let Ok(iterator) = clear_pending(env, called) else {
         return out;
     };
     let Ok(iterator) = iterator.l() else {
         return out;
     };
     loop {
-        let Ok(has_next) = env
-            .call_method(&iterator, jni_str!("hasNext"), jni_sig!("()Z"), &[])
-            .and_then(|value| value.z())
-        else {
+        let called = env.call_method(&iterator, jni_str!("hasNext"), jni_sig!("()Z"), &[]);
+        let Ok(has_next) = clear_pending(env, called).and_then(|value| value.z()) else {
             return out;
         };
         if !has_next {
             return out;
         }
-        let Ok(entry) = env.call_method(
+        let called = env.call_method(
             &iterator,
             jni_str!("next"),
             jni_sig!("()Ljava/lang/Object;"),
             &[],
-        ) else {
+        );
+        let Ok(entry) = clear_pending(env, called) else {
             return out;
         };
         let Ok(entry) = entry.l() else {
             return out;
         };
-        let key = env
-            .call_method(
-                &entry,
-                jni_str!("getKey"),
-                jni_sig!("()Ljava/lang/Object;"),
-                &[],
-            )
+        let called = env.call_method(
+            &entry,
+            jni_str!("getKey"),
+            jni_sig!("()Ljava/lang/Object;"),
+            &[],
+        );
+        let key = clear_pending(env, called)
             .and_then(|value| value.l())
             .map(|key| java_string(env, &key))
             .unwrap_or_default();
-        let value = env
-            .call_method(
-                &entry,
-                jni_str!("getValue"),
-                jni_sig!("()Ljava/lang/Object;"),
-                &[],
-            )
+        let called = env.call_method(
+            &entry,
+            jni_str!("getValue"),
+            jni_sig!("()Ljava/lang/Object;"),
+            &[],
+        );
+        let value = clear_pending(env, called)
             .and_then(|value| value.l())
             .map(|value| java_string(env, &value))
             .unwrap_or_default();
@@ -806,14 +804,14 @@ fn longlink_config_from_java(env: &mut Env<'_>, config: &JObject<'_>) -> Option<
         return None;
     }
     let mut parsed = LonglinkConfig::new(string_field(env, config, jni_str!("name")));
-    parsed.host_list =
-        match env.get_field(config, jni_str!("hostList"), jni_sig!("Ljava/util/List;")) {
-            Ok(field) => field
-                .l()
-                .map(|list| string_list(env, &list))
-                .unwrap_or_default(),
-            Err(_) => Vec::new(),
-        };
+    let field = env.get_field(config, jni_str!("hostList"), jni_sig!("Ljava/util/List;"));
+    parsed.host_list = match clear_pending(env, field) {
+        Ok(field) => field
+            .l()
+            .map(|list| string_list(env, &list))
+            .unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
     parsed.is_keep_alive = bool_field(env, config, jni_str!("isKeepAlive"));
     let group = string_field(env, config, jni_str!("group"));
     if !group.is_empty() {
@@ -830,7 +828,8 @@ fn longlink_config_from_java(env: &mut Env<'_>, config: &JObject<'_>) -> Option<
 
 fn bool_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> bool {
     guard(|| {
-        env.get_field(obj, name, jni_sig!("Z"))
+        let field = env.get_field(obj, name, jni_sig!("Z"));
+        clear_pending(env, field)
             .and_then(|value| value.z())
             .unwrap_or(false)
     })
@@ -2457,7 +2456,8 @@ fn hosts_from_java(env: &mut Env<'_>, array: &JObject<'_>) -> CheckIPPorts {
         }
         let name = string_field(env, &link, jni_str!("name"));
         let hosts = string_array_field(env, &link, jni_str!("hosts"));
-        let ports = match env.get_field(&link, jni_str!("ports"), jni_sig!("[I")) {
+        let field = env.get_field(&link, jni_str!("ports"), jni_sig!("[I"));
+        let ports = match clear_pending(env, field) {
             Ok(field) => field
                 .l()
                 .map(|ports| int_array(env, &ports))
@@ -2482,7 +2482,8 @@ fn hosts_from_java(env: &mut Env<'_>, array: &JObject<'_>) -> CheckIPPorts {
 /// A `String[]` field of `obj`, which is the addresses a resolve found.
 fn string_array_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> Vec<String> {
     guard(|| {
-        let Ok(field) = env.get_field(obj, name, jni_sig!("[Ljava/lang/String;")) else {
+        let field = env.get_field(obj, name, jni_sig!("[Ljava/lang/String;"));
+        let Ok(field) = clear_pending(env, field) else {
             return Vec::new();
         };
         let Ok(array) = field.l() else {
@@ -2496,7 +2497,8 @@ fn string_array_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> Ve
 /// ping, which no other kind of field in the tree carries.
 fn float_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> f32 {
     guard(|| {
-        env.get_field(obj, name, jni_sig!("F"))
+        let field = env.get_field(obj, name, jni_sig!("F"));
+        clear_pending(env, field)
             .and_then(|value| value.f())
             .unwrap_or(0.0)
     })
