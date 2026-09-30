@@ -56,6 +56,10 @@ for case in manifest['cases']:
 }
 
 FAILED=0
+# The rows that compared nothing instead of failing: see the `cpp-decoder` arm.
+# Counted so that the run's last line cannot say "every check passed" over a
+# table with a row in it that was excused.
+CPP_DECODER=0
 printf '| case | rust -> cpp | cpp -> rust | bytes |\n|---|---|---|---|\n'
 
 while read -r name mode compress sync crypt flush_every file; do
@@ -101,10 +105,15 @@ while read -r name mode compress sync crypt flush_every file; do
             RUST_CPP=FAILED
             FAILED=$((FAILED + 1))
             cat "$WORK/$name-rust.diff"
-        elif python3 "$REPO/scripts/compat/check.py" exact \
+        elif [ -s "$WORK/$name-control.plain" ] && python3 "$REPO/scripts/compat/check.py" exact \
             "$WORK/$name-control.plain" "$WORK/$name-rust.plain" \
             > "$WORK/$name-control.diff"; then
+            # An empty control is not "upstream reads both files the same
+            # way", it is upstream's decoder having written nothing at all —
+            # and two empty files compare equal, so without the `-s` the row
+            # is excused for a comparison that never happened.
             RUST_CPP="cpp-decoder"
+            CPP_DECODER=$((CPP_DECODER + 1))
             echo "$name: upstream's decoder reads both files the same wrong" \
                 "way, so this is not a difference between the encoders" >&2
         else
@@ -214,5 +223,12 @@ done
 if [ "$FAILED" -ne 0 ]; then
     echo "$FAILED check(s) failed" >&2
     exit 1
+fi
+# Not an `exit 1` — a row upstream's own decoder excuses is not a failure of
+# the port — but not silence either: "every cross-read check passed" over a
+# table with an excused row in it reads as though the rust -> cpp direction had
+# been compared on every case, and it has not.
+if [ "$CPP_DECODER" -ne 0 ]; then
+    echo "$CPP_DECODER row(s) compared nothing: upstream's decoder read its own file the way it read ours" >&2
 fi
 echo "every cross-read check passed; the files are in $WORK"
