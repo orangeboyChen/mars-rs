@@ -1013,7 +1013,11 @@ impl AppenderInner {
         // the buffer for a file that is not there.
         let mut write_success = self.write_file_record(data);
         if open_success && !self.is_sync() {
-            write_success |= self.closed_after_a_failed_write();
+            // A cache directory is configured — nothing else reaches this far
+            // down `__Log2File` — so the batch has somewhere to go when the
+            // log directory will not take it, and the close must not spend it
+            // on its way there.
+            write_success |= self.closed_before_the_cache_directory();
         }
 
         if !write_success {
@@ -1229,6 +1233,35 @@ impl AppenderInner {
     fn closed_after_a_failed_write(&mut self) -> bool {
         let held = !self.pending.is_empty();
         held && self.close_log_file()
+    }
+
+    /// [`Self::closed_after_a_failed_write`] for a write that still has the
+    /// cache directory to fall back on.
+    ///
+    /// The close cannot be left out the way [`Self::forget_log_file`] stands
+    /// in for it in the synchronous half: [`Self::open_log_file`] answers
+    /// `true` for a file this appender still holds without moving to the
+    /// directory it was asked for, so the handle has to go before the cache
+    /// directory can be opened at all. And the flush the close does is one
+    /// more attempt at a batch the write could not get out, which is what
+    /// makes an async write succeed when the refusal was transient.
+    ///
+    /// What it must not do is be the attempt that *spends* the batch: a batch
+    /// the file refuses twice is given up ([`Self::pending_refused`]), and the
+    /// batch is the cache directory's to stage, not the log directory's. So
+    /// the retry it carries is held back across this one attempt, and the
+    /// fallback finds the batch whole.
+    fn closed_before_the_cache_directory(&mut self) -> bool {
+        if self.pending.is_empty() {
+            return false;
+        }
+        let refused = self.pending_refused;
+        self.pending_refused = false;
+        let closed = self.close_log_file();
+        if !closed {
+            self.pending_refused = refused;
+        }
+        closed
     }
 
     fn forget_log_file(&mut self) {
@@ -3029,6 +3062,50 @@ mod tests {
         assert!(
             text.contains("the very first record"),
             "the batch was dropped instead of kept: {text}"
+        );
+    }
+
+    /// The other end of that: the close's flush is one more attempt at the
+    /// batch, but not the attempt that gives it up. What it is for is the file
+    /// *handle*, which has to go before the cache directory can be opened — so
+    /// an async write whose batch the log directory refused still finds the
+    /// batch whole when it gets there.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_batch_the_closing_flush_could_not_get_out_is_staged_in_the_cache_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("cache");
+        let mut cfg = config(tmp.path(), AppenderMode::Async);
+        cfg.cachedir = Some(cache.clone());
+        // A file that opens and then refuses every write: what a full disk
+        // looks like to `__Log2File`, which cannot tell the two apart.
+        std::os::unix::fs::symlink("/dev/full", today_name(tmp.path())).unwrap();
+
+        let appender = Appender::open(cfg, 0, 0).unwrap();
+        let mut guard = appender.lock();
+        guard.close_log_file();
+        guard.pending.clear();
+        guard.pending_refused = false;
+        assert!(guard.open_log_file(OpenDir::Log, now_secs()));
+
+        // Over the threshold, so `write_file_record` asks the file for the
+        // batch there and then, and fails.
+        let mut batch = vec![b'.'; LOG_FLUSH_THRESHOLD];
+        batch.extend_from_slice(b"a batch only the cache directory will take");
+        assert!(
+            guard.log2file(&batch, false),
+            "the batch reached no file at all"
+        );
+        drop(guard);
+        appender.close();
+
+        let name = crate::file_util::make_log_file_name_prefix(now_secs(), "Mars");
+        let text =
+            String::from_utf8_lossy(&fs::read(cache.join(format!("{name}.xlog"))).unwrap())
+                .to_string();
+        assert!(
+            text.contains("a batch only the cache directory will take"),
+            "the batch the cache directory was given is not in it: {text}"
         );
     }
 
