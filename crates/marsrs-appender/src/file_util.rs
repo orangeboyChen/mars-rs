@@ -214,8 +214,15 @@ pub(crate) fn get_file_paths_from_timeval(
 /// `XloggerAppender::__GetNextFileIndex`.
 ///
 /// `_scan_dir` is the directory whose files decide the index (`config_.logdir_`
-/// in C++); `_cachedir` files are counted as well.
+/// in C++); `_cachedir` files are counted as well — for the name and not for
+/// the size, which is asked of `_out_dir` alone.
+///
+/// The size is one file's and not the day's: the cache copy and the log copy of
+/// one name are the same records, the cache's waiting to be appended to the
+/// log's, so adding the two counts every byte of them twice and splits a file
+/// that was never near the limit.
 pub(crate) fn get_next_file_index(
+    out_dir: &Path,
     scan_dir: &Path,
     cachedir: Option<&Path>,
     fileprefix: &str,
@@ -247,17 +254,7 @@ pub(crate) fn get_next_file_index(
         }
     }
 
-    let mut filesize = 0u64;
-    let logfilepath = scan_dir.join(last_filename);
-    if let Ok(meta) = fs::metadata(&logfilepath) {
-        filesize += meta.len();
-    }
-    if let Some(dir) = cachedir {
-        if let Ok(meta) = fs::metadata(dir.join(last_filename)) {
-            filesize += meta.len();
-        }
-    }
-
+    let filesize = fs::metadata(out_dir.join(last_filename)).map_or(0, |meta| meta.len());
     if filesize > max_file_size {
         // i64::MAX + 1 must not wrap: in release that silently stops rotation
         // and in debug it panics — on the async writer thread, which has no
@@ -284,7 +281,14 @@ pub(crate) fn make_log_file_name(
 ) -> PathBuf {
     let fileprefix = make_log_file_name_prefix(tv_sec, prefix);
     let index = if max_file_size > 0 {
-        get_next_file_index(scan_dir, cachedir, &fileprefix, fileext, max_file_size)
+        get_next_file_index(
+            out_dir,
+            scan_dir,
+            cachedir,
+            &fileprefix,
+            fileext,
+            max_file_size,
+        )
     } else {
         0
     };
@@ -505,20 +509,60 @@ mod tests {
         let prefix = make_log_file_name_prefix(now_secs(), "Mars");
 
         // No files at all -> index 0.
-        assert_eq!(get_next_file_index(dir, None, &prefix, LOG_EXT, 10), 0);
+        assert_eq!(get_next_file_index(dir, dir, None, &prefix, LOG_EXT, 10), 0);
 
         touch(&dir.join(format!("{prefix}.xlog")), &[0u8; 20]);
         // The only file is over the limit -> next index is 1.
-        assert_eq!(get_next_file_index(dir, None, &prefix, LOG_EXT, 10), 1);
+        assert_eq!(get_next_file_index(dir, dir, None, &prefix, LOG_EXT, 10), 1);
         // ... and stays 1 while the newest file is still small.
         touch(&dir.join(format!("{prefix}_1.xlog")), &[0u8; 2]);
-        assert_eq!(get_next_file_index(dir, None, &prefix, LOG_EXT, 10), 1);
+        assert_eq!(get_next_file_index(dir, dir, None, &prefix, LOG_EXT, 10), 1);
 
         // `_10` sorts before `_9` because it is longer (C++ `__string_compare_greater`).
         touch(&dir.join(format!("{prefix}_9.xlog")), &[0u8; 2]);
-        assert_eq!(get_next_file_index(dir, None, &prefix, LOG_EXT, 10), 9);
+        assert_eq!(get_next_file_index(dir, dir, None, &prefix, LOG_EXT, 10), 9);
         touch(&dir.join(format!("{prefix}_10.xlog")), &[0u8; 2]);
-        assert_eq!(get_next_file_index(dir, None, &prefix, LOG_EXT, 10), 10);
+        assert_eq!(
+            get_next_file_index(dir, dir, None, &prefix, LOG_EXT, 10),
+            10
+        );
+    }
+
+    /// The cache copy of a name and the log copy of it are the same records,
+    /// so the split index is decided by the size of the one being written and
+    /// not by the two of them together: a day whose log file is small is not
+    /// split because its cache file happens to hold the same bytes.
+    #[test]
+    fn next_file_index_is_decided_by_the_directory_the_file_is_written_to() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("log");
+        let cache = tmp.path().join("cache");
+        fs::create_dir_all(&log).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        let prefix = make_log_file_name_prefix(now_secs(), "Mars");
+
+        // 11 bytes in the log directory and 11 in the cache directory, which
+        // is one block of records waiting to be moved and not 22 of them.
+        touch(&log.join(format!("{prefix}.xlog")), &[0u8; 5]);
+        touch(&cache.join(format!("{prefix}.xlog")), &[0u8; 6]);
+        assert_eq!(
+            get_next_file_index(&log, &log, Some(&cache), &prefix, LOG_EXT, 10),
+            0,
+            "the log file is under the limit"
+        );
+
+        // The log file on its own is over it, so the next one is `_1` — and
+        // the cache file is not what says so, either way round.
+        touch(&log.join(format!("{prefix}.xlog")), &[0u8; 20]);
+        assert_eq!(
+            get_next_file_index(&log, &log, Some(&cache), &prefix, LOG_EXT, 10),
+            1
+        );
+        assert_eq!(
+            get_next_file_index(&cache, &log, Some(&cache), &prefix, LOG_EXT, 10),
+            0,
+            "the cache file is still under the limit"
+        );
     }
 
     #[test]
