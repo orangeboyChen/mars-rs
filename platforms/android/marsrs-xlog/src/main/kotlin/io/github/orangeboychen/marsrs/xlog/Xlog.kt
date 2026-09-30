@@ -498,8 +498,20 @@ class Xlog : Log.LogImp {
             }
 
             val logConfig = XLogConfig().apply {
+                // A level `marsrs-jni` does not know is clamped by it — below
+                // `0` is "log everything" and above `NONE` is `FATAL` — but a
+                // mode it does not know is not: the config is dropped whole,
+                // which is an appender this call opened nothing for while
+                // `Log` below was handed an `Xlog` that writes through the
+                // process-wide one. `1` is SYNC and every other number is
+                // ASYNC, the mode an appender is opened at when a caller said
+                // nothing.
                 this.level = level
-                this.mode = mode
+                this.mode = if (mode == AppenderMode.SYNC.native) {
+                    AppenderMode.SYNC.native
+                } else {
+                    AppenderMode.ASYNC.native
+                }
                 this.logdir = logDir
                 this.nameprefix = nameprefix
                 this.pubkey = pubkey ?: ""
