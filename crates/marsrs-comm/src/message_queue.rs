@@ -686,13 +686,20 @@ pub fn cancel_message(post: &MessagePost) -> bool {
 /// `MessageQueue::CancelMessage(handler)`.
 pub fn cancel_message_by_handler(handler: &MessageHandler) {
     if let Some(queue) = queue(handler.queue) {
-        let before = {
+        let cancelled = {
             let mut state = queue.lock();
             let before = state.messages.len();
             state.messages.retain(|m| m.post.reg.seq != handler.seq);
-            before
+            state.messages.len() != before
         };
-        if queue.lock().messages.len() != before {
+        if cancelled {
+            // What [cancel_message] notifies for: a `wait_message` on one of
+            // these posts is waiting for exactly this, and on a queue nothing
+            // is dispatching nothing else wakes it. Whether it is cancelled
+            // is read under the lock that took the message off and not under
+            // a second one: two lengths read under two locks are not the
+            // before and after of one retain, and a queue another thread has
+            // posted to in between answers the length it had.
             queue.cond.notify_all();
         }
     }
@@ -707,15 +714,17 @@ pub fn cancel_message_by_handler_title(handler: &MessageHandler, title: MessageT
     // `m.message.lock()`: a handler cancelling its own periodic
     // message runs while the dispatcher holds that lock, and a `Mutex`
     // is not reentrant.
-    let before = {
+    let cancelled = {
         let mut state = queue.lock();
         let before = state.messages.len();
         state
             .messages
             .retain(|m| !(m.post.reg.seq == handler.seq && m.title == title));
-        before
+        state.messages.len() != before
     };
-    if queue.lock().messages.len() != before {
+    // As in [cancel_message_by_handler]: the length the comparison reads is
+    // the one the retain left behind, under the lock that took it.
+    if cancelled {
         queue.cond.notify_all();
     }
 }
@@ -953,6 +962,7 @@ fn first_due(timing: &MessageTiming) -> (Option<Instant>, Option<Duration>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     /// A queue does not run out of sequence numbers at the top of a `u32`:
     /// the count wraps, and the wrap skips 0, which is the `seq` of
@@ -1051,6 +1061,68 @@ mod tests {
         );
         assert!(found_message(&periodic), "re-armed, and not due again");
         assert!(cancel_message(&periodic));
+        destroy_message_queue(id);
+    }
+
+    /// A cancel wakes the wait it ends, and on a queue nothing is dispatching
+    /// nothing else does: no post, no answer and no other cancel is there to
+    /// notify the condition, so a wait with no timeout of its own is over when
+    /// the cancel wakes it and never otherwise — the post it is waiting for is
+    /// gone, and it is asleep on a condition that has already come true.
+    #[test]
+    fn a_cancel_by_handler_wakes_the_wait_it_ends() {
+        let id = create_message_queue();
+        let handler = install_message_handler(|_: &mut Message| {}, false, id);
+
+        // A helper, because the two cancels are one question asked twice: a
+        // wait that was not woken is a thread parked for the rest of the
+        // process, so what is asserted is the flag it sets on the way out and
+        // not the value it returns — a wait that ends when *its* timeout runs
+        // out answers `true` for a post that was taken off an hour ago.
+        let wait_forever = |post: MessagePost| {
+            let ended = Arc::new(AtomicBool::new(false));
+            let waiting = {
+                let ended = Arc::clone(&ended);
+                std::thread::spawn(move || {
+                    wait_message(&post, -1);
+                    ended.store(true, Ordering::SeqCst);
+                })
+            };
+            // Long enough for that thread to be asleep on the condition and
+            // not merely on its way there: a wait that has not parked yet
+            // reads the queue after the cancel and is over anyway.
+            std::thread::sleep(Duration::from_millis(50));
+            (waiting, ended)
+        };
+
+        // An hour out, so that the only thing that takes either post off the
+        // queue is the cancel and not a dispatch: a post a dispatch ran is a
+        // wait that ended for another reason entirely.
+        let (waiting, ended) = wait_forever(post_message(
+            &handler,
+            Message::new(MessageTitle(9), "waited on"),
+            MessageTiming::After(3_600_000),
+        ));
+        cancel_message_by_handler(&handler);
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            ended.load(Ordering::SeqCst),
+            "the cancel by handler did not wake the wait it ended"
+        );
+        let _ = waiting.join();
+
+        let (waiting, ended) = wait_forever(post_message(
+            &handler,
+            Message::new(MessageTitle(10), "waited on"),
+            MessageTiming::After(3_600_000),
+        ));
+        cancel_message_by_handler_title(&handler, MessageTitle(10));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            ended.load(Ordering::SeqCst),
+            "the cancel by title did not wake the wait it ended"
+        );
+        let _ = waiting.join();
         destroy_message_queue(id);
     }
 }
