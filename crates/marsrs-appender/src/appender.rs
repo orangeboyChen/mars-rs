@@ -373,8 +373,9 @@ pub(crate) fn cache_dir(config: &XLogConfig) -> &Path {
 /// directory's (see [`claim_cache_slot`]).
 ///
 /// Neither is inside anything the sweep or the log-file discovery look at:
-/// `del_timeout_file` only removes `.xlog` files and `YYYYMMDD` directories,
-/// and [`crate::file_util::get_file_paths_from_timeval`] only matches `.xlog`.
+/// `del_timeout_file` only removes `.xlog` files (no directory at all — see
+/// the comment at the end of its loop), and
+/// [`crate::file_util::get_file_paths_from_timeval`] only matches `.xlog`.
 pub(crate) fn dir_lock_path(dir: &Path, prefix: &str) -> PathBuf {
     dir.join(format!("{prefix}.lock"))
 }

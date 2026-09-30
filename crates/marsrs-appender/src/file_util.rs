@@ -309,16 +309,18 @@ pub(crate) fn build_stamp() -> (String, String) {
 
 /// `__DelTimeoutFile`.
 ///
-/// `<nameprefix>_<YYYYMMDD>[_<index>].xlog` files and the `YYYYMMDD` dump
-/// directories that have not been touched for `_max_alive_time` seconds.
+/// `<nameprefix>_<YYYYMMDD>[_<index>].xlog` files that have not been touched
+/// for `_max_alive_time` seconds.
 ///
-/// The `.xlog` files are matched by the whole name [`make_log_file_name`]
-/// writes, the way [`move_old_files`] does — and not by `starts_with` of the
+/// The files are matched by the whole name [`make_log_file_name`] writes, the
+/// way [`move_old_files`] does — and not by `starts_with` of the
 /// prefix alone: one `logdir` is what two `Xlog`s with two prefixes share — an
 /// app and a module it links, say — and a sweep over every `.xlog` in it
 /// deletes the other one's logs, on a schedule that is not its own. The C++
-/// has one prefix per process, so it never had the question. The dump
-/// directories carry no prefix in their name, so they go whatever wrote them.
+/// has one prefix per process, so it never had the question.
+///
+/// A directory is never removed, whatever it is named: see the comment at the
+/// end of the loop.
 pub(crate) fn del_timeout_file(dir: &Path, max_alive_time: i64, nameprefix: &str) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -345,9 +347,13 @@ pub(crate) fn del_timeout_file(dir: &Path, max_alive_time: i64, nameprefix: &str
         if meta.is_file() && is_log_file_of(&name, nameprefix) {
             let _ = fs::remove_file(&path);
         }
-        if meta.is_dir() && name.len() == 8 && name.chars().all(|c| c.is_ascii_digit()) {
-            let _ = fs::remove_dir_all(&path);
-        }
+        // The C++ deletes its `YYYYMMDD` dump directories here. This port
+        // writes none — see `dump.rs`, whose only dump is the string
+        // `xlogger_memory_dump` answers with — so every such directory in a
+        // `logdir` is one something else made: an app's own dated folder, or
+        // another component's. Removing it recursively, at every `open`, under
+        // the log's lock, is the one thing in this file that can destroy data
+        // it was never shown the ownership of, so the arm is not carried over.
     }
 }
 
