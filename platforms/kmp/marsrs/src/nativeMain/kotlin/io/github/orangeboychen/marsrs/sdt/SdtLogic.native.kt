@@ -38,7 +38,6 @@ import kotlinx.cinterop.asStableRef
 import kotlinx.cinterop.get
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.pointed
-import kotlinx.cinterop.ptr
 import kotlinx.cinterop.set
 import kotlinx.cinterop.staticCFunction
 import kotlinx.cinterop.toKString
@@ -453,9 +452,14 @@ internal class ProbeBox(private val probe: SdtLogic.IProbe) {
         // Android actual answers it — printed, and then not answered at all.
         // A `Throwable` and not an `Exception`, which is what the stn half
         // catches: an app's `Error` is as fatal here as its exception.
-        val host = query.host?.toKString() ?: ""
-        val timeout = query.timeout.toInt()
+        // The host and the timeout are read inside the guard and not beside
+        // it, the way the stn half reads its whole question inside one: a
+        // `toKString` of a pointer the app is not holding is a read like any
+        // other, and an exception that escapes a `staticCFunction` ends the
+        // process whether it came from the probe or from the question.
         val answered = try {
+            val host = query.host?.toKString() ?: ""
+            val timeout = query.timeout.toInt()
             when (query.kind.toInt()) {
                 PROBE_DNS -> probe.dns(host, timeout)
                 PROBE_TCP -> probe.tcp(host, query.port.toInt(), timeout)
