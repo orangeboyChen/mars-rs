@@ -156,14 +156,19 @@ public actual object StnLogic {
 
     // The thirteen the bridge calls back: one [Question] each, and the [Answer]
     // the app answered read for the kind it asked. An app that answered nothing —
-    // or that was never handed over — gets the answer the C++ takes when the app
-    // said nothing, which is what the AAR's own forwards do.
+    // or that was never handed over — gets the answer STN takes when the app said
+    // nothing, which is the one `marsrs-stn`'s `App` answers and the one the C
+    // ABI gives a host with no app: the same answers on both `actual`s, because a
+    // shared module that answers a task differently on Android than it does on
+    // iOS is a module with two behaviours to reason about.
 
     @JvmStatic
     private fun makesureAuthed(host: String?): Boolean =
         when (val answer = ask(Question.Kind.MakesureAuthed) { this.host = host.orEmpty() }) {
             is Answer.Yes -> answer.yes
-            else -> false
+            // An app that did not answer is logged in, which is what the port
+            // answers on every other platform.
+            else -> true
         }
 
     @JvmStatic
@@ -259,9 +264,11 @@ public actual object StnLogic {
                 answer.handle.value
             }
 
-            // `kTaskFailHandleTaskEnd`: what the AAR answers for an app that has
-            // none, which is the task over and the app not told.
-            else -> FailHandle.TaskEnd.value
+            // An answer nobody read is a good one, which is what the port
+            // answers on every other platform: `Err` is what a task that
+            // could not be decoded ends with, and an app that said nothing
+            // is not an app that read the answer and refused it.
+            else -> FailHandle.Normal.value
         }
     }
 
@@ -306,9 +313,11 @@ public actual object StnLogic {
                 answer.mode.value
             }
 
-            // `ECHECK_NEVER`: what the AAR answers for an app that has none,
-            // which stops STN asking until the next connect.
-            else -> IdentifyMode.Never.value
+            // Asked again on the next connect, which is what the port answers
+            // on every other platform. `Never` would mark this connection
+            // checked and stop STN asking for good, which is an answer an app
+            // that said nothing did not give.
+            else -> IdentifyMode.NextConnect.value
         }
     }
 
