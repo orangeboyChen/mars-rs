@@ -55,9 +55,13 @@ pub enum Query {
         /// `profile.url` — the host of the request with the CGI behind it, and
         /// `http://` in front when the host has no scheme of its own.
         url: String,
-        /// In milliseconds, as the C++ hands it over: a run without a timeout
-        /// hands [`UNUSE_TIMEOUT`](crate::constants::UNUSE_TIMEOUT), which is
-        /// what `__DoCheck` has, default and all.
+        /// In milliseconds:
+        /// [`HTTP_DEFAULT_TIMEOUT`](crate::constants::HTTP_DEFAULT_TIMEOUT)
+        /// for a run that was started without one — the default of its kind,
+        /// as the other three get, and not
+        /// [`UNUSE_TIMEOUT`](crate::constants::UNUSE_TIMEOUT), twenty-four
+        /// days, which is what handing `__DoCheck`'s own `total_timeout`
+        /// over asked an app's probe for.
         timeout_ms: u32,
     },
     /// `PingQuery::RunPingQuery(0, 0, timeout, host)`.
