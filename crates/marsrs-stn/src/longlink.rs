@@ -452,9 +452,11 @@ mod tests {
     #[test]
     fn a_package_over_a_megabyte_is_refused() {
         with_client_version(0, || {
-            // a header that claims more than the C++ allows
+            // a header that claims more than the C++ allows: the `1024 * 1024`
+            // of `longlink_packer.cc`, written out here and not taken from
+            // [`MAX_PACKAGE_LEN`], which is what this is asking about
             let mut packed = longlink_pack(1, 1, &[]);
-            let huge = (MAX_PACKAGE_LEN as u32 + 1).to_be_bytes();
+            let huge = (1024 * 1024 + 1u32).to_be_bytes();
             packed[16..20].copy_from_slice(&huge);
             assert_eq!(longlink_unpack(&packed), Unpacked::False);
         })
@@ -516,7 +518,9 @@ mod tests {
         assert_eq!(encoder.signal_keep_cmdid(), SIGNALKEEP_CMDID);
         assert_eq!(encoder.noop_interval(), 0);
         assert!(!encoder.complexconnect_need_verify());
-        assert_eq!(encoder.heart_interval(), MIN_HEART_INTERVAL);
+        // `MinHeartInterval`, three and a half minutes, and not
+        // [`MIN_HEART_INTERVAL`]: it is the number that is being asked for
+        assert_eq!(encoder.heart_interval(), 210 * 1000);
     }
 
     #[test]
