@@ -1009,7 +1009,9 @@ impl AppenderInner {
         // the buffer for a file that is not there.
         let mut write_success = self.write_file_record(data);
         if open_success && !self.is_sync() {
-            write_success |= self.closed_after_a_failed_write();
+            // The handle is given up, and the batch behind it is kept: see
+            // [`Self::closed_before_the_cache_directory`].
+            self.closed_before_the_cache_directory();
         }
         if !write_success {
             if open_success && self.is_sync() {
@@ -1217,6 +1219,22 @@ impl AppenderInner {
     fn closed_after_a_failed_write(&mut self) -> bool {
         let held = !self.pending.is_empty();
         held && self.close_log_file()
+    }
+
+    /// The close of a file the log directory would not write to, for the branch
+    /// that hands the batch to the cache directory next: the handle is dropped
+    /// and the batch is left in [`Self::pending`].
+    ///
+    /// [`Self::close_log_file`] is wrong for that branch, because it flushes
+    /// first — into the file that has just refused the batch, and as its one
+    /// remaining attempt: [`Self::pending_refused`] gives a batch up after the
+    /// second failure, so a second failure here clears `pending`, and the
+    /// fallback that opens the cache directory then finds no batch to write
+    /// and answers `false` for a record that has reached no file at all. Not
+    /// flushing leaves the attempt where it belongs — with the cache file the
+    /// batch is about to be written to — and a batch still gets exactly two.
+    fn closed_before_the_cache_directory(&mut self) {
+        self.forget_log_file();
     }
 
     fn forget_log_file(&mut self) {
