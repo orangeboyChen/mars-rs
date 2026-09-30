@@ -10,7 +10,11 @@ import { XlogConfig } from './XlogConfig';
 // `platforms/android/marsrs-xlog`, of `platforms/kmp/marsrs-xlog` and of
 // `platforms/react-native/marsrs-xlog` member for member: `Xlog.open(config)`
 // answers the appender, `xlog.level` is the property it is in Kotlin and in
-// Swift, and `xlog.i(tag, message)` has landed by the time it returns.
+// Swift, and `xlog.i(tag, message)` is handed to the appender by the time it
+// returns — which is not the same as being in the file: the default mode is
+// async, so a record waits in the cache for the writer thread until a
+// `flushNow()` takes it over, and only a `Sync` appender has written it when
+// the call is over.
 //
 // Nothing here awaits. A NAPI method that returns no promise is a call and not
 // an `await`, which is why the shape is the Kotlin one and not the Flutter one:
