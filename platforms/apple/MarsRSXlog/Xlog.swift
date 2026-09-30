@@ -100,7 +100,11 @@ public final class Xlog: NSObject {
             guard opened != Self.noHandle else {
                 return .none
             }
-            return LogLevel(rawValue: mars_xlog_get_level(opened)) ?? .verbose
+            // A raw value [LogLevel] does not carry is `none` and not
+            // `verbose`, and for the reason above: the value an appender that
+            // is not there answers is `-1`, and `verbose` is the level that
+            // logs everything — the opposite of what was asked.
+            return LogLevel(rawValue: mars_xlog_get_level(opened)) ?? .none
         }
         set {
             withHandle { mars_xlog_set_level_instance($0, newValue.rawValue) }
