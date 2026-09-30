@@ -17,12 +17,13 @@
 // closure — and re-exports the C module, so `mars_stn_start_task` and friends
 // are still reachable from here for whoever prefers them.
 //
-// Three of the types of that surface are not nested here but are types of the
+// Four of the types of that surface are not nested here but are types of the
 // module, named again by the typealiases below: an extension may not carry an
 // access modifier and neither may its members, so a type nested in `MarsStn`
-// has to be declared in this one body, and this file is held to 520 lines —
-// which holds the values a task is made of, but not `StnTask`, `StnQuestion`
-// and `StnAnswer` as well. `MarsStn.Task` is what an app writes either way.
+// has to be declared in this one body, and the lint run holds a file to 640
+// lines — which holds the values a task is made of, but not `StnTask`,
+// `StnQuestion`, `StnAnswer` and `StnLonglinkConfig` as well. `MarsStn.Task`
+// is what an app writes either way.
 //
 // Every call is a straight translation of a symbol in the header; nothing here
 // adds behaviour the C ABI does not have.
