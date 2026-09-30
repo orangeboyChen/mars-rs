@@ -48,6 +48,8 @@ import io.github.orangeboychen.marsrs.net.ffi.mars_stn_stop_signalling
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_stop_task
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_touch_tasks
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_trig_nooping
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.CPointer
@@ -85,23 +87,26 @@ import kotlinx.cinterop.toKString
  * another [StnLogic] — and it must be asked on a thread that is not the one
  * inside an ask, which is what the C ABI promises too.
  */
-@OptIn(ExperimentalForeignApi::class)
+@OptIn(ExperimentalForeignApi::class, ExperimentalAtomicApi::class)
 public actual object StnLogic {
     /**
      * The app that is installed, which is the only thing the C ABI does not give
      * back: `setApp` remembers it so that the next app releases it.
+     *
+     * Swapped and not written, because `setApp` is a read-modify-write and a
+     * plain field is two of them: two threads that read the same app both
+     * dispose it — a box the C side may still be handing to a question — and
+     * two that read none leave one of the two boxes pinned for the process.
      */
-    private var installed: StableRef<AppBox>? = null
+    private val installed = AtomicReference<StableRef<AppBox>?>(null)
 
     public actual fun setApp(ask: ((Question) -> Answer)?) {
-        val previous = installed
-        installed = null
-        if (ask == null) {
+        val reference = if (ask == null) null else StableRef.create(AppBox(ask))
+        val previous = installed.getAndSet(reference)
+        if (reference == null) {
             mars_stn_set_app(null, null)
         } else {
-            val reference = StableRef.create(AppBox(ask))
             mars_stn_set_app(reference.asCPointer(), staticCFunction(::asked))
-            installed = reference
         }
         // The box of the app before this one is held until the swap is over, and
         // not released by the assignment that replaces it: a question can be in
