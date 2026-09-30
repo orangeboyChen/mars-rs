@@ -279,7 +279,10 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
     return;
   }
   int level = XlogInt(call.arguments, @"level", MarsLevelInfo);
-  XlogAnswer(result, @(mars_xlog_is_enabled_for(instance, level) != 0));
+  // `YES` or `NO`, and not `@(… != 0)`: that one boxes an `int`, which the
+  // standard codec writes as an int32, and Dart's `await … as bool` throws a
+  // type error on it rather than reading it.
+  XlogAnswer(result, @(mars_xlog_is_enabled_for(instance, level) != 0 ? YES : NO));
 }
 
 /// `mars_xlog_flush_now_instance`: the drain is on the thread this is called
