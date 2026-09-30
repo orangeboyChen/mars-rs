@@ -551,8 +551,16 @@ pub unsafe extern "C" fn mars_sdt_run_checks(
 }
 
 /// Takes the JSON report of everything the checks have reported since the last
-/// call — the document `SdtLogic.reportSignalDetectResults(String)` gets in the
-/// C++, built by [`marsrs_sdt::report_json`].
+/// call: one `{"details":[ … ]}` document, one object in it per host a check
+/// probed, of every result recorded since the last take — the results of one
+/// run when a take follows every run, and of several when it does not.
+///
+/// Which is not the document
+/// `SdtLogic.reportSignalDetectResults(String)` gets in the C++, although both
+/// are [`marsrs_sdt::report_json`]'s: that one is the report of the run that
+/// just finished, and this one is whatever has been recorded and not taken
+/// yet, however many runs it came out of. The callback records and the take
+/// hands over, so a host that asks for nothing loses nothing.
 ///
 /// A report that did not fit is *not* taken: on [`MARS_SDT_ERR_NO_SPACE`] (or
 /// [`MARS_SDT_ERR_NULL_OUT`]) it stays where it was and the next call hands it

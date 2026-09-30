@@ -64,8 +64,10 @@ public expect object SdtLogic {
      * profiles, which is this app's to answer.
      *
      * The report reaches the app the way it always does: [ICallBack], which the
-     * run calls once it is over. [takeReport] hands the same document over to an
-     * app that would rather ask for it.
+     * run calls once it is over, with the document of the run it ran in.
+     * [takeReport] hands over whatever has been recorded since the last call —
+     * which is that document when a take follows every run, and the results of
+     * several runs in one when it does not.
      *
      * @param networkType what `PlatformComm.getNetInfo` answers on Android, and
      *                    the caller's own elsewhere
@@ -80,9 +82,12 @@ public expect object SdtLogic {
     public fun runChecks(networkType: Int, probe: IProbe): Boolean
 
     /**
-     * The JSON of everything the checks have reported since the last call — the
-     * same document [ICallBack] was handed — or `null` when there was nothing to
-     * take. Taking it empties it: the next call reports what happened since.
+     * The JSON of everything the checks have reported since the last call: one
+     * document of every result recorded since, which is the results of one run
+     * when a take follows every run, and of several when it does not. Not the
+     * document [ICallBack] is handed, which is the one of the run that just
+     * finished — `null` when there was nothing to take. Taking it empties it:
+     * the next call reports what happened since.
      */
     public fun takeReport(): String?
 

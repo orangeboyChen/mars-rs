@@ -309,8 +309,9 @@ fn a_diagnosis_runs_over_the_probe_and_reports_what_it_found() {
         assert!(json.contains(field), "{field} is missing from {json}");
     }
 
-    // Taking the report empties it, the way one `reportSignalDetectResults`
-    // hands over what a run found and no more.
+    // Taking the report empties it: a take hands over everything recorded
+    // since the last one, and not only the results of the run that just
+    // finished.
     // SAFETY: a valid buffer of 4096 bytes.
     let written = unsafe { mars_sdt_take_report(report.as_mut_ptr(), report.len() as c_uint) };
     assert!(written > 0);

@@ -245,8 +245,12 @@ int mars_sdt_run_checks(void* ctx, MarsSdtProbe probe, int network_type);
 
 /**
  * Takes the JSON report of everything the checks have reported since the last
- * call — the document `SdtLogic.reportSignalDetectResults(String)` gets in the
- * C++: `{"details":[ … ]}`, one object per check.
+ * call — `{"details":[ … ]}`, one object per host a check probed, of every
+ * result recorded since the last take.
+ *
+ * Not the document `SdtLogic.reportSignalDetectResults(String)` gets in the
+ * C++, which is the one of the run that just finished: the callback records a
+ * run's results, and a take hands over however many runs are waiting.
  *
  * @return the number of bytes written excluding the terminating NUL, or a
  *         negative MARS_SDT_ERR_* code.
