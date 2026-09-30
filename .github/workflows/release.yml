@@ -382,7 +382,17 @@ jobs:
                 exit 1
                 ;;
             esac
-            echo "$AAR: $(unzip -p "$AAR" proguard.txt | grep -c '^-keep') keep rules"
+            # A `proguard.txt` of no `-keep` rules is one that lets R8 rename
+            # the names the .so looks up, which is the reason the file is in
+            # the AAR at all — and `grep -c` answers 1 and a `0` for it, which
+            # an `echo` around it would swallow. `|| true` is the count and
+            # not the check: the check is the `test` below it.
+            rules="$(unzip -p "$AAR" proguard.txt | grep -c '^-keep' || true)"
+            test "$rules" -gt 0 || {
+              echo "::error file=$AAR::$AAR's proguard.txt keeps nothing"
+              exit 1
+            }
+            echo "$AAR: $rules keep rules"
           done
       - uses: actions/upload-artifact@v7
         with:

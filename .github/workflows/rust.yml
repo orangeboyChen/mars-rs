@@ -350,7 +350,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: scripts/build_harmony.sh dist/harmony
       - name: The three libraries a HarmonyOS module carries
-        run: ls -l dist/harmony/*/libmars_ffi.so
+        # Named and not globbed: `dist/harmony/*/libmars_ffi.so` lists as few
+        # as one without failing, and a port that stopped building an ABI is
+        # a port that would ship a HAR no device of that ABI can load.
+        run: ls -l dist/harmony/{arm64-v8a,armeabi-v7a,x86_64}/libmars_ffi.so
       # The package's own natives: the same crate, with `napi_init.cpp` — the
       # one C file in the port, and the one nothing else compiles — linked
       # around it. A link that only ever ran at release time is a link nobody
@@ -358,7 +361,7 @@ jobs:
       # downloaded and the Rust this job has already built.
       - run: scripts/build_harmony_napi.sh dist/harmony-napi
       - name: The three libraries the HAR carries
-        run: ls -l dist/harmony-napi/*/libmarsrs_xlog.so
+        run: ls -l dist/harmony-napi/{arm64-v8a,armeabi-v7a,x86_64}/libmarsrs_xlog.so
       # And the package itself: the HAR is a tree and a tar, so what this proves
       # is the staging and the version stamp — which is the part a release would
       # otherwise find out. `0.0.0` is not a release; the number is stamped at

@@ -176,4 +176,16 @@ cp "$har" "$out/$name-$version.har"
 ls -l "$out/$name-$version.har"
 # A HAR is a tar.gz of the module's tree, which is what makes it the same
 # archive scripts/package_harmony.sh writes by hand.
-tar -tzf "$out/$name-$version.har" | grep -E 'oh-package\.json5$|\.ets$|\.so$' | sort || true
+contents="$(tar -tzf "$out/$name-$version.har")"
+echo "$contents" | grep -E 'oh-package\.json5$|\.ets$|\.so$' | sort
+# The listing is a check and not only a log: an archive with no
+# `oh-package.json5` in it is one ohpm cannot install, and one with no `.ets`
+# in it is a HAR of a module that compiled nothing — either of which is a
+# build that has to end here rather than in a package that fails to import.
+# The `.so` is listed and not checked for, because `libs/` is filled by
+# scripts/build_harmony_napi.sh and not by hvigor, which has no CMake project
+# to build one from.
+echo "$contents" | grep -qE 'oh-package\.json5$' ||
+    { echo "::error::the .har holds no oh-package.json5"; exit 1; }
+echo "$contents" | grep -qE '\.ets$' ||
+    { echo "::error::the .har holds no ArkTS source"; exit 1; }
