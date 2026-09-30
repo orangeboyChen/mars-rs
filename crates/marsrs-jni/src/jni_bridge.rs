@@ -1349,12 +1349,13 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: &JClass<'_>, question: Question) -> Ans
             Answer::Yes(bool_of(env, called))
         }
         Question::TrafficData { send, recv } => {
-            let _ = env.call_static_method(
+            let called = env.call_static_method(
                 class,
                 jni_str!("trafficData"),
                 jni_sig!("(II)V"),
                 &[JValue::Int(send as jint), JValue::Int(recv as jint)],
             );
+            void_of(env, called);
             Answer::Nothing
         }
         Question::OnNewDns { host } => {
@@ -1381,7 +1382,7 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: &JClass<'_>, question: Question) -> Ans
             };
             let channel_id = JObject::from(channel_id);
             let body = bytes_argument(env, &body);
-            let _ = env.call_static_method(
+            let called = env.call_static_method(
                 class,
                 jni_str!("onPush"),
                 jni_sig!("(Ljava/lang/String;II[B)V"),
@@ -1392,6 +1393,7 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: &JClass<'_>, question: Question) -> Ans
                     JValue::Object(&body),
                 ],
             );
+            void_of(env, called);
             Answer::Nothing
         }
         Question::Req2Buf {
@@ -1484,12 +1486,13 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: &JClass<'_>, question: Question) -> Ans
             Answer::Ended(int_of(env, called))
         }
         Question::ReportConnectStatus { all, longlink } => {
-            let _ = env.call_static_method(
+            let called = env.call_static_method(
                 class,
                 jni_str!("reportConnectStatus"),
                 jni_sig!("(II)V"),
                 &[JValue::Int(all as jint), JValue::Int(longlink as jint)],
             );
+            void_of(env, called);
             Answer::Nothing
         }
         Question::IdentifyCheckBuffer { channel_id } => {
@@ -1547,7 +1550,9 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: &JClass<'_>, question: Question) -> Ans
             Answer::Yes(bool_of(env, called))
         }
         Question::RequestSync => {
-            let _ = env.call_static_method(class, jni_str!("requestDoSync"), jni_sig!("()V"), &[]);
+            let called =
+                env.call_static_method(class, jni_str!("requestDoSync"), jni_sig!("()V"), &[]);
+            void_of(env, called);
             Answer::Nothing
         }
         Question::NetCheckShortLinkHosts => {
@@ -1564,12 +1569,13 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: &JClass<'_>, question: Question) -> Ans
                 return Answer::Nothing;
             };
             let json = JObject::from(json);
-            let _ = env.call_static_method(
+            let called = env.call_static_method(
                 class,
                 jni_str!("reportTaskProfile"),
                 jni_sig!("(Ljava/lang/String;)V"),
                 &[JValue::Object(&json)],
             );
+            void_of(env, called);
             Answer::Nothing
         }
     }
@@ -1611,6 +1617,15 @@ fn int_of(env: &Env<'_>, called: jni::errors::Result<JValueOwned>) -> i32 {
         .unwrap_or(0)
 }
 
+/// A `V` Java was asked — the answer is nothing either way, but what a call
+/// that threw left pending is not: the questions the app answers with nothing
+/// (`onPush`, `trafficData`, `requestDoSync`, `reportConnectStatus`,
+/// `reportTaskProfile`) come back to JNI calls of their own, and the next one
+/// is the call CheckJNI aborts on. See [`clear_pending`].
+fn void_of(env: &Env<'_>, called: jni::errors::Result<JValueOwned>) {
+    let _ = clear_pending(env, called);
+}
+
 /// An `L` Java answered with — nothing for a call that could not be made, or
 /// for one that answered `null`, which is the C++'s own `NULL` check.
 fn object_of<'a>(
@@ -1636,9 +1651,11 @@ fn string_of(env: &mut Env<'_>, called: jni::errors::Result<JValueOwned>) -> Str
     java.to_str().into_owned()
 }
 
-/// A `String[]` Java answered with.
+/// A `String[]` Java answered with — empty for a call that could not be made,
+/// or for one that answered `null`, which is [`object_of`]'s own answer to
+/// both, pending exception cleared and all.
 fn strings_of(env: &mut Env<'_>, called: jni::errors::Result<JValueOwned>) -> Vec<String> {
-    let Ok(array) = called.and_then(|value| value.l()) else {
+    let Some(array) = object_of(env, called) else {
         return Vec::new();
     };
     string_array(env, &array)
@@ -1984,7 +2001,7 @@ fn ask_platform<'a>(
                 jni_sig!("(Z)J"),
                 &[JValue::Bool(wifi)],
             );
-            PlatformAnswer::Signal(long_of(called))
+            PlatformAnswer::Signal(long_of(env, called))
         }
         PlatformQuestion::NetworkConnected => {
             let called =
@@ -2005,8 +2022,10 @@ fn string_buffer<'a>(env: &mut Env<'a>) -> Option<JObject<'a>> {
 }
 
 /// A `J` Java answered with — `0` for a call that could not be made.
-fn long_of(called: jni::errors::Result<JValueOwned>) -> i64 {
-    called.and_then(|value| value.j()).unwrap_or(0)
+fn long_of(env: &Env<'_>, called: jni::errors::Result<JValueOwned>) -> i64 {
+    clear_pending(env, called)
+        .and_then(|value| value.j())
+        .unwrap_or(0)
 }
 
 // #################### io.github.orangeboychen.marsrs.BaseEvent ####################
