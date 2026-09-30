@@ -17,7 +17,7 @@
 //
 // Every key below is a field `lib/marsrs.dart` put there, and every
 // default is the one `mars_xlog.h` documents — `logDir` is the field with
-// none, because the appender answers `MARS_XLOG_ERR_EMPTY_LOG_DIR` without it.
+// none, because the C ABI opens no appender without it.
 
 static NSString *const kXlogChannel = @"marsrs";
 

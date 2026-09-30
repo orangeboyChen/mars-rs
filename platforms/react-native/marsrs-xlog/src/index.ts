@@ -63,8 +63,8 @@ export type CompressMode = (typeof CompressMode)[keyof typeof CompressMode];
  * gives it: what an `Xlog` is opened with.
  *
  * Every field has the default the C++'s own `XLogConfig` carries, so the one an
- * app has to give is `logDir` — the appender answers
- * `MARS_XLOG_ERR_EMPTY_LOG_DIR` without it. */
+ * app has to give is `logDir` — the C ABI opens no appender
+ * without it. */
 export interface XlogConfig {
   /** Where the log files are written; created if it is missing, and the one
    * field with no default. */
