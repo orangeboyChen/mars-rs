@@ -373,15 +373,32 @@ static napi_value Open(napi_env env, napi_callback_info info) {
     int level = NamedInt(env, argv[0], "level", MarsLevelInfo);
 
     long long handle = mars_xlog_get_instance(namePrefix);
+    // What this call opened, and not what it was answered: a handle the
+    // registry answered is an appender someone else opened, and only an
+    // appender this call opened may be released by it.
+    int opened = 0;
     if (handle == 0) {
         handle = mars_xlog_new_instance(&config, level);
+        if (handle != 0) {
+            opened = 1;
+        }
     }
     if (handle != 0 && !Remember(namePrefix, handle)) {
         // The table is what every call after this one goes through, so an
         // appender it cannot remember is an appender it cannot reach: closed
         // again, rather than opened and left for the process to leak.
-        mars_xlog_release_instance(namePrefix);
-        handle = 0;
+        //
+        // Only when this call is the one that opened it.
+        // `mars_xlog_release_instance` releases the appender of a *prefix*
+        // and not of a handle, so releasing one the registry answered closes
+        // an appender another caller is writing through — and flushes its
+        // cache out from under it. A prefix that was open already is
+        // answered `true` instead: the appender is there, and it was there
+        // before this call was made.
+        if (opened != 0) {
+            mars_xlog_release_instance(namePrefix);
+            handle = 0;
+        }
     }
 
     free(logDir);
