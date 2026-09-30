@@ -46,11 +46,11 @@ The appender is one struct of options and a handful of free calls in
 | `appender_flush()` | `xlog.request_flush()` | `mars_xlog_request_flush_instance(handle)` |
 | `appender_flush_sync()` | `xlog.flush_now()` | `mars_xlog_flush_now_instance(handle)` |
 | `appender_close()` | `xlog.close()` | `mars_xlog_release_instance(prefix)` |
-| `xlogger_SetLevel(level)` | `xlog.set_level(level)` | `mars_xlog_set_level_instance(0, level)` |
-| `appender_setmode(mode)` | `xlog.set_mode(mode)` | `mars_xlog_set_mode_instance(0, mode)` |
-| `appender_set_console_log(bool)` | `xlog.set_console_log_enabled(on)` | `mars_xlog_set_console_log_instance(0, on)` |
-| `appender_set_max_file_size(bytes)` | `xlog.set_max_file_size_bytes(bytes)` | `mars_xlog_set_max_file_size_instance(0, bytes)` |
-| `appender_set_max_alive_duration(secs)` | `xlog.set_max_alive_time_seconds(secs)` | `mars_xlog_set_max_alive_duration_instance(0, secs)` |
+| `xlogger_SetLevel(level)` | `xlog.set_level(level)` | `mars_xlog_set_level_instance(handle, level)` |
+| `appender_setmode(mode)` | `xlog.set_mode(mode)` | `mars_xlog_set_mode_instance(handle, mode)` |
+| `appender_set_console_log(bool)` | `xlog.set_console_log_enabled(on)` | `mars_xlog_set_console_log_instance(handle, on)` |
+| `appender_set_max_file_size(bytes)` | `xlog.set_max_file_size_bytes(bytes)` | `mars_xlog_set_max_file_size_instance(handle, bytes)` |
+| `appender_set_max_alive_duration(secs)` | `xlog.set_max_alive_time_seconds(secs)` | `mars_xlog_set_max_alive_duration_instance(handle, secs)` |
 | `appender_get_current_log_path(out, len)` | `xlog.current_log_path()` | `mars_xlog_current_log_path_instance(instance, out, len)` |
 
 The Rust column is the object an app holds — the `Xlog.open(config)` of Kotlin,

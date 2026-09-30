@@ -75,8 +75,14 @@ typedef enum {
 /** Additional level understood only by the filter: disables every record. */
 #define MARS_LEVEL_NONE 6
 
-/* --- return codes ------------------------------------------------------- */
-
+/* --- return codes -------------------------------------------------------
+ *
+ * The five from `NULL_CONFIG` to `APPENDER` are the reasons an open may be
+ * refused, and no symbol hands them out: `mars_xlog_new_instance` answers the
+ * handle `0` for every one of them, there being no room in a handle for a
+ * negative code. They are here for the caller that wants to name the reason in
+ * its own diagnostic, not to switch on an answer.
+ */
 #define MARS_XLOG_OK 0
 #define MARS_XLOG_ERR_NULL_CONFIG (-1)   /* `config` was NULL                     */
 #define MARS_XLOG_ERR_BAD_MODE (-2)      /* `mode` outside MarsAppenderMode       */

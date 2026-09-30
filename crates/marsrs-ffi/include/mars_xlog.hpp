@@ -257,9 +257,15 @@ public:
      * Read from the C ABI and not mirrored here, so a level another part of
      * the app set is the one this answers with. */
     LogLevel level() const {
+        // A closed `Xlog` answers "nothing is written", which is what the Rust
+        // `Xlog::level` answers as `None` and what `isLoggable` already says
+        // here: a handle no appender is open for has no level of its own, and
+        // the `-1` it is answered with is `(TLogLevel)-1`, the C++'s "log
+        // everything" — the opposite of the truth for one.
+        if (!isOpen()) {
+            return LogLevel::None;
+        }
         const int level = mars_xlog_get_level(handle_);
-        // `-1` is what the C ABI answers for a handle that is not one, and it
-        // is `(TLogLevel)-1`, the C++'s "log everything".
         return level < 0 ? LogLevel::Verbose : static_cast<LogLevel>(level);
     }
 
@@ -412,9 +418,9 @@ public:
      *
      * Setting through a closed `Xlog` sets nothing either, which is what
      * Swift's does and not what Kotlin's does: Kotlin throws, and what it is
-     * protecting is the process-wide appender a closed handle would reach. A
-     * closed `Xlog` here reaches nothing at all — every member is a no-op — so
-     * there is no exception to catch, and a destructor closes without one. */
+     * protecting is an appender a closed handle would reach. A closed `Xlog`
+     * here reaches nothing at all — every member is a no-op — so there is no
+     * exception to catch, and a destructor closes without one. */
     void close() {
         if (!isOpen()) {
             return;
@@ -430,15 +436,17 @@ public:
         handle_ = 0;
     }
 
-    /// The file this appender is writing to, or `std::nullopt` when it has
-    /// none open yet — the first record of a day is what opens one.
+    /// The directory this appender writes its files into, or `std::nullopt`
+    /// once it is closed.
     ///
-    /// A day is one file, so this is the path handed to something that reads
-    /// the log while it is being written. [`logFiles`] is the day's.
+    /// A directory and not a file, which is what the C++'s
+    /// `GetCurrentLogPath` answers, and there is no "not yet" state: an open
+    /// appender has a directory from the moment it is opened. [`logFiles`] is
+    /// the day's file inside it.
     std::optional<std::string> currentLogPath() const {
-        // A closed `Xlog` answers nothing, as every member of it does: the
-        // handle `0` a closed one carries is the process-wide appender to the
-        // C ABI, and that is not this appender's question to answer.
+        // A closed `Xlog` answers nothing, as every member of it does: handle
+        // `0` names no appender at all, and that is not this appender's
+        // question to answer.
         if (!isOpen()) {
             return std::nullopt;
         }
@@ -477,14 +485,25 @@ private:
 
     /// What `body` writes into the buffer it is handed, as a string; `nullopt`
     /// when it wrote nothing.
+    ///
+    /// `MARS_XLOG_ERR_NO_SPACE` is a buffer that was too small and not an
+    /// answer of "no path", so the buffer grows and the question is asked
+    /// again: a path of a deep directory is a path an app still wants, and a
+    /// walk that took a short buffer for the end of the list would answer a
+    /// day with no files in it. Past 64 KiB the question is left unanswered.
     std::optional<std::string> path(
         const std::function<int(char*, std::uint32_t)>& body) const {
-        std::vector<char> buffer(1024);
-        int written = body(buffer.data(), static_cast<std::uint32_t>(buffer.size()));
-        if (written <= 0) {
-            return std::nullopt;
+        for (std::size_t size = 1024; size <= 65536; size *= 2) {
+            std::vector<char> buffer(size);
+            int written = body(buffer.data(), static_cast<std::uint32_t>(buffer.size()));
+            if (written > 0) {
+                return std::string(buffer.data(), static_cast<std::size_t>(written));
+            }
+            if (written != MARS_XLOG_ERR_NO_SPACE) {
+                return std::nullopt;
+            }
         }
-        return std::string(buffer.data(), static_cast<std::size_t>(written));
+        return std::nullopt;
     }
 
     /// The paths of one day, walked index by index until the symbol answers
@@ -510,8 +529,8 @@ private:
     }
 
     /** Runs `body` with this appender's handle, and runs nothing at all once
-     * `close()` has: handle `0` is the process-wide appender to the C ABI, so
-     * a call through it would move a logger this object does not own. */
+     * `close()` has: handle `0` names no appender at all, so a call through it
+     * would silently write nothing. */
     template <typename Body>
     void withHandle(Body body) const {
         if (isOpen()) {

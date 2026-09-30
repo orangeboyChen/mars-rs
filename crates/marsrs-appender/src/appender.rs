@@ -374,7 +374,7 @@ pub(crate) fn cache_dir(config: &XLogConfig) -> &Path {
 ///
 /// Neither is inside anything the sweep or the log-file discovery look at:
 /// `del_timeout_file` only removes `.xlog` files and `YYYYMMDD` directories,
-/// and [`file_util::get_file_names_by_prefix`] only matches `.xlog`.
+/// and [`crate::file_util::get_file_paths_from_timeval`] only matches `.xlog`.
 pub(crate) fn dir_lock_path(dir: &Path, prefix: &str) -> PathBuf {
     dir.join(format!("{prefix}.lock"))
 }
@@ -622,9 +622,8 @@ struct AppenderInner {
     use_mmap: bool,
     /// The cache file this appender owns: see `CacheSlot`.
     ///
-    /// `None` for `Appender::oneshot`, which works on a file left behind by
-    /// another process and must never clear it, and for an appender that could
-    /// not claim a slot of its own at all.
+    /// `None` when the appender writes without one, which is what every slot
+    /// being taken leaves.
     cache: Option<CacheSlot>,
     /// `<logdir>/<prefix>.lock`, taken around the operations that move more
     /// than one file: see `Self::with_dir_lock`. `None` when the file cannot be
@@ -1333,7 +1332,7 @@ impl Appender {
         use crate::config::AppenderError;
 
         if config.logdir.as_os_str().is_empty() {
-            return Err(AppenderError("appender_open: logdir is empty".to_owned()));
+            return Err(AppenderError("Appender::open: logdir is empty".to_owned()));
         }
 
         let cachedir = config.cachedir.clone();
@@ -1612,9 +1611,14 @@ impl Appender {
     /// write it precedes is what makes `N` logging threads no faster than one —
     /// on this tree, eight threads writing 20 000 records took 2.2x the wall
     /// time one thread took before the split.
-    pub(crate) fn write(&self, info: Option<&XLoggerInfo>, log: &str) {
+    ///
+    /// `false` when the record did not land — an appender that is closed, or
+    /// one that was closed while this record was being formatted. The answer is
+    /// the appender's own and not a flag read before the write: a `close` on
+    /// another thread is what makes the two differ.
+    pub(crate) fn write(&self, info: Option<&XLoggerInfo>, log: &str) -> bool {
         if self.shared.flags.log_close.load(Ordering::Acquire) {
-            return;
+            return false;
         }
 
         if Self::console_echoes(
@@ -1642,11 +1646,11 @@ impl Appender {
         // that recursed.
         if count >= 2 && RECURSION_DUMP.with(|cell| cell.borrow().is_none()) {
             if count > MAX_RECURSION {
-                return;
+                return false;
             }
             let dump = recursion_dump(info, count);
             RECURSION_DUMP.with(|cell| *cell.borrow_mut() = Some(dump));
-            return;
+            return false;
         }
 
         // `else`: the dump the last recursive write left, filed with the next
@@ -1666,7 +1670,7 @@ impl Appender {
         // record added after that would sit in the cache with nothing left to
         // take it to a file, and be dropped when the appender is.
         if self.shared.flags.log_close.load(Ordering::Acquire) {
-            return;
+            return false;
         }
         // The record's own second, which is what dates the file it lands in:
         // see [`AppenderInner::write_time`]. `None` when the record carries none
@@ -1723,6 +1727,7 @@ impl Appender {
             }
             guard.write_async(info, len);
         }
+        true
     }
 
     /// `XloggerAppender::WriteTips2File`.
@@ -1831,9 +1836,8 @@ impl Appender {
     /// too; without one, the file keeps whatever the region held and the next
     /// start would append it a second time — once per start, forever.
     ///
-    /// Only for the writer that owns the file: [`Appender::oneshot`] works on
-    /// another process's cache file and must leave it alone when it cannot
-    /// drain or remove it.
+    /// Only for the writer that owns the file: a cache file left behind by
+    /// another process is not this appender's to clear.
     fn clear_cache_file_if_heap(&self) {
         let (use_mmap, path) = {
             let guard = self.lock();
@@ -1883,10 +1887,6 @@ impl Appender {
         if secs as i64 >= MIN_LOG_ALIVE_TIME {
             self.lock().max_alive_time = secs as i64;
         }
-    }
-
-    pub(crate) fn is_closed(&self) -> bool {
-        self.shared.flags.log_close.load(Ordering::Acquire)
     }
 
     /// The prefix every file of this appender starts with.
@@ -1948,17 +1948,11 @@ impl Appender {
             Some(&cachedir),
         );
 
-        let mut paths = Vec::new();
-        if log_path.exists() {
-            paths.push(log_path.clone());
-        }
-        if cache_path.exists() {
-            paths.push(cache_path);
-        }
-        if paths.is_empty() {
-            paths.push(log_path);
-        }
-        paths
+        // Both, and neither filtered by whether it is there: this is the
+        // *name* a day is written under, which is the question an app that is
+        // about to write, or that is naming a file to someone else, asks.
+        // Which of the two are there yet is `getfilepath_from_timespan`'s.
+        vec![log_path, cache_path]
     }
 
     /// `XloggerAppender::GetfilepathFromTimespan`.

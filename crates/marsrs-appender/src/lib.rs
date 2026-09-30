@@ -78,7 +78,6 @@
 //!
 //! Everything else has a counterpart: the per-prefix instance table lives in
 //! [`category`], and the hex dump of a binary blob in [`xlogger_memory_dump`]
-//! (and its file-writing sibling, `xlogger_memory_dump`).
 
 // Only `appender::map_region` uses `unsafe` (memmap2 requires it); see the
 // SAFETY comment there. Everything else is safe Rust.
@@ -127,8 +126,8 @@ use appender::Appender;
 /// nothing installs a process-wide one, so handle `0` names no appender at all.
 static INSTANCES: OnceLock<Mutex<Instances>> = OnceLock::new();
 
-/// Opaque id of an appender created by `appender_open_instance` — the one
-/// an unregistered appender holds, and the one the `*_instance` calls take.
+/// Opaque id of an appender created by `appender_open_instance`, and the one
+/// the `*_instance` calls take.
 pub type AppenderId = u64;
 
 struct Instances {
@@ -159,9 +158,9 @@ fn instance(id: AppenderId) -> Option<Arc<Appender>> {
 
 /// The cache file an instance claimed, if any.
 ///
-/// Which slot an instance got is decided by [`appender::claim_cache_slot`] at
-/// open time and is not a function of the config alone — another process can
-/// hold slot 0 — so the path has to be read back from the appender.
+/// Which slot an instance got is decided by the appender at open time and is
+/// not a function of the config alone — another process can hold slot 0 — so
+/// the path has to be read back from the appender.
 fn instance_cache_path(id: AppenderId) -> Option<PathBuf> {
     instance(id).and_then(|appender| appender.claimed_cache_path())
 }
@@ -199,14 +198,23 @@ pub(crate) fn appender_open_instance(config: XLogConfig) -> Result<AppenderId, A
 }
 
 /// Closes and drops the instance; unknown ids are ignored.
+///
+/// The table's lock is let go before the close and not after it: a close
+/// flushes, hands the file's buffer to the OS and waits for the writer thread
+/// to finish, and every other logger in the process asks this table for its
+/// own appender on every record. Holding it across a close is a stall of all
+/// of them for the length of someone else's drain.
 pub(crate) fn appender_close_instance(id: AppenderId) {
-    if let Some(appender) = lock_instances().map.remove(&id) {
+    let appender = lock_instances().map.remove(&id);
+    if let Some(appender) = appender {
         appender.close();
     }
 }
 
-/// Writes through a specific instance. `false` when the id is unknown or the
-/// appender is closed.
+/// Writes through a specific instance. `false` when the id is unknown, or the
+/// appender is closed — including one closed by another thread while this
+/// record was being written, which is why the answer is the write's own and
+/// not a flag read before it.
 pub(crate) fn appender_write_instance(
     id: AppenderId,
     info: Option<&XLoggerInfo>,
@@ -217,9 +225,7 @@ pub(crate) fn appender_write_instance(
     let Some(appender) = instance(id) else {
         return false;
     };
-    let closed = appender.is_closed();
-    appender.write(info, logbody);
-    !closed
+    appender.write(info, logbody)
 }
 
 /// Asks the writer thread to drain one instance, and returns at once.

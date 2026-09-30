@@ -379,7 +379,8 @@ cc -I include -o app app.c -L. -lmars_ffi                  # shared
 ```
 
 Every call that returns an `int` answers `MARS_XLOG_OK` (0) or a negative
-`MARS_XLOG_ERR_*`, and nothing in the C ABI unwinds into C.
+`MARS_XLOG_ERR_*` — except the three that name a path, which answer the number
+of bytes they wrote instead — and nothing in the C ABI unwinds into C.
 
 ## C++
 

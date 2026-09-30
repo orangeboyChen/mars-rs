@@ -67,7 +67,13 @@ export class Xlog {
   private opened: boolean = true;
 
   private constructor(config: XlogConfig) {
-    this.namePrefix = config.namePrefix ?? DEFAULT_NAME_PREFIX;
+    // A blank prefix is an absent one, which is what the native side takes it
+    // for: it opens the appender under `DEFAULT_NAME_PREFIX`, so an `Xlog` that
+    // kept `''` would hold a name no call of its finds and write through
+    // nothing — and `open` above it would have answered success.
+    this.namePrefix = config.namePrefix === undefined || config.namePrefix === ''
+      ? DEFAULT_NAME_PREFIX
+      : config.namePrefix;
     this.currentLevel = config.level ?? LogLevel.Info;
     this.currentMode = config.mode ?? AppenderMode.Async;
   }
@@ -83,7 +89,8 @@ export class Xlog {
    * Throws when the appender would not take the configuration — an empty
    * `logDir`, or a directory the app cannot write to. */
   static open(config: XlogConfig): Xlog {
-    let namePrefix: string = config.namePrefix ?? DEFAULT_NAME_PREFIX;
+    let namePrefix: string =
+      config.namePrefix === undefined || config.namePrefix === '' ? DEFAULT_NAME_PREFIX : config.namePrefix;
     let alreadyOpen: Xlog | undefined = openAppenders.get(namePrefix);
     if (alreadyOpen !== undefined) {
       return alreadyOpen;

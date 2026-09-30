@@ -7,7 +7,7 @@
 |---|---|---|---|---|---|---|---|---|---|
 | `.xlog` 文件写到哪；目录不存在会创建 | `logdir` | `logDirectory` | `logDir` | `logDir` | `logDir` | `log_dir` | `logDir` | `logDir` | **必填**（Rust 里是 `./log`） |
 | 每个文件名的开头，也是这个 appender 的名字 | `nameprefix` | `namePrefix` | `namePrefix` | `namePrefix` | `namePrefix` | `name_prefix` | `namePrefix` | `namePrefix` | `xlog` |
-| 记录要达到的级别 | 见[级别](#级别) | `level` | `level` | `level` | `level` | `mars_xlog_set_level_instance(0, level)` | `level` | `level` | `info` |
+| 记录要达到的级别 | 见[级别](#级别) | `level` | `level` | `level` | `level` | `mars_xlog_new_instance(&config, level)` | `level` | `level` | `info` |
 | 写入是否等落盘 | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | 异步 |
 | 异步缓存文件放哪 | `cachedir` | `cacheDirectory` | `cacheDir` | `cacheDir` | `cacheDir` | `cache_dir` | `cacheDir` | `cacheDir` | 和日志文件同一个目录 |
 | 缓存文件保留几天 | `cache_days` | `cacheDays` | `cacheDays` | `cacheDays` | `cacheDays` | `cache_days` | `cacheDays` | `cacheDays` | `0` —— 都留着 |
@@ -116,11 +116,11 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 
 | 作用 | Rust | Swift | Android | Kotlin Multiplatform | Flutter | React Native | C | C++ | HarmonyOS |
 |---|---|---|---|---|---|---|---|---|---|
-| 改级别 | `xlog.set_level` | `log.level` | `xlog.level` | `xlog.level` | `xlog.level` | `xlog.level` | `mars_xlog_set_level_instance(0, level)` | `log.setLevel` | `xlog.level` |
-| 切异步 / 同步 | `xlog.set_mode` | `log.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `mars_xlog_set_mode_instance(0, mode)` | `log.setMode` | `xlog.mode` |
-| 同时打到控制台 | `xlog.set_console_log_enabled` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log_instance(0, on)` | `log.setConsoleLogEnabled` | `xlog.consoleLogEnabled` |
-| 到 N 字节就换文件 | `xlog.set_max_file_size_bytes` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size_instance(0, bytes)` | `log.setMaxFileSizeBytes` | `xlog.maxFileSizeBytes` |
-| 超过 N 秒就删文件 | `xlog.set_max_alive_time_seconds` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration_instance(0, secs)` | `log.setMaxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` |
+| 改级别 | `xlog.set_level` | `log.level` | `xlog.level` | `xlog.level` | `xlog.level` | `xlog.level` | `mars_xlog_set_level_instance(handle, level)` | `log.setLevel` | `xlog.level` |
+| 切异步 / 同步 | `xlog.set_mode` | `log.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `mars_xlog_set_mode_instance(handle, mode)` | `log.setMode` | `xlog.mode` |
+| 同时打到控制台 | `xlog.set_console_log_enabled` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log_instance(handle, on)` | `log.setConsoleLogEnabled` | `xlog.consoleLogEnabled` |
+| 到 N 字节就换文件 | `xlog.set_max_file_size_bytes` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size_instance(handle, bytes)` | `log.setMaxFileSizeBytes` | `xlog.maxFileSizeBytes` |
+| 超过 N 秒就删文件 | `xlog.set_max_alive_time_seconds` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration_instance(handle, secs)` | `log.setMaxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` |
 | 写到哪 | `xlog.current_log_path()` | `log.currentLogPath` | `xlog.currentLogPath` | `xlog.currentLogPath` | `await xlog.currentLogPath()` | `xlog.currentLogPath` | `mars_xlog_current_log_path_instance` | `log.currentLogPath()` | `xlog.currentLogPath` |
 | 一天的文件在哪 | `xlog.log_files(1)` | `log.logFiles(daysAgo: 1)` | `xlog.logFiles(1L)` | `xlog.logFiles(1L)` | `await xlog.logFiles(1)` | `xlog.logFiles(1)` | `mars_xlog_getfilepath_from_timespan_instance` | `log.logFiles(1)` | `xlog.logFiles(1)` |
 

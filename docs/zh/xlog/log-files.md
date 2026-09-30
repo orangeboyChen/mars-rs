@@ -105,8 +105,8 @@ xlog.logFileNames(1)
 
 :::
 
-`0` 是今天，`1` 是昨天。Rust 和 Swift 一次给出这一天的全部；C ABI 一次只给一个下标，
-C 那两个调用做的就是一趟走完它的事。配了缓存目录、而且文件确实存在时，“名字”
+`0` 是今天，`1` 是昨天。Rust 和 Swift 一次给出这一天的全部，而且给出的是**这个
+`Xlog` 所属的那一天**；C ABI 一次只给一个下标，C 那两个调用做的就是一趟走完它的事。配了缓存目录、而且文件确实存在时，“名字”
 会比“文件”多出一个：日志目录里那个，和它在缓存目录里的孪生文件。
 
 ## 异步：记录可能还在缓存里
@@ -158,7 +158,7 @@ mars_xlog_flush_now_instance(handle);
 |---|---|
 | `requestFlush()` —— `xlog.request_flush()`、`mars_xlog_request_flush_instance(handle)` | 提出一次排空，然后立刻返回：它返回了，不代表记录已经在文件里，它也不说排空什么时候结束 |
 | `flushNow()` —— `xlog.flush_now()`、`mars_xlog_flush_now_instance(handle)` | 占着调用方线程排空：它返回时记录已经在磁盘上 |
-| `await flush()` —— `xlog.flush().await`、`flush(handle)` | 同一次排空，交给别的线程：await 到它完成时，记录已经在磁盘上 |
+| `await flush()` —— `xlog.flush().await` | 同一次排空，交给别的线程：await 到它完成时，记录已经在磁盘上 |
 
 三个调用的分别只在**谁等**，以及谁拿得到“排完了”这句话。`requestFlush()` 谁也不等
 —— 它是定时器该调的那个 —— 提出一次排空就走，剩下的是写线程的事；没排完也不丢东西：

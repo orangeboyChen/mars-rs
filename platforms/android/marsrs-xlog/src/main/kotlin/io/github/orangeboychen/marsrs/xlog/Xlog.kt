@@ -332,14 +332,17 @@ class Xlog(config: XlogConfig, context: Context? = null) {
         backgroundFlush?.let { registeredWith?.unregisterComponentCallbacks(it) }
         backgroundFlush = null
         registeredWith = null
-        if (!isOpen) {
+        // The claim and not a question: `marsrs-jni` releases by prefix, so
+        // only one of the `Xlog`s of a prefix may release it, and the one that
+        // may is whichever takes the entry out of the table first. A `close`
+        // that finds no entry is a second one — this wrapper's own, or another
+        // one's — and releasing again would close an appender a re-open of
+        // the prefix has since put there.
+        if (!openHandles.remove(namePrefix, handle)) {
+            handle = NO_HANDLE
             return
         }
         releaseXlogInstance(namePrefix)
-        // The appender is the prefix's and not this wrapper's: `marsrs-jni`
-        // answers an [Xlog] of the same prefix with the same handle, so every one
-        // of them is closed with this one.
-        openHandles.remove(namePrefix, handle)
         handle = NO_HANDLE
     }
 

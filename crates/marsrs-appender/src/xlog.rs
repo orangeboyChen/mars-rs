@@ -182,10 +182,11 @@ impl Xlog {
 
     /// Switches async / sync; a no-op once this `Xlog` is closed.
     pub fn set_mode(&self, mode: AppenderMode) {
+        let Some(target) = self.target() else {
+            return;
+        };
         self.mode.store(mode as u8, Ordering::Relaxed);
-        if let Some(target) = self.target() {
-            set_appender_mode(target.0, mode);
-        }
+        set_appender_mode(target.0, mode);
     }
 
     /// Whether the console prints the log too — off until an app turns it on.
@@ -196,10 +197,11 @@ impl Xlog {
     /// Mirrors every record to the console as well as to the file; a no-op once
     /// this `Xlog` is closed.
     pub fn set_console_log_enabled(&self, enabled: bool) {
+        let Some(target) = self.target() else {
+            return;
+        };
         self.console_log_enabled.store(enabled, Ordering::Relaxed);
-        if let Some(target) = self.target() {
-            set_console_log_open(target.0, enabled);
-        }
+        set_console_log_open(target.0, enabled);
     }
 
     /// How many bytes a log file may reach before it is closed and a new one
@@ -210,10 +212,11 @@ impl Xlog {
 
     /// Sets the split size; a no-op once this `Xlog` is closed.
     pub fn set_max_file_size_bytes(&self, bytes: u64) {
+        let Some(target) = self.target() else {
+            return;
+        };
         self.max_file_size_bytes.store(bytes, Ordering::Relaxed);
-        if let Some(target) = self.target() {
-            category_set_max_file_size(target.0, bytes);
-        }
+        category_set_max_file_size(target.0, bytes);
     }
 
     /// How many seconds a log file is kept; `0` is the C++'s own ten days.
@@ -223,11 +226,12 @@ impl Xlog {
 
     /// Sets how long a log file is kept; a no-op once this `Xlog` is closed.
     pub fn set_max_alive_time_seconds(&self, seconds: u64) {
+        let Some(target) = self.target() else {
+            return;
+        };
         self.max_alive_time_seconds
             .store(seconds, Ordering::Relaxed);
-        if let Some(target) = self.target() {
-            category_set_max_alive_duration(target.0, seconds);
-        }
+        category_set_max_alive_duration(target.0, seconds);
     }
 
     /// Whether a record of `level` would be written: what an app asks before it
@@ -346,7 +350,14 @@ impl Xlog {
     /// What this `Xlog` writes through, or `None` once [`Xlog::close`] ran.
     fn target(&self) -> Option<Target> {
         let handle = self.handle.load(Ordering::Relaxed);
-        (handle != DEFAULT_HANDLE).then_some(Target(handle))
+        // The table and not the handle this object cached: a prefix is one
+        // appender, so another `Xlog` of this prefix — or a `close` on it —
+        // takes the appender out from under this handle, and a stale handle is
+        // a no-op to every call it is forwarded through. Asking the table is
+        // what makes `is_open` true for the one that is open and not for the
+        // one whose twin closed the appender they share.
+        (handle != DEFAULT_HANDLE && handle == get_xlogger_instance(&self.name_prefix))
+            .then_some(Target(handle))
     }
 
     /// The directory this appender writes its files to — `XLogConfig::logdir`,

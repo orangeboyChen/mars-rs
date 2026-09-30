@@ -1,4 +1,4 @@
-//! `xlogger_memory_dump()` and `xlogger_dump()` — the hex dump helpers from
+//! `xlogger_memory_dump()` — the hex dump helper from
 //! `mars/xlog/src/appender.cc`.
 //!
 //! The C++ returns a `const char*` into a `thread_local std::string`, so the
@@ -8,7 +8,7 @@
 
 /// `kMaxDumpLength` in `appender.cc`.
 const MAX_DUMP_LENGTH: usize = 4096;
-/// Bytes per dump line (`32` in `xlogger_memory_dump`, `16` in `Dump`).
+/// Bytes per dump line.
 const LINE_BYTES: usize = 32;
 /// Bytes per line of `XloggerAppender::Dump`.
 /// `for (int x = 0; x < 32 && dump_len < (int)_len; ++x)` in `Dump`: at most 32

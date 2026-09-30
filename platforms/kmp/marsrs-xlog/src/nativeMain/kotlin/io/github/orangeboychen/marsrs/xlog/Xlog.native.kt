@@ -17,6 +17,7 @@ import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_max_alive_duration_
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_max_file_size_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_mode_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_write_instance
+import kotlin.concurrent.Volatile
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -70,6 +71,13 @@ public actual class Xlog actual constructor(config: XlogConfig) {
             field = seconds
         }
 
+    /**
+     * The handle [close] takes away, and the one every member is forwarded
+     * through. Volatile because [close] may run on another thread than the
+     * writes it stops: nothing writes through a handle that is half of the old
+     * one and half of the new.
+     */
+    @Volatile
     private var handle: Long = newInstance(config)
 
     private var currentMode: AppenderMode = config.mode
@@ -134,7 +142,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
     public actual fun logFiles(daysAgo: Long): List<String> = if (isOpen) {
         dayPaths { index, out, len ->
-            mars_xlog_getfilepath_from_timespan_instance(handle, daysAgo.toInt(), index, out, len)
+            mars_xlog_getfilepath_from_timespan_instance(handle, daysAgoOf(daysAgo), index, out, len)
         }
     } else {
         emptyList()
@@ -142,7 +150,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
     public actual fun logFileNames(daysAgo: Long): List<String> = if (isOpen) {
         dayPaths { index, out, len ->
-            mars_xlog_make_logfile_name_instance(handle, daysAgo.toInt(), index, out, len)
+            mars_xlog_make_logfile_name_instance(handle, daysAgoOf(daysAgo), index, out, len)
         }
     } else {
         emptyList()
@@ -185,6 +193,13 @@ public actual class Xlog actual constructor(config: XlogConfig) {
         flushNow()
     }
 
+    /**
+     * `daysAgo` as the `Int` the C ABI takes. A `Long` outside `Int`'s range
+     * wraps rather than fails — `Long.MAX_VALUE` would ask the appender for a
+     * day in the future — so what crosses is the day clamped into it.
+     */
+    private fun daysAgoOf(daysAgo: Long): Int = daysAgo.coerceIn(NO_DAYS_AGO, Int.MAX_VALUE.toLong()).toInt()
+
     public actual fun close() {
         if (!isOpen) {
             return
@@ -221,6 +236,9 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
         /** What `mars_xlog_new_instance` answers for a config it opened nothing for. */
         const val NO_HANDLE = 0L
+
+        /** `0` is today, and no day is before it. */
+        const val NO_DAYS_AGO = 0L
 
         /** `mars_xlog_set_console_log_instance` reads a non-zero `open` as on. */
         const val CONSOLE_LOG_OPEN = 1

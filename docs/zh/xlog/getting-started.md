@@ -63,7 +63,8 @@ xlog.flush_now();   // 返回时记录已经在磁盘上
 第二个 logger 就是第二个 `Xlog`，给它自己的 prefix。每个选项都在
 [配置项](/zh/xlog/configuration)那页。一条记录就是级别、tag 和消息 ——
 `xlog.log(level, tag, message)`，或者某个级别自己的 `xlog.i(tag, message)` ——
-不带调用点的任何东西：Rust 没有 `#file` 可以填进文件、函数和行号。
+不带调用点的任何东西：Rust 没有 `#file` 可以填进文件、函数和行号，所以这里写的记录
+带着的是三个空值，Kotlin 的也是这样。
 
 已经开着的 prefix 再 `Xlog::open` 一次，回答的是那个已经开着的 appender 而不是第
 二个，而且第二次传进去的 config 会被忽略 —— 级别、目录都在内 —— 因为那个 appender
@@ -348,8 +349,9 @@ cc -I include -o app app.c libmars_ffi.a -lpthread -ldl     # 静态
 cc -I include -o app app.c -L. -lmars_ffi                  # 动态
 ```
 
-每个返回 `int` 的调用回答 `MARS_XLOG_OK`（0）或一个负的 `MARS_XLOG_ERR_*`，C ABI
-里没有任何东西会把栈展开到 C 里。
+每个返回 `int` 的调用回答 `MARS_XLOG_OK`（0）或一个负的 `MARS_XLOG_ERR_*` —— 只有
+那三个回答路径的例外，它们回答的是写进去的字节数 —— C ABI 里没有任何东西会把栈展开到
+C 里。
 
 ## C++
 

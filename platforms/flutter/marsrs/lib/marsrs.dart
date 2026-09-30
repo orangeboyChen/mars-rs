@@ -301,6 +301,44 @@ class Xlog {
     await _invoke<void>('flush');
   }
 
+  /// The directory this appender writes its files into, or `null` once it is
+  /// closed.
+  ///
+  /// A directory and not a file, because that is what the C++
+  /// `GetCurrentLogPath` answers; the day's file is the question under it.
+  Future<String?> currentLogPath() async {
+    if (_closing != null) {
+      return null;
+    }
+    return _invoke<String?>('currentLogPath');
+  }
+
+  /// The log files of the day `daysAgo` days ago that are *there* — `0` is
+  /// today, `1` is yesterday.
+  Future<List<String>> logFiles(int daysAgo) async {
+    if (_closing != null) {
+      return const [];
+    }
+    final found = await _invoke<List<dynamic>>(
+      'logFiles',
+      {'daysAgo': daysAgo},
+    );
+    return found?.cast<String>() ?? const [];
+  }
+
+  /// The names of the log files of the day `daysAgo` days ago, whether or not
+  /// they are there yet.
+  Future<List<String>> logFileNames(int daysAgo) async {
+    if (_closing != null) {
+      return const [];
+    }
+    final found = await _invoke<List<dynamic>>(
+      'logFileNames',
+      {'daysAgo': daysAgo},
+    );
+    return found?.cast<String>() ?? const [];
+  }
+
   /// Drains what is left and closes this appender. Writing through it afterwards
   /// writes nothing, and calling it twice closes nothing twice: what the second
   /// call answers is the drain the first one started, so an app that awaits

@@ -585,8 +585,10 @@ pub unsafe extern "C" fn mars_xlog_getfilepath_from_timespan_instance(
 ///
 /// # Safety
 ///
-/// `out` must be null or point to at least `len` writable bytes (both are
-/// checked).
+/// `out` must be null, or point to at least `len` writable bytes that stay
+/// alive for the duration of the call. Both are checked one frame down, in
+/// [`write_path_into`], which is what answers `MARS_XLOG_ERR_NULL_OUT` and
+/// `MARS_XLOG_ERR_NO_SPACE`.
 unsafe fn path_at(
     paths: &[std::path::PathBuf],
     index: c_uint,

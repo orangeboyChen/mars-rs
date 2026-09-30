@@ -49,7 +49,10 @@ nothing when it returns.
 ## The API
 
 The same one the Kotlin, the Swift, the Kotlin Multiplatform and the React
-Native packages carry, member for member:
+Native packages carry. One member they have and this one does not: `flush()`,
+an awaited drain — an async work item and a promise, and every method of the
+NAPI module behind this package is synchronous, so a caller that wants the
+drain off its own thread gives `flushNow()` a thread of its own.
 
 | | |
 |---|---|

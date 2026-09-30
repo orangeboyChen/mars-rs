@@ -52,9 +52,8 @@ export interface Spec extends TurboModule {
    * answer, only a drain to be over. */
   flush(namePrefix: string): Promise<void>;
 
-  /** `mars_xlog_current_log_path_instance`: the file this appender is writing to,
-   * or `undefined` when it has none open yet — the first record of the day is
-   * what opens one. */
+  /** `mars_xlog_current_log_path_instance`: the directory this appender writes
+   * its files into, or `undefined` once it is closed. */
   currentLogPath(namePrefix: string): string | undefined;
 
   /** `mars_xlog_getfilepath_from_timespan_instance`: the day's files that are

@@ -401,7 +401,11 @@ static napi_value SetMaxFileSize(napi_env env, napi_callback_info info) {
     napi_value self = NULL;
     if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) == napi_ok && argc >= 2) {
         double bytes = 0;
-        if (napi_get_value_double(env, argv[1], &bytes) == napi_ok && bytes > 0) {
+        // Clamped and not dropped: `0` is the appender's own "never split",
+        // so a caller that takes the split away again has to reach it — a
+        // setter that only ever moves the size up is a size an app cannot
+        // turn off.
+        if (napi_get_value_double(env, argv[1], &bytes) == napi_ok && bytes >= 0) {
             mars_xlog_set_max_file_size_instance(handle, (unsigned long long)bytes);
         }
     }
@@ -516,10 +520,15 @@ typedef int (*PathAt)(long long, int, unsigned int, char*, unsigned int);
 static napi_value Paths(napi_env env, napi_callback_info info, PathAt pathAt) {
     // The array is made first, so that every path out of this function answers
     // one and not `undefined`: the declarations say `string[]`, and a caller
-    // that walks the answer is not prepared for a value that is not there.
+    // that walks the answer is not prepared for a value that is not there. The
+    // one case that cannot answer one is an array the engine will not give us,
+    // and what that is answered with is a throw and not a short list — an
+    // uploader that takes a half of a day for the whole of it is worse than an
+    // app that hears that the question could not be answered.
     napi_value list = NULL;
     if (napi_create_array(env, &list) != napi_ok) {
-        return NULL;
+        napi_throw_error(env, NULL, "marsrs-harmonyos-xlog: no array for a day of paths");
+        return Undefined(env);
     }
     size_t argc = 2;
     napi_value argv[2] = {NULL, NULL};
@@ -545,13 +554,10 @@ static napi_value Paths(napi_env env, napi_callback_info info, PathAt pathAt) {
             break;
         }
         napi_value path = NULL;
-        // A path that will not become a string ends the walk rather than leaving
-        // a hole in an array the caller reads as `string[]`.
-        if (napi_create_string_utf8(env, buffer, (size_t)written, &path) != napi_ok) {
-            break;
-        }
-        if (napi_set_element(env, list, walked, path) != napi_ok) {
-            break;
+        if (napi_create_string_utf8(env, buffer, (size_t)written, &path) != napi_ok ||
+            napi_set_element(env, list, walked, path) != napi_ok) {
+            napi_throw_error(env, NULL, "marsrs-harmonyos-xlog: a path of the day was lost");
+            return Undefined(env);
         }
         walked++;
     }

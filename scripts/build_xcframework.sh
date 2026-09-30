@@ -267,7 +267,7 @@ MAP
         # The other half of the same check, and the reason the two are not one:
         # `nm` prints what it can parse and an error for every object it cannot,
         # so an archive it read nothing from would come out clean above. A slice
-        # of either framework exports symbols of its own — 28 of them for xlog,
+        # of either framework exports symbols of its own — 16 of them for xlog,
         # 9 and 21 for the diagnosis and the pipeline — so none at all means the
         # check above asked nothing rather than that the answer is yes.
         own="$(nm -gU "$slice_lib" 2>/dev/null | grep -Ec " T $owns" || true)"

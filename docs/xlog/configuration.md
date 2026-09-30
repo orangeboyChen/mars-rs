@@ -8,7 +8,7 @@ one with no default — the appender is not opened without somewhere to write.
 |---|---|---|---|---|---|---|---|---|---|
 | where the `.xlog` files go; created when it is not there | `logdir` | `logDirectory` | `logDir` | `logDir` | `logDir` | `log_dir` | `logDir` | `logDir` | **required** (`./log` in Rust) |
 | what every file starts with, and the name the appender is known by | `nameprefix` | `namePrefix` | `namePrefix` | `namePrefix` | `namePrefix` | `name_prefix` | `namePrefix` | `namePrefix` | `xlog` |
-| the level a record has to reach | see [levels](#levels) | `level` | `level` | `level` | `level` | `mars_xlog_set_level_instance(0, level)` | `level` | `level` | `info` |
+| the level a record has to reach | see [levels](#levels) | `level` | `level` | `level` | `level` | `mars_xlog_new_instance(&config, level)` | `level` | `level` | `info` |
 | whether a write waits for the file | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | async |
 | where the async cache file goes | `cachedir` | `cacheDirectory` | `cacheDir` | `cacheDir` | `cacheDir` | `cache_dir` | `cacheDir` | `cacheDir` | next to the log files |
 | how many days a cache file is kept | `cache_days` | `cacheDays` | `cacheDays` | `cacheDays` | `cacheDays` | `cache_days` | `cacheDays` | `cacheDays` | `0` — every file is kept |
@@ -130,15 +130,16 @@ every one of them takes effect from the next record:
 
 | what it does | Rust | Swift | Android | Kotlin Multiplatform | Flutter | React Native | C | C++ | HarmonyOS |
 |---|---|---|---|---|---|---|---|---|---|
-| move the level | `xlog.set_level` | `log.level` | `xlog.level` | `xlog.level` | `xlog.level` | `xlog.level` | `mars_xlog_set_level_instance(0, level)` | `log.setLevel` | `xlog.level` |
-| switch async / sync | `xlog.set_mode` | `log.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `mars_xlog_set_mode_instance(0, mode)` | `log.setMode` | `xlog.mode` |
-| mirror records to the console | `xlog.set_console_log_enabled` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log_instance(0, on)` | `log.setConsoleLogEnabled` | `xlog.consoleLogEnabled` |
-| close a file after N bytes | `xlog.set_max_file_size_bytes` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size_instance(0, bytes)` | `log.setMaxFileSizeBytes` | `xlog.maxFileSizeBytes` |
-| drop a file older than N seconds | `xlog.set_max_alive_time_seconds` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration_instance(0, secs)` | `log.setMaxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` |
+| move the level | `xlog.set_level` | `log.level` | `xlog.level` | `xlog.level` | `xlog.level` | `xlog.level` | `mars_xlog_set_level_instance(handle, level)` | `log.setLevel` | `xlog.level` |
+| switch async / sync | `xlog.set_mode` | `log.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `mars_xlog_set_mode_instance(handle, mode)` | `log.setMode` | `xlog.mode` |
+| mirror records to the console | `xlog.set_console_log_enabled` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log_instance(handle, on)` | `log.setConsoleLogEnabled` | `xlog.consoleLogEnabled` |
+| close a file after N bytes | `xlog.set_max_file_size_bytes` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size_instance(handle, bytes)` | `log.setMaxFileSizeBytes` | `xlog.maxFileSizeBytes` |
+| drop a file older than N seconds | `xlog.set_max_alive_time_seconds` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration_instance(handle, secs)` | `log.setMaxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` |
 | where it writes | `xlog.current_log_path()` | `log.currentLogPath` | `xlog.currentLogPath` | `xlog.currentLogPath` | `await xlog.currentLogPath()` | `xlog.currentLogPath` | `mars_xlog_current_log_path_instance` | `log.currentLogPath()` | `xlog.currentLogPath` |
 | a day of files | `xlog.log_files(1)` | `log.logFiles(daysAgo: 1)` | `xlog.logFiles(1L)` | `xlog.logFiles(1L)` | `await xlog.logFiles(1)` | `xlog.logFiles(1)` | `mars_xlog_getfilepath_from_timespan_instance` | `log.logFiles(1)` | `xlog.logFiles(1)` |
 
-It answers a **directory** and not a file, which is what the C++'s `GetCurrentLogPath` hands back; the day's file is the row under it.
+It answers a **directory** and not a file, which is what the C++'s
+`GetCurrentLogPath` hands back; the day's file is the row under it.
 
 `0` is "no limit" for both sizes and ages: a file is never split and never
 dropped — the C++ keeps its own ten days.

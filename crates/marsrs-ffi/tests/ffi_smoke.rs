@@ -2,9 +2,9 @@
 //! open into a temp dir, write a few records, flush, close, then read the
 //! resulting `.xlog` file back and check the bodies really landed on disk.
 //!
-//! The appender is a process-wide singleton, so every test takes [`LOCK`]:
+//! The instance registry is process-wide, so every test takes [`LOCK`]:
 //! `cargo test` runs the cases in this file on parallel threads and they would
-//! otherwise race over the instance registry.
+//! otherwise race over the one prefix they share.
 
 use std::ffi::CString;
 use std::fs;
@@ -21,9 +21,9 @@ use mars_ffi::{
 
 /// Closes the appender when the test ends, even if it failed.
 ///
-/// The appender is a process-wide singleton that rejects a second
-/// the open of an appender, so a test that panics mid-way would otherwise poison every
-/// test that runs after it.
+/// The instance registry is process-wide and a prefix is one appender to it,
+/// so a test that panics mid-way would otherwise poison every test that runs
+/// after it.
 struct CloseOnDrop;
 impl Drop for CloseOnDrop {
     fn drop(&mut self) {

@@ -459,8 +459,8 @@ public final class Xlog: NSObject {
     }
 
     /// Runs `body` with this appender's handle, and runs nothing at all once
-    /// [close()] has: handle `0` is the process-wide appender to the C ABI,
-    /// so a call through it would move a logger this object does not own.
+    /// [close()] has: handle `0` names no appender at all, so a call through
+    /// it would silently write nothing.
     private func withHandle(_ body: (Int64) -> Void) {
         guard isOpen else {
             return

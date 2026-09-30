@@ -8,49 +8,16 @@ use std::io::Write;
 use crate::config::XLoggerInfo;
 use crate::formater::{extract_file_name, extract_function_name, LEVEL_STRINGS};
 
-// Whether this thread is inside the sink already: a record logged from inside
-// it is not the sink's to have, so [`enter_sink`] answers [`None`] for one.
-thread_local! {
-    static IN_SINK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Marks the thread as inside the sink, and takes the mark away again on the
-/// way out — a sink that panicked included, or one panic would leave the
-/// thread's sink switched off for good.
-struct InSink;
-
-impl Drop for InSink {
-    fn drop(&mut self) {
-        let _ = IN_SINK.try_with(|cell| cell.set(false));
-    }
-}
-
-/// Takes the thread into the sink: [`None`] when it is in there already, which
-/// is a record the sink itself is writing.
-fn enter_sink() -> Option<InSink> {
-    IN_SINK.with(|cell| {
-        if cell.replace(true) {
-            None
-        } else {
-            Some(InSink)
-        }
-    })
-}
-
 /// `mars::xlog::ConsoleLog`.
 ///
 /// Does nothing when `_info` is `None` (the C++ returns early on
 /// `NULL == _info`). What it writes is the built-in stderr line, and only that
-/// one: the sink an app could set was process-wide, and the port has no
-/// process-wide surface left.
+/// one: the sink an app could set was process-wide, and no process-wide
+/// surface is left to set one on.
 pub(crate) fn console_log(info: Option<&XLoggerInfo>, log: &str) {
     let Some(info) = info else {
         return;
     };
-
-    // A record written *from inside* a sink still gets the built-in line,
-    // which is what kept a sink that logs from recursing.
-    let _in_sink = enter_sink();
 
     let level = LEVEL_STRINGS[info.level as usize];
     let tag = info.tag.as_deref().unwrap_or("");

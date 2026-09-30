@@ -81,23 +81,30 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
         if (appenders.containsKey(namePrefix)) {
             return true
         }
-        val xlogConfig = XlogConfig(
-            logDir = config.string("logDir"),
-            namePrefix = namePrefix,
-            level = LogLevel.of(config.int("level", LogLevel.INFO.ordinal)),
-            mode = appenderModeOf(config.int("mode", AppenderMode.ASYNC.ordinal)),
-            pubKey = config.string("pubKey"),
-            compressMode = compressModeOf(config.int("compressMode", CompressMode.ZLIB.ordinal)),
-            compressLevel = config.int("compressLevel", DEFAULT_COMPRESS_LEVEL),
-            cacheDir = config.optionalString("cacheDir"),
-            cacheDays = config.int("cacheDays", NO_CACHE_DAYS)
-        )
+        // Both calls and not the open only: `XlogConfig` is where a blank
+        // `logDir`, a negative `cacheDays` and a compression level out of
+        // range are refused, and it throws before `Xlog.open` is ever reached
+        // — so a `try` around the open alone is a `try` around nothing.
         val xlog = try {
-            Xlog.open(xlogConfig)
+            Xlog.open(
+                XlogConfig(
+                    logDir = config.string("logDir"),
+                    namePrefix = namePrefix,
+                    level = LogLevel.of(config.int("level", LogLevel.INFO.ordinal)),
+                    mode = appenderModeOf(config.int("mode", AppenderMode.ASYNC.ordinal)),
+                    pubKey = config.string("pubKey"),
+                    compressMode = compressModeOf(
+                        config.int("compressMode", CompressMode.ZLIB.ordinal)
+                    ),
+                    compressLevel = config.int("compressLevel", DEFAULT_COMPRESS_LEVEL),
+                    cacheDir = config.optionalString("cacheDir"),
+                    cacheDays = config.int("cacheDays", NO_CACHE_DAYS)
+                )
+            )
         } catch (e: IllegalArgumentException) {
             return false
         }
-        appenders[xlogConfig.namePrefix] = xlog
+        appenders[xlog.namePrefix] = xlog
         return true
     }
 
@@ -191,9 +198,9 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
     /**
      * The appender of [namePrefix], or `null` when there is none — which is a
      * no-op and not a crash, the same answer the Swift and the Kotlin give an
-     * `Xlog` that is closed: no appender is the process-wide one to
-     * `marsrs-jni`, so a call that went on without one would write through
-     * whatever appender the rest of the process writes through.
+     * `Xlog` that is closed: a handle whose appender is gone is a no-op to
+     * `marsrs-jni`, so a call that went on without one would silently write
+     * nothing.
      */
     private fun appender(namePrefix: String): Xlog? = appenders[namePrefix]?.takeIf { it.isOpen }
 

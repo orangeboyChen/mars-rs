@@ -1,4 +1,4 @@
-// The iOS half of `marsrs-react-native`: the fourteen methods of the `Xlog` native
+// The iOS half of `marsrs-react-native`: the sixteen methods of the `Xlog` native
 // module, each of them a straight call of a `mars_xlog_*` symbol — the C ABI of
 // `crates/marsrs-ffi`, in the `marsrs-xlog.xcframework` the pod carries.
 //
@@ -112,11 +112,12 @@ internal final class Xlog: NSObject {
         }
     }
 
-    /// `mars_xlog_current_log_path_instance`: the file this appender is writing
-    /// to, or `nil` before the first record of the day opens one.
+    /// `mars_xlog_current_log_path_instance`: the directory this appender
+    /// writes its files into, or `nil` once it is closed.
     ///
-    /// A day is one file, so this is the path an app hands to something that
-    /// reads the log while it is being written.
+    /// A directory and not a file, because that is what the C++'s
+    /// `GetCurrentLogPath` answers; there is no "before the day's first record"
+    /// state, and the day's file is the question `logFiles` asks.
     @objc(currentLogPath:)
     internal func currentLogPath(of namePrefix: String) -> String? {
         guard let handle = handles[namePrefix] else {
@@ -349,18 +350,24 @@ internal final class Xlog: NSObject {
     /// The paths of one day, walked index by index until the symbol answers that
     /// there is nothing at that index: the list the C++ fills a `std::vector`
     /// with, asked one at a time.
+    ///
+    /// `daysAgo` is a `Double` because JS has one number type, and it is
+    /// converted with `Int32(exactly:)` and not `Int32(_:)`: the latter traps
+    /// on a value it cannot represent — `NaN`, `Infinity`, a number out of
+    /// `Int32`'s range — and a trap on the JS thread is the app dying, where
+    /// a day nobody asked for is an empty list.
     private func dayPaths(
         of namePrefix: String,
         daysAgo: Double,
         at symbol: (Int64, Int32, UInt32, UnsafeMutablePointer<CChar>, UInt32) -> Int32
     ) -> [String] {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = handles[namePrefix], let timespan = Int32(exactly: daysAgo) else {
             return []
         }
         var walked: [String] = []
         var index: UInt32 = 0
         while let found = path(of: { out, len in
-            symbol(handle, Int32(daysAgo), index, out, len)
+            symbol(handle, timespan, index, out, len)
         }) {
             walked.append(found)
             index += 1

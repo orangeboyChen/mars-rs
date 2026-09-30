@@ -145,6 +145,12 @@ fn two_objects_of_one_prefix_are_one_appender() {
     // appender, which is what every platform's `Xlog` says about itself.
     assert!(!two.i("startup", "written through a closed appender"));
     assert_eq!(get_xlogger_instance("shared"), DEFAULT_HANDLE);
+
+    // … and the other one says so, which the handle it cached cannot: `isOpen`
+    // is asked of the prefix and not of the handle, on every platform.
+    assert!(!two.is_open(), "a twin's close left the other open");
+    assert_eq!(two.level(), None);
+    assert_eq!(two.current_log_path(), None);
 }
 
 #[test]

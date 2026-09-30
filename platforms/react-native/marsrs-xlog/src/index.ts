@@ -328,13 +328,13 @@ export class Xlog {
     await NativeXlog.flush(this.namePrefix);
   }
 
-  /** `mars_xlog_current_log_path_instance`: the file this appender is writing to,
-   * or `undefined` when it has none open — the first record of the day is what
-   * opens one.
+  /** `mars_xlog_current_log_path_instance`: the directory this appender writes
+   * its files into, or `undefined` once it is closed.
    *
-   * A day is one file, so this is the path an app hands to something that reads
-   * the log while it is being written. What an app that uploads a whole day asks
-   * for is [`logFiles`]. */
+   * A directory and not a file, because that is what the C++'s
+   * `GetCurrentLogPath` answers, and there is no "not yet" state: an open
+   * appender has a directory from the moment it is opened. What an app that
+   * uploads a whole day asks for is [`logFiles`]. */
   get currentLogPath(): string | undefined {
     if (!this.open) {
       return undefined;
@@ -347,8 +347,9 @@ export class Xlog {
    * when the directory holds none of that day's. `0` is today, `1` is yesterday,
    * and so on.
    *
-   * This is a day of files and not the file being written: what `currentLogPath`
-   * answers is one, and this is this appender's own prefix and directory. */
+   * This is a day of files and not the directory they are in: what
+   * `currentLogPath` answers is that, and this is this appender's own prefix and
+   * directory. */
   logFiles(daysAgo: number): string[] {
     if (!this.open) {
       return [];

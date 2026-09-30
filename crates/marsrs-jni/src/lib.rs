@@ -6,17 +6,15 @@
 //!
 //! | Java                      | this crate                                    |
 //! |---------------------------|-----------------------------------------------|
-//! | `appenderOpen`            | `Java_…_appenderOpen`                         |
-//! | `appenderClose`           | `Java_…_appenderClose`                        |
-//! | `appenderFlush`           | `Java_…_appenderFlush`                        |
 //! | `appenderRequestFlush`     | `Java_…_appenderRequestFlush`                  |
 //! | `appenderFlushNow`        | `Java_…_appenderFlushNow`                     |
 //! | `newXlogInstance`         | [`marsrs_appender::new_xlogger_instance`]  |
 //! | `getXlogInstance`         | [`marsrs_appender::get_xlogger_instance`]  |
 //! | `releaseXlogInstance`     | [`marsrs_appender::release_xlogger_instance`] |
-//! | `logWrite`               | [`marsrs_appender::xlogger_write`]         |
 //! | `write`                  | [`marsrs_appender::is_enabled_for`] + `xlogger_write` |
 //! | `getLogLevel`/`setLogLevel` | [`marsrs_appender::get_level`] / `set_level` |
+//! | `getCurrentLogPath`      | [`marsrs_appender::current_log_path`]       |
+//! | `logFiles`/`logFileNames` | `current_log_files` / `current_log_file_names` |
 //! | `setAppenderMode`         | [`marsrs_appender::set_appender_mode`]     |
 //! | `setConsoleLogOpen`       | [`marsrs_appender::set_console_log_open`]  |
 //! | `setMaxFileSize`          | `set_max_file_size`                           |
@@ -111,17 +109,6 @@ pub(crate) fn flush_now_impl(instance: u64) {
     flush_now(instance);
 }
 
-/// `Xlog.appenderFlush` body — upstream's name, and the one call of the Java
-/// seam that still says which drain it means with a flag: the C++'s own
-/// `appenderFlush(long, boolean)`, which the deprecated `Log` facade calls.
-pub(crate) fn flush_impl(instance: u64, is_sync: bool) {
-    if is_sync {
-        flush_now(instance);
-    } else {
-        request_flush(instance);
-    }
-}
-
 /// `Xlog.newXlogInstance` body — `0` is the "bad config" answer.
 pub(crate) fn new_instance_impl(config: XLogConfig, level: LogLevel) -> jlong {
     new_xlogger_instance(&config, level) as jlong
@@ -142,10 +129,9 @@ pub(crate) fn release_instance_impl(prefix: &str) {
 /// the level is dropped", costs a second JNI call (`getLogLevel`) per line.
 ///
 /// The pid, the tid and the main tid are `-1`, the "fill these in from the OS"
-/// the C++ project's Java spelled for itself only in part: what its `Log` hands
-/// over is a `Thread.id`, which is not a tid. There is no filename, function or
-/// line to carry either, because Java has no `__FILE__` — the C++ project's
-/// `Log` passes `""` and `0` for them, and always did.
+/// the appender answers. There is no filename, function or line to carry
+/// either, because Java has no `__FILE__` — the C++ project's `Log` passed
+/// `""` and `0` for them, and always did.
 pub(crate) fn write_impl(instance: u64, level: LogLevel, tag: Cow<'_, str>, log: &str) -> bool {
     if !is_enabled_for(instance, level) {
         return false;
@@ -259,9 +245,9 @@ pub mod baseevent;
 pub mod jni_bridge;
 
 /// The state of this crate is process-wide — one alarm set, one long-link
-/// address, one appender — so the tests need **one** lock for the whole crate,
-/// not one per module: `alarm`'s reset would otherwise drop an id another
-/// module is holding.
+/// address, and one instance table every appender is looked up in — so the
+/// tests need **one** lock for the whole crate, not one per module: `alarm`'s
+/// reset would otherwise drop an id another module is holding.
 #[cfg(test)]
 pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
@@ -325,8 +311,6 @@ mod tests {
 
         request_flush_impl(instance as u64);
         flush_now_impl(instance as u64);
-        flush_impl(instance as u64, false);
-        flush_impl(instance as u64, true);
 
         // a closed appender answers nothing, and closing twice is harmless
         release_instance_impl("Mars");

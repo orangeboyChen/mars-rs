@@ -55,7 +55,7 @@ use crate::stn::{
 };
 
 use crate::{
-    current_log_path_impl, flush_impl, flush_now_impl, get_level_impl, guard, level_from_java,
+    current_log_path_impl, flush_now_impl, get_level_impl, guard, level_from_java,
     log_file_names_impl, log_files_impl, new_instance_impl, release_instance_impl,
     request_flush_impl, set_appender_mode_impl, set_console_log_open_impl, set_level_impl,
     set_max_alive_time_impl, set_max_file_size_impl, write_impl,
@@ -280,20 +280,6 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderFlu
     guard(|| flush_now_impl(instance as u64))
 }
 
-/// `Xlog.appenderFlush` — upstream's name, and the one call of the Java seam
-/// that still asks for a `sync`: what the C++'s Java declared, and what the
-/// deprecated `Log` facade calls. `Xlog.requestFlush()` and `Xlog.flushNow()`
-/// name the drain instead.
-#[no_mangle]
-pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderFlush<'local>(
-    _env: EnvUnowned<'local>,
-    _this: JObject<'local>,
-    instance: jlong,
-    is_sync: jboolean,
-) {
-    guard(|| flush_impl(instance as u64, is_sync))
-}
-
 /// `Xlog.newXlogInstance` — returns the handle, or `0` on a bad config.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_newXlogInstance<'local>(
@@ -344,8 +330,8 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_write<'loca
             .mutf8_chars(env)
             .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
-        // Borrowed from the JVM, like `logWrite` does: a `String` per record is
-        // an allocation `Java2C_Xlog.cc` never makes.
+        // Borrowed from the JVM: a `String` per record is an allocation
+        // `Java2C_Xlog.cc` never makes.
         let tag = java_string_handle(env, tag.as_ref());
         let tag = tag.as_ref().and_then(|value| value.mutf8_chars(env).ok());
         let _ = write_impl(
@@ -426,8 +412,13 @@ fn paths_to_array<'local>(
         return JObject::null();
     };
     for (index, path) in paths.iter().enumerate() {
+        // A day of paths is one answer and not a list with a hole in it: a
+        // `null` element would be a `null` in a Kotlin `List<String>`, which
+        // is what an app walks to upload the files. So a path the JVM will not
+        // make a string of fails the whole question, and the caller takes the
+        // empty list `null` becomes.
         let Ok(value) = env.new_string(path.to_string_lossy().as_ref()) else {
-            continue;
+            return JObject::null();
         };
         // `JObjectArray::set_element` is the call that replaces this one, and
         // it wants a `JObjectArray` borrowed from the `Env` — which is what
@@ -436,7 +427,9 @@ fn paths_to_array<'local>(
         // deprecated method writes into an array this call owns, which is the
         // same thing.
         #[allow(deprecated)]
-        let _ = env.set_object_array_element(&array, index, &value);
+        let Ok(()) = env.set_object_array_element(&array, index, &value) else {
+            return JObject::null();
+        };
     }
     JObject::from(array)
 }

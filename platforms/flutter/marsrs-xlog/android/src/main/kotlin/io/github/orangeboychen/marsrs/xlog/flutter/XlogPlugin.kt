@@ -95,8 +95,7 @@ class XlogPlugin :
      * The constructor [Xlog.open] calls is what refuses a configuration the
      * appender cannot honour — a blank `logDir` or `namePrefix`, a compression
      * level out of range — and its `IllegalArgumentException` is what the caller
-     * is answered with, rather than a handle it would write through the
-     * process-wide appender with.
+     * is answered with, rather than a handle nothing was opened for.
      */
     private fun open(call: MethodCall, result: Result) {
         val config = XlogConfig(
@@ -213,9 +212,9 @@ class XlogPlugin :
 
     /**
      * The appender of the prefix this call carries, or [IllegalStateException]
-     * when there is none: no appender is the process-wide one to `marsrs-jni`,
-     * so a call that went on without one would write through whatever appender
-     * the rest of the process writes through.
+     * when there is none: a handle whose appender is gone is a no-op to
+     * `marsrs-jni`, so a call that went on without one would silently write
+     * nothing.
      */
     private fun MethodCall.appender(): Xlog {
         val namePrefix = string("namePrefix")

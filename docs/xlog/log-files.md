@@ -55,8 +55,9 @@ xlog.currentLogPath
 
 Every package here answers it, and every one of them answers it about the `Xlog`
 the file belongs to — and what every one of them answers is the **directory**,
-which is what the C++'s `GetCurrentLogPath` hands back; the day's file is the
-question under it.
+which is what the C++'s `GetCurrentLogPath` hands back. The day's *file* is the
+question under it, so between the two an app never has to put a day's name
+together itself.
 
 A whole *day* of files is what an app that uploads yesterday's asks for, and
 there are two calls for it: the files that are there, and the names the day is
@@ -110,8 +111,9 @@ xlog.logFileNames(1)
 
 `0` is today and `1` is yesterday. Rust and Swift answer the day's list in one
 call, and out of the `Xlog` the day belongs to; the C ABI answers one index of it
-at a time, and the two C calls are that walk. Names answer two where files answer one when a cache dir is given and
-the file is there: the log-dir file and its twin in the cache dir.
+at a time, and the two C calls are that walk. Names answer two where files answer
+one when a cache dir is given and the file is there: the log-dir file and its twin
+in the cache dir.
 
 ## Async: the record may still be in the cache
 
@@ -164,7 +166,7 @@ The drain is three calls and not one with a flag:
 |---|---|
 | `requestFlush()` — `xlog.request_flush()`, `mars_xlog_request_flush_instance(handle)` | asks for the drain and returns at once: nothing answers when it is over, and the records are not in the file when it returns |
 | `flushNow()` — `xlog.flush_now()`, `mars_xlog_flush_now_instance(handle)` | drains on the calling thread: the records are on disk when it returns |
-| `await flush()` — `xlog.flush().await`, `flush(handle)` | the same drain, handed to another thread: it answers when the records are on disk |
+| `await flush()` — `xlog.flush().await` | the same drain, handed to another thread: it answers when the records are on disk |
 
 `requestFlush()` is the one a timer calls: it asks for the drain and answers
 nothing about when it is over, and nothing is lost while it is not, because a

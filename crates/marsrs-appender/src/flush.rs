@@ -54,9 +54,9 @@ impl Flush {
         Self::new(|| {})
     }
 
-    /// What to run on the thread, as a closure and not as an appender:
-    /// [`crate::category::flush_all`] drains a list of them, and the one thing
-    /// every caller has in common is "the drain, whenever it is polled".
+    /// What to run on the thread, as a closure and not as an appender: the
+    /// one thing every caller has in common is "the drain, whenever it is
+    /// polled".
     pub(crate) fn new(drain: impl FnOnce() + Send + 'static) -> Self {
         Self {
             drain: Some(Box::new(drain)),

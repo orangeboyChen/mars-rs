@@ -65,7 +65,7 @@ fn stop() -> usize {
     COUNT.load(Ordering::SeqCst)
 }
 
-/// The appender is a process-wide singleton: one test at a time.
+/// The allocation counter is process-wide: one test at a time.
 fn lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
