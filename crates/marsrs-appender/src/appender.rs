@@ -58,7 +58,7 @@
 //!   to rather than trusting a lock that locks nobody.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
@@ -315,6 +315,31 @@ fn clear_cache_file(path: &Path) {
     }
 }
 
+/// Whether the whole region reads as zeros: a hole `set_len` made, with no
+/// record stored through the mapping yet.
+///
+/// `st_blocks` cannot answer this, though it looks like it should. It counts
+/// what the disk has given the file, and a file written the only way this one
+/// is written to — through a mapping — is not promised blocks before
+/// writeback: a cache file holding a crashed run's records measures as sparse
+/// on a filesystem that allocates late (ext4's delayed allocation) or
+/// compresses (f2fs, btrfs), and accounts nothing at all on one that does not
+/// implement it (FUSE, a card's sdcardfs). Taking that at its word and
+/// pre-allocating over such a file writes a block of zeros over records no
+/// log holds a copy of, and the "begin of mmap" recovery never fires. What is
+/// asked instead is the one thing a hole cannot be: a byte that is not zero.
+///
+/// A read that fails is answered as `false`: a file this process cannot read
+/// is one the mapping is not going to take either, and zeroing bytes nobody
+/// could inspect first is the wrong way round to be careful.
+fn is_unwritten(file: &mut File) -> bool {
+    let mut buffer = vec![0u8; BUFFER_BLOCK_LENGTH];
+    file.seek(SeekFrom::Start(0))
+        .and_then(|_| file.read_exact(&mut buffer))
+        .map(|()| buffer.iter().all(|byte| *byte == 0))
+        .unwrap_or(false)
+}
+
 /// Opens (creating if needed) and maps the claimed cache file; falls back to a
 /// heap region on any error. Returns `(region, use_mmap)`.
 ///
@@ -327,10 +352,21 @@ fn open_region(file: &mut File, path: &Path) -> (Region, bool) {
     // turns that store into SIGBUS, killing the host. `mars/comm/mmap_util.cc`
     // pre-allocates by writing zeros and falls back to the heap path if that
     // write fails; do the same.
-    // What the file measured on entry: the length a failed pre-allocation
-    // puts it back to.
+    // A file shorter than a block has never been written to, and length alone
+    // says so. A file that measures a block is asked what its bytes are: a
+    // build before this one — and the C++ the port sits beside during a
+    // migration — made this file `BUFFER_BLOCK_LENGTH` long with `set_len` and
+    // wrote nothing into it, and that is a hole of exactly the length a later
+    // open would take for "already allocated". A hole reads as zeros, so a
+    // file that is all zeros is pre-allocated over whatever it measures, and
+    // a file with a single byte in it that is not is left as it is: it holds
+    // records, and the bytes of a record are the one thing this may not write
+    // over. See [`is_unwritten`] for why the block count is not what is asked.
+    //
+    // `entry_len` is also the length a failed pre-allocation puts the file back
+    // to.
     let entry_len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
-    let needs_preallocation = entry_len < BUFFER_BLOCK_LENGTH as u64;
+    let needs_preallocation = entry_len < BUFFER_BLOCK_LENGTH as u64 || is_unwritten(file);
     if file.set_len(BUFFER_BLOCK_LENGTH as u64).is_err() {
         return (Region::heap(), false);
     }
@@ -2962,6 +2998,115 @@ mod tests {
         let path = dir.join("Mars.mmap3");
         fs::write(&path, &region).unwrap();
         path
+    }
+
+    /// A file whose blocks could not be reserved must be left **short**.
+    ///
+    /// The length `set_len` records and the blocks the zero-fill reserves are
+    /// two different things, and only the second is what a mapping needs: a
+    /// file that is `BUFFER_BLOCK_LENGTH` long with a hole where the zeros
+    /// should be is a file the next `open` skips the pre-allocation for — it
+    /// measures the length, not the blocks — and maps, and the first record
+    /// stored into the hole raises SIGBUS on a disk that is still full. That is
+    /// the crash the pre-allocation exists to prevent, handed to the next
+    /// start.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_cache_file_whose_blocks_were_not_reserved_is_left_short() {
+        // The one file a test can hold that takes the `set_len` and refuses
+        // the write: see `sys::unwritable_file`.
+        let Some(mut file) = crate::sys::unwritable_file() else {
+            return;
+        };
+        assert_eq!(file.metadata().unwrap().len(), 0);
+
+        let (region, use_mmap) = open_region(&mut file, Path::new("marsrs-unwritable"));
+        assert!(!use_mmap);
+        assert!(matches!(region, Region::Heap(_)), "heap, and not a mapping");
+        assert_eq!(
+            file.metadata().unwrap().len(),
+            0,
+            "the file is a {BUFFER_BLOCK_LENGTH} byte hole otherwise, and the next open \
+             maps it instead of pre-allocating it again"
+        );
+    }
+
+    /// The other half of the same hole: a file that already measures the
+    /// block, which is what `set_len` of a build before this one left behind.
+    /// The length is what the file claims and the zeros are what say nothing
+    /// was stored, so one that measures the whole block and reads as nothing
+    /// is pre-allocated like any other and not taken at its word.
+    #[test]
+    fn a_cache_file_that_measures_the_block_but_reads_as_zeros_is_filled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("Mars.mmap3");
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        file.set_len(BUFFER_BLOCK_LENGTH as u64).unwrap();
+        assert!(
+            is_unwritten(&mut file),
+            "a hole the length of the block reads as zeros"
+        );
+
+        let (region, use_mmap) = open_region(&mut file, &path);
+        drop(region);
+        // What is asserted is the decision, and not the disk's bookkeeping: a
+        // filesystem that allocates late or compresses is free to answer the
+        // block count either way for a file of zeros, and that count is what
+        // stopped being asked. A mapping is the answer only when the
+        // pre-allocation ran through — a write of zeros it could not do sends
+        // `open_region` to the heap instead.
+        if use_mmap {
+            assert_eq!(
+                file.metadata().unwrap().len(),
+                BUFFER_BLOCK_LENGTH as u64,
+                "the pre-allocation wrote the block and left the file at the block"
+            );
+        }
+    }
+
+    /// The way round that costs records: a file that measures the block *and*
+    /// holds a crashed run's undrained ones. That is exactly the file a block
+    /// count calls sparse on a filesystem that allocates late or compresses,
+    /// and pre-allocating over it would write a block of zeros over the only
+    /// copy of those records there is — the "begin of mmap" recovery of the
+    /// next open would find nothing to recover. What decides is what is in
+    /// the file, and not what the disk says it gave it.
+    #[test]
+    fn a_cache_file_that_holds_records_is_not_written_over() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("Mars.mmap3");
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        file.set_len(BUFFER_BLOCK_LENGTH as u64).unwrap();
+        // One byte of a record: `st_blocks` cannot tell this file from a hole
+        // of the same length, and the length cannot either.
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.write_all(&[1u8]).unwrap();
+        file.flush().unwrap();
+        assert!(!is_unwritten(&mut file), "the file holds a record");
+
+        let (region, _use_mmap) = open_region(&mut file, &path);
+        drop(region);
+
+        let mut first = [0u8; 1];
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.read_exact(&mut first).unwrap();
+        assert_eq!(
+            first,
+            [1u8],
+            "the record the appender has not drained yet is still in the file"
+        );
     }
 
     #[test]
