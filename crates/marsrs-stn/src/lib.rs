@@ -335,4 +335,4 @@ pub use timing_sync::{
     UNLOGIN_SYNC_INTERVAL,
 };
 pub use weak_network::{ReportWeak, WeakKey, WeakNetworkLogic};
-pub use zombie_task_manager::ZombieTaskManager;
+pub use zombie_task_manager::{Redo, ZombieCallbacks, ZombieTaskManager};

@@ -34,8 +34,14 @@
 //!   schedule that may already have come due, where the due time here goes
 //!   with the list and the next save arms a whole [`TIMER_INTERVAL`].
 
+use std::sync::{Arc, Mutex, PoisonError};
+
 use crate::task::Task;
 use crate::task_profile::{ErrCmdType, TaskFailHandleType, LOCAL_TASK_TIMEOUT};
+
+fn poisoned<T>(poisoned: PoisonError<T>) -> T {
+    poisoned.into_inner()
+}
 
 /// `RETRY_INTERVAL` — how long a zombie waits before it is started again, and
 /// how long the net core has to have been idle for that to happen.
@@ -70,6 +76,69 @@ struct ZombieTask {
     save_time: u64,
 }
 
+/// One zombie of a [`ZombieTaskManager::plan_redo_at`] pass: either its
+/// deadline ran out and the app is told it failed, or the task is started
+/// again. Both are app callbacks, which is why the pass is planned and
+/// applied in two steps.
+#[derive(Debug)]
+pub enum Redo {
+    /// Fail the task, and say how long it had been out.
+    Fail(Task, u64),
+    /// Start the task again.
+    Start(Task),
+}
+
+/// `fun_start_task_` and `fun_callback_`, behind a lock of their own and not
+/// behind the one the queue is kept in.
+///
+/// What a zombie is failed or started with is an app callback, and an app
+/// that answers one by asking the core about its tasks asks for that lock —
+/// which [`crate::NetCore::zombie`] holds for the whole pass. So a pass
+/// decides what each zombie gets ([`ZombieTaskManager::plan_redo_at`]) and
+/// the caller applies it with [`ZombieCallbacks::apply`], holding nothing.
+#[derive(Clone, Default)]
+pub struct ZombieCallbacks {
+    start: Arc<Mutex<Option<Box<StartTask>>>>,
+    callback: Arc<Mutex<Option<Box<ZombieCallback>>>>,
+}
+
+impl ZombieCallbacks {
+    /// Do to one zombie what a pass decided for it.
+    pub fn apply(&self, redo: Redo) {
+        match redo {
+            Redo::Fail(task, spent) => self.fail(&task, spent),
+            Redo::Start(task) => self.start(&task),
+        }
+    }
+
+    /// `fun_callback_(kEctLocal, kEctLocalTaskTimeout, kTaskFailHandleTaskEnd,
+    /// …)`.
+    fn fail(&self, task: &Task, spent: u64) {
+        let mut callback = self.callback.lock().unwrap_or_else(poisoned);
+        if let Some(callback) = callback.as_mut() {
+            // `u32` is what the app is handed, as in the C++, and `spent` is
+            // measured over the life of a task and not over the life of a
+            // clock: a cost past 49.7 days is the largest one there is
+            // rather than one that wrapped into a small one.
+            callback(
+                ErrCmdType::Local,
+                LOCAL_TASK_TIMEOUT,
+                TaskFailHandleType::TaskEnd,
+                task,
+                u32::try_from(spent).unwrap_or(u32::MAX),
+            );
+        }
+    }
+
+    /// `fun_start_task_(…)`.
+    fn start(&self, task: &Task) {
+        let mut start = self.start.lock().unwrap_or_else(poisoned);
+        if let Some(start) = start.as_mut() {
+            start(task);
+        }
+    }
+}
+
 /// The tasks whose channel went away before they were answered: kept here
 /// instead of failed, started again when the link comes back, and failed
 /// only when the deadline they were given is used up.
@@ -81,8 +150,7 @@ pub struct ZombieTaskManager {
     /// When the periodic check is due; [`None`] while there is nothing to
     /// check.
     next_check: Option<u64>,
-    start: Option<Box<StartTask>>,
-    callback: Option<Box<ZombieCallback>>,
+    calls: ZombieCallbacks,
 }
 
 impl ZombieTaskManager {
@@ -98,14 +166,20 @@ impl ZombieTaskManager {
             tasks: Vec::new(),
             net_core_last_start_task_time: now,
             next_check: None,
-            start: None,
-            callback: None,
+            calls: ZombieCallbacks::default(),
         }
+    }
+
+    /// The two callbacks, shared: a caller that must not hold the lock this
+    /// queue is kept behind — which is [`crate::NetCore::zombie`]'s — runs
+    /// what a pass decided with these.
+    pub fn callbacks(&self) -> ZombieCallbacks {
+        self.calls.clone()
     }
 
     /// `fun_start_task_ = …`.
     pub fn set_start_task(&mut self, start: impl FnMut(&Task) + Send + 'static) {
-        self.start = Some(Box::new(start));
+        *self.calls.start.lock().unwrap_or_else(poisoned) = Some(Box::new(start));
     }
 
     /// `fun_callback_ = …`.
@@ -113,17 +187,17 @@ impl ZombieTaskManager {
         &mut self,
         callback: impl FnMut(ErrCmdType, i32, TaskFailHandleType, &Task, u32) + Send + 'static,
     ) {
-        self.callback = Some(Box::new(callback));
+        *self.calls.callback.lock().unwrap_or_else(poisoned) = Some(Box::new(callback));
     }
 
     /// `fun_start_task_ = NULL` — a zombie that is started again does nothing.
     pub fn clear_start_task(&mut self) {
-        self.start = None;
+        *self.calls.start.lock().unwrap_or_else(poisoned) = None;
     }
 
     /// `fun_callback_ = NULL`.
     pub fn clear_callback(&mut self) {
-        self.callback = None;
+        *self.calls.callback.lock().unwrap_or_else(poisoned) = None;
     }
 
     /// How many zombies are saved.
@@ -229,8 +303,28 @@ impl ZombieTaskManager {
     /// again does not feed the loop it was started from — which is what the
     /// C++'s copy of `lsttask_` does too.
     pub fn redo_tasks_at(&mut self, now: u64) {
+        let redos = self.plan_redo_at(now);
+        let calls = self.callbacks();
+        for redo in redos {
+            calls.apply(redo);
+        }
+    }
+
+    /// Which of the two a redo does to each zombie, decided in one pass, in
+    /// the order they are to happen, and with nothing called back into.
+    ///
+    /// The tasks are taken out, so a `fun_start_task_` that saves a task
+    /// again does not feed the pass it was started from — which is what the
+    /// C++'s copy of `lsttask_` does too.
+    ///
+    /// Nothing the app is given runs here: a caller that holds this manager's
+    /// lock — which is [`crate::NetCore::zombie`]'s — plans with this and
+    /// applies with [`ZombieCallbacks::apply`] once the lock is let go,
+    /// because an app that answers a callback by asking the core about its
+    /// tasks asks for that very lock.
+    pub fn plan_redo_at(&mut self, now: u64) -> Vec<Redo> {
         if self.tasks.is_empty() {
-            return;
+            return Vec::new();
         }
         let mut batch: Vec<ZombieTask> = std::mem::take(&mut self.tasks);
         // `lsttask.sort(__compare_task)` — `std::list::sort` is stable, and so
@@ -238,20 +332,21 @@ impl ZombieTaskManager {
         batch.sort_by_key(|zombie| zombie.task.priority);
         self.next_check = None;
 
-        for zombie in batch.iter_mut() {
-            let spent = now.saturating_sub(zombie.save_time);
-            // `cur_time - save_time >= total_timeout`, and the subtraction that
-            // follows
-            match remaining_timeout(zombie.task.total_timeout, spent) {
-                None => self.fail(zombie, spent),
-                Some(total_timeout) => {
-                    zombie.task.total_timeout = total_timeout;
-                    if let Some(start) = self.start.as_mut() {
-                        start(&zombie.task);
+        // `cur_time - save_time >= total_timeout`, and the subtraction that
+        // follows
+        batch
+            .into_iter()
+            .map(|mut zombie| {
+                let spent = now.saturating_sub(zombie.save_time);
+                match remaining_timeout(zombie.task.total_timeout, spent) {
+                    None => Redo::Fail(zombie.task, spent),
+                    Some(total_timeout) => {
+                        zombie.task.total_timeout = total_timeout;
+                        Redo::Start(zombie.task)
                     }
                 }
-            }
-        }
+            })
+            .collect()
     }
 
     /// `OnNetCoreStartTask()`.
@@ -273,32 +368,41 @@ impl ZombieTaskManager {
 
     /// The same, with the reading handed in.
     pub fn on_timer_check_at(&mut self, now: u64) {
+        let redos = self.plan_timer_check_at(now);
+        let calls = self.callbacks();
+        for redo in redos {
+            calls.apply(redo);
+        }
+    }
+
+    /// Which zombies this pass ends, and which it starts again, with the
+    /// queue itself left as the pass wants it and nothing called back into —
+    /// see [`Self::plan_redo_at`] for why the two are separate.
+    pub fn plan_timer_check_at(&mut self, now: u64) -> Vec<Redo> {
         // `uint64_t netCoreLastStartTaskTime = net_core_last_start_task_time_`:
         // the C++ reads it once, before the loop starts any task
         let net_core_last_start_task_time = self.net_core_last_start_task_time;
         let mut kept = Vec::with_capacity(self.tasks.len());
+        let mut redos = Vec::new();
 
         for mut zombie in std::mem::take(&mut self.tasks) {
             let spent = now.saturating_sub(zombie.save_time);
             match remaining_timeout(zombie.task.total_timeout, spent) {
-                None => self.fail(&zombie, spent),
+                None => redos.push(Redo::Fail(zombie.task, spent)),
                 Some(total_timeout)
                     if spent >= RETRY_INTERVAL
                         && now.saturating_sub(net_core_last_start_task_time) >= RETRY_INTERVAL =>
                 {
                     zombie.task.total_timeout = total_timeout;
-                    if let Some(start) = self.start.as_mut() {
-                        start(&zombie.task);
-                    }
+                    redos.push(Redo::Start(zombie.task));
                 }
                 Some(_) => kept.push(zombie),
             }
         }
-        // What the pass left, and behind it what a task the callbacks saved
-        // while it ran added: `self.tasks` was taken out for the iteration,
-        // so a `save` from inside `start` put its zombie into a list this
-        // assignment would otherwise overwrite — and a zombie saved from the
-        // loop is one nobody ever fails or starts again.
+        // What the pass left: `self.tasks` was taken out for the iteration and
+        // this puts the zombies that are still waiting back, before anything
+        // is called — so a `save` from a callback joins the back of the queue
+        // it was saved to instead of one this assignment overwrites.
         kept.append(&mut self.tasks);
         self.tasks = kept;
 
@@ -307,24 +411,7 @@ impl ZombieTaskManager {
         if !self.tasks.is_empty() {
             self.next_check = Some(now.saturating_add(TIMER_INTERVAL));
         }
-    }
-
-    /// `fun_callback_(kEctLocal, kEctLocalTaskTimeout, kTaskFailHandleTaskEnd,
-    /// …)`.
-    fn fail(&mut self, zombie: &ZombieTask, spent: u64) {
-        if let Some(callback) = self.callback.as_mut() {
-            // `u32` is what the app is handed, as in the C++, and `spent` is
-            // measured over the life of a task and not over the life of a
-            // clock: a cost past 49.7 days is the largest one there is
-            // rather than one that wrapped into a small one.
-            callback(
-                ErrCmdType::Local,
-                LOCAL_TASK_TIMEOUT,
-                TaskFailHandleType::TaskEnd,
-                &zombie.task,
-                u32::try_from(spent).unwrap_or(u32::MAX),
-            );
-        }
+        redos
     }
 
     /// The check has nothing to do once the last zombie is gone.

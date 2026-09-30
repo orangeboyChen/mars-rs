@@ -879,6 +879,29 @@ impl NetCore {
         self.zombie.lock().unwrap_or_else(poisoned)
     }
 
+    /// [`ZombieTaskManager::redo_tasks_at`] for the tasks of this core.
+    ///
+    /// The lock the accessor hands out is taken and let go around every step,
+    /// and not around the whole pass: what a redo does to a zombie is an app
+    /// callback — a task timed out is reported, one with time left is started
+    /// again — and an app that answers one by asking this core about its
+    /// tasks asks for the lock the pass would be holding, which on one thread
+    /// is a hang. Which of the two each zombie gets is still decided in one
+    /// pass under the lock, so the pass sees the same queue and the same
+    /// reading the C++'s does.
+    fn redo_zombies_at(&mut self, now: u64) {
+        let (redos, calls) = {
+            // Not `for … in self.zombie().plan_redo_at(now)`: a temporary in
+            // the head of a `for` lives until the loop ends, which is the
+            // lock this pass must not hold.
+            let mut zombie = self.zombie();
+            (zombie.plan_redo_at(now), zombie.callbacks())
+        };
+        for redo in redos {
+            calls.apply(redo);
+        }
+    }
+
     /// `net_source_`.
     pub fn net_source(&mut self) -> &mut NetSource {
         &mut self.net_source
@@ -1167,7 +1190,7 @@ impl NetCore {
         self.net_source.clear_cache();
         if self.use_long_link {
             self.longlink.redo_tasks_at(now);
-            self.zombie().redo_tasks_at(now);
+            self.redo_zombies_at(now);
         }
         self.shortlink.redo_tasks_at(now);
     }
@@ -1213,7 +1236,7 @@ impl NetCore {
                     self.longlink.redo_tasks_of_at(now, Some(&name));
                 }
             }
-            self.zombie().redo_tasks_at(now);
+            self.redo_zombies_at(now);
         }
         self.shortlink.redo_tasks_at(now);
         self.shortlink_try_flag = false;
@@ -1442,10 +1465,16 @@ impl NetCore {
             // itself, and the zombie check arms its own next alarm.
             self.shortlink.run_loop_at(now);
             self.longlink.run_loop_at(now);
-            self.zombie
-                .lock()
-                .unwrap_or_else(poisoned)
-                .on_timer_check_at(now);
+            // The check plans and applies like [`Self::redo_zombies_at`] does:
+            // what it does to a zombie is an app callback, and the lock the
+            // queue is kept behind is not to be held across one.
+            let (redos, calls) = {
+                let mut zombie = self.zombie.lock().unwrap_or_else(poisoned);
+                (zombie.plan_timer_check_at(now), zombie.callbacks())
+            };
+            for redo in redos {
+                calls.apply(redo);
+            }
             if self.timing_sync.due_time().is_some_and(|due| due <= now) {
                 self.timing_sync.on_alarm_at(now);
             }
@@ -1549,7 +1578,7 @@ impl NetCore {
         }
 
         if err_type == ErrCmdType::Ok {
-            self.zombie().redo_tasks_at(now);
+            self.redo_zombies_at(now);
         }
 
         // `kEctDial`, `kEctHttp`, `kEctServer` and `kEctLocal` are not about
@@ -1596,7 +1625,7 @@ impl NetCore {
         self.conn_status_call_back();
 
         if self.use_long_link && err_type == ErrCmdType::Ok {
-            self.zombie().redo_tasks_at(now);
+            self.redo_zombies_at(now);
         }
 
         if matches!(
@@ -1630,7 +1659,7 @@ impl NetCore {
         }
         self.timing_sync.on_longlink_status_changed_at(now, status);
         if status == LongLinkStatus::Connected {
-            self.zombie().redo_tasks_at(now);
+            self.redo_zombies_at(now);
         }
         self.conn_status_call_back();
         if let Some(change) = self.on_longlink_status_change.as_mut() {
@@ -3117,6 +3146,55 @@ mod tests {
     }
 
     #[test]
+    fn a_redo_calls_the_app_with_the_zombie_queue_unlocked() {
+        let (mut core, _rec) = wired();
+        up(&core, LongLinkStatus::Connected);
+        core.longlink()
+            .set_buf2resp(|_task, _body, _channel| (9, TaskFailHandleType::TaskTimeout));
+        let mut doomed = task(7);
+        doomed.total_timeout = 50;
+        assert!(core.start_task_at(NOW, doomed));
+        core.longlink()
+            .on_response_at(NOW + 10, long_answer(7, profile_of("1.2.3.4")));
+        assert_eq!(core.zombie().len(), 1);
+
+        // An app that answers a failure by asking the core about its tasks
+        // asks for the lock the pass is holding, and a mutex taken twice on
+        // one thread never lets go: that is a hang and not a failure, so the
+        // callback asks the way `try_lock` does and the answer is what is
+        // read here.
+        let zombie = Arc::clone(&core.zombie);
+        let answers = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&answers);
+        core.set_task_callback(move |from, _err_type, _err_code, _handle, _task| {
+            if from == CallFrom::Zombie {
+                record
+                    .lock()
+                    .unwrap_or_else(poisoned)
+                    .push(zombie.try_lock().is_ok());
+            }
+            1
+        });
+
+        // the reading a zombie was saved at is the clock's own, which
+        // `call_back` reads for itself, so the reading the redo is handed has
+        // to be one that is past the deadline and not one of the test's
+        let later = gettickcount().saturating_add(1_000);
+        core.redo_tasks_at(later);
+
+        assert_eq!(
+            *answers.lock().unwrap_or_else(poisoned),
+            vec![true],
+            "the app is called while the zombie queue is locked, so an app that comes back into the core hangs"
+        );
+        assert_eq!(
+            core.zombie().len(),
+            0,
+            "the deadline ran out, so the task was failed instead of kept"
+        );
+    }
+
+    #[test]
     fn a_zombie_that_ends_is_not_saved_again() {
         let (mut core, rec) = wired();
         let task = task(7);
@@ -3910,7 +3988,11 @@ mod tests {
         core.stop_signal();
         core.keep_signal();
         core.touch_tasks_at(NOW + 100);
-        core.redo_tasks_at(NOW + 100);
+        // the reading a zombie was saved at is the clock's own, which
+        // `call_back` reads for itself, so the reading the redo is handed has
+        // to be one that is past the deadline and not one of the test's
+        let later = gettickcount().saturating_add(1_000);
+        core.redo_tasks_at(later);
     }
 
     #[test]
