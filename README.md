@@ -105,7 +105,9 @@ implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0-alpha.3")
 ```
 
 ```bash
-ohpm install marsrs-harmonyos-xlog    # HarmonyOS — ArkTS; xlog only, for now
+# HarmonyOS — ArkTS; xlog only, for now. ohpm is not switched on yet, so a
+# release is where the package comes from:
+ohpm install marsrs-harmonyos-xlog-<version>.har
 ```
 
 Then the same three steps on every platform: open an appender once when the app

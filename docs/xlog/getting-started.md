@@ -38,8 +38,12 @@ Native carry the logger in both of their packages today.
 ## Rust
 
 ```bash
-cargo add marsrs          # the whole port: xlog, stn and sdt
-cargo add marsrs-xlog     # xlog alone — the logger and nothing else
+# The crates are not on crates.io yet — publication is pending — so a Rust app
+# takes them off the tag: `cargo add marsrs-xlog` on its own resolves nothing.
+# xlog alone — the logger and nothing else:
+cargo add marsrs-xlog --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
+# the whole port: + STN and SDT
+cargo add marsrs --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
 ```
 
 `marsrs` is one module per piece of mars — `xlog`, `stn`, `sdt`, `comm` — and
@@ -48,7 +52,7 @@ logs takes `marsrs-xlog`, or `marsrs` with the rest turned off:
 
 ```toml
 [dependencies]
-marsrs = { version = "0.1", default-features = false, features = ["xlog"] }
+marsrs = { git = "https://github.com/orangeboyChen/mars-rs", tag = "v0.1.0-alpha.3", default-features = false, features = ["xlog"] }
 ```
 
 ```rust
@@ -87,7 +91,7 @@ itself when it is dropped, so one held for the life of the process needs no
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
+.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0-alpha.3")
 
 // and, in the target that takes it:
 .product(name: "MarsRSXlog", package: "mars-rs")
@@ -134,7 +138,7 @@ C symbols are there too for whoever prefers them.
 platform :ios, '12.0'
 use_frameworks!
 
-pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/v0.1.0/MarsRSXlog.podspec'
+pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/v0.1.0-alpha.3/MarsRSXlog.podspec'
 ```
 
 Three pods, under the names of the three products above: `MarsRSXlog` is the
@@ -182,8 +186,8 @@ console sink, which takes a C function pointer.
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")    // xlog alone
-implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")  // + STN and SDT
+implementation("io.github.orangeboychen.marsrs:xlog:0.1.0-alpha.3")    // xlog alone
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0-alpha.3")  // + STN and SDT
 ```
 
 Both AARs carry the same `libmarsrsxlog.so`, for `arm64-v8a`, `armeabi-v7a` and
@@ -223,8 +227,8 @@ maven {
 }
 
 // build.gradle.kts of the shared module
-implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")    // xlog alone
-implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")  // + STN and SDT
+implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0-alpha.3")    // xlog alone
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0-alpha.3")  // + STN and SDT
 ```
 
 One dependency in `commonMain`, and each platform compiles its own half of it —
