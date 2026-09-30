@@ -70,7 +70,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     }
 
     public actual val isOpen: Boolean
-        get() = handle != NO_HANDLE && handle == openHandles[namePrefix]
+        get() = openHandle() != NO_HANDLE
 
     public actual var level: LogLevel
         get() = LogLevel.of(getLogLevel(requireOpen()))
@@ -84,20 +84,30 @@ public actual class Xlog actual constructor(config: XlogConfig) {
         }
 
     public actual val currentLogPath: String?
-        get() = if (isOpen) getCurrentLogPath(handle) else null
+        get() {
+            val opened = openHandle()
+            return if (opened == NO_HANDLE) null else getCurrentLogPath(opened)
+        }
 
-    public actual fun logFiles(daysAgo: Long): List<String> =
-        if (isOpen) logFiles(handle, daysAgo)?.toList().orEmpty() else emptyList()
+    public actual fun logFiles(daysAgo: Long): List<String> {
+        val opened = openHandle()
+        return if (opened == NO_HANDLE) emptyList() else logFiles(opened, daysAgo)?.toList().orEmpty()
+    }
 
-    public actual fun logFileNames(daysAgo: Long): List<String> =
-        if (isOpen) logFileNames(handle, daysAgo)?.toList().orEmpty() else emptyList()
+    public actual fun logFileNames(daysAgo: Long): List<String> {
+        val opened = openHandle()
+        return if (opened == NO_HANDLE) emptyList() else logFileNames(opened, daysAgo)?.toList().orEmpty()
+    }
 
-    public actual fun isLoggable(level: LogLevel): Boolean =
-        isOpen && LogLevel.of(getLogLevel(handle)).isEnabledFor(level)
+    public actual fun isLoggable(level: LogLevel): Boolean {
+        val opened = openHandle()
+        return opened != NO_HANDLE && LogLevel.of(getLogLevel(opened)).isEnabledFor(level)
+    }
 
     public actual fun log(level: LogLevel, tag: String, message: String) {
-        if (isOpen) {
-            write(handle, level.ordinal, tag, message)
+        val opened = openHandle()
+        if (opened != NO_HANDLE) {
+            write(opened, level.ordinal, tag, message)
         }
     }
 
@@ -114,14 +124,16 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     public actual fun f(tag: String, message: String) = log(LogLevel.FATAL, tag, message)
 
     public actual fun requestFlush() {
-        if (isOpen) {
-            appenderRequestFlush(handle)
+        val opened = openHandle()
+        if (opened != NO_HANDLE) {
+            appenderRequestFlush(opened)
         }
     }
 
     public actual fun flushNow() {
-        if (isOpen) {
-            appenderFlushNow(handle)
+        val opened = openHandle()
+        if (opened != NO_HANDLE) {
+            appenderFlushNow(opened)
         }
     }
 
@@ -151,11 +163,33 @@ public actual class Xlog actual constructor(config: XlogConfig) {
      * nothing, and read a level that is not its own.
      */
     private fun requireOpen(): Long {
-        check(isOpen) {
+        val opened = openHandle()
+        check(opened != NO_HANDLE) {
             "no appender of this Xlog is open ('$namePrefix'): Xlog.open(XlogConfig(...)) another to log again"
         }
-        return handle
+        return opened
     }
+
+    /**
+     * The handle of this appender, [NO_HANDLE] when it is closed, read once:
+     * [handle] is what the `open` of this class was answered, and the table of
+     * [openHandles] is what says the handle is still this [Xlog]'s — an [Xlog]
+     * of the same [namePrefix] is closed with this one, and the table is where
+     * that shows.
+     *
+     * One read and not two, because the two it replaces are not one answer:
+     * `isOpen` and then `handle` is a window a [close] on another thread
+     * lands in, and what comes out of it is the [NO_HANDLE] that [close]
+     * wrote. A handle of no appender is a no-op to `marsrs-jni`, so the level
+     * a wrapper read through it is the one it answers for nothing — which
+     * [LogLevel.of] reads as `VERBOSE`, the level that logs everything: an
+     * [Xlog] that was closed answered the opposite of what it was asked. A
+     * setter handed no handle is quieter and no better: it moves nothing and
+     * still answers that it took the setting. The Kotlin/Native `actual` of
+     * this `expect` reads it once the same way.
+     */
+    private fun openHandle(): Long =
+        handle.takeIf { it != NO_HANDLE && it == openHandles[namePrefix] } ?: NO_HANDLE
 
     // The names `marsrs-jni` exports, and the signatures it reads them under.
     //

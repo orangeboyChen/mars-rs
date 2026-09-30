@@ -93,7 +93,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
      * alone answers a handle the prefix was re-opened under in the meantime.
      */
     public actual val isOpen: Boolean
-        get() = handle != NO_HANDLE && handle == mars_xlog_get_instance(namePrefix)
+        get() = openHandle() != NO_HANDLE
 
     public actual var level: LogLevel
         get() = LogLevel.of(mars_xlog_get_level(requireOpen()))
@@ -136,36 +136,48 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     }
 
     public actual val currentLogPath: String?
-        get() = if (isOpen) {
-            pathAt { out, len ->
-                mars_xlog_current_log_path_instance(handle, out, len)
+        get() {
+            val opened = openHandle()
+            return if (opened == NO_HANDLE) {
+                null
+            } else {
+                pathAt { out, len ->
+                    mars_xlog_current_log_path_instance(opened, out, len)
+                }
             }
+        }
+
+    public actual fun logFiles(daysAgo: Long): List<String> {
+        val opened = openHandle()
+        return if (opened == NO_HANDLE) {
+            emptyList()
         } else {
-            null
+            dayPaths { index, out, len ->
+                mars_xlog_getfilepath_from_timespan_instance(opened, daysAgoOf(daysAgo), index, out, len)
+            }
         }
-
-    public actual fun logFiles(daysAgo: Long): List<String> = if (isOpen) {
-        dayPaths { index, out, len ->
-            mars_xlog_getfilepath_from_timespan_instance(handle, daysAgoOf(daysAgo), index, out, len)
-        }
-    } else {
-        emptyList()
     }
 
-    public actual fun logFileNames(daysAgo: Long): List<String> = if (isOpen) {
-        dayPaths { index, out, len ->
-            mars_xlog_make_logfile_name_instance(handle, daysAgoOf(daysAgo), index, out, len)
+    public actual fun logFileNames(daysAgo: Long): List<String> {
+        val opened = openHandle()
+        return if (opened == NO_HANDLE) {
+            emptyList()
+        } else {
+            dayPaths { index, out, len ->
+                mars_xlog_make_logfile_name_instance(opened, daysAgoOf(daysAgo), index, out, len)
+            }
         }
-    } else {
-        emptyList()
     }
 
-    public actual fun isLoggable(level: LogLevel): Boolean =
-        isOpen && mars_xlog_is_enabled_for(handle, level.ordinal) != DISABLED
+    public actual fun isLoggable(level: LogLevel): Boolean {
+        val opened = openHandle()
+        return opened != NO_HANDLE && mars_xlog_is_enabled_for(opened, level.ordinal) != DISABLED
+    }
 
     public actual fun log(level: LogLevel, tag: String, message: String) {
-        if (isOpen) {
-            mars_xlog_write_instance(handle, level.ordinal, tag, EMPTY, EMPTY, NO_LINE, message)
+        val opened = openHandle()
+        if (opened != NO_HANDLE) {
+            mars_xlog_write_instance(opened, level.ordinal, tag, EMPTY, EMPTY, NO_LINE, message)
         }
     }
 
@@ -182,14 +194,16 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     public actual fun f(tag: String, message: String) = log(LogLevel.FATAL, tag, message)
 
     public actual fun requestFlush() {
-        if (isOpen) {
-            mars_xlog_request_flush_instance(handle)
+        val opened = openHandle()
+        if (opened != NO_HANDLE) {
+            mars_xlog_request_flush_instance(opened)
         }
     }
 
     public actual fun flushNow() {
-        if (isOpen) {
-            mars_xlog_flush_now_instance(handle)
+        val opened = openHandle()
+        if (opened != NO_HANDLE) {
+            mars_xlog_flush_now_instance(opened)
         }
     }
 
@@ -205,7 +219,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     private fun daysAgoOf(daysAgo: Long): Int = daysAgo.coerceIn(NO_DAYS_AGO, Int.MAX_VALUE.toLong()).toInt()
 
     public actual fun close() {
-        if (!isOpen) {
+        if (openHandle() == NO_HANDLE) {
             return
         }
         mars_xlog_release_instance(namePrefix)
@@ -220,11 +234,32 @@ public actual class Xlog actual constructor(config: XlogConfig) {
      * not this one's.
      */
     private fun requireOpen(): Long {
-        check(isOpen) {
+        val opened = openHandle()
+        check(opened != NO_HANDLE) {
             "no appender of this Xlog is open ('$namePrefix'): Xlog.open(XlogConfig(...)) another to log again"
         }
-        return handle
+        return opened
     }
+
+    /**
+     * The handle of this appender, [NO_HANDLE] when it is closed, read once:
+     * [handle] is what `mars_xlog_new_instance` answered, and the registry is
+     * what says the handle is still this [Xlog]'s — an [Xlog] of the same
+     * [namePrefix] is closed with this one, and the registry is where that
+     * shows.
+     *
+     * One read and not two, because the two it replaces are not one answer:
+     * `isOpen` and then `handle` is a window a [close] on another thread
+     * lands in, and what comes out of it is the `0` that [close] wrote. A
+     * handle of `0` is one no appender is open for, so the level a wrapper
+     * read through it is the `-1` `mars_xlog_get_level` answers for one —
+     * which [LogLevel.of] reads as `VERBOSE`, the level that logs
+     * everything: an [Xlog] that was closed answered the opposite of what it
+     * was asked. A setter handed a `0` is quieter and no better: it moves
+     * nothing and still answers that it took the setting.
+     */
+    private fun openHandle(): Long =
+        handle.takeIf { it != NO_HANDLE && it == mars_xlog_get_instance(namePrefix) } ?: NO_HANDLE
 
     public actual companion object {
         /** What a path symbol writes into: a path never fills it, and a symbol
