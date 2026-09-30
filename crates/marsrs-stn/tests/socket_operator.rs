@@ -32,7 +32,6 @@ struct Host {
     closed: Vec<SocketFd>,
     breaker: Breaker,
     profile: SocketProfile,
-    timeouts: (u32, u32),
 }
 
 impl Host {
@@ -44,7 +43,6 @@ impl Host {
             closed: Vec::new(),
             breaker: Breaker { broken: false },
             profile: SocketProfile::default(),
-            timeouts: (0, 0),
         }
     }
 }
@@ -54,6 +52,12 @@ impl SocketOperator for Host {
         let socket = SocketFd(self.next);
         self.next += 1;
         self.opened.push(socket);
+        // what a connect leaves behind for the link that asked for it, and
+        // what `ShortLink` reads out of [`SocketOperator::profile`] as soon
+        // as it has one
+        self.profile.index = 0;
+        self.profile.rtt = 30;
+        self.profile.total_cost = 40;
         socket
     }
 
@@ -100,8 +104,10 @@ impl SocketOperator for Host {
         SocketFd(socket.0 + 100)
     }
 
-    fn set_ip_connection_timeout(&mut self, v4_timeout_ms: u32, v6_timeout_ms: u32) {
-        self.timeouts = (v4_timeout_ms, v6_timeout_ms);
+    fn set_ip_connection_timeout(&mut self, _v4_timeout_ms: u32, _v6_timeout_ms: u32) {
+        // a host that dials one address at a time has nothing to race, and
+        // what a connect decides with them is pinned in `tests/short_link.rs`,
+        // where the link is the one that hands them over
     }
 }
 
@@ -129,12 +135,18 @@ fn the_host_opens_sends_and_closes_through_the_operator() {
 
     host.close(socket);
     assert_eq!(host.closed, vec![socket]);
-    // The profile the host holds is the one the port reads out of the
-    // operator — `LongLink::operator_profile` — and a seam that answered a
-    // default of its own would hand a link a profile no host ever filled in.
-    // Nothing here moved it, so what is asked of it is that it comes back.
-    host.profile.rtt = 30;
-    assert_eq!(host.profile().rtt, 30);
+    // The profile the port reads out of the operator is the one the host's
+    // connect left behind — `SocketOperator::profile`, which a short link
+    // asks as soon as it has a socket — so a seam that answered a default of
+    // its own would hand a link a profile no host ever filled in
+    assert_eq!(
+        host.profile(),
+        SocketProfile {
+            rtt: 30,
+            total_cost: 40,
+            ..SocketProfile::default()
+        }
+    );
 }
 
 #[test]
@@ -144,13 +156,6 @@ fn a_breaker_is_woken_once_and_says_so() {
 
     assert!(host.breaker().break_());
     assert!(host.breaker().is_break());
-}
-
-#[test]
-fn the_timeouts_the_host_sets_are_what_a_connect_decides_with() {
-    let mut host = Host::new();
-    host.set_ip_connection_timeout(1_000, 2_000);
-    assert_eq!(host.timeouts, (1_000, 2_000));
 }
 
 #[test]
