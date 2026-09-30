@@ -1570,6 +1570,12 @@ impl Appender {
             appender.clear_cache_file_if_heap();
         }
 
+        // What a configured `pub_key` does *not* buy, said in the file before
+        // anything else is written to it: see [`Appender::crypt_caveat`].
+        if let Some(caveat) = appender.crypt_caveat() {
+            appender.write_tips2file(caveat);
+        }
+
         // `__DATE__` / `__TIME__` of the C++ banner: which build produced this
         // log file, not what time it is now.
         let (build_date, build_time) = crate::file_util::build_stamp();
@@ -1931,6 +1937,48 @@ impl Appender {
         }
     }
 
+    /// What a configured [`XLogConfig::pub_key`] does **not** give the caller:
+    /// the line the log says it in, or `None` when there is nothing to say.
+    ///
+    /// Two ways a `pub_key` encrypts nothing, and until now neither was said
+    /// anywhere:
+    ///
+    /// * `LogCrypt::new` leaves `is_crypt` false for a key that is not the 128
+    ///   hex characters of a valid secp256k1 point — it early-returns, the way
+    ///   the C++ does — and every record of the log then goes out with the
+    ///   NOCRYPT magics and a plaintext body;
+    /// * `LogCrypt::CryptSyncLog` stores a sync record's body in the clear
+    ///   whatever the key is: the C++ has the TEA loop commented out, the port
+    ///   kept that, and the record still carries the "crypt" magic.
+    ///
+    /// Both are written into the file and not answered to the caller, which is
+    /// what `xlog encode` does for the first (`--pubkey` that is not a key is
+    /// an error there): an app on a device cannot be rebuilt the moment its
+    /// key turns out to be bad, and an appender that refused to open would
+    /// cost it every record of the run, encryption or none. What nobody may
+    /// believe is that the log is encrypted when it is not, and the file is
+    /// where whoever reads that log — or ships it off the device — looks
+    /// first.
+    fn crypt_caveat(&self) -> Option<&'static str> {
+        let guard = self.lock();
+        if guard.config.pub_key.is_empty() {
+            return None;
+        }
+        if !guard.buff.is_crypt() {
+            return Some(
+                "[F][ the configured pub_key is not the 128 hex characters of a secp256k1 \
+                 public key, so no record of this log is encrypted\n",
+            );
+        }
+        if guard.config.mode == AppenderMode::Sync {
+            return Some(
+                "[F][ appender mode is sync: `LogCrypt::CryptSyncLog` stores a record's body \
+                 in the clear, so the configured pub_key encrypts nothing in this mode\n",
+            );
+        }
+        None
+    }
+
     /// `XloggerAppender::SetMode`.
     pub(crate) fn set_mode(&self, mode: AppenderMode) -> Result<(), crate::config::AppenderError> {
         let previous = self.lock().config.mode;
@@ -1945,6 +1993,12 @@ impl Appender {
                 self.lock().tx = None;
                 return Err(err);
             }
+        }
+        // A mode the configured `pub_key` does nothing in is worth a line in
+        // the log as much as an open in that mode is: see
+        // [`Appender::crypt_caveat`].
+        if let Some(caveat) = self.crypt_caveat() {
+            self.write_tips2file(caveat);
         }
         self.lock().notify();
         Ok(())
