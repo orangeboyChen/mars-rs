@@ -47,6 +47,13 @@ manifest = json.load(open('$MANIFEST'))
 for case in manifest['cases']:
     print(case['name'], case['mode'], case['compress'], case['sync'],
           case['crypt'], case['flush_every'], case['file'])" > "$WORK/cases.txt"
+# A manifest of no case is a run that compared nothing: `FAILED` would stay at
+# zero over a table of no rows, which is the same answer a run of sixteen
+# passing cases gives.
+[ -s "$WORK/cases.txt" ] || {
+    echo "crates/marsrs-compat/fixtures/manifest.json names no case" >&2
+    exit 1
+}
 
 FAILED=0
 printf '| case | rust -> cpp | cpp -> rust | bytes |\n|---|---|---|---|\n'
@@ -163,8 +170,17 @@ for mode in zlib zstd; do
             "$REPO/target/release/examples/xlog_file" --mode="$mode" \
                 --sync="$sync" "$RUST_DIR" "$FIX/inputs.bin" "$KEY" \
                 > "$WORK/app-rust-$tag.txt"
-            RUST_CPP=ok
-            for file in $(cat "$WORK/app-rust-$tag.txt"); do
+            # A row that names no file is a row that compared nothing: the
+            # loop over an empty list leaves `ok` where it is, and `ok` is a
+            # claim about a comparison that ran.
+            files="$(cat "$WORK/app-rust-$tag.txt")"
+            if [ -z "$files" ]; then
+                echo "$tag: the Rust appender named no file to decode" >&2
+                RUST_CPP=FAILED
+            else
+                RUST_CPP=ok
+            fi
+            for file in $files; do
                 "$OUT/upstream_decode" "$file" "$file.plain"
                 python3 "$REPO/scripts/compat/check.py" lines \
                     "$FIX/inputs.bin" "$file.plain" || RUST_CPP=FAILED
@@ -174,8 +190,14 @@ for mode in zlib zstd; do
             "$OUT/upstream_encode" --appender=1 --mode="$mode" --sync="$sync" \
                 --pubkey="$KEY" --records="$FIX/inputs.bin" \
                 --out="$CPP_DIR" > "$WORK/app-cpp-$tag.txt"
-            CPP_RUST=ok
-            for file in $(cat "$WORK/app-cpp-$tag.txt"); do
+            files="$(cat "$WORK/app-cpp-$tag.txt")"
+            if [ -z "$files" ]; then
+                echo "$tag: upstream's appender named no file to decode" >&2
+                CPP_RUST=FAILED
+            else
+                CPP_RUST=ok
+            fi
+            for file in $files; do
                 "$REPO/target/release/xlog-compat" decode --privkey="$PRIVKEY" \
                     --in="$file" --out="$file.plain" > /dev/null
                 python3 "$REPO/scripts/compat/check.py" lines \
