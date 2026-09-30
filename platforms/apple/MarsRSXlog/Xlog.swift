@@ -487,7 +487,7 @@ public final class Xlog: NSObject {
         // A mirror of an appender this open made, at the values a fresh one is
         // opened with. An open that was refused made no appender, and one that
         // joined an appender which was there already mirrors what it found.
-        if !joining && opened != Self.noHandle {
+        if !joining, opened != Self.noHandle {
             XlogSettings.replace(of: config.namePrefix, with: XlogSettings.Values(mode: config.mode))
         }
         Self.registryLock.unlock()
