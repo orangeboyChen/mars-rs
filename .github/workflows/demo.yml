@@ -34,8 +34,8 @@ name: Demos
 #   flutter,    analysed and type-checked: `flutter analyze`, and `tsc` over
 #   react-      `App.tsx` against the module of this tree
 #   native
-#   harmonyos   built with DevEco's own ArkTS compiler, over the HAR of a
-#               release
+#   harmonyos   built with DevEco's own ArkTS compiler, over the HAR this run
+#               assembles out of the checkout and not the HAR of a release
 #
 # Which is the most a runner can answer for each of them, and not the same
 # answer for all eight: a demo that is a complete project is built, and one that
@@ -73,6 +73,12 @@ env:
   TYPESCRIPT_VERSION: '5.9.3'
   JAVA_VERSION: '17'
   DEVECO_CLI_VERSION: '5.1.0.840'
+  # Its checksum, the one lint-harmony.yml pins: the HarmonyOS job below
+  # downloads the same 2.1 GB archive off the same mirror, and
+  # scripts/fetch_deveco_cli.sh only checks what it is told to check — with no
+  # checksum in the environment it unpacks the toolchain unverified and says so
+  # in a warning nobody reads.
+  DEVECO_CLI_SHA256: '1dcefa4741dc289277560b2802040e0c45b433898d8db453d711d5376e0478f1'
 
 jobs:
   # Which of the files each demo below reads this commit touched, and so which
@@ -233,8 +239,11 @@ jobs:
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
       # `assembleDebug` and not `installDebug`: the second needs a device or an
       # emulator to install onto, and what this job asks is whether the app
-      # still builds — the AAR it takes comes out of JitPack, which builds it
-      # from the tag `demo/android/gradle/libs.versions.toml` names.
+      # still builds — over `platforms/android` of this checkout, which
+      # `demo/android/settings.gradle.kts` substitutes for the published
+      # package, so the appender it compiles against is the one in the tree and
+      # not the one JitPack builds out of the tag
+      # `demo/android/gradle/libs.versions.toml` names.
       - name: assembleDebug
         working-directory: demo/android
         run: ./gradlew assembleDebug
@@ -382,11 +391,16 @@ jobs:
       # transcoder out of the SDK — and `DEVECO_CLI_PRUNE=0` is the switch
       # scripts/fetch_deveco_cli.sh has for keeping the two components a HAR
       # build never runs (1.8 GB of a C++ toolchain and the previewer).
+      #
+      # The checksum in the key, the way lint-harmony.yml keys its own: what a
+      # checksum checks is the download, and a cache hit is a download that
+      # never happens — an entry keyed on the version alone would go on serving
+      # the copy it unpacked before the archive under that version changed.
       - name: Cache the DevEco Command Line Tools ${{ env.DEVECO_CLI_VERSION }}
         uses: actions/cache@v6
         with:
           path: .deveco-cli
-          key: deveco-cli-full-${{ env.DEVECO_CLI_VERSION }}
+          key: deveco-cli-full-${{ env.DEVECO_CLI_VERSION }}-${{ env.DEVECO_CLI_SHA256 }}
       - name: Fetch the DevEco Command Line Tools ${{ env.DEVECO_CLI_VERSION }}
         env:
           DEVECO_CLI_PRUNE: '0'
