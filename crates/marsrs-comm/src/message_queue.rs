@@ -8,9 +8,13 @@
 //! `MessageTitle_t`, `Message`, `MessageTiming`, `RunLoop`) and the rules
 //! that matter:
 //!
-//! * a handler with `seq == 0` is a **broadcast** handler and receives
-//!   every message of its queue, including the ones addressed to another
-//!   handler;
+//! * a message addressed to the handler whose `seq` is `0` is a
+//!   **broadcast**: it runs on every handler of the queue that was
+//!   installed with `recv_broadcast`, and on none of the handlers the
+//!   other messages are addressed to. That handler is
+//!   [`MessageHandler::default`], and `install_message_handler` never
+//!   hands one out — the seq of a handler that can be addressed to
+//!   starts at 1;
 //! * `post_message` returns a `MessagePost` that can be cancelled — by
 //!   post, by handler, or by handler + title;
 //! * `after`/`period` messages only run once their time has come;
@@ -284,6 +288,21 @@ impl QueueState {
         self.next_post_seq = seq.wrapping_add(1).max(1);
         seq
     }
+
+    /// The sequence number of the next handler, which is never 0.
+    ///
+    /// Wrapping, and not `+= 1`, for the reason [`Self::next_post_seq`]
+    /// gives and for one of its own: 0 is the `seq` of the handler a
+    /// broadcast is addressed to, so a handler that was handed 0 is one
+    /// that is installed as the broadcast handler instead of as itself —
+    /// dispatch runs it for every broadcast of the queue and never for a
+    /// message addressed to it, and `post_message` skips the check that
+    /// the handler is still installed.
+    fn next_handler_seq(&mut self) -> u32 {
+        let seq = self.next_handler_seq;
+        self.next_handler_seq = seq.wrapping_add(1).max(1);
+        seq
+    }
 }
 
 struct Queue {
@@ -405,8 +424,7 @@ where
         return MessageHandler::default();
     };
     let mut state = queue.lock();
-    let seq = state.next_handler_seq;
-    state.next_handler_seq += 1;
+    let seq = state.next_handler_seq();
     state.handlers.push(HandlerEntry {
         seq,
         handler: Arc::new(handler),
@@ -982,6 +1000,23 @@ mod tests {
             state.next_post_seq(),
             1,
             "it wrapped to 0, which is no post"
+        );
+    }
+
+    /// The same for a handler, and for one reason more: the number a
+    /// handler wraps to would be 0, which is the `seq` of the handler a
+    /// broadcast is addressed to — a handler installed with it is run for
+    /// every broadcast of the queue and never for a message of its own.
+    #[test]
+    fn the_sequence_number_of_a_handler_wraps_past_the_top_of_a_u32() {
+        let mut state = QueueState::new();
+        state.next_handler_seq = u32::MAX - 1;
+        assert_eq!(state.next_handler_seq(), u32::MAX - 1);
+        assert_eq!(state.next_handler_seq(), u32::MAX);
+        assert_eq!(
+            state.next_handler_seq(),
+            1,
+            "it wrapped to 0, which is the broadcast handler"
         );
     }
 
