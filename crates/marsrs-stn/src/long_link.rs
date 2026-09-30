@@ -461,9 +461,10 @@ impl RunEnd {
 /// the heartbeat that is out or a task's.
 ///
 /// The C++ calls `OnResponse` from inside its loop and `OnRecv` for a package
-/// that is not whole yet; the port hands the answers back instead, which is what
-/// [`LongLink::read_at`] returns. A package that is still missing bytes is
-/// neither: it stays in the link's buffer, and nothing is handed back for it.
+/// that is not whole yet; the port hands the answers back instead, in the
+/// [`Read`] [`LongLink::read_at`] answers with. A package that is still missing
+/// bytes is neither: it stays in the link's buffer, and nothing is handed back
+/// for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
     /// A task's answer — the C++'s `OnResponse(kEctOK, 0, ...)`.
@@ -483,6 +484,38 @@ pub enum Answer {
         /// The task it is the answer to.
         taskid: u32,
     },
+}
+
+/// What one read of the socket gave: every whole package in it, and why the run
+/// is over, when it is.
+///
+/// A run can be over with packages already unpacked, and the two come back
+/// together for that reason: the C++ hands each package to `OnResponse` as it
+/// unpacks it, and only sees the package that ends the run afterwards, so what
+/// it had answered before it ended is answered all the same. A read that hands
+/// back an end and no answers is a run that ended before it read anything.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Read {
+    /// The whole packages in what came, in the order they were unpacked.
+    pub answers: Vec<Answer>,
+    /// Why the run is over, and [`None`] for one that is not.
+    pub end: Option<RunEnd>,
+}
+
+impl Read {
+    /// A read the run went on after: what it answered, and no end.
+    fn answered(answers: Vec<Answer>) -> Self {
+        Self { answers, end: None }
+    }
+
+    /// A read the run is over after: what it answered before it ended, and why
+    /// it ended.
+    fn ended(answers: Vec<Answer>, end: RunEnd) -> Self {
+        Self {
+            answers,
+            end: Some(end),
+        }
+    }
 }
 
 /// What the host's run wrote: how many bytes went out, and which tasks the
@@ -1305,16 +1338,16 @@ impl LongLink {
     /// A package that is missing bytes is kept for the next read — it is the
     /// `LONGLINK_UNPACK_CONTINUE` the C++ breaks out of its loop for, and what
     /// [`LongLink::recv_len`] is.
-    pub fn read_at(&mut self, now: u64, socket: SocketFd) -> Result<Vec<Answer>, RunEnd> {
+    pub fn read_at(&mut self, now: u64, socket: SocketFd) -> Read {
         let bytes = match self.socket_recv(socket) {
             Ok(bytes) => bytes,
-            Err(err_code) => return Err(RunEnd::socket(err_code)),
+            Err(err_code) => return Read::ended(Vec::new(), RunEnd::socket(err_code)),
         };
         if bytes.is_empty() {
             // `0 == recvlen`: the peer hung up, which the next run writes on
             // the profile rather than reporting
             self.server_triggered_off = true;
-            return Err(RunEnd::shutdown());
+            return Read::ended(Vec::new(), RunEnd::shutdown());
         }
         self.last_recv = now;
         // the C++ emits before it hands the bytes to its unpacker, so a read
@@ -1326,7 +1359,13 @@ impl LongLink {
         while !self.recv.is_empty() {
             let unpacked = longlink_unpack(&self.recv);
             match unpacked {
-                Unpacked::False => return Err(RunEnd::unpack()),
+                // a package that is not one ends the run, and what was
+                // unpacked before it is still answered: the C++ hands each
+                // package over as it unpacks it, and this is the package it
+                // sees after the ones it already handed over
+                Unpacked::False => {
+                    return Read::ended(answers, RunEnd::unpack());
+                }
                 // not a whole package yet: what came stays for the next read
                 Unpacked::Continue => break,
                 Unpacked::Package {
@@ -1341,7 +1380,7 @@ impl LongLink {
                         // place for ever, which is no answer at all. The port
                         // ends the run on it, the way it ends one on a package
                         // that is not a package
-                        return Err(RunEnd::unpack());
+                        return Read::ended(answers, RunEnd::unpack());
                     }
                     let answer = if self.noop_resp_at(now, cmdid, seq, &body) {
                         Answer::Heartbeat { cmdid, taskid: seq }
@@ -1357,11 +1396,11 @@ impl LongLink {
                 }
             }
         }
-        Ok(answers)
+        Read::answered(answers)
     }
 
     /// The same, with the reading of the clock the host's `gettickcount()`.
-    pub fn read(&mut self, socket: SocketFd) -> Result<Vec<Answer>, RunEnd> {
+    pub fn read(&mut self, socket: SocketFd) -> Read {
         self.read_at(marsrs_comm::tickcount::gettickcount(), socket)
     }
 
@@ -3110,7 +3149,7 @@ mod tests {
         *seen.answer.lock().unwrap() = longlink_pack(12, 7, b"hello");
 
         assert_eq!(
-            link.read_at(2_000, socket).unwrap(),
+            link.read_at(2_000, socket).answers,
             vec![Answer::Task {
                 cmdid: 12,
                 taskid: 7,
@@ -3132,13 +3171,15 @@ mod tests {
         // half a package, which is the `LONGLINK_UNPACK_CONTINUE` the C++ breaks
         // its loop for
         *seen.answer.lock().unwrap() = packed[..packed.len() / 2].to_vec();
-        assert_eq!(link.read_at(2_000, socket).unwrap(), vec![]);
+        let read = link.read_at(2_000, socket);
+        assert_eq!(read.answers, vec![]);
+        assert_eq!(read.end, None, "half a package is not the end of a run");
         assert_eq!(link.recv_len(), packed.len() / 2);
 
         // ... and the rest of it makes a whole one, out of both reads
         *seen.answer.lock().unwrap() = packed[packed.len() / 2..].to_vec();
         assert_eq!(
-            link.read_at(2_100, socket).unwrap(),
+            link.read_at(2_100, socket).answers,
             vec![Answer::Task {
                 cmdid: 12,
                 taskid: 7,
@@ -3157,13 +3198,40 @@ mod tests {
         link.make_sure_connected();
         let socket = link.connect_at(1_000).unwrap();
         *seen.answer.lock().unwrap() = vec![0; crate::longlink::HEADER_LEN];
-        assert_eq!(link.read_at(2_000, socket), Err(RunEnd::unpack()));
+        assert_eq!(link.read_at(2_000, socket).end, Some(RunEnd::unpack()));
+    }
+
+    #[test]
+    fn a_read_that_ends_answers_with_what_it_had_unpacked() {
+        let _lock = crate::test_lock();
+        let (mut link, seen) = link();
+        link.make_sure_connected();
+        let socket = link.connect_at(1_000).unwrap();
+        // a whole package, and then the header that claims no bytes at all
+        let mut packed = longlink_pack(12, 7, b"hello");
+        packed.resize(packed.len() + crate::longlink::HEADER_LEN, 0);
+        *seen.answer.lock().unwrap() = packed;
+
+        let read = link.read_at(2_000, socket);
+        assert_eq!(
+            read.answers,
+            vec![Answer::Task {
+                cmdid: 12,
+                taskid: 7,
+                body: b"hello".to_vec(),
+            }],
+            "the C++ handed this one over before it saw the package that ends the run"
+        );
+        assert_eq!(read.end, Some(RunEnd::unpack()));
     }
 
     #[test]
     fn a_read_of_nothing_is_the_peer_hanging_up() {
         let mut link = connected();
-        assert_eq!(link.read_at(2_000, SocketFd(3)), Err(RunEnd::shutdown()));
+        assert_eq!(
+            link.read_at(2_000, SocketFd(3)).end,
+            Some(RunEnd::shutdown())
+        );
         // `svr_trig_off_`, which the next run writes on the profile rather than
         // reporting
         assert!(link.is_server_triggered_off());
@@ -3180,7 +3248,7 @@ mod tests {
         *seen.answer.lock().unwrap() = longlink_pack(NOOP_CMDID, Task::NOOP_TASK_ID, &[]);
 
         assert_eq!(
-            link.read_at(1_500, socket).unwrap(),
+            link.read_at(1_500, socket).answers,
             vec![Answer::Heartbeat {
                 cmdid: NOOP_CMDID,
                 taskid: Task::NOOP_TASK_ID,
@@ -3269,7 +3337,7 @@ mod tests {
         assert_eq!(link.connect_status(), LongLinkStatus::Connected);
         assert!(link.send(Task::new(7, 12), b"hello"));
         assert!(link.write(SocketFd(3), false).is_ok());
-        assert_eq!(link.read(SocketFd(3)), Err(RunEnd::shutdown()));
+        assert_eq!(link.read(SocketFd(3)).end, Some(RunEnd::shutdown()));
         link.finish_run(SocketFd(3), RunEnd::ok());
         assert!(!link.is_running());
     }

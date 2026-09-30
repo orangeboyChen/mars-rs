@@ -240,6 +240,8 @@ pub use anti_avalanche::{AntiAvalanche, LimitKind};
 pub use dynamic_timeout::{DynamicTimeout, DynamicTimeoutStatus};
 pub use flow_limit::FlowLimit;
 pub use frequency_limit::FrequencyLimit;
+// `Read` is not here: [`short_link`] already has one of that name, so what one
+// read of a long link gave is [`long_link::Read`].
 pub use long_link::{
     AlarmStatus, Answer, ConnectFail, DisconnectInternalCode, LongLink, MakeSure, NoopAlarm,
     RunEnd, SendData, Written, EBADMSG, ECT_DNS_MAKE_SOCKET_PREPARED,
@@ -288,7 +290,8 @@ pub use report::task_profile_json;
 // value a sent task ends with is [`sent::Answer`].
 pub use sent::{Driver, Failure, Sent};
 // `ConnectFail` is not here: [`long_link`] already has one of that name, so the
-// short link's is [`short_link::ConnectFail`].
+// short link's is [`short_link::ConnectFail`]. Neither is `Read` of the long
+// link's, which is [`long_link::Read`]: what one read of a long link gave.
 pub use short_link::{
     NetworkLabel, Read, RunFail, ShortLink, DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_RW_TIMEOUT_MS,
     ECT_HTTP_PARSE_STATUS_LINE, ECT_HTTP_SPLIT_HTTP_HEAD_AND_BODY, ECT_SOCKET_READ_ONCE,

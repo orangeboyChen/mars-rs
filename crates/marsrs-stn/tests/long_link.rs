@@ -630,7 +630,7 @@ fn a_run_writes_a_task_reads_its_answer_and_ends_with_the_profile() {
     );
 
     assert_eq!(
-        link.read_at(2_100, socket).unwrap(),
+        link.read_at(2_100, socket).answers,
         vec![Answer::Task {
             cmdid: 12,
             taskid: 7,
@@ -659,7 +659,10 @@ fn a_run_the_peer_hung_up_on_is_over_and_says_so() {
     });
 
     // a read of nothing is the peer hanging up
-    assert_eq!(link.read_at(2_000, SocketFd(3)), Err(RunEnd::shutdown()));
+    assert_eq!(
+        link.read_at(2_000, SocketFd(3)).end,
+        Some(RunEnd::shutdown())
+    );
     assert!(link.is_server_triggered_off());
     link.finish_run_at(2_000, SocketFd(3), RunEnd::shutdown());
 
@@ -689,10 +692,10 @@ fn what_the_link_read_stays_until_it_is_a_whole_package() {
     link.make_sure_connected();
     let socket = link.run_at(1_000).unwrap();
 
-    assert_eq!(link.read_at(2_000, socket).unwrap(), vec![]);
+    assert_eq!(link.read_at(2_000, socket).answers, vec![]);
     assert_eq!(link.recv_len(), packed.len() / 2, "half of it is here");
     assert_eq!(
-        link.read_at(2_100, socket).unwrap(),
+        link.read_at(2_100, socket).answers,
         vec![Answer::Task {
             cmdid: 12,
             taskid: 7,
