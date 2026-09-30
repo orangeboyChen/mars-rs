@@ -5,6 +5,7 @@
 
 package io.github.orangeboychen.marsrs.sdt
 
+import android.util.Log
 import io.github.orangeboychen.marsrs.Mars
 
 /**
@@ -294,11 +295,22 @@ object SdtLogic {
      *
      * @param networkType what `PlatformComm.getNetInfo` answers
      * @param probe the four probes, asked while this runs and not after
-     * @return `false` when there was no check in flight, or when the one there
-     *     was got cancelled before its first check
+     * @return `false` when there was no check in flight, when the one there was
+     *     got cancelled before its first check, and when this call was made
+     *     from inside a run of it — which is what a probe or the callback that
+     *     starts a second one is answered with, rather than with a second run
      */
     @JvmStatic
     fun runChecks(networkType: Int, probe: IProbe): Boolean {
+        // A run started from inside a run — from one of the four probes, or from
+        // the [ICallBack] the report is handed to — is refused and not run:
+        // `synchronized` is reentrant, so the inner run would be let in, and the
+        // `finally` it ends with takes the probe away from the outer run, whose
+        // checks from then on ask a `null` probe and are recorded as failures.
+        if (Thread.holdsLock(runLock)) {
+            Log.w(TAG, "runChecks from inside a run of it: the second one is not started")
+            return false
+        }
         // The four probes are asked of this class's own statics, from the native
         // call below this one on the stack, on this very thread: that is why the
         // probe is a field for as long as the run is and not an argument the
