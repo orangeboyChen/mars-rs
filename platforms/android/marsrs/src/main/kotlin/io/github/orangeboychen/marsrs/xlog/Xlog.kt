@@ -82,7 +82,7 @@ class Xlog(config: XlogConfig, context: Context? = null) {
      * appender and is closed with this one.
      */
     val isOpen: Boolean
-        get() = handle != NO_HANDLE && handle == openHandles[namePrefix]
+        get() = openHandle() != NO_HANDLE
 
     /**
      * The level of this appender: a record less severe than this is dropped.
@@ -215,7 +215,10 @@ class Xlog(config: XlogConfig, context: Context? = null) {
      * builds a message that is expensive to build. `false` once [close] ran,
      * which is the one honest answer of an appender that writes nothing.
      */
-    fun isLoggable(level: LogLevel): Boolean = isOpen && LogLevel.of(getLogLevel(handle)).isEnabledFor(level)
+    fun isLoggable(level: LogLevel): Boolean {
+        val opened = openHandle()
+        return opened != NO_HANDLE && LogLevel.of(getLogLevel(opened)).isEnabledFor(level)
+    }
 
     /**
      * The directory this appender writes its files into, or `null` once it is
@@ -226,7 +229,10 @@ class Xlog(config: XlogConfig, context: Context? = null) {
      * state — an open appender has a directory from the moment it is opened.
      */
     val currentLogPath: String?
-        get() = if (isOpen) getCurrentLogPath(handle) else null
+        get() {
+            val opened = openHandle()
+            return if (opened == NO_HANDLE) null else getCurrentLogPath(opened)
+        }
 
     /**
      * The log files of the day `daysAgo` days ago that are *there* — what an app
@@ -237,21 +243,26 @@ class Xlog(config: XlogConfig, context: Context? = null) {
      * [currentLogPath] answers is the directory, and this names the day's file in
      * it.
      */
-    fun logFiles(daysAgo: Long): List<String> =
-        if (isOpen) logFiles(handle, daysAgo)?.toList().orEmpty() else emptyList()
+    fun logFiles(daysAgo: Long): List<String> {
+        val opened = openHandle()
+        return if (opened == NO_HANDLE) emptyList() else logFiles(opened, daysAgo)?.toList().orEmpty()
+    }
 
     /**
      * The names of the log files of the day `daysAgo` days ago, whether or not
      * they are there yet — the name an app that is about to write, or that is
      * naming a file to someone else, asks for.
      */
-    fun logFileNames(daysAgo: Long): List<String> =
-        if (isOpen) logFileNames(handle, daysAgo)?.toList().orEmpty() else emptyList()
+    fun logFileNames(daysAgo: Long): List<String> {
+        val opened = openHandle()
+        return if (opened == NO_HANDLE) emptyList() else logFileNames(opened, daysAgo)?.toList().orEmpty()
+    }
 
     /** Writes a record of [level]. */
     fun log(level: LogLevel, tag: String, message: String) {
-        if (isOpen) {
-            write(handle, level.native, tag, message)
+        val opened = openHandle()
+        if (opened != NO_HANDLE) {
+            write(opened, level.native, tag, message)
         }
     }
 
@@ -281,8 +292,9 @@ class Xlog(config: XlogConfig, context: Context? = null) {
      * nothing is lost by a drain that has not happened yet.
      */
     fun requestFlush() {
-        if (isOpen) {
-            appenderRequestFlush(handle)
+        val opened = openHandle()
+        if (opened != NO_HANDLE) {
+            appenderRequestFlush(opened)
         }
     }
 
@@ -294,8 +306,9 @@ class Xlog(config: XlogConfig, context: Context? = null) {
      * the time the drain takes, on that thread.
      */
     fun flushNow() {
-        if (isOpen) {
-            appenderFlushNow(handle)
+        val opened = openHandle()
+        if (opened != NO_HANDLE) {
+            appenderFlushNow(opened)
         }
     }
 
@@ -353,11 +366,31 @@ class Xlog(config: XlogConfig, context: Context? = null) {
      * nothing, and read a level that is not its own.
      */
     private fun requireOpen(): Long {
-        check(isOpen) {
+        val opened = openHandle()
+        check(opened != NO_HANDLE) {
             "no appender of this Xlog is open ('$namePrefix'): Xlog.open(XlogConfig(...)) another to log again"
         }
-        return handle
+        return opened
     }
+
+    /**
+     * The handle of this appender, [NO_HANDLE] when it is closed, read once:
+     * [handle] is what `Xlog.open` was answered, and the table of [openHandles]
+     * is what says the handle is still this [Xlog]'s — an [Xlog] of the same
+     * [namePrefix] is closed with this one, and the table is where that shows.
+     *
+     * One read and not two, because the two it replaces are not one answer:
+     * `isOpen` and then `handle` is a window a [close] on another thread
+     * lands in, and what comes out of it is the [NO_HANDLE] that [close]
+     * wrote. A handle of no appender is a no-op to `marsrs-jni`, so the level
+     * a wrapper read through it is the one it answers for nothing — which
+     * [LogLevel.of] reads as `VERBOSE`, the level that logs everything: an
+     * [Xlog] that was closed answered the opposite of what it was asked. A
+     * setter handed no handle is quieter and no better: it moves nothing and
+     * still answers that it took the setting.
+     */
+    private fun openHandle(): Long =
+        handle.takeIf { it != NO_HANDLE && it == openHandles[namePrefix] } ?: NO_HANDLE
 
     // The names `marsrs-jni` exports, and the signatures it reads them under.
     //
