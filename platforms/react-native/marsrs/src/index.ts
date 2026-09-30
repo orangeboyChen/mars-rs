@@ -419,7 +419,13 @@ export class Xlog {
     return NativeXlog.logFileNames(this.namePrefix, daysAgo);
   }
 
-  /** `mars_xlog_release_instance`: closes the appender `Xlog.open` made.
+  /** Closes the appender `Xlog.open` made. `mars_xlog_release_instance_of` on
+   * iOS, which is given the handle beside the prefix — a release by prefix
+   * alone closes whichever appender the prefix answers at that moment — and
+   * `mars_xlog_release_instance` on Android, which releases the prefix and is
+   * asked once per `Xlog`, by whichever takes its handle out of the table
+   * first.
+   *
    * Nothing is closed twice: an `Xlog` that is already closed answers `false`
    * from `isOpen` and drops what it is asked to write — and an appender two
    * names hold is closed for both, because `Xlog.open` gave them one `Xlog`. */
