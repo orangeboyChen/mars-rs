@@ -1617,7 +1617,13 @@ impl Appender {
             appender.write_tips2file("~~~~~ begin of mmap ~~~~~\n");
             let reached = appender.lock().drain_leftover(leftover.as_slice());
             appender.write_tips2file(&format!("~~~~~ end of mmap ~~~~~{mark}\n"));
-            if !reached {
+            if reached {
+                // A slot with no mapping keeps its bytes, so once the records
+                // above are in a log the file has to be emptied or the next
+                // start appends them a second time — once per start, forever.
+                // (With a mapping, `buffer_drained` zeroes it in place.)
+                appender.clear_cache_file_if_heap();
+            } else {
                 // A block this process did not compress itself cannot stay in
                 // the region: [`LogBuffer::attach`] recovered its length, but the
                 // compressor that produced it is gone, so the next record written
@@ -1630,15 +1636,15 @@ impl Appender {
                 //
                 // The records are not given up with it: they were copied out
                 // above, and a batch [`AppenderInner::log2file`] could not write
-                // stays in `AppenderInner::pending` for one more attempt.
+                // stays in `AppenderInner::pending` for one more attempt — and
+                // what the region stops holding the *file* still does, so a
+                // run that dies before that attempt lands leaves them where the
+                // next start finds them. Emptying the file here is what would
+                // take the only copy left from a process that is about to need
+                // it: see [`Appender::close`], which keeps it for the same
+                // reason when its own drain is the one that failed.
                 appender.lock().buffer_drained();
             }
-            // A slot with no mapping keeps its bytes, so once the records above
-            // are in a log the file has to be emptied or the next start appends
-            // them a second time — once per start, forever. (With a mapping,
-            // `buffer_drained` zeroes it in place.) Clearing it while the write
-            // has not happened is what would lose them.
-            appender.clear_cache_file_if_heap();
         }
 
         // What a configured `pub_key` does *not* buy, said in the file ahead of
