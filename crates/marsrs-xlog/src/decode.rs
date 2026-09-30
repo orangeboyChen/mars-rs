@@ -45,7 +45,10 @@ use std::path::Path;
 
 use marsrs_crypt::{magic, CLIENT_PUBKEY_LEN, HEADER_LEN, TAILER_LEN, TEA_BLOCK_LEN};
 
-/// The round count both halves of `LogCrypt::CryptSyncLog` loop over.
+/// The round count `LogCrypt::CryptAsyncLog` loops the blocks of a body
+/// through — the half of the cipher a sync record never gets: its body is
+/// copied verbatim, so this is the count the async one is decrypted with
+/// here and nothing else.
 const TEA_ROUNDS: u32 = 16;
 const TEA_DELTA: u32 = 0x9e37_79b9;
 
