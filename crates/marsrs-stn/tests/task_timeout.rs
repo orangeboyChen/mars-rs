@@ -49,8 +49,10 @@ const WAITS: &[Wait] = &[
         expected: 12_000,
         what: "the base wifi wait",
     },
-    // 16 bytes: `1000 * 16 / 12288` is 1 ms, and the C++'s `test0` asks for
-    // 12 000 because it rounds the fraction away — the port does not
+    // 16 bytes: `1000 * 16 / 12288` is 1 ms. The C++ never writes the number
+    // down — its cases ask `__FirstPkgTimeout(0, 16, 0)` for it (`test2` to
+    // `test4`) and compare a real wait against that — so 12 001 is what they
+    // expect, and 12 000 is not a number any of them holds
     Wait {
         init: 0,
         len: 16,
