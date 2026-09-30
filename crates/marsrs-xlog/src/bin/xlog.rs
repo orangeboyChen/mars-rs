@@ -36,6 +36,15 @@
 //! `INPUT` is a path or `-` for standard input (`--in=` and `--records=` say
 //! the same thing), and `--out` is a path or `-` for standard output; it is
 //! standard output when it is left out, so `xlog decode a.xlog | less` works.
+//! A value of no characters says the same thing as `-`: `--in=` is standard
+//! input and `--out=` standard output, because a path of no characters is not
+//! one anything can open.
+//!
+//! A `--` ends the options: what stands behind it is an `INPUT`, however it
+//! starts, so a file whose name begins with a dash is one the command reads
+//! and not an option it does not have. It ends the questions too — `xlog help`
+//! and `xlog --version` are asked as a subcommand or as a flag of their own,
+//! and not from the value of an option.
 //!
 //! Every option has a short spelling, and takes its value either attached —
 //! `-oFILE`, `-o=FILE` — or as the next argument, `-o FILE`. A subcommand has
@@ -53,6 +62,12 @@ use marsrs_xlog::{bytes::AutoBuffer, decode_records_counted, CompressMode, Decod
 /// `kBufferBlockLength` in `mars/xlog/src/appender.cc` (150 KiB), the size of
 /// the region a record is written through.
 const DEFAULT_REGION: usize = 150 * 1024;
+/// The biggest `--region` there is — 64 MiB, which is four hundred times the
+/// block the appender writes through and more room than a record of any size
+/// an app writes needs. A number past it is refused: the region is
+/// `vec![0u8; region_len]`, so a `--region` that is a typo is a terabyte the
+/// process asks for and the machine does not have.
+const MAX_REGION: usize = 64 * 1024 * 1024;
 /// `ZSTD_c_compressionLevel` default of `XlogConfig` in the C++ appender.
 const DEFAULT_LEVEL: i32 = 6;
 /// The bytes one record needs of the region: the block's header, its own
@@ -98,12 +113,14 @@ options:
                          nor encrypted, which is what the C++ writes
   -l, --level=N          encode: the zstd level, 6 by default
   -r, --region=N         encode: the size of the buffer a record is written
-                         through, 153600 by default; a record that needs a
-                         bigger one is given it
+                         through, 153600 by default and 67108864 at most; a
+                         record that needs a bigger one is given it
 
-INPUT of `-`, or none at all, is standard input; so is `--out=-`. A short
-option takes its value attached — `-oFILE`, `-o=FILE` — or as the next
-argument, `-o FILE`.
+INPUT of `-`, or none at all, is standard input; so is `--out=-`. A value of no
+characters says the same thing: `--in=` is standard input and `--out=` standard
+output. A `--` ends the options, so what stands behind it is an INPUT however it
+starts. A short option takes its value attached — `-oFILE`, `-o=FILE` — or as the
+next argument, `-o FILE`.
 
 `xlog keygen` prints the pair as `pubkey=HEX` and `privkey=HEX`: the 128 hex
 characters a `pubKey` is configured with, and the 64 that `xlog decode
@@ -136,19 +153,16 @@ struct Command {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    // Asked anywhere on the line, not only as a subcommand: `xlog encode --help`
-    // is the same question as `xlog help`, and both are answered the same way.
-    if args
-        .iter()
-        .any(|arg| matches!(arg.as_str(), "help" | "h" | "--help" | "-h"))
-    {
+    // Asked as the subcommand, or as a flag of its own — and not as the value
+    // of an option, which is what a scan of every argument would also match:
+    // `xlog decode --out help` names a file called `help`, and asks for no
+    // help at all. `xlog encode --help` is the same question as `xlog help`,
+    // and both are answered the same way.
+    if asked(&args, &["help", "h"], &["--help", "-h"]) {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
     }
-    if args
-        .iter()
-        .any(|arg| matches!(arg.as_str(), "--version" | "-V" | "-v"))
-    {
+    if asked(&args, &[], &["--version", "-V", "-v"]) {
         println!("xlog {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
@@ -183,6 +197,28 @@ fn main() -> ExitCode {
     }
 }
 
+/// Whether the command line asked for one of `words` as its subcommand, or for
+/// one of `flags` as an option of its own.
+///
+/// A scan of every argument is not what this is: an option's value is an
+/// argument too, and `xlog decode --out help` names a file called `help` while
+/// asking for nothing. So the two places the question can stand are the two a
+/// command line has for it — the first argument, which is where a subcommand
+/// is, and an argument that is an option of its own — and neither is behind the
+/// `--` that says everything after it is an input: `xlog encode -- --help`
+/// reads a file of that name.
+fn asked(args: &[String], words: &[&str], flags: &[&str]) -> bool {
+    if args
+        .first()
+        .is_some_and(|first| words.contains(&first.as_str()))
+    {
+        return true;
+    }
+    args.iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .any(|arg| flags.contains(&arg.as_str()))
+}
+
 impl Command {
     /// Parses `--key=value` and `-k value` options, and at most one positional
     /// argument.
@@ -200,9 +236,24 @@ impl Command {
         };
 
         let mut index = 0;
+        // What stands behind a `--` is an input however it starts: an option's
+        // own spelling is not the only way a file of records is named, and a
+        // path that begins with a dash is one an option parser takes for an
+        // option of its own.
+        let mut inputs_only = false;
         while index < args.len() {
             let arg = &args[index];
             index += 1;
+            if inputs_only {
+                if command.input.replace(arg.clone()).is_some() {
+                    return Err(format!("two inputs given, the second one `{arg}`"));
+                }
+                continue;
+            }
+            if arg == "--" {
+                inputs_only = true;
+                continue;
+            }
             if let Some(rest) = arg.strip_prefix("--") {
                 // `--out=PATH` and `--out PATH` are the same option; the second
                 // one is what a command line reads like, and the value is the
@@ -233,11 +284,6 @@ impl Command {
             }
         }
 
-        if command.pubkey.as_deref() == Some("") {
-            command.pubkey = None;
-        }
-        // An option of another subcommand is a mistake and not a default: a
-        // `--privkey` that `encode` ignores writes a file nobody asked for.
         if what != What::Encode && command.pubkey.is_some() {
             return Err("--pubkey is an option of `xlog encode`".into());
         }
@@ -267,8 +313,8 @@ impl Command {
             return Err(format!("--{key} is not an option of `xlog keygen`"));
         }
         match key {
-            "in" | "records" => self.input = Some(value.to_owned()),
-            "out" => self.out = Some(value.to_owned()),
+            "in" | "records" => self.input = given(value),
+            "out" => self.out = given(value),
             "mode" => {
                 self.mode = match value {
                     "zlib" => CompressMode::Zlib,
@@ -288,10 +334,21 @@ impl Command {
                     self.sync = flag;
                 }
             }
-            "pubkey" => self.pubkey = Some(value.to_owned()),
+            "pubkey" => self.pubkey = given(value),
             "privkey" => self.privkey = Some(privkey(value)?),
             "level" => self.level = number(key, value)?,
-            "region" => self.region = number(key, value)?,
+            "region" => {
+                self.region = number(key, value)?;
+                // `--region` is a floor and not a ceiling — a record that needs
+                // more room is given it — so a number past this one is a typo
+                // and not a request: the region is `vec![0u8; region_len]`, and
+                // `--region=999999999999` is a terabyte of it.
+                if self.region > MAX_REGION {
+                    return Err(format!(
+                        "--region must be at most {MAX_REGION} bytes, got `{value}`"
+                    ));
+                }
+            }
             other => return Err(format!("unknown option `--{other}`")),
         }
         Ok(())
@@ -341,6 +398,14 @@ impl Command {
         }
         Ok(records)
     }
+}
+
+/// A value of no characters is a value that was not given: `--out=` is
+/// standard output the way leaving `--out` out is, `--in=` is standard input,
+/// and `--pubkey=` is a file in the clear — a path, a key and a hex string of
+/// no characters are not ones anything can open, derive or parse.
+fn given(value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 /// The long name of every short option: `-o PATH` is `--out=PATH`, and `-k` is

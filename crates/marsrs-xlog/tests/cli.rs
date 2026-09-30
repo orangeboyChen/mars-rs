@@ -79,6 +79,22 @@ fn run(args: &[&str]) -> (bool, Vec<u8>, String) {
     )
 }
 
+/// The same, in `dir`: what a relative path on the command line is relative
+/// to, which is the machine's own working directory and not one of these
+/// tests'.
+fn run_in(dir: &Path, args: &[&str]) -> (bool, Vec<u8>, String) {
+    let output = xlog()
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .expect("run the CLI");
+    (
+        output.status.success(),
+        output.stdout,
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
 #[test]
 fn every_mode_round_trips_the_records() {
     let dir = scratch("round-trip");
@@ -816,6 +832,7 @@ fn the_version_and_the_usage_are_printed() {
         }
     }
 }
+
 /// A file read with the private key of another pair is a file no record of
 /// which comes out: the walk goes on from a record it cannot read, so what it
 /// answers with is a marker per record and no log at all. A command that
@@ -858,4 +875,132 @@ fn a_file_read_with_the_key_of_another_pair_is_refused() {
     assert!(!out.is_empty(), "no marker was written");
     assert!(text.contains("error"), "no reason was written: {text}");
     assert_ne!(out, RECORDS, "the records came out with the wrong key");
+}
+
+/// The usage is asked for as a subcommand, or as a flag of its own — and not
+/// from the value of an option, which is an argument like any other.
+#[test]
+fn an_options_value_is_not_the_question_it_looks_like() {
+    let dir = scratch("value-spelling");
+    let input = write(&dir, "records.txt", RECORDS);
+
+    // `--out help` names a file called `help`.
+    let (ok, out, err) = run_in(
+        &dir,
+        &["encode", &input.display().to_string(), "--out", "help"],
+    );
+    assert!(ok, "encode to a file called `help` failed: {err}");
+    assert!(
+        out.is_empty(),
+        "the usage was printed instead: {}",
+        String::from_utf8_lossy(&out)
+    );
+    let help = dir.join("help");
+    assert!(
+        std::fs::metadata(&help)
+            .expect("a file called `help`")
+            .len()
+            > 0,
+        "no file was written"
+    );
+
+    // And `--help` of a subcommand is the question, wherever it stands.
+    for args in [["encode", "--help"].as_slice(), ["decode", "-h"].as_slice()] {
+        let (ok, out, _) = run(args);
+        assert!(ok, "`{}` failed", args.join(" "));
+        let usage = String::from_utf8_lossy(&out).into_owned();
+        assert!(
+            usage.contains("xlog keygen"),
+            "no usage was printed: {usage}"
+        );
+    }
+}
+
+/// An input whose name starts with a dash is an input: what says so is the
+/// `--` that ends the options.
+#[test]
+fn a_dash_dash_ends_the_options() {
+    let dir = scratch("dash-dash");
+    write(&dir, "-weird.txt", RECORDS);
+
+    // Without it, an option parser takes the name for an option of its own:
+    // `w` is no option of any subcommand's.
+    let (ok, _, err) = run_in(&dir, &["encode", "-weird.txt"]);
+    assert!(!ok, "a name of that shape was read as an input");
+    assert!(
+        err.contains("unknown option"),
+        "the error does not say why: {err}"
+    );
+
+    // The options stand in front of the `--`: everything behind it is an input.
+    let (ok, _, err) = run_in(&dir, &["encode", "-o", "a.xlog", "--", "-weird.txt"]);
+    assert!(
+        ok,
+        "encode of a file whose name starts with a dash failed: {err}"
+    );
+    let (ok, out, err) = run_in(&dir, &["decode", "--", "a.xlog"]);
+    assert!(ok, "decode failed: {err}");
+    assert_eq!(out, RECORDS, "the records did not come back");
+}
+
+/// A value of no characters is the stream the option names: `--out=` is
+/// standard output, and `--in=` standard input. A path of no characters is not
+/// one anything can open.
+#[test]
+fn an_empty_value_is_the_stream_it_names() {
+    let dir = scratch("empty-value");
+    let input = write(&dir, "records.txt", RECORDS);
+    let file = dir.join("a.xlog");
+
+    let (ok, _, err) = run(&[
+        "encode",
+        &input.display().to_string(),
+        "-o",
+        &file.display().to_string(),
+    ]);
+    assert!(ok, "encode failed: {err}");
+
+    let (ok, out, err) = run(&["decode", &file.display().to_string(), "--out="]);
+    assert!(ok, "decode with an empty --out failed: {err}");
+    assert_eq!(out, RECORDS, "the records did not come back");
+
+    let mut child = xlog()
+        .args(["decode", "--in="])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("start the CLI");
+    child
+        .stdin
+        .take()
+        .expect("the stdin pipe")
+        .write_all(&std::fs::read(&file).expect("read the .xlog"))
+        .expect("write the .xlog");
+    let decoded = child.wait_with_output().expect("the log text");
+    assert!(
+        decoded.status.success(),
+        "decode from standard input failed: {}",
+        String::from_utf8_lossy(&decoded.stderr)
+    );
+    assert_eq!(decoded.stdout, RECORDS, "the records did not come back");
+}
+
+/// The region is `vec![0u8; region_len]`, and `--region` is a floor and not a
+/// ceiling — a record that needs more room is given it — so a number past the
+/// largest one there is a typo and not a request.
+#[test]
+fn a_region_past_the_largest_one_is_refused() {
+    let dir = scratch("region-cap");
+    let input = write(&dir, "records.txt", RECORDS);
+
+    let (ok, _, err) = run(&[
+        "encode",
+        "--region=999999999999",
+        &input.display().to_string(),
+    ]);
+    assert!(!ok, "a terabyte of region was accepted");
+    assert!(
+        err.contains("at most"),
+        "the error does not say what the largest one is: {err}"
+    );
 }
