@@ -109,8 +109,8 @@ let longLink = [MarsSdt.Link(
     ports: [MarsSdt.HostPort(host: "1.2.3.4", port: 80)]
 )]
 MarsSdt.setHTTPNetCheckCGI("http://example.com/netcheck")
-// 1 | 2 是 NET_CHECK_BASIC | NET_CHECK_LONG：先 ping 和 dns，再 tcp
-MarsSdt.startActiveCheck(longLink: longLink, shortLink: [], mode: 1 | 2, timeout: 10_000)
+// [.basic, .long] 是先 ping 和 dns，再 tcp
+MarsSdt.startActiveCheck(longLink: longLink, shortLink: [], mode: [.basic, .long], timeout: 10_000)
 
 // 2. 计划，跑在 `probe` 回答的那个网络之上
 MarsSdt.runChecks(networkType: 1) { query in
@@ -237,8 +237,7 @@ marsrs-<version>-<host>.zip      （Windows）
 MarsSdtIpPort port = { "1.2.3.4", 80 };
 MarsSdtHosts longlink[] = { { "default", &port, 1 } };
 mars_sdt_set_http_netcheck_cgi("http://example.com/netcheck");
-/* 1 | 2 是 NET_CHECK_BASIC | NET_CHECK_LONG：先 ping 和 dns，再 tcp */
-mars_sdt_start_active_check(longlink, 1, NULL, 0, 1 | 2, 10000);
+mars_sdt_start_active_check(longlink, 1, NULL, 0, NET_CHECK_BASIC | NET_CHECK_LONG, 10000);
 
 /* 2. 计划，跑在 `probe` 回答的那个网络之上 */
 static void probe(void *ctx, const MarsSdtQuery *q, MarsSdtAnswer *a) {
