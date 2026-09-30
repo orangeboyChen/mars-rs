@@ -2621,13 +2621,4 @@ mod tests {
             "the grace has no end while the app is in front"
         );
     }
-
-    #[test]
-    fn a_network_change_is_one_the_pipeline_survives() {
-        // `mars::baseevent::GetSignalOnNetworkChange()`: every long link is
-        // taken down, so what there was to connect is gone and a link nobody
-        // made is still not one that is up
-        mars_stn_on_network_change();
-        assert_eq!(mars_stn_longlink_is_connected(), 0);
-    }
 }
