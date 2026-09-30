@@ -111,42 +111,65 @@ public final class Xlog: NSObject {
         }
     }
 
-    /// Whether a write reaches the file before it returns: what the
-    /// `XlogConfig` gave, until this says otherwise. The C ABI has no getter
-    /// for it, so this is the last value this side wrote.
+    /// Whether a write reaches the file before it returns: what [XlogSettings]
+    /// holds for this `namePrefix`, because the C ABI has no getter for it and
+    /// a prefix is one appender — two `Xlog`s of one write through the same
+    /// one, so a mode either of them set is the other's.
     @objc public var mode: AppenderMode {
-        get { withHandleLock { currentMode } }
+        get { XlogSettings.values(of: namePrefix).mode }
         set {
-            withHandleLock { currentMode = newValue }
-            withHandle { mars_xlog_set_mode_instance($0, newValue.rawValue) }
+            // Mirrored inside, and not before: a closed `Xlog` moves nothing,
+            // so a mirror that took the value would answer a mode no appender
+            // is running under.
+            withHandle { handle in
+                XlogSettings.set(\.mode, of: namePrefix, to: newValue)
+                mars_xlog_set_mode_instance(handle, newValue.rawValue)
+            }
         }
     }
 
     /// Whether the console prints the log too — off until an app turns it on.
+    /// Mirrored the way [mode] is, and for the same reason.
     @objc public var isConsoleLogEnabled: Bool {
-        get { withHandleLock { consoleLogEnabled } }
+        get { XlogSettings.values(of: namePrefix).consoleLogEnabled }
         set {
-            withHandleLock { consoleLogEnabled = newValue }
-            withHandle { mars_xlog_set_console_log_instance($0, newValue ? 1 : 0) }
+            withHandle { handle in
+                XlogSettings.set(\.consoleLogEnabled, of: namePrefix, to: newValue)
+                mars_xlog_set_console_log_instance(handle, newValue ? 1 : 0)
+            }
         }
     }
 
     /// How many bytes a log file may reach before it is closed and a new one
-    /// opened; `0` is "never split".
+    /// opened; `0` is "never split". Mirrored the way [mode] is, and for the
+    /// same reason.
     @objc public var maxFileSizeBytes: UInt64 {
-        get { withHandleLock { fileSizeLimit } }
+        get { XlogSettings.values(of: namePrefix).fileSizeLimit }
         set {
-            withHandleLock { fileSizeLimit = newValue }
-            withHandle { mars_xlog_set_max_file_size_instance($0, newValue) }
+            withHandle { handle in
+                XlogSettings.set(\.fileSizeLimit, of: namePrefix, to: newValue)
+                mars_xlog_set_max_file_size_instance(handle, newValue)
+            }
         }
     }
 
     /// How many seconds a log file is kept; `0` is the C++'s own ten days.
+    /// Mirrored the way [mode] is, and for the same reason.
+    ///
+    /// What it answers is the limit the appender is held to and not the one
+    /// that was asked for: a limit below [minAliveTimeSeconds] is one the C ABI
+    /// refuses — the same floor an `open` holds a configuration to — so the
+    /// appender keeps the one it had, and `0` is below that floor as well.
     @objc public var maxAliveTimeSeconds: Int64 {
-        get { withHandleLock { aliveTimeLimit } }
+        get { XlogSettings.values(of: namePrefix).aliveTimeLimit }
         set {
-            withHandleLock { aliveTimeLimit = newValue }
-            withHandle { mars_xlog_set_max_alive_duration_instance($0, newValue) }
+            guard newValue >= Self.minAliveTimeSeconds else {
+                return
+            }
+            withHandle { handle in
+                XlogSettings.set(\.aliveTimeLimit, of: namePrefix, to: newValue)
+                mars_xlog_set_max_alive_duration_instance(handle, newValue)
+            }
         }
     }
 
@@ -437,6 +460,12 @@ public final class Xlog: NSObject {
         // the registry and been answered cannot have this prefix's new handle
         // taken out from under it by the open that follows.
         Self.registryLock.lock()
+        // Asked before the open and not after it: `mars_xlog_new_instance`
+        // answers the handle a prefix already has *without* applying `config`
+        // to the appender behind it, so an `Xlog` that joins one mirrors what
+        // the appender was given by the `Xlog` that opened it, and not what
+        // its own `config` asked for.
+        let joining = config.namePrefix.withCString { mars_xlog_get_instance($0) != Self.noHandle }
         let opened = withCStrings(
             first: config.logDirectory,
             second: config.namePrefix,
@@ -455,6 +484,12 @@ public final class Xlog: NSObject {
             )
             return mars_xlog_new_instance(&cConfig, config.level.rawValue)
         }
+        // A mirror of an appender this open made, at the values a fresh one is
+        // opened with. An open that was refused made no appender, and one that
+        // joined an appender which was there already mirrors what it found.
+        if !joining && opened != Self.noHandle {
+            XlogSettings.replace(of: config.namePrefix, with: XlogSettings.Values(mode: config.mode))
+        }
         Self.registryLock.unlock()
         guard opened != Self.noHandle else {
             throw XlogError.refused
@@ -462,7 +497,6 @@ public final class Xlog: NSObject {
 
         self.namePrefix = config.namePrefix
         self.handle = opened
-        self.currentMode = config.mode
         super.init()
         XlogBackgroundFlush.shared.add(self)
     }
@@ -485,26 +519,17 @@ public final class Xlog: NSObject {
     /// all.
     private let handleLock = NSLock()
 
-    /// What [mode], [isConsoleLogEnabled], [maxFileSizeBytes] and
-    /// [maxAliveTimeSeconds] answer: the C ABI has no getter for any of them,
-    /// so this side keeps the last value it wrote. Read and written under
-    /// [handleLock], because a setter is called from whichever thread an app
-    /// set it on and a getter from whichever thread asks, and Swift gives a
-    /// stored property no lock of its own.
-    private var currentMode: AppenderMode
-
-    private var consoleLogEnabled = false
-
-    private var fileSizeLimit: UInt64 = 0
-
-    private var aliveTimeLimit: Int64 = 0
-
     /// The queue an `await flush()` waits for the disk on: serial, because a
     /// drain holds the appender's lock from the cache to the OS anyway.
     private static let flushQueue = DispatchQueue(label: "io.github.orangeboychen.marsrs.xlog.flush")
 
     /// The handle the C ABI answers for an appender it did not open.
     private static let noHandle: Int64 = 0
+
+    /// `kMinLogAliveTime` — one day: what
+    /// `mars_xlog_set_max_alive_duration_instance` holds a limit to, below
+    /// which the appender keeps the one it had.
+    private static let minAliveTimeSeconds: Int64 = 86_400
 
     /// What makes [close()] one step and not two: a close releases by prefix,
     /// so the question it asks of the registry and the release that trusts the
@@ -536,16 +561,6 @@ public final class Xlog: NSObject {
             return
         }
         body(opened)
-    }
-
-    /// Runs `body` with [handleLock] held, which is what the settings this
-    /// side mirrors are read and written under — and not [withHandle], because
-    /// a setting is a value this `Xlog` keeps and not a call through the
-    /// handle.
-    private func withHandleLock<T>(_ body: () -> T) -> T {
-        handleLock.lock()
-        defer { handleLock.unlock() }
-        return body()
     }
 
     /// The handle of this appender, [noHandle] when it is closed: what every
