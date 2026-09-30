@@ -441,33 +441,41 @@ mod tests {
     /// otherwise, which is what this one is here for.
     #[test]
     fn the_state_is_broadcast_with_both_locks_free() {
-        let (in_here_tx, in_here_rx) = mpsc::channel();
-        let (signalled_tx, signalled_rx) = mpsc::channel();
+        // The sample takes the lock the others do, and not only because the
+        // net core is shared: the move it makes is a move of the active state,
+        // and `SwitchActiveStateForDebug(false)` sets that state to false
+        // whatever the foreground is — in the middle of another sample, it
+        // answered "not active" to the ask that came right after the
+        // `onForeground(true)` that had just made it active again.
+        isolated(|| {
+            let (in_here_tx, in_here_rx) = mpsc::channel();
+            let (signalled_tx, signalled_rx) = mpsc::channel();
 
-        // the net core's thread: one ask after another, so that an ask is
-        // waiting whenever the other thread reaches the signal
-        let asking = thread::spawn(move || {
-            crate::stn::with_logic(|_| {
-                in_here_tx.send(()).ok();
-                for _ in 0..ASK_COUNT {
-                    let _ = is_foreground_impl();
-                    thread::yield_now();
-                }
+            // the net core's thread: one ask after another, so that an ask is
+            // waiting whenever the other thread reaches the signal
+            let asking = thread::spawn(move || {
+                crate::stn::with_logic(|_| {
+                    in_here_tx.send(()).ok();
+                    for _ in 0..ASK_COUNT {
+                        let _ = is_foreground_impl();
+                        thread::yield_now();
+                    }
+                });
             });
-        });
-        in_here_rx.recv().unwrap();
+            in_here_rx.recv().unwrap();
 
-        let signalling = thread::spawn(move || {
-            switch_active_state_for_debug_impl(false);
-            signalled_tx.send(()).ok();
-        });
-        assert_eq!(
-            signalled_rx.recv_timeout(Duration::from_secs(10)),
-            Ok(()),
-            "the signal waited for the ask that waited for the signal"
-        );
-        signalling.join().unwrap();
-        asking.join().unwrap();
+            let signalling = thread::spawn(move || {
+                switch_active_state_for_debug_impl(false);
+                signalled_tx.send(()).ok();
+            });
+            assert_eq!(
+                signalled_rx.recv_timeout(Duration::from_secs(10)),
+                Ok(()),
+                "the signal waited for the ask that waited for the signal"
+            );
+            signalling.join().unwrap();
+            asking.join().unwrap();
+        })
     }
 
     #[test]
