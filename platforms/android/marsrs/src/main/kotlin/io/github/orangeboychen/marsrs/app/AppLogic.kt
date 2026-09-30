@@ -64,6 +64,14 @@ object AppLogic {
         fun getDeviceType(): DeviceInfo?
     }
 
+    /**
+     * The app the four questions are asked of: written by [setCallBack] on the
+     * thread the app called it on and read on whichever of the port's own
+     * threads asked — the same field, one write and many reads, and a read
+     * with no `@Volatile` is one a thread is free to answer out of a cache of
+     * its own, which is an app that is asked nothing because it is not there.
+     */
+    @Volatile
     private var callBack: ICallBack? = null
 
     /**
