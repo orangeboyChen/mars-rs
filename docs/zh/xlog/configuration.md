@@ -47,9 +47,8 @@ HarmonyOS 那一列也是 Kotlin 的拼法，只是大小写不同：`LogLevel.V
 assert 是唯一不受级别管的一条记录：不管 appender 开在哪一级，它都按 `fatal` 写进去
 —— assert 说的是一件不该发生的事。
 
-两个调用都不结束进程，这也是 C++ 在这里做了、而本移植没做的唯一一件事：上游写完这条
-记录之后会在 Android 上 `raise(SIGTRAP)`、在 Apple 上调 `__assert_rtn`。想让进程停在
-assert 上的 App 得自己停 —— `std::process::abort()`，或者平台自己的陷阱 —— 写完再停。
+两个调用都不结束进程。想让进程停在 assert 上的 App 得自己停 ——
+`std::process::abort()`，或者平台自己的陷阱 —— 写完再停。
 
 ::: code-group
 

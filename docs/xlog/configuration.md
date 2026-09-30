@@ -53,11 +53,9 @@ An assert is the one record the level does not gate: it is written at `fatal`
 whatever the appender's level is, because what an assert names is a condition
 that is not supposed to be possible.
 
-Neither call ends the process, and that is the one thing the C++ does here that
-this port does not: upstream raises `SIGTRAP` on Android and calls
-`__assert_rtn` on Apple once the record is written. An app that wants its
-process stopped on an assert stops it itself — `std::process::abort()`, or a
-platform trap — after the write.
+Neither call ends the process. An app that wants its process stopped on an
+assert stops it itself — `std::process::abort()`, or a platform trap — after the
+write.
 
 ::: code-group
 
