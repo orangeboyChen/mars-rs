@@ -21,9 +21,10 @@ import java.io.ByteArrayOutputStream
  * function pointer of the C ABI. Five of the eighteen never reach the app here,
  * because the bridge answers them itself; see [Question.Kind].
  *
- * The two `actual`s differ in one more place: [CgiProfile] carries the nine ticks
- * and the two integers `marsrs-jni` fills in, and not the two readings only the C
- * ABI has, so a profile an app reads on Android answers `0` and `""` for them.
+ * The two `actual`s differ in one more place: [CgiProfile] carries the ten ticks
+ * and the rtt, and the two integers `marsrs-jni` fills in, and not the two
+ * readings only the C ABI has, so a profile an app reads on Android answers `0`
+ * and `""` for them.
  */
 public actual object StnLogic {
     init {
@@ -341,7 +342,7 @@ public actual object StnLogic {
         ask(Question.Kind.ReportTaskProfile) { this.profileJSON = taskString }
     }
 
-    /** What `marsrs-jni` hands [onTaskEnd]: the nine ticks and the two integers its `cgi_profile` fills in. */
+    /** What `marsrs-jni` hands [onTaskEnd]: the ten ticks and the rtt, and the two integers its `cgi_profile` fills in. */
     internal class CgiProfile {
         @JvmField
         var taskStartTime: Long = 0
