@@ -198,7 +198,7 @@ pub unsafe extern "system" fn JNI_OnLoad(
 /// [`crate::sdt`] recorded it; nothing here panics into Rust either way.
 ///
 /// A callback that threw is answered here and not by the next call — see
-/// [`clear_pending`]. This is the one C2Java call of the port that is a `V`
+/// `clear_pending`. This is the one C2Java call of the port that is a `V`
 /// and not a question: the app's handler gets the report and answers nothing,
 /// so there is no answer to read the failure out of, and the thread it runs
 /// on was attached by Rust, which discards a pending exception at detach
