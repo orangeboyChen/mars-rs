@@ -633,14 +633,25 @@ impl ShortLink {
         }
 
         // a debug ip is where the link goes, so there is no proxy to speak of
+        //
+        // An http proxy is the one a link both dials at the proxy's own
+        // address and writes its request for — [`crate::shortlink::request_url`]
+        // answers `http://host/cgi` for [`IpSourceType::Proxy`] and nothing
+        // else — so the two halves are one decision, and it is taken here: a
+        // link that dialled the proxy but wrote the pair behind it would put
+        // a request no proxy can route on a socket that goes to one. A tunnel
+        // or a socks5 one is dialled *through* and keeps the request, so a
+        // debug ip takes no proxy away from those.
+        let debug_ip = self.debug_ip();
         let use_proxy = proxy.is_address_valid()
             && self
                 .profile
                 .ip_items
                 .first()
-                .is_some_and(|item| item.source_type != IpSourceType::Debug);
+                .is_some_and(|item| item.source_type != IpSourceType::Debug)
+            && !(proxy.kind == ProxyType::Http && !debug_ip.is_empty());
 
-        if use_proxy && proxy.kind == ProxyType::Http && self.debug_ip().is_empty() {
+        if use_proxy && proxy.kind == ProxyType::Http {
             self.profile.ip = proxy.ip.clone();
             self.profile.port = proxy.port;
             self.profile.ip_type = IpSourceType::Proxy;
@@ -2185,11 +2196,40 @@ mod tests {
         link.connect_at(1000).unwrap();
         assert_eq!(link.profile().ip_type, IpSourceType::Dns);
         assert_eq!(link.profile().ip, "183.3.226.35");
+
+        // the connect goes to the pair dns named and not to the proxy, and the
+        // operator is told of no proxy at all
         let addresses = seen.addresses.lock().unwrap();
         assert_eq!(
             addresses[0][0].ip(),
-            "10.0.0.1",
-            "the debug ip keeps the proxy off the list, but the connect still goes to it"
+            "183.3.226.35",
+            "the debug ip keeps the proxy off the list and out of the connect"
+        );
+        assert_eq!(seen.proxies.lock().unwrap()[0].kind, ProxyType::None);
+
+        // … and that is the pair the request is written for: a link that
+        // dialled the proxy would have to ask it for the whole url, which is
+        // what `IpSourceType::Proxy` writes and what this one does not
+        assert_eq!(
+            crate::shortlink::request_url(link.profile(), "/cgi"),
+            "/cgi"
+        );
+    }
+
+    #[test]
+    fn an_http_proxy_is_dialled_and_written_a_request_for() {
+        let seen = Seen::default();
+        let mut link = proxy_link(&seen);
+        link.set_proxy(|_| ProxyInfo::new(ProxyType::Http, "", "10.0.0.1", 8080, "", ""));
+
+        link.connect_at(1000).unwrap();
+        assert_eq!(link.profile().ip_type, IpSourceType::Proxy);
+        let addresses = seen.addresses.lock().unwrap();
+        assert_eq!(addresses[0][0].ip(), "10.0.0.1");
+        assert_eq!(
+            crate::shortlink::request_url(link.profile(), "/cgi"),
+            "http://short.weixin.qq.com/cgi",
+            "a proxy is asked for the whole url and not for the path"
         );
     }
 
