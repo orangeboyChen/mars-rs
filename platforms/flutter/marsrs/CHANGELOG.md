@@ -9,7 +9,7 @@
 
 ## 0.1.0-alpha.2
 
-* The first version: `Xlog` over the 23 `mars_xlog_*` symbols the C ABI is —
+* The first version: `Xlog` over the 16 `mars_xlog_*` symbols the C ABI is —
   `Xlog.open`, the six levels `v` to `f`, `isLoggable`, `flush`, `close`, and the
   settings: `setLevel`, `getLevel`, `setMode`, `setConsoleLogEnabled`,
   `setMaxFileSize`, `setMaxAliveTime`. Four of the calls answer a `Future` —
