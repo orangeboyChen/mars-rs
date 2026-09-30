@@ -762,11 +762,11 @@ impl LongLinkTaskManager {
                 self.tasks.remove(at);
                 Some(RespHandle::Ended)
             }
-            // `kTaskFailHandleDefault`, and `kTaskFailHandleTaskTimeout`
-            // together with anything else the app made up, which is the C++'s
-            // `default:`. Both fail the channel and not just the task, and
-            // both hand `__BatchErrorRespHandle` the code the decoder read --
-            // but they report different things to the app.
+            // `kTaskFailHandleDefault` and `kTaskFailHandleTaskTimeout`, which
+            // the C++'s `switch` sends to its `default:`. Both fail the channel
+            // and not just the task, and both hand `__BatchErrorRespHandle` the
+            // code the decoder read — but they report different things to the
+            // app.
             TaskFailHandleType::Default | TaskFailHandleType::TaskTimeout => {
                 self.batch_error_resp_handle_at(
                     now,
@@ -779,13 +779,17 @@ impl LongLinkTaskManager {
                     },
                     true,
                 );
-                let reported = match handle {
-                    // `fun_notify_network_err_(..., err_code, ...)`: what the
-                    // app's own decoder read out of the body
-                    TaskFailHandleType::Default => err_code,
-                    // `default:` has no code of its own to name and reports
-                    // the handle
-                    made_up => made_up as i32,
+                // `fun_notify_network_err_(..., err_code, ...)` for the default
+                // handle — what the app's own decoder read out of the body —
+                // and the handle itself for the timeout, which is the only
+                // other one this arm is reached with: `default:` has no code
+                // of its own to name. [`TaskFailHandleType::of`] answers
+                // `Normal` for every int that is not one of these, so there is
+                // no handle the app made up for this arm to see.
+                let reported = if handle == TaskFailHandleType::Default {
+                    err_code
+                } else {
+                    handle as i32
                 };
                 self.notify_network_err(
                     &response.name,
