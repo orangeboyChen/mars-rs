@@ -812,7 +812,6 @@ impl ShortLink {
 
         let connected = self.operator_profile();
         self.profile.conn_rtt = connected.rtt;
-        self.profile.ip_index = connected.index;
         self.profile.conn_cost = u64::from(connected.total_cost);
         self.profile.is0rtt = connected.is_0rtt;
 
@@ -832,6 +831,13 @@ impl ShortLink {
                 error_code: connected.error_code,
             });
         }
+
+        // which pair won, and only now: a connect that came back with no
+        // socket has no winner, and `-1` is what
+        // [`crate::TaskOutcome::fail_step`] reads as "it was the connect that
+        // failed". A link that named a pair it never reached is one whose task
+        // is counted as having waited for a first packet instead.
+        self.profile.ip_index = connected.index;
 
         let index = usize::try_from(connected.index).unwrap_or(usize::MAX);
         // the pairs that lost: only the ones the host had *started* a connect
@@ -1854,6 +1860,10 @@ mod tests {
             ECT_SOCKET_MAKE_SOCKET_PREPARED
         );
         assert_eq!(link.profile().conn_errcode, 110);
+        assert_eq!(
+            link.profile().ip_index, -1,
+            "no pair won, so the host's own 0 is not the profile's: a task that never connected is one that failed at the connect"
+        );
         assert_eq!(
             seen.events.lock().unwrap().as_slice(),
             &[(false, 0, 0)],
