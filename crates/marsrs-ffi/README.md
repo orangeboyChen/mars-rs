@@ -37,15 +37,13 @@ file.
 ## Build
 
 ```sh
-cd rust
-export CARGO_TARGET_DIR=/tmp/mrs-ffi
 cargo build -p marsrs-ffi --release
 ```
 
 which produces
 
-* `$CARGO_TARGET_DIR/release/libmars_ffi.a` — static
-* `$CARGO_TARGET_DIR/release/libmars_ffi.{so,dylib}` — dynamic
+* `target/release/libmars_ffi.a` — static
+* `target/release/libmars_ffi.{so,dylib}` — dynamic
 
 Cross-compiling works the usual way, e.g.
 
@@ -88,18 +86,18 @@ Compile and link:
 
 ```sh
 # static
-clang log_bridge.c -I rust/crates/marsrs-ffi/include \
-      rust/target/release/libmars_ffi.a -lpthread -ldl -lm -o demo
+clang log_bridge.c -I crates/marsrs-ffi/include \
+      target/release/libmars_ffi.a -lpthread -ldl -lm -o demo
 # dynamic
-clang log_bridge.c -I rust/crates/marsrs-ffi/include \
-      -L rust/target/release -lmars_ffi -lpthread -ldl -lm -o demo
+clang log_bridge.c -I crates/marsrs-ffi/include \
+      -L target/release -lmars_ffi -lpthread -ldl -lm -o demo
 ```
 
 On Apple platforms the Rust run-time needs the system frameworks too:
 
 ```sh
-clang log_bridge.c -I rust/crates/marsrs-ffi/include \
-      rust/target/release/libmars_ffi.a \
+clang log_bridge.c -I crates/marsrs-ffi/include \
+      target/release/libmars_ffi.a \
       -framework CoreFoundation -framework Security -lpthread -ldl -lm -o demo
 ```
 
