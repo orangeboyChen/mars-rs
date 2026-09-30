@@ -79,8 +79,10 @@ pub struct LogBuffer {
     /// zstd compression level; ignored by the zlib backend.
     level: i32,
     /// The live compression stream, if any. `None` before the first
-    /// `__Reset()` and after every [`LogBuffer::flush`] (the C++ calls
-    /// `deflateEnd` / `ZSTD_e_end` there).
+    /// `__Reset()` and after every [`LogBuffer::drained`] — the port ends the
+    /// stream there (`deflateEnd` / `ZSTD_e_end`) and not in
+    /// [`LogBuffer::flush`], which is where the C++ ends it, so that a flush
+    /// can be repeated for a drain that failed.
     compressor: Option<Compressor>,
 }
 
