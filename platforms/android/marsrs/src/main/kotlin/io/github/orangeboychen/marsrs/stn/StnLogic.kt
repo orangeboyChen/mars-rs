@@ -589,6 +589,16 @@ object StnLogic {
      *
      * A name a link already has is that link and not a second one.
      *
+     * What is made is a link and not a connection: nothing dials until
+     * [makesureLongLinkConnectedExt] asks it to or a task goes out on it, so
+     * [longLinkIsConnectedExt] reads `false` of a link made a moment ago.
+     *
+     * A config whose [LonglinkConfig.isMain] is `true` also takes "the" long
+     * link over from whichever link had it: [makesureLongLinkConnected],
+     * [longLinkIsConnected] and every call that names no link answer for this
+     * one from then on, and [markMainLonglink] is how another one gets it
+     * back.
+     *
      * @return whether the link is there afterwards — an answer the C++ cannot
      *     give, its `CreateLonglink_ext` being `void`
      */
