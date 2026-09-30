@@ -8,10 +8,11 @@
 
 /// `kMaxDumpLength` in `appender.cc`.
 const MAX_DUMP_LENGTH: usize = 4096;
-/// Bytes per dump line: `for (int x = 0; x < 32 && dump_len < (int)_len; ++x)`
-/// in `Dump`, so one dump is at most 32 lines of the blob — which is why a
-/// blob is cut at [`MAX_DUMP_LENGTH`] long before its lines run out.
+/// Bytes per dump line.
 const LINE_BYTES: usize = 32;
+/// Bytes per line of `XloggerAppender::Dump`.
+/// `for (int x = 0; x < 32 && dump_len < (int)_len; ++x)` in `Dump`: at most 32
+/// lines, i.e. 512 bytes of the blob.
 /// `HEX_STRING` in `appender.cc` — lower-case hex, no `0x` prefix.
 const HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -138,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn the_dump_is_exactly_as_long_as_the_c_plus_plus_makes_it() {
+    fn a_dump_is_as_long_as_its_header_and_the_lines_it_rendered() {
         // `\n<len> bytes:\n`, then `6 * bytes` for the line and one more for
         // the newline that ends it
         assert_eq!(xlogger_memory_dump(&[0x5a]).len(), 18);
