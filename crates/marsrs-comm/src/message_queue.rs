@@ -12,9 +12,11 @@
 //!   **broadcast**: it runs on every handler of the queue that was
 //!   installed with `recv_broadcast`, and on none of the handlers the
 //!   other messages are addressed to. That handler is
-//!   [`MessageHandler::default`], and `install_message_handler` never
-//!   hands one out — the seq of a handler that can be addressed to
-//!   starts at 1;
+//!   [`MessageHandler::default`], and [`install_message_handler`] hands it
+//!   out only for a queue that is not there — installed onto a destroyed
+//!   or a never-created id, what an app gets is a handler every post to it
+//!   broadcasts. The seq of a handler of a queue that *is* there starts at
+//!   1;
 //! * `post_message` returns a `MessagePost` that can be cancelled — by
 //!   post, by handler, or by handler + title;
 //! * `after`/`period` messages only run once their time has come;
