@@ -984,11 +984,31 @@ fn a_task_goes_out_on_the_link_the_core_made_and_not_on_a_channel_nobody_wired()
 
 #[test]
 fn an_encoder_the_app_set_is_the_one_every_link_is_made_with() {
-    let mut core = NetCore::with_encoder_at(START, true, LongLinkEncoder::new());
+    // An encoder the app asked for, and not the one a link makes for itself:
+    // `0` is "the link decides", so an interval of its own is a difference
+    // every heartbeat after this one can be seen to carry.
+    let mut encoder = LongLinkEncoder::new();
+    encoder.noop_interval = 60_000;
+
+    let mut core = NetCore::with_encoder_at(START, true, encoder);
     let link = core.create_long_link(LonglinkConfig::new("second"));
     assert!(link.is_some());
     assert!(core.long_link_meta("second").is_some());
     assert_eq!(core.longlink().channels().len(), 2);
+
+    // … and both of the links the core made are made with it, the one the app
+    // named and the one it did not. A core that handed the default to the
+    // factory passes the three assertions above untouched.
+    for name in [MAIN, "second"] {
+        let link = Arc::clone(core.long_link(name).unwrap_or_else(|| {
+            panic!("the core made no link named {name}");
+        }));
+        let made = link.lock().unwrap_or_else(|p| p.into_inner()).encoder();
+        assert_eq!(
+            made, encoder,
+            "the link named {name} was made with {made:?} and not with {encoder:?}"
+        );
+    }
 }
 
 /// What the host drains is not the follow-ups alone. A task that answered

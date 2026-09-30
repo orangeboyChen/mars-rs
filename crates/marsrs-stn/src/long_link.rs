@@ -652,6 +652,18 @@ impl LongLink {
         &self.config
     }
 
+    /// `encoder_` — the encoder every package this link writes goes through.
+    ///
+    /// A host that gave [`crate::NetCore`] an encoder of its own has no other
+    /// way to see which one a link ended up with: what the encoder decides —
+    /// the cmdid of a heartbeat, whether there is an interval of its own,
+    /// whether a connected pair is asked to answer first — is asked of the
+    /// link and not of the app, and a link that quietly kept the default is
+    /// one that answers every one of those differently without saying so.
+    pub fn encoder(&self) -> LongLinkEncoder {
+        self.encoder
+    }
+
     /// `Profile()` — the record of the connect, and of the run that came
     /// before it.
     pub fn profile(&self) -> &ConnectProfile {
