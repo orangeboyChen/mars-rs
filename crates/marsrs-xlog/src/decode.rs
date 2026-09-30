@@ -45,7 +45,10 @@ use std::path::Path;
 
 use marsrs_crypt::{magic, CLIENT_PUBKEY_LEN, HEADER_LEN, TAILER_LEN, TEA_BLOCK_LEN};
 
-/// The round count both halves of `LogCrypt::CryptSyncLog` loop over.
+/// The round count `LogCrypt::CryptAsyncLog` loops the blocks of a body
+/// through — the half of the cipher a sync record never gets: its body is
+/// copied verbatim, so this is the count the async one is decrypted with
+/// here and nothing else.
 const TEA_ROUNDS: u32 = 16;
 const TEA_DELTA: u32 = 0x9e37_79b9;
 
@@ -733,12 +736,13 @@ fn inflate(magic_start: u8, body: &[u8]) -> Result<Vec<u8>, String> {
 /// `zstdDecompress` — `ZSTD_decompressStream` in a loop, tolerating a frame
 /// that was never terminated.
 ///
-/// `LogZstdBuffer::Flush` ends the stream with `ZSTD_compressStream2(...,
-/// ZSTD_e_end)` against a *zero-sized* output buffer, so the frame epilogue is
-/// never written and the decompressor keeps the tail of the last block back.
-/// `decode_log_file.c` accepts that and returns what it got; so does this, and
-/// the same failure with nothing recovered yet is the one it answers with its
-/// marker.
+/// Flushing a zstd log ends the writes of one block with
+/// `ZSTD_compressStream2(..., ZSTD_e_flush)` and never with `ZSTD_e_end`, so
+/// the frame epilogue is never written; the last flush of a block is against
+/// a *zero-sized* output buffer, which is why the tail of it never leaves the
+/// stream either. `decode_log_file.c` accepts that and returns what it got; so
+/// does this, and the same failure with nothing recovered yet is the one it
+/// answers with its marker.
 fn inflate_zstd(body: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Read;
 
