@@ -159,12 +159,29 @@ internal final class Xlog: NSObject {
     }
 
     /// `mars_xlog_get_level`: what the appender answers, and not what JS holds.
+    ///
+    /// Asked of the registry and not of the handle [handles] holds, which is
+    /// what the Kotlin half of this module does: a prefix is one appender to
+    /// the C ABI, so an appender another part of the app closed — a
+    /// `MarsRSXlog.Xlog` of the same prefix — took it out of the registry and
+    /// left the handle cached here, and `mars_xlog_get_level` answers `-1` for
+    /// a handle it does not know.
     @objc(getLevel:)
     internal func level(of namePrefix: String) -> Double {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix) else {
             return Double(MARS_LEVEL_NONE)
         }
-        return Double(mars_xlog_get_level(handle))
+        let native = mars_xlog_get_level(handle)
+        // A level `MarsLogLevel` does not carry — the `-1` above among them —
+        // is answered as `MARS_LEVEL_NONE` and not as it stands, which is the
+        // answer the Kotlin half of this module gives for the same numbers:
+        // `0`, `MarsLevelVerbose`, is the level that logs everything, so a
+        // level that is not one read as `0` is the opposite of what an
+        // appender that writes nothing was asked.
+        guard native >= 0, native <= MARS_LEVEL_NONE else {
+            return Double(MARS_LEVEL_NONE)
+        }
+        return Double(native)
     }
 
     /// `mars_xlog_request_flush_instance`: tells the writer thread it may take what is
@@ -308,6 +325,27 @@ internal final class Xlog: NSObject {
         case namePrefix = 1
         case pubKey = 2
         case cacheDir = 3
+    }
+
+    /// The handle [handles] holds for `namePrefix`, and `nil` when it is not
+    /// the appender of that prefix any more: the registry is asked, and the
+    /// handle it answers is the one that is open.
+    ///
+    /// The registry and not the handle alone, which is the question the Swift
+    /// `Xlog` of the port asks in its own `openHandle`:
+    /// `mars_xlog_release_instance` releases the appender of a *prefix* and
+    /// not of a handle, so a handle whose appender something else closed is
+    /// still the number this dictionary holds, and every symbol of the C ABI
+    /// answers a handle it does not know — `mars_xlog_get_level` with `-1`,
+    /// which is a level of no `MarsLogLevel`.
+    private func openHandle(of namePrefix: String) -> Int64? {
+        guard let handle = handles[namePrefix] else {
+            return nil
+        }
+        let owns = namePrefix.withCString { prefix in
+            mars_xlog_get_instance(prefix) == handle
+        }
+        return owns ? handle : nil
     }
 
     /// Runs `body` with every one of `strings` as a C string, and frees the

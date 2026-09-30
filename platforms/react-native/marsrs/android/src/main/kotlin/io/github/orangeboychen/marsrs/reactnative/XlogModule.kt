@@ -43,6 +43,7 @@ import io.github.orangeboychen.marsrs.xlog.Xlog
 import io.github.orangeboychen.marsrs.xlog.XlogConfig
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 /** The Android half of `Xlog`. */
 class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactContext) {
@@ -163,10 +164,20 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * A TurboModule method that answers a promise is the one codegen calls off
      * the JS thread, which is the whole reason this one answers one: a drain
      * blocks the thread it runs on, and the JS thread is not one to block.
+     *
+     * A flush asked of a module [invalidate] has already shut the queue down
+     * is no drain and a settled promise: the `await` in JS does not return
+     * from a promise nobody resolved, and there is no appender left to drain.
      */
     override fun flush(namePrefix: String, promise: Promise) {
-        flushQueue.execute {
-            appender(namePrefix)?.flushNow()
+        try {
+            flushQueue.execute {
+                appender(namePrefix)?.flushNow()
+                promise.resolve(null)
+            }
+        } catch (e: RejectedExecutionException) {
+            // The queue is shut down, so the drain it was handed is one it
+            // will never run: settle here, and not in it.
             promise.resolve(null)
         }
     }
@@ -204,6 +215,19 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
     /** `Xlog.close`: releases the appender `open` made. */
     override fun close(namePrefix: String) {
         appenders.remove(namePrefix)?.close()
+    }
+
+    /**
+     * What React Native calls when the bridge this module was made for goes
+     * away, and the one place the thread [flushQueue] runs on is shut down:
+     * `Executors.newSingleThreadExecutor` keeps a non-daemon thread alive
+     * until something shuts it, so a module that did not would leave one
+     * behind per bridge reload — each of them idle, and each of them a
+     * process that will not end while they are there.
+     */
+    override fun invalidate() {
+        super.invalidate()
+        flushQueue.shutdown()
     }
 
     /**
