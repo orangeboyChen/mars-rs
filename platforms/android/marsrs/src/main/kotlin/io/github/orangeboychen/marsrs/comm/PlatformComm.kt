@@ -163,7 +163,13 @@ object PlatformComm {
 
         @JvmStatic
         fun getStatisticsNetType(): Int {
-            val ctx = context ?: return 0
+            // `NETTYPE_NON`, the "no network" this class spells, and not the `0`
+            // a bare return carries: `0` is `NETTYPE_NOT_WIFI`, a network there
+            // is no type for, and `marsrs-jni` hands it to STN as one it may go
+            // out on — the one thing a released context cannot answer for. Every
+            // other `C2Java` callback answers its own empty for a context that
+            // is gone: `E_NO_NET`, `null`, `-1`.
+            val ctx = context ?: return NETTYPE_NON
 
             return try {
                 val ret = NetStatusUtil.getNetType(ctx)
