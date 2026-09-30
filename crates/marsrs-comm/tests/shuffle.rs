@@ -22,9 +22,9 @@ fn a_draw_outside_the_bound_is_clamped_to_the_position_being_walked() {
     let mut items = [0, 1, 2, 3];
     random_shuffle(&mut items, &mut |_bound| usize::MAX);
     // Clamped to the position itself, which is the swap that changes
-    // nothing: whatever the draws were, the slice is still the permutation
-    // it was handed as.
-    let mut sorted = items;
-    sorted.sort_unstable();
-    assert_eq!(sorted, [0, 1, 2, 3]);
+    // nothing: every draw is the position it is clamped to, so the slice is
+    // left in the order it was handed over as. Sorted first, as this used to
+    // be, every permutation of the four answers it — including every one a
+    // shuffle that swapped something real leaves behind.
+    assert_eq!(items, [0, 1, 2, 3]);
 }
