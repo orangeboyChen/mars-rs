@@ -272,6 +272,34 @@ fn a_length_of_zero_the_peer_named_ends_the_answer_at_its_head() {
     assert!(parser.is_success());
 }
 
+/// The hang-up ends the answer the head was still waiting for: one that named
+/// five bytes and was cut short at three is over as well, and it is over with
+/// the three it got. Nothing is said about the two that did not come — the
+/// answer is not failed, and it is not left in `Body` for a socket that will
+/// never write again.
+///
+/// Which is what the C++ answers (`http.cc:714`): it asks whether the
+/// connection closes and whether a body is being read, and not whether the
+/// length it was waiting for is the one it got. The two readings are pinned
+/// apart in `scripts/compat/comm.sh`, which asks this row of both.
+#[test]
+fn an_answer_the_head_named_a_length_for_ends_at_the_hang_up_too() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5\r\n\r\n"),
+        RecvStatus::Body,
+        "the head alone is not the answer"
+    );
+    assert_eq!(parser.recv(b"hel"), RecvStatus::Body, "three of the five");
+    assert_eq!(parser.recv(b""), RecvStatus::End, "the peer hung up");
+    assert_eq!(parser.body(), b"hel");
+    assert!(parser.is_success());
+    // and it is an answer and not a failure: a caller that waits for the
+    // length to be met would wait for ever
+    assert!(parser.is_body_ready());
+    assert!(parser.is_fields_ready());
+}
+
 /// A parser that is done takes no more bytes: `run` has no state left that
 /// could use them, so what it was given would sit in `buffered()` and grow
 /// for as long as the caller kept handing over what the socket gave it.
@@ -344,9 +372,24 @@ fn a_chunk_of_the_biggest_size_there_is_is_not_read_as_one_of_nothing() {
             format!("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{size}\r\nabc")
                 .as_bytes(),
         );
-        // a body that is not read, and no overflow on the way there: which
-        // of the two it is depends on how wide a `usize` is
-        assert!(!parser.is_success(), "{size} of chunk: {status:?}");
+        // A body that is not read, and no overflow on the way there: which
+        // of the two it is depends on how wide a `usize` is. On a 64-bit
+        // target the size fits and the chunk it announced is still not in
+        // the buffer, so the parser waits for bytes that may yet come; on a
+        // 32-bit one it does not fit at all, and the answer is one whose
+        // body is not the one the head said.
+        //
+        // Named, and not asked as `!parser.is_success()`: that is
+        // `BodyReady()`, which is `End` and nothing else, so a parser that
+        // never got as far as the body — a first line that failed, a head
+        // that failed — is a pass of this test as well.
+        let expected = if cfg!(target_pointer_width = "64") {
+            RecvStatus::Body
+        } else {
+            RecvStatus::BodyError
+        };
+        assert_eq!(status, expected, "{size} of chunk");
+        assert!(parser.is_fields_ready(), "{size} of chunk: {status:?}");
         assert!(parser.body().is_empty(), "{size} of chunk was read as none");
     }
 }
