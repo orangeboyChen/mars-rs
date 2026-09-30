@@ -441,10 +441,11 @@ mod tests {
     fn the_metadata_is_the_link_and_the_config_it_was_made_with() {
         let meta = meta();
         assert!(format!("{meta:?}").contains("long.weixin.qq.com"));
-        assert_eq!(
-            meta.channel().lock().unwrap().config().name,
-            meta.config().name
-        );
+        // the whole config, and not its name alone: what the metadata keeps
+        // is a copy of the one the link was made with, and every field of it
+        // is a question a task asks the link — the group and the link type
+        // among them, which a name says nothing about
+        assert_eq!(meta.channel().lock().unwrap().config(), meta.config());
     }
 
     #[test]
