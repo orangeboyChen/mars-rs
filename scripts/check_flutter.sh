@@ -13,7 +13,7 @@
 # have a handler on both platform halves, and the two packages must ask for the
 # same set, because they are one package under two names.
 
-set -uo pipefail
+set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
