@@ -37,6 +37,7 @@ import io.github.orangeboychen.marsrs.xlog.XlogConfig
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 /** The Android half of `marsrs`: the whole port, which today is xlog. */
 class XlogPlugin :
@@ -87,6 +88,7 @@ class XlogPlugin :
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel?.setMethodCallHandler(null)
         channel = null
+        closeAll()
         // The thread `flush` drains on is this plugin's and not the app's, and
         // a plugin outlives the engine it was attached to: a thread left
         // running would be one more per engine, for the life of the process.
@@ -242,6 +244,29 @@ class XlogPlugin :
         val namePrefix = call.string("namePrefix")
         appenders.remove(namePrefix)?.close()
         result.success(null)
+    }
+
+    /**
+     * Every appender [open] made, closed: what a plugin the engine has left
+     * owes the files it was writing, and the only drain they will get — the
+     * queue is shut down below, so an appender left open is one whose records
+     * stay in its buffer, whose writer thread stays alive and whose cache
+     * stays claimed for the life of the process.
+     *
+     * Closed on the queue and not on this thread, which is the app's main
+     * looper, because `Xlog.close` is itself a drain; and `shutdown` runs what
+     * it was handed before it stops, so these do run. A queue that was shut
+     * down already — a detach before this one — was handed them then.
+     */
+    private fun closeAll() {
+        try {
+            flushQueue.execute {
+                appenders.values.forEach { it.close() }
+                appenders.clear()
+            }
+        } catch (e: RejectedExecutionException) {
+            appenders.clear()
+        }
     }
 
     /**
