@@ -99,7 +99,7 @@ the two a request and its answer would have been asked for — `req2buf` and
 
 ## What a task runs on
 
-Nothing drains the queue for you. `run_pending` / `due_time` — in every spelling
+Nothing drains the queue for you. `run_pending` / `due_delay` — in every spelling
 on [the getting started page](/stn/getting-started) — is what moves a task out of
 it, and no thread is started unless an app asks for one: the loop is the app's,
 and a task that is started and never drained sits in its queue until the process
@@ -117,11 +117,11 @@ starting tasks through it. A host that already has a `run_pending` loop keeps it
 and takes no `Driver`: a pass that ends a task wakes whoever awaited it, so a
 `Driver` and a host's own loop work together.
 
-`due_time` is how long the host may wait until the next pass is due, in
+`due_delay()` is how long the host may wait until the next pass is due, in
 milliseconds: `0` is a pass that is already due, which a follow-up waiting in the
-queue is. It is a duration and not a time of day, which is what a caller across an
-ABI needs — a tick is measured from an origin only this process can read, so the
-host is told the wait instead. What it is not is a promise: a loop that calls
+queue is. It is a duration and not a time of day, which is what a caller across
+an ABI needs — a tick is measured from an origin only this process can read, so
+the host is told the wait instead. What it is not is a promise: a loop that calls
 `run_pending` in a tight spin works too, and burns a core doing it.
 
 On Android and in the shared Kotlin the loop is the one place an app sees the two

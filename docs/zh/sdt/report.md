@@ -1,7 +1,8 @@
 # 报告
 
-每一项检查写一个 `CheckResultProfile`，报告就是它们变成的 JSON ——
-`{"details":[ … ]}`，一项检查一个对象：
+每一项检查探测到的每个 host 写一个 `CheckResultProfile`，报告就是它们变成的 JSON ——
+`{"details":[ … ]}`，一个 host 一个对象，而不是一项检查一个对象：ping 和 dns 会走两条
+链路，所以这两项各为长连接的每个 host 写一个、为短连接的每个 host 写一个。
 
 ```json
 {
@@ -33,7 +34,7 @@
 | 什么 | Rust | Swift | 共享 Kotlin、Android | C |
 |---|---|---|---|---|
 | 报告 | `report_json(&results)` | `MarsSdt.takeReport()` | `SdtLogic.takeReport()` | `mars_sdt_take_report(buf, len)` |
-| 改用回调 | — | — | `SdtLogic.setCallBack { … }` | — |
+| 改用回调 | `sdt.set_callback(…)` | — | `SdtLogic.setCallBack(object : SdtLogic.ICallBack { … })` | — |
 
 两条路拿的是同一份文档，所以 App 用其中一条：在 Android 和共享 Kotlin 上，一趟会把
 报告交给回调*并且*留着给之后的 `takeReport()`，所以两个都用的 App 会把同一次诊断送
@@ -41,8 +42,8 @@
 
 在 Android 和共享 Kotlin 上报告是一个 `String?`，所以没有 buffer 要估大小。Swift
 的 `takeReport()` 从 4 KB 起、翻倍到 1 MB，三种情况下回答 `nil`：没东西可拿；C ABI
-回答的不是 `MARS_SDT_ERR_NO_SPACE` 而是别的负码 —— panic、buffer 是 NULL、还有一
-趟在跑；或者报告连 1 MB 都装不下。只有第一种是"还没有诊断"，把每个 `nil` 都当第一种
+回答的不是 `MARS_SDT_ERR_NO_SPACE` 而是别的负码 —— panic，或 buffer 是 NULL ——
+或者报告连 1 MB 都装不下。只有第一种是"还没有诊断"，把每个 `nil` 都当第一种
 处理的 App 会丢掉一份它本来已经拿到的报告。`mars_sdt_take_report` 在报告塞不进
 buffer 时回答 `MARS_SDT_ERR_NO_SPACE` —— 而且**结果留着**，所以调用方换一个更大的
 buffer 再问一次，拿到的还是那次诊断，而不是一份空的。
@@ -68,8 +69,9 @@ buffer 再问一次，拿到的还是那次诊断，而不是一份空的。
 锁，所以它能在探测还没问完的时候从另一个线程落下来 —— 而这也正是取消有意义的唯一
 时刻。它做的是不让计划里剩下的部分跑起来；已经发出去的探测打断不了。
 
-还有，一次只能跑一趟：诊断是一个进程级的值，所以第二次 `runChecks` 会等第一次
-而不是跟它并排跑 —— 在 Android 和共享 Kotlin 上，第二次调用直到第一次结束才返回。
+还有，一次只能跑一趟：诊断是一个进程级的值，所以第二次 `runChecks` 不会跟第一次并排
+跑。在 Android 上它会等 —— 第二次调用直到第一次结束才返回。在其余的 Kotlin 目标上它
+被拒绝：`runChecks` 回答 `false`，什么也不跑。
 
 ## 接着看
 

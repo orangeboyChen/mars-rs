@@ -222,7 +222,7 @@ SdtLogic.runChecks(
 SdtLogic.takeReport()?.let { send(it) }
 ```
 
-## The C ABI {#c-abi}
+## C ABI {#c-abi}
 
 ```text
 marsrs-<version>-<host>.tar.gz   （Linux、macOS）

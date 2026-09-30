@@ -15,7 +15,7 @@ task ends is unchanged — an error type, an error code and a profile.
 
 **A queue is drained by a call and not by a thread.** The C++ runs the queues on a
 message-queue thread of its own; this port has no threads in it, so what would
-have been a thread is a call the host makes — `run_pending()`, with `due_time()`
+have been a thread is a call the host makes — `run_pending()`, with `due_delay()`
 for how long it may wait before making it. A loop is the whole of it:
 
 ::: code-group

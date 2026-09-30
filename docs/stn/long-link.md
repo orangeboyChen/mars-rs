@@ -26,8 +26,10 @@ gives it a name — `create_long_link` and a `LonglinkConfig` of the name, the
 hosts, whether it reconnects on its own and whether it is the link whose status
 the app hears about — and reaches it by that name from then on:
 `destroy_long_link` drops it and fails whatever was going out on it, and
-`mark_main_longlink` makes it the one the app is told about. A config that leaves
-`group` empty and `link_type` at `0` gets the long-link defaults.
+`mark_main_longlink` makes it the one the app is told about. On every platform but
+Rust, a config that leaves `group` empty and `link_type` at `0` gets the long-link
+defaults; in Rust `LonglinkConfig::new` has already filled them in — `group` is
+`default-group` and `link_type` is `Task::CHANNEL_LONG`.
 
 `makesureLongLinkConnected()` answers nothing on Android and in the shared
 Kotlin — the C ABI's symbol answers 1 or 0 and the JNI one answers `void` — so a

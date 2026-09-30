@@ -44,11 +44,11 @@ code and carries it across to the Dart or the JS itself.
    returns at once. In Rust `stn.send(task, body)` starts one and hands back the
    answer of it, to await.
 3. **Drive the queue.** What would have been a thread is a pair of calls the app
-   makes — `run_pending()`, and `due_time()` to know how long it may wait before
-   making it. In Rust one call runs that pair for you: `Driver::spawn(stn)`
-   drains the queues on a thread of this crate's until the `Driver` is dropped.
-   On every platform, a task that is started and never drained stays in its
-   queue.
+   makes — `run_pending()`, and `due_delay()` to know how long it may wait
+   before making it. In Rust one call runs that pair for you:
+   `Driver::spawn(stn)` drains the queues on a thread of this crate's until the
+   `Driver` is dropped. On every platform, a task that is started and never
+   drained stays in its queue.
 
 ## Rust
 

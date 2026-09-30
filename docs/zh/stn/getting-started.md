@@ -40,7 +40,7 @@ native 一侧在 Android 上倒是带着 STN —— 整个移植的那个 AAR �
 2. **发起一个任务。** 它被接过去，挑一条链路，放进队列，调用立刻返回。Rust 里
    `stn.send(task, body)` 还会把任务的回答交回来，可以 await。
 3. **驱动队列。** 本该是一个线程的地方，是 App 的一对调用 —— `run_pending()`，以及
-   告诉它这一趟最多还能等多久的 `due_time()`。Rust 里一个调用就把这一对跑起来：
+   告诉它这一趟最多还能等多久的 `due_delay()`。Rust 里一个调用就把这一对跑起来：
    `Driver::spawn(stn)` 起这个 crate 的一个线程排空队列，直到 `Driver` 被 drop。
    每个平台上，一个发起了却从没排空的任务都会待在它的队列里。
 
@@ -359,7 +359,7 @@ Android 上走 JNI 桥，每个 Kotlin/Native target 上通过 cinterop 走 C AB
 `common` 声明只能是两者都能说出来的东西：Android 上那座桥自己回答十八个问题里的
 五个，所以 `setApp` 在那里只接到十三个，在 Kotlin/Native 上是全部十八个。
 
-## The C ABI {#c-abi}
+## C ABI {#c-abi}
 
 ```text
 marsrs-<version>-<host>.tar.gz   （Linux、macOS）
