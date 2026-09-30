@@ -1777,8 +1777,13 @@ mod tests {
         assert_eq!(Timeout::PkgPkg.err_code(), HTTP_PKG_PKG_TIMEOUT);
     }
 
+    /// `RespHandle` is the answer of one response and not a queue of them:
+    /// what the three say is whether the task is over, which is what
+    /// [`handle_of`] answers for the four places that ask. The queue itself —
+    /// an ended task leaving it and a retried one staying — is what the tests
+    /// around this one run.
     #[test]
-    fn only_an_ended_task_left_the_queue() {
+    fn each_handle_says_whether_the_task_is_over() {
         assert!(RespHandle::Ended.is_ended());
         assert!(!RespHandle::Retried.is_ended());
         assert!(!RespHandle::Deferred.is_ended());
