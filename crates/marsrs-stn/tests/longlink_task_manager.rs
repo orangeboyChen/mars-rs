@@ -749,7 +749,9 @@ fn a_minor_task_goes_out_on_the_channel_its_hosts_named() {
             body: b"/cgi-bin/7".to_vec(),
         }]
     );
-    assert!(!app.manager.has_task(7) || app.manager.task_count(MAIN) == 0);
+    // ... and the queue that has it is the minor one's: the one the task
+    // named no host for keeps nothing of it
+    assert_eq!(app.manager.task_count(MAIN), 0);
 }
 
 #[test]

@@ -35,6 +35,7 @@ const FIRST_PKG: u64 = 12 * 1000;
 struct Sent {
     taskid: u32,
     use_proxy: bool,
+    debug_host: String,
     sent_count: i32,
 }
 
@@ -71,6 +72,7 @@ impl App {
             recorder.lock().unwrap().push(Sent {
                 taskid: task.taskid,
                 use_proxy: request.use_proxy,
+                debug_host: request.debug_host.clone(),
                 sent_count: request.sent_count,
             });
             body_recorder.lock().unwrap().push(request.body.clone());
@@ -246,6 +248,7 @@ fn a_task_that_goes_out_and_answers_is_over() {
         vec![Sent {
             taskid: 7,
             use_proxy: true,
+            debug_host: String::new(),
             sent_count: 0
         }]
     );
@@ -296,11 +299,13 @@ fn a_task_that_answered_nothing_is_tried_again_and_the_last_try_goes_without_a_p
             Sent {
                 taskid: 7,
                 use_proxy: true,
+                debug_host: String::new(),
                 sent_count: 0
             },
             Sent {
                 taskid: 7,
                 use_proxy: false,
+                debug_host: String::new(),
                 sent_count: 0
             },
         ],
@@ -589,8 +594,9 @@ fn the_debug_host_the_app_set_is_the_one_a_run_is_pointed_at() {
     app.manager.set_debug_host("debug.weixin.qq.com");
     app.start(7);
 
-    assert_eq!(app.manager.debug_host(), "debug.weixin.qq.com");
+    // what the run is handed is the host, and not a getter that answers it
     assert_eq!(app.sent().len(), 1);
+    assert_eq!(app.sent()[0].debug_host, "debug.weixin.qq.com");
 }
 
 #[test]
