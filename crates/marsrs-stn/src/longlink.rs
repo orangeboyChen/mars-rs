@@ -198,17 +198,27 @@ pub fn longlink_unpack(packed: &[u8]) -> Unpacked {
     if header.client_version != client_version() {
         return Unpacked::False;
     }
-    let body_len = header.body_length as usize;
-    let package_len = header.head_length as usize + body_len;
-
-    if package_len > MAX_PACKAGE_LEN {
+    // The two lengths come off the wire as `u32`, so they are added as `u64`
+    // and only then compared: on a 32-bit target — `armv7` is one this
+    // repository builds — a head of `0xFFFF_FFFF` and a body of one byte
+    // wrapped to 0, and a package that is over the bound was read as one of
+    // nothing, whose `body` was the whole buffer from the front.
+    let head_len = header.head_length as u64;
+    let Some(package_len) = head_len.checked_add(header.body_length as u64) else {
+        return Unpacked::False;
+    };
+    if package_len > MAX_PACKAGE_LEN as u64 {
         return Unpacked::False;
     }
+    let package_len = package_len as usize;
     if package_len > packed.len() {
         return Unpacked::Continue;
     }
 
-    let body = packed[package_len - body_len..package_len].to_vec();
+    // the head is where the body starts, and not `package_len - body_len`:
+    // the subtraction is the same number, and it underflowed on a header
+    // whose `body_length` claimed more than the package holds
+    let body = packed[head_len as usize..package_len].to_vec();
     Unpacked::Package {
         cmdid: header.cmdid,
         seq: header.seq,
@@ -446,6 +456,26 @@ mod tests {
             let mut packed = longlink_pack(1, 1, &[]);
             let huge = (MAX_PACKAGE_LEN as u32 + 1).to_be_bytes();
             packed[16..20].copy_from_slice(&huge);
+            assert_eq!(longlink_unpack(&packed), Unpacked::False);
+        })
+    }
+
+    /// The two lengths of the header are added, and it is the width of a
+    /// `usize` that decides whether the addition can wrap: on a 32-bit target
+    /// a head of `u32::MAX` and a body of one byte is a package of nothing,
+    /// whose `body` is the whole buffer counted from the front. Adding as
+    /// `u64` keeps the answer `False` however wide a `usize` is.
+    #[test]
+    fn a_head_that_claims_the_longest_length_there_is_is_refused() {
+        with_client_version(0, || {
+            let mut packed = longlink_pack(1, 1, b"body");
+            packed[0..4].copy_from_slice(&u32::MAX.to_be_bytes());
+            assert_eq!(longlink_unpack(&packed), Unpacked::False);
+
+            // and the pair of them is `2^32`, which a `usize` of 32 bits
+            // holds as nothing at all
+            packed[0..4].copy_from_slice(&(u32::MAX - 1).to_be_bytes());
+            packed[16..20].copy_from_slice(&2u32.to_be_bytes());
             assert_eq!(longlink_unpack(&packed), Unpacked::False);
         })
     }
