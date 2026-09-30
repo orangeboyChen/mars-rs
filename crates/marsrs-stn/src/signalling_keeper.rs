@@ -202,11 +202,18 @@ impl SignallingKeeper {
     ///
     /// The reading is the data's, and not this call's: `NetCore::feed_signalling`
     /// carries it here a turn later than the link that saw it, so it can be an
-    /// older one than the touch the `keepTime` is measured from. What ends the
-    /// signalling is the `keepTime` running out, so a reading from before the
-    /// touch is one from inside it, and not a clock that went backwards — the
-    /// C++'s `xassert2(now >= last_touch_time_)` is an assert about its own
-    /// clock, which is read when the signal is delivered and not carried.
+    /// older one than the touch the `keepTime` is measured from. The C++ reads
+    /// its own clock when the signal is delivered, so its `now` is never the
+    /// older of the two — `xassert2(now >= last_touch_time_)` is what says so
+    /// in a build that has asserts, and the `now < last_touch_time_` of the
+    /// same `if` is what a build without them still has, keeping the unsigned
+    /// subtraction behind it from wrapping.
+    ///
+    /// A reading carried here is late by a turn, and not a clock that went
+    /// backwards, so no reading ends the signalling: what ends it is the
+    /// `keepTime` running out. `saturating_sub` needs no guard, and stopping
+    /// for a reading that is merely late would end the signalling for a
+    /// mapping that is still busy.
     pub fn on_network_data_changed_at(&mut self, now: u64) {
         if !self.keeping {
             return;
@@ -360,9 +367,11 @@ mod tests {
         assert_eq!(keeper.due_time(), Some(4_000 + 1_000));
 
         // a reading carried here one turn later than the data it is the
-        // reading of is not a clock that went backwards: data that moved
-        // before the touch still says the mapping is busy, so the `keepTime`
-        // is measured from the touch and the next buffer is posted after it
+        // reading of is not a clock that went backwards, and it is the one
+        // place the port and the C++ part ways: the C++ stops keeping on
+        // `now < last_touch_time_` itself. Data that moved before the touch
+        // still says the mapping is busy, so the `keepTime` is measured from
+        // the touch and the next buffer is posted after it
         let mut keeper = SignallingKeeper::new();
         keeper.keep_at(5_000);
         keeper.on_network_data_changed_at(4_000);
