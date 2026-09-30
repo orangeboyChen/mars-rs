@@ -144,6 +144,16 @@ jobs:
     # the commit touched, and what is skipped is every step of it: three
     # runners that check out nothing, install nothing and compile nothing.
     runs-on: ${{ matrix.os }}
+    # Not UTC, which is what every runner here is by default and the one thing
+    # in this workflow that cares: `marsrs-core`'s localtime is what stamps
+    # every record's hour and calendar day, and a test that compares it against
+    # the machine's own `Local` cannot tell local time from UTC on a host whose
+    # zone is UTC — a `lookup` that had been changed to answer UTC passes the
+    # whole suite on those. Windows reads its zone out of the OS and ignores
+    # `TZ`, so that leg gets nothing from this; the fixed-offset test is the
+    # one that holds there.
+    env:
+      TZ: Asia/Shanghai
     strategy:
       fail-fast: false
       matrix:
