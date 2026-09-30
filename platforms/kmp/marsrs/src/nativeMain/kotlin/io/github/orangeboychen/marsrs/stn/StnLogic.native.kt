@@ -270,7 +270,21 @@ internal class AppBox(private val ask: (Question) -> Answer) {
         // the next one is asked, which is what the header says and the only time
         // a copy is known to be dead.
         held.clear()
-        write(ask(question.toQuestion()), out)
+        // An exception that escapes this function escapes into C, and the
+        // frame this one is called from is a `staticCFunction`: there is
+        // nothing above it to catch it, and Kotlin/Native ends the process
+        // on an uncaught one. A question an app answered badly then costs
+        // the app its process, which is the one thing a callback the app
+        // cannot see must not do. What is answered instead is the same
+        // thing the Android actual answers: the question is printed, and
+        // the pipeline is told nothing was answered at all.
+        val answered = try {
+            ask(question.toQuestion())
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Answer.None
+        }
+        write(answered, out)
     }
 
     fun dispose() {

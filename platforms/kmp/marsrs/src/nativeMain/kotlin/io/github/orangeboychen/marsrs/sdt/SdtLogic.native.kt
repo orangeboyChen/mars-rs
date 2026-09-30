@@ -335,14 +335,25 @@ internal class ProbeBox(private val probe: SdtLogic.IProbe) {
     /** What one query asked, and what the app answered: written into [out]. */
     fun answer(query: MarsSdtQuery, out: CPointer<MarsSdtAnswer>) {
         held.clear()
+        // The same guard the stn callback above it has, for the same reason:
+        // this runs under a `staticCFunction`, so an exception the probe
+        // throws goes into C with no frame above it to catch it, and
+        // Kotlin/Native ends the process on one. A probe that threw is
+        // answered the way the Android actual answers it — printed, and
+        // then not answered at all.
         val host = query.host?.toKString() ?: ""
         val timeout = query.timeout.toInt()
-        val answered = when (query.kind.toInt()) {
-            PROBE_DNS -> probe.dns(host, timeout)
-            PROBE_TCP -> probe.tcp(host, query.port.toInt(), timeout)
-            PROBE_HTTP -> probe.http(host, timeout)
-            PROBE_PING -> probe.ping(host, timeout)
-            else -> ProbeAnswer.None
+        val answered = try {
+            when (query.kind.toInt()) {
+                PROBE_DNS -> probe.dns(host, timeout)
+                PROBE_TCP -> probe.tcp(host, query.port.toInt(), timeout)
+                PROBE_HTTP -> probe.http(host, timeout)
+                PROBE_PING -> probe.ping(host, timeout)
+                else -> ProbeAnswer.None
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            ProbeAnswer.None
         }
         write(answered, out)
     }
