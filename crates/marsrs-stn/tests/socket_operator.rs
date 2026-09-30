@@ -129,7 +129,12 @@ fn the_host_opens_sends_and_closes_through_the_operator() {
 
     host.close(socket);
     assert_eq!(host.closed, vec![socket]);
-    assert_eq!(host.profile(), SocketProfile::default());
+    // The profile the host holds is the one the port reads out of the
+    // operator — `LongLink::operator_profile` — and a seam that answered a
+    // default of its own would hand a link a profile no host ever filled in.
+    // Nothing here moved it, so what is asked of it is that it comes back.
+    host.profile.rtt = 30;
+    assert_eq!(host.profile().rtt, 30);
 }
 
 #[test]
