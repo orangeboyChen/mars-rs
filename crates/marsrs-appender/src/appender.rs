@@ -638,9 +638,7 @@ struct AppenderInner {
     /// refused a second time is given up on. The C++'s `FILE*` cannot hold a
     /// refused batch at all.
     pending_refused: bool,
-    /// `openfiletime_`
-    open_file_time: i64,
-    /// The local day [`Self::open_file_time`] falls on — the `filetm.tm_year ==
+    /// The local day the open file was opened on — the `filetm.tm_year ==
     /// tcur.tm_year && ...` of `XloggerAppender::__OpenLogFile`.
     ///
     /// Stamped once, when the file is opened, so that the per-record
@@ -1127,7 +1125,6 @@ impl AppenderInner {
             self.close_log_file();
         }
 
-        self.open_file_time = now_time;
         self.open_file_day = local_time(now_time).date;
         let logfilepath = match dir {
             OpenDir::Log => self.log_file_path(now_time),
@@ -1245,7 +1242,6 @@ impl AppenderInner {
     }
 
     fn forget_log_file(&mut self) {
-        self.open_file_time = 0;
         self.open_file_day = NO_DAY;
         self.log_file = None;
         self.flushed_len = 0;
@@ -1359,7 +1355,6 @@ impl AppenderInner {
             // and the batch in it is gone — while the record's writer was told
             // it was written.
             let closed = self.close_log_file();
-            self.open_file_time = 0;
             self.open_file_day = NO_DAY;
             return closed;
         }
@@ -1527,7 +1522,6 @@ impl Appender {
             pending: Vec::with_capacity(PENDING_CAPACITY),
             flushed_len: 0,
             pending_refused: false,
-            open_file_time: 0,
             open_file_day: NO_DAY,
             last_time: 0,
             write_sec: None,
@@ -2018,16 +2012,25 @@ impl Appender {
 
     /// `XloggerAppender::SetMode`.
     pub(crate) fn set_mode(&self, mode: AppenderMode) -> Result<(), crate::config::AppenderError> {
-        let previous = self.lock().config.mode;
-        self.lock().config.mode = mode;
+        // One acquisition for the read-modify-write: two are a window in which
+        // another `set_mode` — or an `open` of the same prefix — writes the
+        // mode this one then overwrites, and the `previous` this one would roll
+        // back to is the mode *that* one chose.
+        let previous = {
+            let mut guard = self.lock();
+            let previous = guard.config.mode;
+            guard.config.mode = mode;
+            previous
+        };
         if mode == AppenderMode::Async {
             if let Err(err) = self.start_thread() {
                 // The thread could not be created: leaving the appender in
                 // async mode would buffer every record into a channel whose
                 // receiver is dropped, and neither `flush` nor `close` could
                 // recover them. Roll back to the mode that still works.
-                self.lock().config.mode = previous;
-                self.lock().tx = None;
+                let mut guard = self.lock();
+                guard.config.mode = previous;
+                guard.tx = None;
                 return Err(err);
             }
         }
