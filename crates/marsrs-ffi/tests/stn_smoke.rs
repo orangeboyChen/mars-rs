@@ -14,11 +14,11 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use mars_ffi::stn::{
     mars_stn_clear_tasks, mars_stn_create_longlink, mars_stn_destroy_longlink, mars_stn_due_time,
     mars_stn_gen_sequence_id, mars_stn_gen_task_id, mars_stn_has_task, mars_stn_keep_signalling,
-    mars_stn_longlink_is_connected_ext, mars_stn_makesure_longlink_connected,
-    mars_stn_mark_main_longlink, mars_stn_redo_tasks, mars_stn_reset,
-    mars_stn_reset_and_init_encoder_version, mars_stn_run_pending, mars_stn_set_app,
-    mars_stn_set_backup_ips, mars_stn_set_client_version, mars_stn_set_debug_ip,
-    mars_stn_set_longlink_svr_addr, mars_stn_set_shortlink_svr_addr,
+    mars_stn_longlink_is_connected, mars_stn_longlink_is_connected_ext,
+    mars_stn_makesure_longlink_connected, mars_stn_mark_main_longlink, mars_stn_noop_task_id,
+    mars_stn_redo_tasks, mars_stn_reset, mars_stn_reset_and_init_encoder_version,
+    mars_stn_run_pending, mars_stn_set_app, mars_stn_set_backup_ips, mars_stn_set_client_version,
+    mars_stn_set_debug_ip, mars_stn_set_longlink_svr_addr, mars_stn_set_shortlink_svr_addr,
     mars_stn_set_signalling_strategy, mars_stn_start_task, mars_stn_stop_signalling,
     mars_stn_stop_task, mars_stn_touch_tasks, mars_stn_trig_nooping, MarsStnAnswer,
     MarsStnAnswerKind, MarsStnLonglinkConfig, MarsStnQuestion, MarsStnQuestionKind, MarsStnStrings,
@@ -27,6 +27,7 @@ use mars_ffi::stn::{
 };
 use marsrs_stn::task_profile::{LOCAL_CHANNEL_SELECT, LOCAL_RESET};
 use marsrs_stn::ErrCmdType;
+use marsrs_stn::Task;
 
 /// The host every task in these tests goes out on.
 const HOST: &str = "long.weixin.qq.com";
@@ -294,6 +295,14 @@ fn no_task_is_reported() {
 
 /// The rest of the surface a caller reaches: the addresses the links go out on,
 /// the signalling session, the version a package goes out with, the noop.
+///
+/// None of these has a getter on the other side of the ABI to read it back
+/// with — there is no `GetClientVersion` and no `GetShortLinkPort` in
+/// `stn_logic.h` — so what a test here can say about them is what a caller
+/// sees: none of them takes the pipeline down, and the pipeline answers the
+/// same way afterwards. What each one sets is asked of the net source and of
+/// the core in `marsrs-stn`'s own tests, which is where a setter that wrote
+/// the wrong thing is caught.
 #[test]
 fn the_surface_a_caller_reaches_is_one_it_can_call() {
     let _guard = lock();
@@ -319,8 +328,13 @@ fn the_surface_a_caller_reaches_is_one_it_can_call() {
     mars_stn_stop_signalling();
     mars_stn_set_client_version(200);
     mars_stn_trig_nooping();
-    // There is a long link to connect now that it has a host to go out on.
+    // What a caller reads afterwards: there is a long link to connect now that
+    // it has a host to go out on, it is not up because nothing has connected
+    // it, and the pipeline still says when the next pass is due.
     assert_eq!(mars_stn_makesure_longlink_connected(), 1);
+    assert_eq!(mars_stn_longlink_is_connected(), 0);
+    assert_ne!(mars_stn_due_time(), MARS_STN_ERR_NO_DUE);
+    assert_eq!(mars_stn_noop_task_id(), Task::NOOP_TASK_ID);
 }
 
 /// The ids a caller asks for are new every time: a counter for the tasks of the
