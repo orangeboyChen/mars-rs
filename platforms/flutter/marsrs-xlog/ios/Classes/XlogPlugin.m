@@ -202,6 +202,13 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   // Off the thread the call came in on, and back to it for the answer: a
   // platform channel is answered on the app's main thread, and a drain blocks
   // the thread it runs on.
+  //
+  // What crosses is the handle and not the prefix, and `close:` on the main
+  // thread may release the appender while this block waits: a handle whose
+  // instance is gone is one the C ABI drains nothing for, and one it never
+  // hands out twice, so no appender opened behind this one is the one a late
+  // drain would flush. A `flush()` that answers after a `close()` did is a
+  // `flush()` of nothing, which is what `close()`'s own drain left.
   dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
     mars_xlog_flush_now_instance(instance);
     dispatch_async(dispatch_get_main_queue(), ^{
