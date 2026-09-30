@@ -1,4 +1,4 @@
-// The Android half of the `marsrs_xlog` plugin: the fifteen methods of
+// The Android half of the `marsrs_xlog` plugin: the fourteen methods of
 // the plugin's channel, each of them a straight call of a member of `Xlog` —
 // the Kotlin face of `libmarsrsxlog.so` in the `marsrs-xlog` AAR, and the same
 // class `platforms/kmp/marsrs-xlog` publishes to a Kotlin Multiplatform app

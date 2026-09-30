@@ -3,7 +3,7 @@
 #import "mars_xlog.h"
 
 // The iOS half of the `marsrs_xlog` plugin: the C ABI of `mars_xlog.h`
-// (crate `marsrs-ffi`) behind the fifteen methods of the plugin's channel.
+// (crate `marsrs-ffi`) behind the fourteen methods of the plugin's channel.
 //
 // Objective-C, and not Swift: what the plugin carries is a static library with
 // a C header, and `MarsRSFFI` — the module SwiftPM makes of the two — is not
