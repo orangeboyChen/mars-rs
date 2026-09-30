@@ -169,7 +169,7 @@ public actual object StnLogic {
     }
 
     // The same reading of a negative: no task has it, so none is in the queues.
-    public actual fun hasTask(taskID: Int): Boolean = taskID >= 0 && mars_stn_has_task(taskID.toUInt()) != 0
+    public actual fun hasTask(taskID: Int): Boolean = taskID >= 0 && mars_stn_has_task(taskID.toUInt()) > 0
 
     public actual fun redoTask() {
         mars_stn_redo_tasks()
@@ -206,10 +206,10 @@ public actual object StnLogic {
         }
     }
 
-    public actual fun longLinkIsConnected(): Boolean = mars_stn_longlink_is_connected() != 0
+    public actual fun longLinkIsConnected(): Boolean = mars_stn_longlink_is_connected() > 0
 
     public actual fun longLinkIsConnectedExt(name: String): Boolean =
-        memScoped { mars_stn_longlink_is_connected_ext(name) != 0 }
+        memScoped { mars_stn_longlink_is_connected_ext(name) > 0 }
 
     public actual fun disableLongLink() {
         mars_stn_disable_longlink()
@@ -221,11 +221,11 @@ public actual object StnLogic {
         mars_stn_create_longlink(config.native(this).ptr) == 0
     }
 
-    // Both are `> 0` and not `!= 0`: the C ABI answers `1` for "a link of that
-    // name was there", `0` for "there was none" and `MARS_STN_ERR_PANIC` —
-    // which is `-1` — for a panic it caught inside the call. `!= 0` reads the
-    // panic as success, and an app is then told the link is gone when the call
-    // never reached the net core; `0` is what the JNI `actual` answers for the
+    // The five asks of this object that read a `1` or a `0` are `> 0` and not
+    // `!= 0`: the C ABI answers `1` for yes, `0` for no and `MARS_STN_ERR_PANIC`
+    // — which is `-1` — for a panic it caught inside the call, and `!= 0` reads
+    // that panic as a yes: a link that is up, a link that is gone, when the call
+    // never reached the net core. `0` is what the JNI `actual` answers for the
     // same question, so the two agree on either side of the seam.
     public actual fun destroyLonglink(name: String?): Boolean = mars_stn_destroy_longlink(name) > 0
 
