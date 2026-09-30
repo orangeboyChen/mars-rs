@@ -142,12 +142,18 @@ fn stop_only_ends_a_keeper_that_has_been_posted() {
 
 #[test]
 fn a_cleared_send_keeps_the_time_but_sends_nothing() {
-    let mut keeper = SignallingKeeper::new();
-    keeper.set_send(|_| 7);
+    let (mut keeper, seen) = keeper_that_records();
     keeper.clear_send();
     keeper.keep_at(1_000);
     assert!(keeper.is_keeping());
-    assert_eq!(keeper.sent(), 1, "the buffer still went out");
+    // `sent` is the count of the buffers the keeper meant to send, and not of
+    // the ones that reached the app — `fun_send_signalling_buffer_ = NULL` is
+    // what the C++ clears, and the count goes up either way
+    assert_eq!(keeper.sent(), 1);
+    assert!(
+        seen.lock().unwrap_or_else(|p| p.into_inner()).is_empty(),
+        "the callback is gone, so no buffer went out"
+    );
 }
 
 #[test]

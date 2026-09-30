@@ -409,10 +409,25 @@ mod tests {
     #[test]
     fn a_cleared_send_keeps_the_time_but_sends_nothing() {
         let mut keeper = SignallingKeeper::new();
-        keeper.set_send(|_| 7);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recording = Arc::clone(&seen);
+        keeper.set_send(move |cmdid| {
+            recording
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(cmdid);
+            7
+        });
         keeper.clear_send();
         keeper.keep_at(1_000);
         assert!(keeper.is_keeping());
-        assert_eq!(keeper.sent(), 1, "the buffer still went out");
+        // `sent` is the count of the buffers the keeper meant to send, and
+        // not of the ones that reached the app — `fun_send_signalling_buffer_
+        // = NULL` is what the C++ clears, and the count goes up either way
+        assert_eq!(keeper.sent(), 1);
+        assert!(
+            seen.lock().unwrap_or_else(|e| e.into_inner()).is_empty(),
+            "the callback is gone, so no buffer went out"
+        );
     }
 }
