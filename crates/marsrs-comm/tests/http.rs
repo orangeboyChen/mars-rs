@@ -362,3 +362,49 @@ fn the_size_of_a_chunk_is_hexadecimal() {
     );
     assert_eq!(parser.body(), b"hi");
 }
+
+/// `CRLF` is what ends a line of a head, so a value that carries one is two
+/// lines when it is written out: the field the caller asked for, and then a
+/// field of its own. Neither goes in.
+#[test]
+fn a_field_that_would_end_its_own_line_is_not_one_that_goes_in() {
+    let mut builder = a_request();
+    let fields = builder.fields_mut();
+    fields.set("X-Injected", "v\r\nX-Other: 1");
+    fields.set("X-Name\r\nX-Other: 2", "v");
+    fields.set("X-Nul\0", "v");
+    assert!(
+        fields.get("X-Injected").is_none(),
+        "a value that ended the line"
+    );
+    assert!(
+        fields.get("X-Other").is_none(),
+        "the line it would have written"
+    );
+    assert!(
+        fields.get("X-Nul").is_none(),
+        "a name the C++ would have cut"
+    );
+    assert_eq!(fields.len(), 5, "the head is the five of its own");
+
+    let head = String::from_utf8_lossy(&a_request().header_to_buffer().unwrap()).to_string();
+    assert!(!head.contains("X-Other"), "the line it would have written");
+}
+
+/// The url is written into the first line, which is what the head hangs off
+/// of: one that carries a `CRLF` ends the head early and starts another
+/// request on the socket it went out on. There is no head to write.
+#[test]
+fn a_url_that_would_end_the_first_line_writes_no_head_at_all() {
+    let mut builder = Builder::new(CsMode::Request);
+    *builder.request_mut() = RequestLine::new(Method::Post, "/cgi HTTP/1.1\r\n\r\n", Version::V1_1);
+    builder.fields_mut().set_accept_all();
+    assert_eq!(builder.header_to_buffer(), None);
+    assert_eq!(builder.to_buffer(), None);
+
+    // an answer's reason, which is the other first line
+    let mut builder = Builder::new(CsMode::Respond);
+    *builder.status_mut() = StatusLine::new(Version::V1_1, 200, "OK\r\nX-Injected: 1");
+    builder.fields_mut().set_accept_all();
+    assert_eq!(builder.header_to_buffer(), None);
+}

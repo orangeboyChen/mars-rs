@@ -396,6 +396,12 @@ impl HeaderFields {
     /// the C++'s `std::map` would hold it, and one that is there keeps its name
     /// — and so its place — and gets the new value.
     pub fn set(&mut self, name: &str, value: &str) {
+        // a field that would end the line it is written on is not one that
+        // goes in: what it would write is another line, and the head is not
+        // the caller's to add lines to
+        if !is_writable(name) || !is_writable(value) {
+            return;
+        }
         match self
             .headers
             .binary_search_by(|header| compare_names(&header.name, name))
@@ -732,7 +738,14 @@ impl Builder {
             CsMode::Request => self.request.to_string(),
             CsMode::Respond => self.status.to_string(),
         };
-        if first_line.is_empty() || self.fields.is_empty() {
+        // `None` is what the C++ answers `false` for, and a first line that
+        // would write more than one is not a line there is anything to say
+        // about: no head is written rather than one that says two things
+        let writable = match self.mode {
+            CsMode::Request => is_writable(&self.request.url),
+            CsMode::Respond => is_writable(&self.status.reason_phrase),
+        };
+        if first_line.is_empty() || self.fields.is_empty() || !writable {
             return None;
         }
         let mut buffer = first_line.into_bytes();
@@ -1251,6 +1264,18 @@ impl Parser {
     fn consume(&mut self, len: usize) {
         self.buffer.drain(..len);
     }
+}
+
+/// Whether a piece of a head is one that may be written into one.
+///
+/// `CRLF` is what ends a line, so a url, a reason, a name or a value that
+/// carries one does not go into the head as one line: it comes out as the
+/// line it was, then another one — a field the caller never asked for, or a
+/// head that ends early and a second request on a socket that is being kept.
+/// `NUL` goes with them, which is where the C++'s own `strlen` would have
+/// ended the string.
+fn is_writable(part: &str) -> bool {
+    !part.contains(['\r', '\n', '\0'])
 }
 
 /// `less` — how the C++'s `std::map` orders two names, which is `strcasecmp`:
