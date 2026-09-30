@@ -145,6 +145,21 @@ class Xlog {
 
   static const MethodChannel _channel = MethodChannel('marsrs_xlog');
 
+  /// The [Xlog] of every prefix this isolate has open, and what [open] answers
+  /// for one that is open already: the platform side opens one appender per
+  /// prefix and answers the one that is open — the same appender, and not a
+  /// second one carrying the second configuration — the way the Kotlin, the
+  /// Swift and the ArkTS of the port all do.
+  ///
+  /// Without it a second [open] of one prefix is a second Dart object over the
+  /// one appender, and the two disagree: `close` on one of them releases the
+  /// appender the other still answers `isOpen` for, and a write through that
+  /// other is a write the platform side refuses and this library swallows.
+  /// A [level] or a [mode] the two objects mirror is the appender's, and the
+  /// second [XlogConfig] whose every field the platform side discarded is not
+  /// what either mirror reads.
+  static final Map<String, Xlog> _opened = <String, Xlog>{};
+
   /// What every file of this appender starts with, and what it is known by.
   final String namePrefix;
 
@@ -172,11 +187,31 @@ class Xlog {
   ///
   /// The platform side answers `marsrs_xlog` / `the appender refused the
   /// configuration (<code>)` when the appender would not take it, the code
-  /// being the negative `MARS_XLOG_ERR_*` it was refused with, and
+  /// being the negative `MARS_XLOG_marsrs_xlog_*` it was refused with, and
   /// `logDir is empty` when [XlogConfig.logDir] is.
+  ///
+  /// A prefix that is open already is answered with the [Xlog] it was opened
+  /// with, and [config] is not applied: the platform side answers the appender
+  /// of that prefix and not a second one, so a configuration it discarded is
+  /// not one any mirror of the appender may read. [close] the one you were
+  /// given before you open the prefix again.
   static Future<Xlog> open(XlogConfig config) async {
+    final prefix = config.effectiveNamePrefix;
+    final opened = _opened[prefix];
+    if (opened != null) {
+      final closing = opened._closing;
+      // A prefix that is closing is not open: the drain it is waiting for is
+      // the one that releases the appender, so an [open] that did not wait
+      // would be given an appender the platform side is still closing.
+      if (closing == null) {
+        return opened;
+      }
+      await closing;
+    }
     await _channel.invokeMethod<void>('open', config.toMap());
-    return Xlog._(config.effectiveNamePrefix, config.level, config.mode);
+    final xlog = Xlog._(prefix, config.level, config.mode);
+    _opened[prefix] = xlog;
+    return xlog;
   }
 
   /// The level a record has to reach: what this was last set to, and what the
@@ -332,7 +367,17 @@ class Xlog {
     }
     final drain = _invoke<void>('close');
     _closing = drain;
-    return drain;
+    // The prefix is free again only once the drain has run, and not when this
+    // call was made: an [open] that came in between the two would be answered
+    // with this [Xlog], and one that came in after would open a prefix the
+    // platform side is still closing.
+    try {
+      return await drain;
+    } finally {
+      if (_opened[namePrefix] == this) {
+        _opened.remove(namePrefix);
+      }
+    }
   }
 
   /// Every call carries the name the appender was opened with, because the
