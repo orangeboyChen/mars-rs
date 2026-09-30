@@ -47,7 +47,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
@@ -361,6 +361,9 @@ impl Ends {
 pub struct Driver {
     stop: Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// The logic the thread is draining, which [`Driver::shutdown`] asks
+    /// whether it can join by.
+    logic: Arc<Mutex<StnLogic>>,
 }
 
 impl Driver {
@@ -378,23 +381,48 @@ impl Driver {
         let stop = Arc::new(AtomicBool::new(false));
         let thread = {
             let stop = Arc::clone(&stop);
+            let logic = Arc::clone(&logic);
             std::thread::Builder::new()
                 .name("marsrs-stn-driver".to_owned())
                 .spawn(move || drain(&logic, &stop))
                 .ok()
         };
-        Self { stop, thread }
+        Self {
+            stop,
+            thread,
+            logic,
+        }
     }
 
     fn shutdown(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            // the thread is joined rather than left to the process: a task
-            // that was mid-pass when the driver was dropped is one whose end
-            // nobody is waiting for any more, and it is not one the host
-            // should find still running after the drop came back
-            let _joined = thread.join();
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        // The thread is joined rather than left to the process: a task that
+        // was mid-pass when the driver was dropped is one whose end nobody is
+        // waiting for any more, and it is not one the host should find still
+        // running after the drop came back.
+        //
+        // Unless the join cannot come back, which is the case in which this
+        // call is holding the logic the thread is waiting for: an app that
+        // drops its driver with the lock taken — and a callback of the pass
+        // the thread is running now, which is a pass holding it — would wait
+        // for a thread waiting for a lock this call holds, and neither would
+        // end. So the lock is asked first, and a thread that is not one this
+        // call can join is left to the stop flag, which is what ends it
+        // either way.
+        match self.logic.try_lock() {
+            // the lock is free, so the thread is not in a pass it cannot come
+            // back from: it is sleeping, or about to take the lock itself
+            Ok(free) => drop(free),
+            // a panic poisoned it, which is not a lock anybody holds
+            Err(TryLockError::Poisoned(poisoned)) => drop(poisoned.into_inner()),
+            // somebody holds it — this call, or another thread of the app —
+            // and the pass the thread is waiting for is the one holding it
+            Err(TryLockError::WouldBlock) => return,
         }
+        let _joined = thread.join();
     }
 }
 
@@ -441,10 +469,12 @@ fn locked<T: ?Sized>(lock: &Arc<Mutex<T>>) -> MutexGuard<'_, T> {
 mod tests {
     use std::future::Future;
     use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::task::{Context, Poll, Waker};
+    use std::time::{Duration, Instant};
 
-    use super::{Answer, Driver, Ends, Failure, Sent, StnLogic};
+    use super::{Answer, Driver, Ends, Failure, Sent, StnLogic, SLICE_MS};
     use crate::stn_callback_bridge::CgiProfile;
     use crate::task_profile::{ConnectProfile, ErrCmdType};
 
@@ -583,5 +613,42 @@ mod tests {
         drop(driver);
         // the drop joins the thread, so the logic is this thread's again
         assert!(!logic.lock().unwrap().is_created());
+    }
+
+    /// The other drop: one made while the logic is held, by an app that is
+    /// holding it or by a callback of the pass the thread is running — which
+    /// is a pass holding it. The thread's next pass waits for that lock and
+    /// the join waits for the thread, so a drop that joined would not come
+    /// back at all; what ends the thread instead is the stop flag.
+    #[test]
+    fn a_driver_is_dropped_without_waiting_for_a_pass_that_cannot_end() {
+        let logic = Arc::new(Mutex::new(StnLogic::new()));
+        let driver = Driver::spawn(Arc::clone(&logic));
+        let held = Arc::clone(&logic);
+        let dropped = Arc::new(AtomicBool::new(false));
+        let back = Arc::clone(&dropped);
+
+        let holding = std::thread::spawn(move || {
+            let _pass = held.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            // a slice, and then some: the thread is only ever waiting for the
+            // lock between two passes, and it is the waiting for it that a
+            // drop that joins cannot come back from
+            std::thread::sleep(Duration::from_millis(SLICE_MS * 4));
+            drop(driver);
+            back.store(true, Ordering::SeqCst);
+        });
+
+        // A hang is not a failure any test reports, so the wait is bounded:
+        // what is asked about is a drop that does not come back.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !dropped.load(Ordering::SeqCst) {
+            assert!(
+                Instant::now() < deadline,
+                "the drop of a driver whose logic is held is waiting for the thread, and the \
+                 thread is waiting for the lock the drop is holding"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        holding.join().expect("the drop came back");
     }
 }
