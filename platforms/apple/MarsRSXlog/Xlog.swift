@@ -158,7 +158,8 @@ public final class Xlog: NSObject {
     ///
     /// What it answers is the limit the appender is held to and not the one
     /// that was asked for: a limit below [minAliveTimeSeconds] is one the C ABI
-    /// refuses — the same floor an `open` holds a configuration to — so the
+    /// refuses — `MIN_LOG_ALIVE_TIME` of the appender it wraps, the shortest
+    /// lifetime that one takes from a configuration as from a call — so the
     /// appender keeps the one it had, and `0` is below that floor as well.
     @objc public var maxAliveTimeSeconds: Int64 {
         get { XlogSettings.values(of: namePrefix).aliveTimeLimit }
