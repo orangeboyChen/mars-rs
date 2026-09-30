@@ -446,11 +446,16 @@ pub unsafe extern "C" fn mars_xlog_write_instance(
 
 /// `mars::xlog::IsEnabledFor` — `1` when the instance would write this level.
 ///
-/// `level_ <= _level`, on the **raw** `TLogLevel` the caller passed: the C++
-/// casts it (`(TLogLevel)_level`, `Java2C_Xlog.cc`) and never checks it, so
-/// `MARS_LEVEL_NONE` (6) is a level a caller may ask *about* — and asking about
-/// it is not the same as asking about `Fatal`, which is what collapsing it onto
-/// `Fatal` (or answering nothing) used to do.
+/// `level_ <= _level`, on the **`TLogLevel`** the caller passed and not on a
+/// collapsed copy of it: the C++ casts it (`(TLogLevel)_level`,
+/// `Java2C_Xlog.cc`) and never checks it, so a level of `-1` is asked about as
+/// `-1` — below `Verbose`, and answered `0` — and not as the `Verbose` the
+/// *filter* would make of it.
+///
+/// A level no record can carry is answered `0`, whatever the filter is:
+/// `MARS_LEVEL_NONE` (6) is a filter that drops everything, and the write
+/// refuses it as a record's level, so `1` here would promise a caller a write
+/// that never happens.
 #[no_mangle]
 pub extern "C" fn mars_xlog_is_enabled_for(instance: c_longlong, level: c_int) -> c_int {
     guard(0, || c_int::from(enabled_for(instance as u64, level)))
@@ -460,6 +465,12 @@ pub extern "C" fn mars_xlog_is_enabled_for(instance: c_longlong, level: c_int) -
 /// (`xlogger_IsEnabledFor` for handle `0`, `XloggerCategory::IsEnabledFor` for
 /// an instance).
 fn enabled_for(handle: u64, level: c_int) -> bool {
+    // A record has no level outside `Verbose..=Fatal`, and the write refuses
+    // one that is outside it, so this does too: the question is whether the
+    // instance would write, and nothing is written at such a level.
+    let Some(_) = to_log_level(level) else {
+        return false;
+    };
     match marsrs_appender::get_level(handle) {
         Some(stored) => (stored as i32) <= level,
         // A handle that is not one: nothing is written through it, so nothing

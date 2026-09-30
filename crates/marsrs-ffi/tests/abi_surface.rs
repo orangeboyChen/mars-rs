@@ -220,18 +220,28 @@ fn instances_are_created_addressed_and_released() {
 
 /// `XloggerCategory::IsEnabledFor` is `level_ <= _level` on the **raw**
 /// `TLogLevel`, and the C++ casts whatever the caller passes
-/// (`(TLogLevel)_level`), so `MARS_LEVEL_NONE` (6) is a level a caller may ask
-/// about — it is not `Fatal`, and it is not "no answer at all".
+/// (`(TLogLevel)_level`) — so `-1` is asked about as `-1`, and not as the
+/// `Verbose` the filter would make of it.
+///
+/// What the raw comparison does not answer is a level no record can carry:
+/// `MARS_LEVEL_NONE` (6) is a filter, and the write refuses it as a level, so
+/// it is answered `0` and not `1`. Answering `1` there told a caller a write
+/// was coming that the write itself drops.
 #[test]
-fn is_enabled_for_compares_the_raw_level() {
+fn is_enabled_for_answers_about_the_levels_a_record_can_have() {
     let _guard = serial();
     let dir = tempdir("enabled");
     let config = make_config(&dir, 0, 0);
     let handle = unsafe { mars_xlog_new_instance(&config.raw, 0) };
     assert!(handle > 0, "an instance is a handle");
 
-    mars_xlog_set_level_instance(handle, 0); // Verbose: everything passes, 6 included
-    assert_eq!(mars_xlog_is_enabled_for(handle, 6), 1);
+    mars_xlog_set_level_instance(handle, 0); // Verbose: every record passes
+                                             // `MARS_LEVEL_NONE` is a filter and not a record's level — the write
+                                             // refuses it — so the answer is `0` even when everything else passes.
+    assert_eq!(mars_xlog_is_enabled_for(handle, 6), 0);
+    // … and so is anything past it, which the C++ would have answered `1` to.
+    assert_eq!(mars_xlog_is_enabled_for(handle, 7), 0);
+    assert_eq!(mars_xlog_is_enabled_for(handle, 100), 0);
     assert_eq!(mars_xlog_is_enabled_for(handle, 5), 1);
     // A negative level is below Verbose, so nothing passes it.
     assert_eq!(mars_xlog_is_enabled_for(handle, -1), 0);
