@@ -1172,8 +1172,11 @@ impl ShortLinkTaskManager {
                 status,
                 mobile,
             );
-            let read_write = if task.long_polling {
-                read_write_timeout(task.long_polling_timeout.max(0) as u64, mobile)
+            // a long-polling task that named no timeout is one that waits for
+            // its first package like any other: a wait of nothing is not what
+            // an app asking for long polling meant
+            let read_write = if task.long_polling && task.long_polling_timeout > 0 {
+                read_write_timeout(task.long_polling_timeout as u64, mobile)
             } else {
                 read_write_timeout(first_pkg, mobile)
             };
@@ -1611,10 +1614,11 @@ fn deadlines(profile: &TaskProfile, network: NetworkKind) -> [Option<(Timeout, u
             Timeout::ReadWrite,
             sent.saturating_add(profile.transfer_profile.read_write_timeout),
         )),
-        (running && long_polling && sent > 0 && pkg == 0).then_some((
-            Timeout::LongPolling,
-            sent.saturating_add(profile.task.long_polling_timeout.max(0) as u64),
-        )),
+        (running && long_polling && sent > 0 && pkg == 0 && profile.task.long_polling_timeout > 0)
+            .then_some((
+                Timeout::LongPolling,
+                sent.saturating_add(profile.task.long_polling_timeout as u64),
+            )),
         (running && !long_polling && sent > 0 && pkg == 0).then_some((
             Timeout::FirstPkg,
             sent.saturating_add(profile.transfer_profile.first_pkg_timeout),
@@ -1862,6 +1866,32 @@ mod tests {
         assert_eq!(
             timed_out(profile, 400_000, NetworkKind::Wifi),
             Some(Timeout::LongPolling)
+        );
+    }
+
+    /// `long_polling_timeout` is `0` until an app says otherwise, and a wait
+    /// of nothing is not a wait: a long-polling task that named no timeout
+    /// used to run into one the moment it was sent, and was failed with
+    /// `HTTP_LONG_POLLING_TIMEOUT` without ever having been waited on.
+    #[test]
+    fn a_long_polling_task_that_named_no_timeout_waits_like_any_other() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        let mut task = task(7);
+        task.long_polling = true;
+        manager.start_task_at(100_000, task, prepare());
+        assert!(manager.on_send_at(100_000, RunId(7)));
+
+        let profile = &manager.tasks()[0];
+        assert_eq!(
+            next_deadline(profile, NetworkKind::Wifi),
+            Some((Timeout::Task, 105_000)),
+            "the task's own 5s, and not a long poll that ran out as it was sent"
+        );
+        assert_eq!(
+            timed_out(profile, 100_000, NetworkKind::Wifi),
+            None,
+            "the task was sent at 100_000 and is not out of time yet"
         );
     }
 
