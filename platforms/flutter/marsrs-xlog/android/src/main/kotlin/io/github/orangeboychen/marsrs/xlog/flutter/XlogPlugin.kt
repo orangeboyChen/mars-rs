@@ -377,7 +377,10 @@ class XlogPlugin :
         /** The C ABI reads a max file size of `0` as "never split". */
         private const val NO_FILE_SIZE_LIMIT = 0L
 
-        /** The C ABI reads a max alive time of `0` as the C++'s own ten days. */
+        /** `0`: the lifetime an appender opened with none keeps, which is the
+         * C++'s own ten days — and not one the C ABI applies, because a
+         * lifetime below a day is refused and `0` is below it. What it is here
+         * is the number a call that named none sends. */
         private const val NO_ALIVE_TIME_LIMIT = 0L
     }
 }

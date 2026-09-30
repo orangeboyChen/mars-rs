@@ -150,6 +150,12 @@ class Xlog {
 
   static const MethodChannel _channel = MethodChannel('marsrs');
 
+  /// The shortest lifetime of a file the appender takes, in seconds: one below
+  /// it — `0` among them — is refused, and the appender keeps the lifetime it
+  /// had. `MIN_LOG_ALIVE_TIME` of the Rust, which is the one place the number
+  /// is written down.
+  static const int minAliveTimeSeconds = 86400;
+
   /// The [Xlog] of every prefix this isolate has open, and what [open] answers
   /// for one that is open already: the platform side opens one appender per
   /// prefix and answers the one that is open — the same appender, and not a
@@ -307,14 +313,22 @@ class Xlog {
     _send('setMaxFileSize', <String, Object?>{'bytes': bytes});
   }
 
-  /// How many seconds a log file is kept; `0` is the C++'s own ten days.
+  /// How many seconds a log file is kept: `0` is the lifetime an appender
+  /// opened with none keeps — the C++'s own ten days — and one below a day is
+  /// a lifetime the appender refuses, so what this answers is the one it has
+  /// and not the last one it was asked for.
   int get maxAliveTimeSeconds => _maxAliveTimeSeconds;
 
   set maxAliveTimeSeconds(int seconds) {
     if (_closing != null) {
       return;
     }
-    _maxAliveTimeSeconds = seconds;
+    // Mirrored once it is a lifetime the appender took, and not before: a day
+    // is the shortest one it takes, and `0` is below it, so a mirror that took
+    // the number would answer a lifetime no appender is writing under.
+    if (seconds >= minAliveTimeSeconds) {
+      _maxAliveTimeSeconds = seconds;
+    }
     _send('setMaxAliveTime', <String, Object?>{'seconds': seconds});
   }
 
