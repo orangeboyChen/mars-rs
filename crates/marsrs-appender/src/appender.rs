@@ -967,7 +967,7 @@ impl AppenderInner {
             return false;
         }
         let cache_path = self.cache_file_path(tv);
-        let cache_logs = self.cache_logs();
+        let cache_logs = self.cache_logs(tv);
 
         if (cache_logs || cache_path.exists()) && self.open_log_file(OpenDir::Cache, tv) {
             let mut written = self.write_file_record(data);
@@ -1075,7 +1075,14 @@ impl AppenderInner {
     }
 
     /// `XloggerAppender::__CacheLogs`.
-    fn cache_logs(&self) -> bool {
+    ///
+    /// `tv` is the second the records being written carry, which is the one
+    /// every path around this answer is built from: what is asked is whether
+    /// *their* log file is there, and a block that waited in the cache
+    /// overnight is not answered about by tomorrow's. The C++ asks about now
+    /// because it has nowhere else to read the time from — see
+    /// [`Self::write_time`].
+    fn cache_logs(&self, tv: i64) -> bool {
         let Some(cachedir) = self.config.cachedir.as_ref() else {
             return false;
         };
@@ -1083,7 +1090,6 @@ impl AppenderInner {
             return false;
         }
 
-        let tv = now_secs();
         if self.log_file_path(tv).exists() {
             return false;
         }
