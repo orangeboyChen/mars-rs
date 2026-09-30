@@ -452,6 +452,10 @@ impl Thread {
 ///
 /// The wait is one `wait_timeout` on a [`Condition`] and not a run of short
 /// sleeps, which is what a start thirty seconds from now used to cost: a
+/// A thousand years: what [`CancelSignal::wait`] waits for when the wait it was
+/// asked for does not fit in an [`Instant`].
+const UNREACHABLE_WAIT: Duration = Duration::from_secs(60 * 60 * 24 * 365 * 1000);
+
 /// wake-up every millisecond, thirty thousand of them, and a cancellation
 /// that went unnoticed for up to a millisecond after it was asked for.
 #[derive(Debug)]
@@ -473,7 +477,12 @@ impl CancelSignal {
     /// `false` when the wait was cancelled, whether that happened before it
     /// began or while it was being waited out.
     fn wait(&self, duration: Duration) -> bool {
-        let deadline = Instant::now() + duration;
+        // `Instant` has a ceiling, and `now + duration` past it panics rather
+        // than overflowing: a wait that far out is a wait nothing outlives, so
+        // it is put where the clock can hold it instead.
+        let deadline = Instant::now()
+            .checked_add(duration)
+            .unwrap_or_else(|| Instant::now() + UNREACHABLE_WAIT);
         // The flag is read under the lock, and a canceller takes the lock
         // before it notifies: a cancel that lands between the read and the
         // wait is therefore one the wait knows about before it sleeps.

@@ -727,8 +727,12 @@ pub fn wait_message(post: &MessagePost, timeout_ms: i64) -> bool {
     let Some(queue) = queue(post.reg.queue) else {
         return false;
     };
-    let deadline =
-        (timeout_ms >= 0).then(|| Instant::now() + Duration::from_millis(timeout_ms as u64));
+    let deadline = (timeout_ms >= 0)
+        .then(|| Duration::from_millis(timeout_ms as u64))
+        // A deadline the clock cannot hold is not one that panics the wait:
+        // what was asked for is longer than forever, and `None` is the
+        // "wait forever" this already answers for a negative timeout.
+        .and_then(|duration| Instant::now().checked_add(duration));
     let mut state = queue.lock();
     loop {
         if !state.messages.iter().any(|m| m.post == *post) && !state.running_posts.contains(post) {
@@ -813,7 +817,9 @@ impl RunLoop {
         // the end of the wait: only the deadline or a due message is,
         // otherwise a spurious wake-up reports "nothing to do" before an
         // `After` message is due.
-        let deadline = timeout.map(|timeout| Instant::now() + timeout);
+        // A timeout the clock cannot hold is no deadline at all, which is the
+        // case this already makes for a caller that asked for none.
+        let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
         // The post this dispatch is running, which is taken out of
         // `running_posts` once its handlers are done.
         let post;
