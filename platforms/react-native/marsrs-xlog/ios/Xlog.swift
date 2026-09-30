@@ -162,12 +162,11 @@ internal final class Xlog: NSObject {
 
     /// `mars_xlog_get_level`: what the appender answers, and not what JS holds.
     ///
-    /// Asked of the registry and not of the handle [handles] holds, which is
-    /// what the Kotlin half of this module does: a prefix is one appender to
-    /// the C ABI, so an appender another part of the app closed — a
-    /// `MarsRSXlog.Xlog` of the same prefix — took it out of the registry and
-    /// left the handle cached here, and `mars_xlog_get_level` answers `-1` for
-    /// a handle it does not know.
+    /// Asked of the handle [openHandle] answered, and not of the one [handles]
+    /// cached: a prefix is one appender to the C ABI, so an appender another
+    /// part of the app closed — a `MarsRSXlog.Xlog` of the same prefix — took
+    /// it out of the registry and left the handle cached here, and
+    /// `mars_xlog_get_level` answers `-1` for a handle it does not know.
     @objc(getLevel:)
     internal func level(of namePrefix: String) -> Double {
         guard let handle = openHandle(of: namePrefix) else {
