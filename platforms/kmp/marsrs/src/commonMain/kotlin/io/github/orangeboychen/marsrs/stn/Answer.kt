@@ -43,7 +43,12 @@ public sealed class Answer {
         public val cmdid: Int
     ) : Answer()
 
-    /** `reportTaskLimited` — what the limit is; `0` is "go ahead". */
+    /**
+     * `reportTaskLimited` — the number the gate weighed the task against,
+     * answered back. A report and not an override: a task the gates refused
+     * stays refused whatever an app answers, and ends with
+     * `LOCAL_ANTI_AVALANCHE`.
+     */
     public data class Limit(public val limit: Int) : Answer()
 }
 
