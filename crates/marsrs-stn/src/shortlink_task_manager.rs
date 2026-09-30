@@ -644,10 +644,23 @@ impl ShortLinkTaskManager {
         match handle {
             TaskFailHandleType::Normal => {
                 let network = self.network();
-                let cost = now.saturating_sub(self.tasks[at].transfer_profile.start_send_time);
+                let sent_at = self.tasks[at].transfer_profile.start_send_time;
                 let total = self.tasks[at].transfer_profile.send_data_size + body_len;
-                self.dynamic_timeout
-                    .record_at(network, total as u32, cost, now);
+                // What the queue's own timeouts are read off, and what the
+                // window `NetCore` hands to both of its queues is not: a
+                // `start_send_time` of `0` is a request the host never said
+                // went out, and `now` minus nothing is the age of the process.
+                // One such answer in the shared window is a network both
+                // queues then read as slow, which is why [`deadlines`] asks
+                // the same field before it counts a timeout.
+                if sent_at != 0 {
+                    self.dynamic_timeout.record_at(
+                        network,
+                        total as u32,
+                        now.saturating_sub(sent_at),
+                        now,
+                    );
+                }
                 let ended = self.single_resp_handle_at(
                     now,
                     at,
@@ -2100,6 +2113,39 @@ mod tests {
         );
         assert!(manager.is_empty());
         assert_eq!(manager.tasks_continuous_fail_count(), 1);
+    }
+
+    /// The window both queues are handed is one reading of the network, so
+    /// what goes into it is one wait and not a tick count: `start_send_time`
+    /// is `0` until the host says the request went out, and `now` minus
+    /// nothing is how long the process has been up.
+    #[test]
+    fn an_answer_whose_send_the_host_never_reported_is_not_a_reading_of_the_network() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        let window = DynamicTimeout::new();
+        manager.set_dynamic_timeout(window.clone());
+        manager.set_buf2resp(|_task, _body, _channel| (0, TaskFailHandleType::Normal));
+
+        manager.start_task_at(100_000, task(7), prepare());
+        assert!(manager.on_send_at(100_000, RunId(7)));
+        manager.on_response_at(100_001, RunId(7), answered(b"hello"));
+        let good = window.continuous_good_count();
+        assert!(
+            good > 0,
+            "an answer inside its budget is one the window counts"
+        );
+
+        // and one that came back without the host ever saying the request went
+        // out
+        manager.start_task_at(100_000, task(8), prepare());
+        manager.on_response_at(100_001, RunId(8), answered(b"hello"));
+
+        assert_eq!(
+            window.continuous_good_count(),
+            good,
+            "a cost of nothing is not a package that missed its budget"
+        );
     }
 
     #[test]

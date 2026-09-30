@@ -703,10 +703,23 @@ impl LongLinkTaskManager {
         match handle {
             TaskFailHandleType::Normal => {
                 let network = self.network();
-                let cost = now.saturating_sub(self.tasks[at].transfer_profile.start_send_time);
+                let sent_at = self.tasks[at].transfer_profile.start_send_time;
                 let total = self.tasks[at].transfer_profile.send_data_size + len;
-                self.dynamic_timeout
-                    .record_at(network, total as u32, cost, now);
+                // `start_send_time` is `0` until the host says the request went
+                // out, and what a cost read off a `0` is is the tick the
+                // process has been up and not the wait the answer took —
+                // minutes, and on a long-lived host days. One such answer in
+                // the window the two queues share is a network both of them
+                // read as dead from then on, which is why the timeouts are
+                // counted off the same field and off nothing else.
+                if sent_at != 0 {
+                    self.dynamic_timeout.record_at(
+                        network,
+                        total as u32,
+                        now.saturating_sub(sent_at),
+                        now,
+                    );
+                }
                 let ended = self.single_resp_handle_at(
                     now,
                     at,
@@ -1848,6 +1861,7 @@ fn upsert(batch: &mut Vec<(String, i32, u32)>, name: String, entry: (i32, u32)) 
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use crate::dynamic_timeout::DynamicTimeout;
     use crate::long_link::DisconnectInternalCode;
     use crate::net_source::LonglinkConfig;
     use crate::task::Task;
@@ -2473,6 +2487,40 @@ mod tests {
             manager.tasks()[0].remain_retry_count,
             1,
             "the try the batch took is given back"
+        );
+    }
+
+    /// The window the two queues share is what the first-package timeout of
+    /// both of them is read off, so what goes into it is one reading of the
+    /// network and not a tick count: `start_send_time` is `0` until the host
+    /// says the request went out, and `now` minus nothing is the age of the
+    /// process — minutes, and on a host that has been up for a while days.
+    #[test]
+    fn an_answer_whose_send_the_host_never_reported_is_not_a_reading_of_the_network() {
+        let mut manager = manager();
+        let _ = wire(&mut manager);
+        let window = DynamicTimeout::new();
+        manager.set_dynamic_timeout(window.clone());
+
+        manager.start_task_at(NOW, task(7), Task::CHANNEL_LONG);
+        manager.on_send_at(NOW, 7);
+        manager.on_response_at(NOW + 1, answered(7, b"hello"));
+        let good = window.continuous_good_count();
+        assert!(
+            good > 0,
+            "an answer inside its budget is one the window counts"
+        );
+
+        // and one that came back without the host ever saying the request went
+        // out, which a host that reads the answer off its own socket and
+        // forgets the send does
+        manager.start_task_at(NOW, task(8), Task::CHANNEL_LONG);
+        manager.on_response_at(NOW + 1, answered(8, b"hello"));
+
+        assert_eq!(
+            window.continuous_good_count(),
+            good,
+            "a cost of nothing is not a package that missed its budget"
         );
     }
 
