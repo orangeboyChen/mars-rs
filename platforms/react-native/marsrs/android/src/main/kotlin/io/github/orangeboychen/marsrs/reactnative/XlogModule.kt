@@ -121,12 +121,15 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * too.
      */
     override fun log(namePrefix: String, level: Double, tag: String, message: String) {
-        appender(namePrefix)?.log(LogLevel.of(level.toInt()), tag, message)
+        val native = int32(level) ?: return
+        appender(namePrefix)?.log(LogLevel.of(native), tag, message)
     }
 
     /** `Xlog.isLoggable`: whether a record of the level would be written. */
-    override fun isLoggable(namePrefix: String, level: Double): Boolean =
-        appender(namePrefix)?.isLoggable(LogLevel.of(level.toInt())) ?: false
+    override fun isLoggable(namePrefix: String, level: Double): Boolean {
+        val native = int32(level) ?: return false
+        return appender(namePrefix)?.isLoggable(LogLevel.of(native)) ?: false
+    }
 
     /** `Xlog.level`, read: what `marsrs-jni` answers, and not what JS holds. */
     override fun getLevel(namePrefix: String): Double =
@@ -170,12 +173,14 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
 
     /** `Xlog.level`. */
     override fun setLevel(namePrefix: String, level: Double) {
-        appender(namePrefix)?.level = LogLevel.of(level.toInt())
+        val native = int32(level) ?: return
+        appender(namePrefix)?.level = LogLevel.of(native)
     }
 
     /** `Xlog.mode`. */
     override fun setMode(namePrefix: String, mode: Double) {
-        appender(namePrefix)?.mode = appenderModeOf(mode.toInt())
+        val native = int32(mode) ?: return
+        appender(namePrefix)?.mode = appenderModeOf(native)
     }
 
     /** `Xlog.consoleLogEnabled`. */
@@ -257,6 +262,27 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
         fun compressModeOf(ordinal: Int): CompressMode = when (ordinal) {
             CompressMode.ZSTD.ordinal -> CompressMode.ZSTD
             else -> CompressMode.ZLIB
+        }
+
+        /**
+         * The number JS sent for a level or a mode, and `null` when it is not
+         * one: a `NaN`, an infinity, and anything the `Int` the C ABI takes
+         * cannot hold.
+         *
+         * `Double.toInt()` answers `0` for a `NaN`, and `LogLevel.of` answers
+         * `VERBOSE` for a `0`, so a level JS computed and came to no level
+         * with — a sum with an `undefined` in it — was one the appender was
+         * *moved* to, and the one it was moved to is the level that logs
+         * everything: an app that meant to log nothing logged all of it. The
+         * iOS half of this module reads the same number with `int32(_:)`,
+         * which answers `nil` for all three and leaves the appender alone, so
+         * one line of JS moved the appender on Android and not on iOS.
+         */
+        private fun int32(value: Double): Int? {
+            if (!value.isFinite() || value < Int.MIN_VALUE.toDouble() || value > Int.MAX_VALUE.toDouble()) {
+                return null
+            }
+            return value.toInt()
         }
     }
 }
