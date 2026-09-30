@@ -287,6 +287,18 @@ MAP
     # there, named the way a consumer's `xcodebuild` looks for it (ios-arm64,
     # ios-arm64_x86_64-simulator, watchos-arm64_arm64_32,
     # watchos-arm64-simulator).
+    #
+    # What is asserted is the count and not the four names: an xcframework is
+    # one directory per slice and an `Info.plist`, so the directories are the
+    # slices, and `${#slices[@]}` is the number the array above asks for — the
+    # day a slice is added or one is dropped, this moves with it. `ls` alone is
+    # not the check it reads as: it prints, it answers 0, and the directory it
+    # is given is one the command above just made, so it cannot be missing.
+    slices_built="$(find "$build/$name" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+    test "$slices_built" -eq "${#slices[@]}" || {
+        echo "::error::$name carries $slices_built slices and not ${#slices[@]}"
+        exit 1
+    }
     ls "$build/$name"
 
     (cd "$build" && zip -q -r "$out/$name.zip" "$name")
