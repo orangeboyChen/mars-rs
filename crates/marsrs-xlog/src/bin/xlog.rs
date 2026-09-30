@@ -73,7 +73,7 @@ const DEFAULT_LEVEL: i32 = 6;
 /// The bytes one record needs of the region: the block's header, its own
 /// length, the tailer byte, and the most a compressor adds to an input it
 /// cannot compress — zstd's `ZSTD_COMPRESSBOUND` is `len + len / 256 + 64`,
-/// the number [`Compressor::worst_case`] asks for, and this leaves half as
+/// the number `marsrs_buffer::Compressor::worst_case` asks for, and this leaves half as
 /// much margin again (`len / 128`), which is also what covers zlib's stored
 /// blocks, five bytes per 64 KiB.
 ///
