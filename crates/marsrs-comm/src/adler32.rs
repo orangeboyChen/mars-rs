@@ -39,15 +39,14 @@ pub fn adler32(data: &[u8]) -> u32 {
 /// The seed is the two 16-bit sums of an earlier call: `seed & 0xffff` is
 /// `a`, `seed >> 16` is `b`. A seed of `0` is [`adler32`].
 ///
-/// A seed is taken as it stands and not reduced first, which is where the
-/// two differ: the C takes each of the two sums modulo 65521 before it hands
-/// them back — once, for a body of one byte — so a seed whose halves are not
-/// already below 65521 — one no caller in mars can
-/// produce, since `basepacker.cc` passes either `0` or the answer of a
-/// previous call — comes back smaller there than here. Reducing one would
-/// mean answering a checksum the caller did not ask for: what this is given
-/// is the sums to carry on from, and a caller that has sums of its own to
-/// carry on from is the caller it is for.
+/// A seed is taken as it stands and not reduced first: what this is given
+/// is the sums to carry on from, and reducing them would be answering a
+/// checksum the caller did not ask for. It is also what the C answers —
+/// its one-byte path subtracts 65521 once per sum where this takes `%`,
+/// and the two are the same number for anything below twice 65521, which
+/// a sum of two 16-bit halves always is — so no seed makes the sides
+/// differ, and a caller that has sums of its own to carry on from is the
+/// caller this is for.
 pub fn adler32_seeded(seed: u32, data: &[u8]) -> u32 {
     let mut a = seed & 0xffff;
     let mut b = (seed >> 16) & 0xffff;
