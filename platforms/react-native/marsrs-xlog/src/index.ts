@@ -250,7 +250,13 @@ export class Xlog {
       return;
     }
     NativeXlog.setMaxFileSize(this.namePrefix, bytes);
-    this.currentMaxFileSize = bytes;
+    // Mirrored once it is a size the native side took, and not before: that
+    // side reads a `number` as an `unsigned long long`, and a negative one or
+    // a `NaN` is not one it hands over. `0` is a size and not an absence —
+    // "never split" — so it is mirrored like any other.
+    if (Number.isFinite(bytes) && bytes >= 0) {
+      this.currentMaxFileSize = bytes;
+    }
   }
 
   /** How many seconds a log file of this appender is kept before the sweep
