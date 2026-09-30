@@ -1,6 +1,6 @@
 // The xlog-only Android AAR of mars-rs: `libmarsrsxlog.so` (crate `marsrs-jni`)
-// for every ABI, plus the two Kotlin classes of the logging half — `Xlog` and
-// the `Log` facade over it. The whole port is the `marsrs` module; this is the
+// for every ABI, plus the Kotlin classes of the logging half — `Xlog`, the
+// config it is opened with and the three enums that config is made of. The whole port is the `marsrs` module; this is the
 // package for an app that only logs, the way `marsrs-xlog` on crates.io is. It
 // is published as `io.github.orangeboychen.marsrs:xlog` — the group is the
 // port, the artifact the piece of it.
