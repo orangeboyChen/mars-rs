@@ -110,8 +110,7 @@ pub use category::{
     set_max_file_size as category_set_max_file_size, xlogger_write, XloggerCategory, XloggerFilter,
     XloggerHandle, XloggerScopeTracer, DEFAULT_HANDLE,
 };
-pub use config::{AppenderError, AppenderMode, FileIoAction, LogLevel, XLogConfig, XLoggerInfo};
-pub use console::ConsoleFun;
+pub use config::{AppenderError, AppenderMode, LogLevel, XLogConfig, XLoggerInfo};
 pub use dump::xlogger_memory_dump;
 pub use flush::Flush;
 pub use formater::log_formater;

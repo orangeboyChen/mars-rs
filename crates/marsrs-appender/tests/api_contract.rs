@@ -17,7 +17,7 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 
 use marsrs_appender::{
-    AppenderError, AppenderMode, FileIoAction, Flush, LogLevel, XLogConfig, XLoggerInfo, Xlog,
+    AppenderError, AppenderMode, Flush, LogLevel, XLogConfig, XLoggerInfo, Xlog,
 };
 use marsrs_buffer::CompressMode;
 
@@ -112,12 +112,4 @@ fn struct_and_enum_shapes_match_the_contract() {
     assert_eq!(LogLevel::Warn as i32, 3);
     assert_eq!(LogLevel::Error as i32, 4);
     assert_eq!(LogLevel::Fatal as i32, 5);
-    assert_eq!(FileIoAction::None as i32, 0);
-    assert_eq!(FileIoAction::Success as i32, 1);
-    assert_eq!(FileIoAction::Unnecessary as i32, 2);
-    assert_eq!(FileIoAction::OpenFailed as i32, 3);
-    assert_eq!(FileIoAction::ReadFailed as i32, 4);
-    assert_eq!(FileIoAction::WriteFailed as i32, 5);
-    assert_eq!(FileIoAction::CloseFailed as i32, 6);
-    assert_eq!(FileIoAction::RemoveFailed as i32, 7);
 }

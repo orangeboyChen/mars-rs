@@ -465,52 +465,6 @@ pub fn xlogger_write(handle: XloggerHandle, info: Option<&XLoggerInfo>, log: Opt
     }
 }
 
-/// `mars::comm::__ASSERTV2` — the body of an assert record: the expression it
-/// failed on in `[ASSERT(...)]`, and the message behind it.
-///
-/// The C++ writes it into `char assertlog[4096]` and replaces the whole thing
-/// with `"[ASSERT] FAILED!!!"` when `snprintf` cannot fit it; `format!` cannot
-/// fail, so what goes out here is always the whole message.
-fn assert_log(expression: &str, log: &str) -> String {
-    format!("[ASSERT({expression})]{log}")
-}
-
-/// `xlogger_Assert` of `mars/comm/xlogger/xloggerbase.h` — the record an
-/// assert writes.
-///
-/// The C++ builds a fresh `XLoggerInfo` for it — level `kLevelFatal`, the
-/// file, function and line of the caller — and writes it with
-/// `xlogger_Write`, so no instance's level filter is asked and the record
-/// goes out through the process-wide appender.
-///
-/// What the port does not take over is what the C++ does after the write:
-/// `raise(SIGTRAP)` on Android, `__assert_rtn` on Apple and `_assert` on
-/// Windows, each of them when `NDEBUG` is not defined. None of the three has
-/// a portable counterpart here, and a caller that wants its process stopped
-/// has `std::process::abort()` for it.
-pub fn xlogger_assert(info: Option<&XLoggerInfo>, expression: &str, log: &str) -> bool {
-    write_assert(info, &assert_log(expression, log))
-}
-
-/// `xlogger_AssertP` — the same record with a message the caller formatted,
-/// which is what `mars::comm::__ASSERTV2` runs through `vsnprintf`.
-pub fn xlogger_assert_p(
-    info: Option<&XLoggerInfo>,
-    expression: &str,
-    args: std::fmt::Arguments<'_>,
-) -> bool {
-    write_assert(info, &assert_log(expression, &args.to_string()))
-}
-
-/// What both end with: a `kLevelFatal` record through `xlogger_Write`, i.e.
-/// through the process-wide appender and past whatever level an instance was
-/// given.
-fn write_assert(info: Option<&XLoggerInfo>, log: &str) -> bool {
-    let mut info = info.cloned().unwrap_or_default();
-    info.level = LogLevel::Fatal;
-    write_default(Some(&info), Some(log))
-}
-
 /// `XScopeTracer` of `mars/comm/xlogger/xlogger.h` — the guard behind the
 /// `xverbose_scope` / `xverbose_function` macros, and the port's answer to
 /// them: one record when the scope is entered, one when it is dropped, and

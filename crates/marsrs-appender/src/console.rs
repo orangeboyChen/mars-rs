@@ -8,25 +8,6 @@ use std::io::Write;
 use crate::config::XLoggerInfo;
 use crate::formater::{extract_file_name, extract_function_name, LEVEL_STRINGS};
 
-/// `mars::xlog::TConsoleFun` — where a console record goes instead of the
-/// built-in sink, which is standard error on every platform.
-///
-/// The C++ `TConsoleFun` is an Apple-only enum of three sinks of its own
-/// (`kConsolePrintf`, `kConsoleNSLog`, `kConsoleOSLog` — see
-/// `mars/xlog/objc/objc_console.mm`), and `os_log_with_type` is a macro with
-/// no symbol to link against, so the port cannot offer the three. What it
-/// offers instead is the sink itself: a record and its info, handed over
-/// unformatted so that the app decides what a console record looks like on
-/// the platform it is running on.
-///
-/// A sink is the app's own code, and the app's own code may log — a logging
-/// adapter that routes every record back through xlog is the ordinary shape
-/// of one. Such a record is not handed back to the sink: it takes the
-/// built-in stderr line, and the recursion guard of `Appender::write` makes
-/// it the one recursive-call diagnostic, so the two of them do not call one
-/// another until the stack goes.
-pub type ConsoleFun = fn(&XLoggerInfo, &str);
-
 // Whether this thread is inside the sink already: a record logged from inside
 // it is not the sink's to have, so [`enter_sink`] answers [`None`] for one.
 thread_local! {

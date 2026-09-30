@@ -1,5 +1,5 @@
 //! Configuration and record types — port of `mars/xlog/appender.h`
-//! (`TAppenderMode`, `TCompressMode`, `TFileIOAction`, `XLogConfig`) and of the
+//! (`TAppenderMode`, `TCompressMode`, `XLogConfig`) and of the
 //! `XLoggerInfo` struct in `mars/comm/xlogger/xloggerbase.h`.
 //!
 //! The Rust `XLogConfig` mirrors the C++ one field for field, except that
@@ -45,29 +45,6 @@ pub enum LogLevel {
     /// without the variant `LEVEL_NONE` collapsed onto `Fatal` and kept the
     /// worst records while dropping everything else.
     None = 6,
-}
-
-/// `mars::xlog::TFileIOAction`.
-///
-/// Reported by the recovery path that drains a dead process's cache.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FileIoAction {
-    /// `kActionNone`
-    None = 0,
-    /// `kActionSuccess`
-    Success = 1,
-    /// `kActionUnnecessary` — there was nothing to flush.
-    Unnecessary = 2,
-    /// `kActionOpenFailed`
-    OpenFailed = 3,
-    /// `kActionReadFailed`
-    ReadFailed = 4,
-    /// `kActionWriteFailed`
-    WriteFailed = 5,
-    /// `kActionCloseFailed`
-    CloseFailed = 6,
-    /// `kActionRemoveFailed`
-    RemoveFailed = 7,
 }
 
 /// `mars::xlog::XLogConfig`.
@@ -220,8 +197,6 @@ mod tests {
         assert_eq!(AppenderMode::Sync as i32, 1);
         assert_eq!(LogLevel::Verbose as i32, 0);
         assert_eq!(LogLevel::Fatal as i32, 5);
-        assert_eq!(FileIoAction::None as i32, 0);
-        assert_eq!(FileIoAction::RemoveFailed as i32, 7);
     }
 
     #[test]
