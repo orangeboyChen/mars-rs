@@ -25,5 +25,5 @@ features:
   - title: 任务链路，还有网络诊断
     details: "STN 把一个请求当成一个任务跑 —— 排队、重试、超时、上报，走在短连接或 App 自己维持的长连接上。SDT 回答一个主机为什么不再回应：ping、DNS、TCP、HTTP，以及一份写清每一项查到了什么的 JSON 报告。"
   - title: 它自己不开线程
-    details: "两半都不跑在自己的线程上：本来该是一个线程的地方，是宿主自己调的一次调用 —— `run_pending()` 和 `due_time()`、`runChecks` 和它的探针。"
+    details: "你不要求，就没有谁跑在自己的线程上：本来该是一个线程的地方，是宿主自己调的一次调用 —— 管线是 `run_pending()` 和 `due_time()`，诊断是 `runChecks` 和它的探针。`Driver::spawn()` 是那个可以要的排空线程，appender 异步模式的写线程是日志那一半自己起的那个。"
 ---

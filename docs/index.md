@@ -25,5 +25,5 @@ features:
   - title: The task pipeline, and the diagnosis
     details: "STN runs a request as a task — queued, retried, timed out, reported, over a short link or a long link the app keeps. SDT answers why a host stopped answering: ping, DNS, TCP and HTTP, and a JSON report of what each found."
   - title: No threads but yours
-    details: "Neither half runs on a thread of its own, so what would have been a thread is a call the host makes — `run_pending()` and `due_time()`, `runChecks` and its probes."
+    details: "Nothing runs on a thread of its own unless you ask for one: what would have been a thread is a call the host makes — `run_pending()` and `due_time()` for the pipeline, `runChecks` and its probes for the diagnosis. `Driver::spawn()` is the drain thread you can ask for, and the appender's async writer is the one the logger starts on its own."
 ---
