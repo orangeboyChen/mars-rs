@@ -123,12 +123,20 @@ mod tests {
 
     #[test]
     fn the_hour_agrees_with_chrono() {
-        // The cache is only allowed to answer what `chrono` would have.
+        // The cache is only allowed to answer what `chrono` would have, so it
+        // is asked twice: the first call is a miss that fills the cache, and
+        // it is the second — the one that came out of it — that has to agree
+        // with the hour `chrono` works out for the same second.
         for secs in [0i64, 1_700_000_000, 1_700_000_000 + 13 * 3600] {
+            let _miss = local_time(secs);
             let cached = local_time(secs);
-            let fresh = lookup(secs);
-            assert_eq!(cached, fresh);
-            assert_eq!(cached.hour, fresh.hour);
+            // what `chrono` says of the same second, asked here and not
+            // through `lookup`, which is the function under test
+            let Some(local) = Local.timestamp_opt(secs, 0).single() else {
+                panic!("{secs} is a second `chrono` cannot name");
+            };
+            assert_eq!(cached.hour, local.hour() as u8, "{secs} in this zone");
+            assert_eq!(cached.date, (local.year(), local.month(), local.day()));
         }
     }
 
