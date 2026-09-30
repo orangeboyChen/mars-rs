@@ -82,8 +82,7 @@ public final class Xlog: NSObject {
     /// closing either releases it — the handle this one cached still looks
     /// open, and a write through it would silently write nothing.
     @objc public var isOpen: Bool {
-        handle != Self.noHandle
-            && namePrefix.withCString { mars_xlog_get_instance($0) } == handle
+        openHandle() != Self.noHandle
     }
 
     /// The level of this appender: a record less severe than this is dropped.
@@ -97,10 +96,11 @@ public final class Xlog: NSObject {
             // everything": the `-1` `mars_xlog_get_level` answers for a
             // handle that is not one is `(TLogLevel)-1`, the C++'s own
             // spelling of the opposite.
-            guard isOpen else {
+            let opened = openHandle()
+            guard opened != Self.noHandle else {
                 return .none
             }
-            return LogLevel(rawValue: mars_xlog_get_level(handle)) ?? .verbose
+            return LogLevel(rawValue: mars_xlog_get_level(opened)) ?? .verbose
         }
         set {
             withHandle { mars_xlog_set_level_instance($0, newValue.rawValue) }
@@ -146,10 +146,11 @@ public final class Xlog: NSObject {
     /// builds a message that is expensive to build.
     @objc
     public func isEnabled(for level: LogLevel) -> Bool {
-        guard isOpen else {
+        let opened = openHandle()
+        guard opened != Self.noHandle else {
             return false
         }
-        return mars_xlog_is_enabled_for(handle, level.rawValue) != 0
+        return mars_xlog_is_enabled_for(opened, level.rawValue) != 0
     }
 
     /// Writes a record of `level`.
@@ -165,16 +166,14 @@ public final class Xlog: NSObject {
         function: String = #function,
         line: Int32 = #line
     ) {
-        // `handle != Self.noHandle` and not `isOpen`, which asks the C ABI
-        // whether the prefix is still registered: a record is the hot path,
-        // and the write below already no-ops for a handle that is not one.
-        guard handle != Self.noHandle else {
+        let opened = openHandle()
+        guard opened != Self.noHandle else {
             return
         }
         // `cTag` and friends: the same four strings as C pointers, which is
         // what the closure hands back and what the C ABI copies out of.
         withCStrings(first: tag, second: file, third: function, fourth: message) { cTag, cFile, cFunction, cMessage in
-            mars_xlog_write_instance(handle, level.rawValue, cTag, cFile, cFunction, line, cMessage)
+            mars_xlog_write_instance(opened, level.rawValue, cTag, cFile, cFunction, line, cMessage)
         }
     }
 
@@ -291,7 +290,7 @@ public final class Xlog: NSObject {
     public func flush() async {
         // The handle and not `self`: the closure runs on another thread, and
         // `Xlog` is not `Sendable`, so strict concurrency refuses the capture.
-        let opened = self.handle
+        let opened = openHandle()
         guard opened != Self.noHandle else {
             return
         }
@@ -308,23 +307,21 @@ public final class Xlog: NSObject {
     /// `namePrefix` answers `0`. Safe to call twice.
     @objc
     public func close() {
-        guard isOpen else {
+        guard openHandle() != Self.noHandle else {
             return
         }
-        // A prefix is one appender to the C ABI, so two `Xlog`s of one prefix
-        // hold one handle between them — and releasing takes the prefix and
-        // not the handle, which drops whatever the prefix answers *now*. Once
-        // this object's twin closed the appender and a third one reopened the
-        // prefix, releasing here would close an appender that is not ours.
-        let ownsPrefix = namePrefix.withCString { prefix in
-            mars_xlog_get_instance(prefix) == handle
+        // Releasing takes the prefix and not the handle, which drops whatever
+        // the prefix answers *now* — and [openHandle] has just asked the
+        // registry and been answered this one, so what is released here is
+        // this appender and not the one a third `Xlog` reopened the prefix
+        // with. A prefix is one appender to the C ABI, so two `Xlog`s of one
+        // prefix hold one handle between them and this closes both.
+        namePrefix.withCString { prefix in
+            mars_xlog_release_instance(prefix)
         }
-        if ownsPrefix {
-            namePrefix.withCString { prefix in
-                mars_xlog_release_instance(prefix)
-            }
-        }
+        handleLock.lock()
         handle = Self.noHandle
+        handleLock.unlock()
     }
 
     /// `mars_xlog_current_log_path_instance`: the directory this appender writes
@@ -335,10 +332,11 @@ public final class Xlog: NSObject {
     /// (`XloggerAppender::GetCurrentLogPath` hands back `sg_logdir`); the day's
     /// file is what [`logFiles(daysAgo:)`] names.
     @objc public var currentLogPath: String? {
-        guard isOpen else {
+        let opened = openHandle()
+        guard opened != Self.noHandle else {
             return nil
         }
-        return path { out, len in mars_xlog_current_log_path_instance(handle, out, len) }
+        return path { out, len in mars_xlog_current_log_path_instance(opened, out, len) }
     }
 
     /// `mars_xlog_getfilepath_from_timespan_instance`: the log files of `daysAgo` days ago
@@ -355,11 +353,12 @@ public final class Xlog: NSObject {
     /// represent rather than answering nothing.
     @objc
     public func logFiles(daysAgo: Int) -> [String] {
-        guard isOpen, let timespan = Int32(exactly: daysAgo) else {
+        let opened = openHandle()
+        guard opened != Self.noHandle, let timespan = Int32(exactly: daysAgo) else {
             return []
         }
         return paths { index, out, len in
-            mars_xlog_getfilepath_from_timespan_instance(handle, timespan, index, out, len)
+            mars_xlog_getfilepath_from_timespan_instance(opened, timespan, index, out, len)
         }
     }
 
@@ -372,11 +371,12 @@ public final class Xlog: NSObject {
     /// [`logFiles(daysAgo:)`] answers one.
     @objc
     public func logFileNames(daysAgo: Int) -> [String] {
-        guard isOpen, let timespan = Int32(exactly: daysAgo) else {
+        let opened = openHandle()
+        guard opened != Self.noHandle, let timespan = Int32(exactly: daysAgo) else {
             return []
         }
         return paths { index, out, len in
-            mars_xlog_make_logfile_name_instance(handle, timespan, index, out, len)
+            mars_xlog_make_logfile_name_instance(opened, timespan, index, out, len)
         }
     }
 
@@ -454,7 +454,18 @@ public final class Xlog: NSObject {
     }
 
     /// The handle `mars_xlog_new_instance` answered with; `0` once [close()] ran.
+    ///
+    /// Under [handleLock] and not plain: [close()] writes it from whichever
+    /// thread an app closed on, and every member reads it from whichever
+    /// thread it was called on. Two threads touching one property without
+    /// that is a race on eight bytes, and a torn read of a handle is a write
+    /// through an appender that is not this one's.
     private var handle: Int64
+
+    /// What makes [handle] one value across threads: [close()] takes it on the
+    /// thread it was called on, and a record is written from any thread at
+    /// all.
+    private let handleLock = NSLock()
 
     /// What [mode] answers while this side is the only one that knows it.
     private var currentMode: AppenderMode
@@ -483,9 +494,40 @@ public final class Xlog: NSObject {
     /// [close()] has: handle `0` names no appender at all, so a call through
     /// it would silently write nothing.
     private func withHandle(_ body: (Int64) -> Void) {
-        guard isOpen else {
+        let opened = openHandle()
+        guard opened != Self.noHandle else {
             return
         }
-        body(handle)
+        body(opened)
+    }
+
+    /// The handle of this appender, [noHandle] when it is closed: what every
+    /// member reads once and then makes its call through, rather than asking
+    /// [isOpen] and reading [handle] again for the call that question guards.
+    ///
+    /// One read and not two, because the two are not one answer: a [close()]
+    /// on another thread lands between them, and what the second one reads
+    /// is the `0` the close wrote. Handle `0` is one no appender is open
+    /// for, so the level this `Xlog` answered through it was the `-1` the C
+    /// ABI answers — `(TLogLevel)-1`, which [LogLevel] reads as `verbose`,
+    /// the level that logs everything: a closed `Xlog` answered the opposite
+    /// of what it was asked. A setter handed a `0` is quieter and no better:
+    /// it moves nothing, and still answers that it took the setting.
+    ///
+    /// Asked of the C ABI's registry and not of the handle alone, which is
+    /// the other half of [isOpen]: a prefix is one appender, so an `Xlog` of
+    /// the same [namePrefix] is closed with this one, and the registry is
+    /// where that shows.
+    private func openHandle() -> Int64 {
+        handleLock.lock()
+        defer { handleLock.unlock() }
+        let opened = handle
+        guard opened != Self.noHandle else {
+            return Self.noHandle
+        }
+        let owns = namePrefix.withCString { prefix in
+            mars_xlog_get_instance(prefix) == opened
+        }
+        return owns ? opened : Self.noHandle
     }
 }
