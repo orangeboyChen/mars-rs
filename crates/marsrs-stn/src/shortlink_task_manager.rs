@@ -1955,10 +1955,12 @@ mod tests {
         );
     }
 
-    /// `long_polling_timeout` is `0` until an app says otherwise, and a wait
-    /// of nothing is not a wait: a long-polling task that named no timeout
-    /// used to run into one the moment it was sent, and was failed with
-    /// `HTTP_LONG_POLLING_TIMEOUT` without ever having been waited on.
+    /// `long_polling_timeout` is `-1` until an app says otherwise — the C++'s
+    /// own "the caller did not say", which is one millisecond short of the
+    /// margin and not the whole of it — and a wait of nothing is not a wait:
+    /// a long-polling task that named no timeout used to run into one the
+    /// moment it was sent, and was failed with `HTTP_LONG_POLLING_TIMEOUT`
+    /// without ever having been waited on.
     #[test]
     fn a_long_polling_task_that_named_no_timeout_waits_like_any_other() {
         let mut manager = ShortLinkTaskManager::new();
@@ -1971,8 +1973,8 @@ mod tests {
         let profile = &manager.tasks()[0];
         assert_eq!(
             next_deadline(profile, NetworkKind::Wifi),
-            Some((Timeout::Task, 105_000)),
-            "the task's own 5s, and not a long poll that ran out as it was sent"
+            Some((Timeout::Task, 104_999)),
+            "the task's own 4 999, and not a long poll that ran out as it was sent"
         );
         assert_eq!(
             timed_out(profile, 100_000, NetworkKind::Wifi),

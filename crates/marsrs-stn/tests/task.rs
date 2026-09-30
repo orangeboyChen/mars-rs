@@ -26,10 +26,15 @@ fn the_constructor_fills_in_the_cpp_defaults() {
     // `Task` give it that, and `NetCore` reads `DEF_TASK_RETRY_COUNT` for it.
     // `0` would be "do not retry".
     assert_eq!(task.retry_count, -1);
-    assert_eq!(task.server_process_cost, 0);
-    assert_eq!(task.total_timeout, 0);
+    // `stn.cc:53-57`: all three are `-1` there, and a `0` here would not be
+    // the same thing. A server cost of nothing is a cost the caller did say,
+    // which is what takes the dynamic-timeout branch of `first_pkg_timeout`,
+    // and a long poll of `0` waits the whole `5 * 1000` where `-1` waits the
+    // `4999` the C++'s `int` arithmetic gives.
+    assert_eq!(task.server_process_cost, -1);
+    assert_eq!(task.total_timeout, -1);
     assert!(!task.long_polling);
-    assert_eq!(task.long_polling_timeout, 0);
+    assert_eq!(task.long_polling_timeout, -1);
 
     assert!(task.report_arg.is_empty());
     assert!(task.channel_name.is_empty());
@@ -45,7 +50,8 @@ fn the_constructor_fills_in_the_cpp_defaults() {
     assert_eq!(task.max_minorlinks, 0);
     assert!(task.function.is_empty());
     assert!(task.cgi_prefix.is_empty());
-    assert_eq!(task.redirect_type, HostRedirectType::None);
+    // `stn.cc:62`: the `3` of the enum, and not the `0` of "it was not"
+    assert_eq!(task.redirect_type, HostRedirectType::NewHost);
     assert_eq!(task.client_sequence_id, 0);
 }
 
@@ -123,5 +129,5 @@ fn a_short_link_task_is_built_up_from_the_defaults() {
     assert_eq!(clone.headers.len(), 2);
     assert_eq!(clone.redirect_type, HostRedirectType::HttpToHttps);
     assert_ne!(clone, Task::new(1, 2));
-    assert_eq!(HostRedirectType::default(), HostRedirectType::None);
+    assert_eq!(HostRedirectType::default(), HostRedirectType::NewHost);
 }
