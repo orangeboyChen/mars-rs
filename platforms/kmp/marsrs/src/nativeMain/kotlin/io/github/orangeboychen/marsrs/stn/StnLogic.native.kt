@@ -304,11 +304,21 @@ internal class AppBox(private val ask: (Question) -> Answer) {
         // the pipeline is told nothing was answered at all.
         val answered = try {
             ask(question.toQuestion())
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
             Answer.None
         }
-        write(answered, out)
+        try {
+            write(answered, out)
+        } catch (e: Throwable) {
+            // The half that allocates is this one, and what it catches is a
+            // `Throwable` and not an `Exception`: `held.strings` and
+            // `held.bytes` take `nativeHeap.allocArray`, and what that throws
+            // when there is nothing left to give is an `OutOfMemoryError`,
+            // which is an `Error`. What the struct holds then is what `write`
+            // put into it first, which is nothing answered at all.
+            e.printStackTrace()
+        }
     }
 
     fun dispose() {

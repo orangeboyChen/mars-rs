@@ -260,8 +260,16 @@ public actual class Xlog actual constructor(config: XlogConfig) {
          * opened with: what tells an [Xlog] that the appender it shares with
          * another [Xlog] of the same [namePrefix] has been closed, which the
          * handle alone cannot — `marsrs-jni` answers both with the same one.
+         *
+         * `internal`, because what [openHandle] trusts it to say is whether the
+         * appender of this [Xlog] is still its own, and a caller that cleared
+         * it or wrote a `0` into it would take every setter to an
+         * `IllegalStateException`, `log` to writing nothing, and `close` to
+         * skipping the release. The other `actual` keeps no table at all:
+         * there, the registry behind `mars_xlog_get_instance` is the answer,
+         * and it is not reachable from Kotlin.
          */
-        val openHandles: ConcurrentHashMap<String, Long> = ConcurrentHashMap()
+        internal val openHandles: ConcurrentHashMap<String, Long> = ConcurrentHashMap()
 
         /** The handle `marsrs-jni` answers for an appender it did not open. */
         const val NO_HANDLE = 0L

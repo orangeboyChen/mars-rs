@@ -25,6 +25,7 @@ import io.github.orangeboychen.marsrs.net.ffi.mars_sdt_take_report
 import kotlin.concurrent.Volatile
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.native.ThreadLocal
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.CPointer
@@ -93,10 +94,18 @@ public actual object SdtLogic {
     private val pending = AtomicReference<List<String>>(emptyList())
 
     /**
-     * Whether a run of the checks is in flight, which is what refuses a second
-     * one: see [runChecks], where the refusal is and where the reason is.
+     * Whether the thread this is read on is inside a run of the checks, which
+     * is what refuses a second one: see [runChecks], where the refusal is and
+     * where the reason is.
+     *
+     * One flag per thread and not one flag for the whole process: what has to
+     * be refused is the run a *probe* of a run asks for, which is a run the
+     * thread asking is already inside, and a run another thread asks for is
+     * not that one — it is a run the C ABI makes wait behind the first, which
+     * is what the other `actual` does with its own lock as well.
      */
-    private val running = AtomicReference(false)
+    @ThreadLocal
+    private var running = false
 
     /** What [SdtLogic]'s own KDoc says, which is where the words are. */
     public actual fun interface ICallBack {
@@ -171,18 +180,16 @@ public actual object SdtLogic {
         // below this takes the probe away from the run that is still asking it.
         //
         // Android's `actual` asks `Thread.holdsLock` for the same thing, which
-        // is a question about one thread: there is no `synchronized` and no
-        // reentrant lock on Kotlin/Native, and nothing here answers which
-        // thread a call came from, so this is one flag for the whole process.
-        // What a second thread pays for that is a `false` where it would have
-        // waited: the diagnosis is one process-wide value, so the run it was
-        // refused would have run the request the first one already ran.
-        if (!running.compareAndSet(false, true)) {
+        // is a question about one thread: the flag above is one per thread, so
+        // the run a second thread asks for is not refused, it waits behind the
+        // first the way it does there.
+        if (running) {
             return false
         }
         val box = ProbeBox(probe)
         val reference = StableRef.create(box)
         return try {
+            running = true
             val ran = mars_sdt_run_checks(
                 reference.asCPointer(),
                 staticCFunction(::probed),
@@ -208,15 +215,20 @@ public actual object SdtLogic {
                 // exception of its own, so the two seams answer the app with
                 // the answer of the run and not with a throw of its callback.
                 // Printed and not rethrown, the way a probe that threw is.
+                // An `Error` of the app's is caught as well and not only an
+                // `Exception`: what an uncaught one does on Kotlin/Native is
+                // end the process, and the frame this is called from has
+                // nothing above it to catch it — the run is over either way,
+                // and the report of it was put by before this was called.
                 try {
                     callBack?.reportSignalDetectResults(report)
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     e.printStackTrace()
                 }
             }
             ran == MARS_SDT_OK
         } finally {
-            running.value = false
+            running = false
             reference.dispose()
             box.dispose()
         }
