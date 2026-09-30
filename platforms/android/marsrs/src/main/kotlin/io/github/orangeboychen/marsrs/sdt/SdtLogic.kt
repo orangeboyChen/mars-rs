@@ -291,8 +291,9 @@ object SdtLogic {
      * nobody has set one.
      *
      * The report reaches the app the way it always does: [ICallBack], which the
-     * run calls once it is over. [takeReport] hands the same document over to an
-     * app that would rather ask for it.
+     * run calls once it is over, with one document of that one run. An app that
+     * would rather ask for it finds the same results in [takeReport], which
+     * answers with one document for every run since it was last asked.
      *
      * A second run waits for the first: the diagnosis is one process-wide value,
      * so this call does not come back while another thread is inside it.
@@ -336,17 +337,29 @@ object SdtLogic {
     private external fun nativeRunChecks(networkType: Int): Boolean
 
     /**
-     * The JSON of everything the checks have reported since the last call — the
-     * same document [ICallBack] was handed — or `null` when there was nothing
-     * to take. Taking it empties it: the next call reports what happened since.
+     * The JSON of everything the checks have reported since the last call, or
+     * `null` when there was nothing to take. Taking it empties it: the next
+     * call reports what happened since.
+     *
+     * It is one document however many runs it took, and [ICallBack] is handed
+     * one document per run — so two runs since the last call are two entries
+     * of this one's `details`, and not either of the two the callback got.
      */
     @JvmStatic
     external fun takeReport(): String?
 
     /**
      * A diagnosis made again from nothing: the check in flight, the plan it was
-     * running and every result waiting to be taken. The callback and the CGI
-     * are not: they are the caller's.
+     * running, every result waiting to be taken, and the URI
+     * [setHttpNetcheckCGI] set.
+     *
+     * The URI goes with it because it is the diagnosis on the native side that
+     * keeps it, and this throws the whole of that away: [httpNetcheckCGI]
+     * answers `null` afterwards, and an app that wants the HTTP check to go
+     * where it went before has to set it again.
+     *
+     * The callback does not: it is a field of this object, and a run after a
+     * reset still reports to it.
      */
     @JvmStatic
     external fun reset()
