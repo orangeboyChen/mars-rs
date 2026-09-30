@@ -218,7 +218,8 @@ public:
           currentMode_(other.currentMode_),
           consoleLogEnabled_(other.consoleLogEnabled_),
           maxFileSizeBytes_(other.maxFileSizeBytes_),
-          maxAliveTimeSeconds_(other.maxAliveTimeSeconds_) {
+          maxAliveTimeSeconds_(other.maxAliveTimeSeconds_),
+          flushing_(std::move(other.flushing_)) {
         other.handle_ = 0;
     }
 
@@ -231,6 +232,7 @@ public:
             consoleLogEnabled_ = other.consoleLogEnabled_;
             maxFileSizeBytes_ = other.maxFileSizeBytes_;
             maxAliveTimeSeconds_ = other.maxAliveTimeSeconds_;
+            flushing_ = std::move(other.flushing_);
             other.handle_ = 0;
         }
         return *this;
@@ -411,9 +413,20 @@ public:
             return done.get_future();
         }
         const long long handle = handle_;
-        return std::async(std::launch::async, [handle] {
+        std::promise<void> drained;
+        std::future<void> awaited = drained.get_future();
+        // Two futures over one drain: the caller's, and the shared one this
+        // object keeps so that `close()` can wait for it too. A `std::future`
+        // is one waiter's, and `close()` is a second, and the drain needs a
+        // second because the handle it was handed is a number and not a claim
+        // on the appender behind it — a release that lands first turns the
+        // drain into a no-op whose future still says the records are on the
+        // disk.
+        flushing_ = std::async(std::launch::async, [handle, drained = std::move(drained)]() mutable {
             mars_xlog_flush_now_instance(handle);
-        });
+            drained.set_value();
+        }).share();
+        return awaited;
     }
 
     /** Closes this appender: drains what is left and drops it. Writing through
@@ -426,6 +439,16 @@ public:
      * here reaches nothing at all — every member is a no-op — so there is no
      * exception to catch, and a destructor closes without one. */
     void close() {
+        // A drain this object started is waited for before the appender goes:
+        // what the drain was handed is the handle's number, so a release that
+        // lands first leaves it flushing an id no appender answers — a silent
+        // no-op, and ids are never reused, so nothing flushes those records
+        // later either. Handing `close()` the caller's future would not do:
+        // one future is one waiter's, and the caller may have dropped theirs.
+        if (flushing_.valid()) {
+            flushing_.wait();
+            flushing_ = std::shared_future<void>();
+        }
         if (!isOpen()) {
             return;
         }
@@ -559,6 +582,12 @@ private:
     bool consoleLogEnabled_;
     std::uint64_t maxFileSizeBytes_;
     std::int64_t maxAliveTimeSeconds_;
+
+    /// The drain `flush()` started and has not been waited for. Kept shared
+    /// because two parties wait for it — the caller of `flush()`, and
+    /// `close()`, which cannot take the caller's future and must not release
+    /// the appender out from under the drain.
+    std::shared_future<void> flushing_;
 };
 
 }  // namespace xlog
