@@ -292,13 +292,22 @@ internal final class Xlog: NSObject {
     /// part of the app opened after this one was closed would be theirs and
     /// would be closed by this. Naming the handle is what makes the question
     /// and the release one call.
+    ///
+    /// Off the JS thread, the way `flush` is: a method codegen answers no
+    /// promise from is a call made on the JS thread, and a release is a drain
+    /// of everything the appender still holds and a write of the banner that
+    /// ends the file. The handle is taken out of `handles` here and not in the
+    /// block, so a reopen of the prefix that lands while the drain is queued
+    /// is a reopen of an appender this close never held.
     @objc(close:)
     internal func close(_ namePrefix: String) {
         guard let handle = handles.removeValue(forKey: namePrefix) else {
             return
         }
-        namePrefix.withCString { prefix in
-            mars_xlog_release_instance_of(prefix, handle)
+        Self.flushQueue.async {
+            namePrefix.withCString { prefix in
+                mars_xlog_release_instance_of(prefix, handle)
+            }
         }
     }
 

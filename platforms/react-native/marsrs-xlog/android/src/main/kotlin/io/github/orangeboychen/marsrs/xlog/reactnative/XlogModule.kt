@@ -224,9 +224,27 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
         appender(namePrefix)?.maxAliveTimeSeconds = native
     }
 
-    /** `Xlog.close`: releases the appender `open` made. */
+    /**
+     * `Xlog.close`: releases the appender `open` made.
+     *
+     * A method that answers no promise is a call codegen makes on the JS
+     * thread, and `Xlog.close` is a drain of everything the appender is still
+     * holding and a write of the banner that ends the file — so this one is
+     * handed to the queue, the way [flush] is, and the JS thread is free again
+     * at once.
+     *
+     * Taken out of [appenders] here and not on the queue: a reopen of the
+     * prefix that lands while the drain is queued is otherwise an appender
+     * this close never held. What a queue that was shut down already means is
+     * that [closeAll] ran, and with it this close.
+     */
     override fun close(namePrefix: String) {
-        appenders.remove(namePrefix)?.close()
+        val appender = appenders.remove(namePrefix) ?: return
+        try {
+            flushQueue.execute { appender.close() }
+        } catch (e: RejectedExecutionException) {
+            appender.close()
+        }
     }
 
     /**
