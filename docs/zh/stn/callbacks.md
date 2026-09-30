@@ -58,10 +58,14 @@ api 没有对应的方法，于是 STN 用自己的答案 —— 外加一个它
 `reportTaskLimited` 是唯一一个只问闸门拦下的任务的问题：每个要发出去的
 任务都要过两道防雪崩闸门，闸门拦下的那个根本到不了队列，所以 App 在别的事情里都听
 不到它。App 拿到的是拦下它的那道闸门，以及那道闸门量出来的数 —— 同一份 body 多久
-之前发过，或者 funnel 装不下的那几个字节；App 回答的也是这个数，改没改过，它最后
-都记在任务的 profile 上。这个数在问题上是 `limit`，共享 Kotlin 和 Swift 用
-`Answer.Limit` 和 `.limit(…)` 把它交回去；C 里它是 `MarsStnQuestion` 的 `limit`
-和一个 `MarsStnAnswerLimit`。任务走的是哪条连接，见[长连接](/zh/stn/long-link)。
+之前发过，或者 funnel 装不下的那几个字节；App 回答的也是这个数，改没改过。这个数在
+问题上是 `limit`，共享 Kotlin 和 Swift 用 `Answer.Limit` 和 `.limit(…)` 把它交回
+去；C 里它是 `MarsStnQuestion` 的 `limit` 和一个 `MarsStnAnswerLimit`。
+
+这个回答是「报告」，不是「放行」：上游那个是 `void`，闸门拦下的决定不因 App 往里写
+了什么而改变 —— 被拦下的任务还是被拦下，最后以 `LOCAL_ANTI_AVALANCHE` 收场。本端口
+拿这个回答什么也没做，两件事是一件事：`anti_avalanche_check` 问完就丢掉，所以没有哪
+个 App 的回答能让一个被拦下的任务出去。任务走的是哪条连接，见[长连接](/zh/stn/long-link)。
 
 账号和设备不在这十八个里：Android 上它们是 `AppLogic.ICallBack`，其余平台上 STN
 根本不问它们。

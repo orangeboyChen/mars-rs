@@ -64,10 +64,16 @@ two anti-avalanche gates weigh every task that goes out, and a task they refuse
 never reaches a queue, so nothing else the app hears carries it. What the app is
 handed is which gate refused it and the reading it weighed the task against —
 how long ago the same body went out, or how many bytes the funnel would not
-take — and what it answers is that reading, changed or not, which is what ends
-up on the task's profile. The reading is `limit` on the question, and
-`Answer.Limit` or `.limit(…)` is how the shared Kotlin and Swift hand it back;
-in C it is the `limit` of `MarsStnQuestion` and a `MarsStnAnswerLimit`.
+take — and what it answers is that reading, changed or not. The reading is
+`limit` on the question, and `Answer.Limit` or `.limit(…)` is how the shared
+Kotlin and Swift hand it back; in C it is the `limit` of `MarsStnQuestion` and a
+`MarsStnAnswerLimit`.
+
+That answer is a report and not an override: the C++'s own is `void`, and a
+gate's refusal stands whatever an app writes into it — a task the gates refused
+stays refused and ends with `LOCAL_ANTI_AVALANCHE`. What the port does with the
+answer is nothing at all, which is the same thing: `anti_avalanche_check` asks
+and drops it, so no answer of an app's lets a refused task out.
 See [the long link](/stn/long-link) for the link a task goes out on.
 
 The account and the device are not one of the eighteen: on Android they are
