@@ -132,4 +132,12 @@ for entry in "${abis[@]}"; do
     }
 done
 
+# `find` answers 0 for a tree with no `.so` in it and so does `sort`, so an
+# output directory the loop above never wrote to is a script that passed. What
+# says the three are there is the count and not the exit of either.
+count="$(find "$out" -name '*.so' | wc -l | tr -d ' ')"
+[ "$count" -eq "${#abis[@]}" ] || {
+    echo "::error::$out holds $count .so and not ${#abis[@]}"
+    exit 1
+}
 find "$out" -name '*.so' | sort
