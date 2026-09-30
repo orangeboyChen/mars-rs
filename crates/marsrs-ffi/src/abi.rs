@@ -323,6 +323,11 @@ pub unsafe extern "C" fn mars_xlog_new_instance(
 
 /// The handle registered for `name_prefix`, or `0` when there is none.
 ///
+/// The prefix is read the way [`mars_xlog_new_instance`] read the one it
+/// registered — lossily — so one that is not UTF-8 names the appender it
+/// opened. Read as text, the whole of such a prefix is `""`, which is no
+/// prefix at all: an appender that was open was answered with `0`.
+///
 /// # Safety
 ///
 /// `name_prefix` must be null, or a NUL-terminated C string that stays alive for the duration of
@@ -330,13 +335,18 @@ pub unsafe extern "C" fn mars_xlog_new_instance(
 #[no_mangle]
 pub unsafe extern "C" fn mars_xlog_get_instance(name_prefix: *const c_char) -> c_longlong {
     guard(0, || {
-        // SAFETY: null is reported as an empty string by the helper.
-        let prefix = unsafe { cstr::ptr_to_str_or_empty(name_prefix) };
-        marsrs_appender::get_xlogger_instance(prefix) as c_longlong
+        // SAFETY: null is reported as an empty prefix by the helper.
+        let prefix = unsafe { cstr::ptr_to_string_lossy(name_prefix) };
+        marsrs_appender::get_xlogger_instance(&prefix) as c_longlong
     })
 }
 
 /// Releases the instance registered for `name_prefix` and closes its appender.
+///
+/// The prefix is read the way the open read it, so an appender whose prefix is
+/// not UTF-8 is one this closes: read as text, the whole of such a prefix is
+/// `""`, and the appender — its mmap, its files and its writer — stayed open
+/// for as long as the process did.
 ///
 /// # Safety
 ///
@@ -345,9 +355,9 @@ pub unsafe extern "C" fn mars_xlog_get_instance(name_prefix: *const c_char) -> c
 #[no_mangle]
 pub unsafe extern "C" fn mars_xlog_release_instance(name_prefix: *const c_char) {
     let _ = guard(0, || {
-        // SAFETY: null is reported as an empty string by the helper.
-        let prefix = unsafe { cstr::ptr_to_str_or_empty(name_prefix) };
-        marsrs_appender::release_xlogger_instance(prefix);
+        // SAFETY: null is reported as an empty prefix by the helper.
+        let prefix = unsafe { cstr::ptr_to_string_lossy(name_prefix) };
+        marsrs_appender::release_xlogger_instance(&prefix);
         0
     });
 }

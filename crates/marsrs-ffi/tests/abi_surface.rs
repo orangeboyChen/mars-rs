@@ -66,6 +66,48 @@ fn make_config(dir: &std::path::Path, mode: c_int, compress: c_int) -> ConfigBun
     }
 }
 
+/// A prefix is a name and not text, so one that is not UTF-8 is kept — with
+/// U+FFFD for the byte that is not — and the appender is registered under it.
+/// The lookup and the release have to read it the same way: read as a `&str`,
+/// the whole of such a prefix is `""`, so a caller found no appender where it
+/// had just opened one and never closed it.
+#[test]
+fn a_prefix_that_is_not_utf8_is_the_one_the_appender_was_opened_with() {
+    let _guard = serial();
+    let dir = tempdir("lossy-prefix");
+    let log_dir = CString::new(dir.to_str().unwrap()).unwrap();
+    let pub_key = CString::new("").unwrap();
+    let prefix = CString::new([b'a', b'p', b'p', 0xff, b'n', b'a', b'm', b'e']).unwrap();
+    let raw = MarsXLogConfig {
+        mode: 0,
+        log_dir: log_dir.as_ptr(),
+        name_prefix: prefix.as_ptr(),
+        pub_key: pub_key.as_ptr(),
+        compress_mode: 0,
+        compress_level: 0,
+        cache_dir: std::ptr::null(),
+        cache_days: 0,
+    };
+
+    let handle = unsafe { mars_xlog_new_instance(&raw, 0) };
+    assert!(handle > 0, "an instance is a handle");
+    assert_eq!(
+        unsafe { mars_xlog_get_instance(prefix.as_ptr()) },
+        handle,
+        "the prefix it was opened with names it"
+    );
+
+    unsafe {
+        mars_xlog_release_instance(prefix.as_ptr());
+    }
+    assert_eq!(
+        unsafe { mars_xlog_get_instance(prefix.as_ptr()) },
+        0,
+        "and it is the one that closed it"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_new_instance_refuses_a_bad_config_before_touching_the_disk() {
     let _guard = serial();
