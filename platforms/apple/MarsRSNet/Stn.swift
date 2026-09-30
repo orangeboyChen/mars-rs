@@ -326,13 +326,13 @@ public final class MarsStn: NSObject {
     /// `StopTask` — whether it was one of ours.
     @objc
     public static func stop(taskID: UInt32) -> Bool {
-        mars_stn_stop_task(taskID) != 0
+        isYes(mars_stn_stop_task(taskID))
     }
 
     /// `HasTask` — whether the task is in one of the queues.
     @objc
     public static func hasTask(_ taskID: UInt32) -> Bool {
-        mars_stn_has_task(taskID) != 0
+        isYes(mars_stn_has_task(taskID))
     }
 
     /// `RedoTask` — every task that is out is run again.
@@ -356,7 +356,7 @@ public final class MarsStn: NSObject {
     /// `MakesureLongLinkConnected` — whether there was a default link to connect.
     @objc
     public static func makeSureLongLinkConnected() -> Bool {
-        mars_stn_makesure_longlink_connected() != 0
+        isYes(mars_stn_makesure_longlink_connected())
     }
 
     /// `MakesureLonglinkConnected_ext` — the link `name` was made with is asked
@@ -370,14 +370,14 @@ public final class MarsStn: NSObject {
     /// `kConnected` and nothing else, so one that is still connecting is not.
     @objc
     public static func isLongLinkConnected() -> Bool {
-        mars_stn_longlink_is_connected() != 0
+        isYes(mars_stn_longlink_is_connected())
     }
 
     /// `LongLinkIsConnected_ext` — whether the link `name` was made with is up,
     /// `false` for a name no link has.
     @objc
     public static func isLongLinkConnected(name: String) -> Bool {
-        name.withCString { mars_stn_longlink_is_connected_ext($0) != 0 }
+        name.withCString { isYes(mars_stn_longlink_is_connected_ext($0)) }
     }
 
     /// `DisableLongLink` — no task goes out on a long link again, and only
@@ -412,7 +412,7 @@ public final class MarsStn: NSObject {
     @objc
     @discardableResult
     public static func destroyLongLink(_ name: String) -> Bool {
-        name.withCString { mars_stn_destroy_longlink($0) != 0 }
+        name.withCString { isYes(mars_stn_destroy_longlink($0)) }
     }
 
     /// `MarkMainLonglink_ext` — the link of that name is the one whose errors
@@ -424,7 +424,7 @@ public final class MarsStn: NSObject {
     @objc
     @discardableResult
     public static func markMainLongLink(_ name: String) -> Bool {
-        name.withCString { mars_stn_mark_main_longlink($0) != 0 }
+        name.withCString { isYes(mars_stn_mark_main_longlink($0)) }
     }
 
     /// `SetSignallingStrategy` — for every keeper in the process. A period or a
@@ -539,6 +539,17 @@ public final class MarsStn: NSObject {
     /// and the class is what lets Objective-C write them.
     override private init() {
         super.init()
+    }
+
+    /// Whether the `1` or `0` a symbol of `mars_stn.h` answered was `1`.
+    ///
+    /// `> 0` and not `!= 0`, because every one of them answers
+    /// `MARS_STN_ERR_PANIC` — `-1` — when a panic was caught inside the call,
+    /// and `!= 0` reads that panic as a yes: a task that was stopped, a link
+    /// that is up, a link that is destroyed, when the call never reached the
+    /// net core at all.
+    private static func isYes(_ answer: Int32) -> Bool {
+        answer > 0
     }
 
     /// What guards [`installed`], and with it the read-modify-write [`setApp`]
