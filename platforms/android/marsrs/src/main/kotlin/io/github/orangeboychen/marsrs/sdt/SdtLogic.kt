@@ -299,10 +299,12 @@ object SdtLogic {
      *
      * @param networkType what `PlatformComm.getNetInfo` answers
      * @param probe the four probes, asked while this runs and not after
-     * @return `false` when there was no check in flight, when the one there was
-     *     got cancelled before its first check, and when this call was made
-     *     from inside a run of it — which is what a probe or the callback that
-     *     starts a second one is answered with, rather than with a second run
+     * @return `false` when no check recorded anything — there was no check in
+     *     flight, the one there was got cancelled before its first check, or
+     *     the checks it planned had nothing to check — and when this call was
+     *     made from inside a run of it, which is what a probe or the callback
+     *     that starts a second one is answered with, rather than with a second
+     *     run
      */
     @JvmStatic
     fun runChecks(networkType: Int, probe: IProbe): Boolean {

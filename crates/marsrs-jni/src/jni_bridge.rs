@@ -2191,9 +2191,10 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_plan<'lo
 /// back until every probe of every planned check has answered, and it holds the
 /// process-wide diagnosis for as long.
 ///
-/// `false` when there was no check in flight, or when the one there was got
-/// cancelled before its first check — which is what `MARS_SDT_ERR_NO_CHECK` is
-/// in the C ABI.
+/// `false` when no check recorded anything: there was no check in flight, the
+/// one there was got cancelled before its first check, or the checks it planned
+/// had nothing to check — which is what `MARS_SDT_ERR_NO_CHECK` is in the C
+/// ABI.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_nativeRunChecks<'local>(
     _env: EnvUnowned<'local>,

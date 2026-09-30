@@ -259,9 +259,11 @@ pub fn run_active_check_with_net_info_impl(ask: &mut Ask) -> Vec<CheckResultProf
 /// that asks the diagnosis about itself from inside its answer waits for that
 /// lock on the thread holding it; see [`run_active_check_impl`].
 ///
-/// `false` when nothing was in flight, and when the one that was got cancelled
-/// before its first check: a run that answered nothing is a run that reported
-/// nothing, which is what `MARS_SDT_ERR_NO_CHECK` is in the C ABI.
+/// `false` when no check recorded anything: nothing was in flight, the one
+/// that was got cancelled before its first check, or the checks it planned had
+/// nothing to check — a link that was given no hosts. A run that answered
+/// nothing is a run that reports nothing, which is what
+/// `MARS_SDT_ERR_NO_CHECK` is in the C ABI.
 pub fn run_checks_java_impl(network_type: i32) -> bool {
     let mut ask = Ask::new(crate::jni_bridge::ask_probe);
     let results = run_active_check_impl(&mut ask, network_type);

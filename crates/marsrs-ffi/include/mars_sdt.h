@@ -73,7 +73,7 @@ extern "C" {
 #define MARS_SDT_ERR_NO_SPACE (-3)   /* output buffer too small (0 or < need) */
 #define MARS_SDT_ERR_NO_PROBE (-4)   /* `mars_sdt_run_checks` got no probe    */
 #define MARS_SDT_ERR_BUSY (-5)       /* a check is already in flight          */
-#define MARS_SDT_ERR_NO_CHECK (-6)   /* nothing is in flight, so nothing ran  */
+#define MARS_SDT_ERR_NO_CHECK (-6)   /* no check recorded anything           */
 #define MARS_SDT_ERR_BAD_ARG (-7)    /* the arguments cannot start a check    */
 
 /* --- the bits a mode is made of ------------------------------------------ */
@@ -230,6 +230,11 @@ unsigned int mars_sdt_plan(MarsSdtCheck* out, unsigned int cap);
  * `probe` may be NULL, which is reported as MARS_SDT_ERR_NO_PROBE; the request
  * in flight is cancelled, so the next MARS_SDT_START is taken rather than
  * answered MARS_SDT_ERR_BUSY for the life of the process.
+ *
+ * MARS_SDT_ERR_NO_CHECK is what a run that recorded nothing answers — nothing
+ * was in flight, the request was cancelled before its first check, or the
+ * checks it planned had nothing to check — and not "the run failed": the
+ * request is over and the report for it is an empty one.
  * `network_type` is the `comm::getNetInfo()` every check writes into its
  * profiles, which is the platform's to answer.
  *

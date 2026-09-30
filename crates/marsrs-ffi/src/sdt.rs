@@ -54,7 +54,11 @@ pub const MARS_SDT_ERR_NO_PROBE: c_int = -4;
 /// A check is already in flight, which is what `StartActiveCheck` answers
 /// `false` for.
 pub const MARS_SDT_ERR_BUSY: c_int = -5;
-/// There is no check in flight, so there is nothing to run.
+/// No check recorded anything: nothing was in flight, the request in flight
+/// was cancelled before its first check, or the checks it planned had nothing
+/// to check — a mode that asks for a link that was given no hosts. The run is
+/// over either way, and the report is an empty one, so this is not a code a
+/// caller retries.
 pub const MARS_SDT_ERR_NO_CHECK: c_int = -6;
 /// What the caller handed [`mars_sdt_start_active_check`] cannot start a
 /// check at all: a hosts array that promises `count` hosts behind a null
@@ -497,7 +501,8 @@ pub unsafe extern "C" fn mars_sdt_plan(out: *mut MarsSdtCheck, cap: c_uint) -> c
 ///
 /// @return [`MARS_SDT_OK`], or [`MARS_SDT_ERR_NO_PROBE`] — `probe` was null, so
 /// nothing was asked and the request in flight was cancelled —
-/// [`MARS_SDT_ERR_NO_CHECK`] (nothing was in flight, so nothing ran) or
+/// [`MARS_SDT_ERR_NO_CHECK`] — see the constant: no check recorded anything,
+/// which is not the same as nothing having run — or
 /// [`MARS_SDT_ERR_PANIC`].
 ///
 /// # Safety
