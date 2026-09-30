@@ -355,7 +355,10 @@ impl LongLinkConnectMonitor {
     }
 
     /// `__OnSignalActive(_isactive)` — the app became active, or stopped being
-    /// it, and only the first of the two is a reason to touch the alarms.
+    /// it. The C++ does not look at the flag at all: `__AutoIntervalConnect`
+    /// runs on both edges (`longlink_connect_monitor.cc:401`). The port asks
+    /// for the link again only on the edge that became active, and the reason
+    /// is below.
     pub fn on_active_changed(&mut self, is_active: bool) {
         self.on_active_changed_at(marsrs_comm::tickcount::gettickcount(), is_active)
     }
@@ -374,8 +377,10 @@ impl LongLinkConnectMonitor {
     /// had armed, which `__AutoIntervalConnect` cancels and replaces with
     /// a rebuild up to ten minutes out.
     ///
-    /// `__OnSignalForeground` above is left alone: that is the one the C++
-    /// does not condition on its flag.
+    /// `__OnSignalForeground` above is the one the C++ reads its own flag in,
+    /// and only under `__APPLE__`: a socket that has had nothing to send for
+    /// four and a half minutes is closed there, and then, flag or no flag, the
+    /// alarms are recomputed the same way.
     pub fn on_active_changed_at(&mut self, now: u64, is_active: bool) {
         if self.is_svr_trig_off() {
             return;
@@ -1174,6 +1179,33 @@ mod tests {
         assert_eq!(monitor.status(), LongLinkStatus::DisConnected);
         assert_eq!(monitor.last_connect_time(), 0);
         assert_eq!(monitor.last_connect_net_type(), NO_NET);
+    }
+
+    /// The one edge the port drops: the C++ recomputes on both
+    /// (`longlink_connect_monitor.cc:401`), and this is the reason it does not
+    /// — see [`LongLinkConnectMonitor::on_active_changed_at`].
+    #[test]
+    fn only_becoming_active_is_a_reason_to_ask_for_the_link_again() {
+        let (mut monitor, calls) = a_monitor();
+
+        monitor.on_active_changed_at(0, false);
+        assert_eq!(
+            monitor.rebuild_due_time(),
+            None,
+            "the edge that stopped being active arms nothing"
+        );
+        assert_eq!(monitor.wake_due_time(), None);
+
+        monitor.on_active_changed_at(0, true);
+        assert_eq!(
+            monitor.rebuild_due_time(),
+            Some(15_000),
+            "the short wait of the active-and-foreground column of `INTERVALS`"
+        );
+        assert!(
+            calls.lock().unwrap_or_else(|e| e.into_inner()).is_empty(),
+            "and a rebuild that is a minute out connects nothing yet"
+        );
     }
 
     #[test]
