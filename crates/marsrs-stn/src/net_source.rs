@@ -1648,6 +1648,7 @@ mod tests {
         assert!(source.ipport_strategy().ban_list().is_empty());
 
         source.init_history_to_banned_list();
-        assert!(format!("{source:?}").contains("NetSource"));
+        assert!(format!("{source:?}").contains("\"other.example\""));
+        assert!(format!("{source:?}").contains("ipv6_enabled: false"));
     }
 }

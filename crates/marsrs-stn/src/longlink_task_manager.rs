@@ -3373,6 +3373,7 @@ mod tests {
         // twice.
         assert_eq!(manager.task_count(CHANNEL), 1);
         assert_eq!(manager.task_count("long.other.qq.com"), 0);
-        assert!(format!("{manager:?}").contains("LongLinkTaskManager"));
+        assert!(format!("{manager:?}").contains("tasks: 1"));
+        assert!(format!("{manager:?}").contains("channels: 1"));
     }
 }

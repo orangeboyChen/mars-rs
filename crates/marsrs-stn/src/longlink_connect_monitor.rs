@@ -1182,7 +1182,8 @@ mod tests {
         assert!(!monitor.is_keep_alive());
         assert_eq!(monitor.status(), LongLinkStatus::DisConnected);
         assert_eq!(monitor.last_connect_net_type(), NO_NET);
-        assert!(format!("{monitor:?}").contains("LongLinkConnectMonitor"));
+        assert!(format!("{monitor:?}").contains("status: DisConnected"));
+        assert!(format!("{monitor:?}").contains("is_keep_alive: false"));
 
         // inactive and with no account, so the ladder decides — and the first
         // rung of it is a minute from now

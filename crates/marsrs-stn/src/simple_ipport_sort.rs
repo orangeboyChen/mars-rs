@@ -1190,7 +1190,10 @@ mod tests {
         let mut sort = SimpleIpPortSort::default();
         assert!(sort.records().is_empty());
         assert!(sort.ban_list().is_empty());
-        assert!(format!("{sort:?}").contains("SimpleIpPortSort"));
+        assert_eq!(
+            format!("{sort:?}"),
+            "SimpleIpPortSort { records: 0, ban_fail_list: 0, server_bans: 0 }"
+        );
         // and it is usable without a host at all
         let items = vec![IpPortItem::new("1.2.3.4", 80)];
         let items = sort.sort_and_filter(items, 10, false);

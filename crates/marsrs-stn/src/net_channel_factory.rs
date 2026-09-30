@@ -128,7 +128,6 @@ mod tests {
     #[test]
     fn the_default_factory_is_mars_s_own() {
         let mut factory = ChannelFactory::default();
-        assert!(format!("{factory:?}").contains("ChannelFactory"));
         let config = LonglinkConfig::new("long.weixin.qq.com");
         assert_eq!(
             factory.create_longlink(&config).config().group,

@@ -994,6 +994,7 @@ mod tests {
         let mut test = LongLinkSpeedTest::new([pair("1.1.1.1", 80)]);
         assert_eq!(test.fastest(), None);
         assert_eq!(test.round(&[SocketEvent::Writable], 0), vec![Need::Nothing]);
-        assert!(format!("{test:?}").contains("LongLinkSpeedTest"));
+        // one candidate, and no host to open a socket for it
+        assert!(format!("{test:?}").contains("open_sockets: 0"));
     }
 }

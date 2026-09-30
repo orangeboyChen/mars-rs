@@ -620,6 +620,9 @@ mod tests {
         assert!(!check.try_connect_at(0));
         check.cancel_connect();
         check.stop_check();
-        assert!(format!("{check:?}").contains("NetSourceTimerCheck"));
+        // and what `__StopCheck` leaves alone: a check that was never in
+        // flight keeps its period armed
+        assert!(format!("{check:?}").contains("testing: false"));
+        assert!(check.period_due().is_some());
     }
 }
