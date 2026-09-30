@@ -162,6 +162,14 @@ class Xlog {
   /// what either mirror reads.
   static final Map<String, Xlog> _opened = <String, Xlog>{};
 
+  /// The [open] of a prefix that has not answered yet, and what a second [open]
+  /// of that prefix is answered with: the channel call below is an await, so an
+  /// [open] that ran in it read a map the first had not written to yet and
+  /// opened the prefix again — one appender, two [Xlog]s, and the second
+  /// displacing the first in [_opened], which is then the one [close] releases
+  /// while the app still writes through the one it was handed.
+  static final Map<String, Future<Xlog>> _opening = <String, Future<Xlog>>{};
+
   /// What every file of this appender starts with, and what it is known by.
   final String namePrefix;
 
@@ -197,6 +205,21 @@ class Xlog {
   /// not one any mirror of the appender may read. [close] the one you were
   /// given before you open the prefix again.
   static Future<Xlog> open(XlogConfig config) async {
+    final prefix = config.effectiveNamePrefix;
+    final opening = _opening[prefix];
+    if (opening != null) {
+      return opening;
+    }
+    final pending = _open(config);
+    _opening[prefix] = pending;
+    try {
+      return await pending;
+    } finally {
+      _opening.remove(prefix);
+    }
+  }
+
+  static Future<Xlog> _open(XlogConfig config) async {
     final prefix = config.effectiveNamePrefix;
     final opened = _opened[prefix];
     if (opened != null) {
