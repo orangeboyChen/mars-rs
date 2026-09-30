@@ -49,7 +49,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll, Waker};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::stn_callback_bridge::CgiProfile;
 use crate::task_profile::ErrCmdType;
@@ -352,9 +352,11 @@ impl Ends {
 /// for an app that awaits a task and has no loop — it is started by
 /// [`Driver::spawn`] and stops when the [`Driver`] is dropped.
 ///
-/// The thread sleeps the delay [`StnLogic::due_delay`] answers and drains the
-/// queues when it is up, in slices short enough that a dropped driver is
-/// noticed before it is waited for.
+/// The thread drains the queues at the end of every slice, and not at the
+/// delay [`StnLogic::due_delay`] answers, which is the number a *host*
+/// schedules a run loop of its own with: how long it may wait is what that
+/// delay says, and a host that is woken before it is up is a host that comes
+/// back early. Nothing wakes this thread, so see [`drain`].
 #[derive(Debug)]
 pub struct Driver {
     stop: Arc<std::sync::atomic::AtomicBool>,
@@ -408,18 +410,25 @@ const SLICE_MS: u64 = 20;
 
 fn drain(logic: &Arc<Mutex<StnLogic>>, stop: &AtomicBool) {
     while !stop.load(Ordering::Relaxed) {
-        let wait = {
+        {
             let mut logic = locked(logic);
             logic.run_pending();
-            // nothing to wait for is not nothing to do: a task another thread
-            // started is a queue with a pass due in it, and there is no waker
-            // to hear about it, so the driver looks again
-            logic.due_delay().unwrap_or(SLICE_MS)
-        };
-        let until = Instant::now() + Duration::from_millis(wait);
-        while Instant::now() < until && !stop.load(Ordering::Relaxed) {
-            std::thread::sleep(Duration::from_millis(SLICE_MS));
         }
+        // A pass at the end of every slice, and not at the delay
+        // [`StnLogic::due_delay`] answers. That delay is the earliest alarm
+        // the queues have armed — a first-package timeout, a retry, the next
+        // heartbeat — and an alarm is not when there is work to do: an
+        // answer a socket has already read, and a task another thread has
+        // already started, arm no alarm at all, because this crate starts
+        // no thread of a socket's own and a queue is only ever drained by a
+        // pass. Sleeping out the delay is a ceiling on how late both are
+        // seen, and on a quiet link it is a ceiling of tens of seconds,
+        // which is a task answered with a timeout an answer had beaten.
+        //
+        // A host may sleep the delay, and the bridges hand it across for
+        // that: a host is woken by its own sockets and by whatever else it
+        // waits on, and a thread of this crate's is woken by nothing.
+        std::thread::sleep(Duration::from_millis(SLICE_MS));
     }
 }
 
