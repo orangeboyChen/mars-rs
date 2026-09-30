@@ -75,9 +75,10 @@ data class XlogConfig @JvmOverloads constructor(
     /**
      * The public key of the elliptic-curve pair whose private key reads the
      * log file back. Empty — the default — writes a file any reader of a
-     * mars log file can open; the C++ project's `pubkey` is the same
-     * string, and the port does not encrypt, so what an app puts here is
-     * what its own tooling sees.
+     * mars log file can open; a key of the 128 hex characters of a secp256k1
+     * one — the string the C++ project's `pubkey` is too — encrypts the
+     * body of every **async** record with ECDH + TEA, which is what the
+     * private half of the pair is for.
      */
     val pubKey: String = ""
 ) {
