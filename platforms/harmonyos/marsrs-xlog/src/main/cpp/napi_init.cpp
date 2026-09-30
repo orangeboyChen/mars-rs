@@ -408,8 +408,13 @@ static napi_value SetMaxFileSize(napi_env env, napi_callback_info info) {
         double bytes = 0;
         // `0` is a size and not a missing one: `mars_xlog.h` reads it as "do
         // not split", so what is refused here is a negative — and a NaN, which
-        // is a `number` ArkTS computed and gave no size with.
-        if (napi_get_value_double(env, argv[1], &bytes) == napi_ok && bytes >= 0) {
+        // is a `number` ArkTS computed and gave no size with. So is every
+        // value the 64-bit integer cannot hold — an infinity, and any `number`
+        // from 2^64 up: the cast of one is undefined behaviour, and what it
+        // would have left the appender with is a limit nobody asked for.
+        // The bound is exact, 2^64 being a `double` there is one of.
+        if (napi_get_value_double(env, argv[1], &bytes) == napi_ok && bytes >= 0 &&
+            bytes < 18446744073709551616.0) {
             mars_xlog_set_max_file_size_instance(handle, (unsigned long long)bytes);
         }
     }
