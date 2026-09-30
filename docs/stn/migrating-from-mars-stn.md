@@ -76,7 +76,7 @@ DNS ahead of the connect, the retry, the timeout, and the report at the end.
 | `mars::stn::StopTask` | `stn.stop_task(id)` | `StnLogic.stopTask(id)` | `MarsStn.stop(taskID:)` | `mars_stn_stop_task(id)` |
 | `mars::stn::HasTask` | `stn.has_task(id)` | `StnLogic.hasTask(id)` | `MarsStn.hasTask(id)` | `mars_stn_has_task(id)` |
 | `mars::stn::SetCallback` | `stn.set_callback(app)` | `StnLogic.setCallBack(cb)` | `MarsStn.setApp { … }` | `mars_stn_set_app(ctx, ask)` |
-| `mars::stn::MakesureLonglinkConnected` | `stn.make_sure_long_link_connected("default")` | `StnLogic.makesureLongLinkConnected()` | `MarsStn.makeSureLongLinkConnected()` | `mars_stn_makesure_longlink_connected()` |
+| `mars::stn::MakesureLonglinkConnected` | `stn.make_sure_default_long_link_connected()` | `StnLogic.makesureLongLinkConnected()` | `MarsStn.makeSureLongLinkConnected()` | `mars_stn_makesure_longlink_connected()` |
 | `mars::stn::CreateLonglink_ext` | `stn.create_long_link(config)` | `StnLogic.createLonglink(config)` | `MarsStn.createLongLink(config)` | `mars_stn_create_longlink(&config)` |
 | `mars::stn::DestroyLonglink_ext` | `stn.destroy_long_link(name)` | `StnLogic.destroyLonglink(name)` | `MarsStn.destroyLongLink(name)` | `mars_stn_destroy_longlink(name)` |
 | `mars::stn::MarkMainLonglink_ext` | `stn.mark_main_longlink(name)` | `StnLogic.markMainLonglink(name)` | `MarsStn.markMainLongLink(name)` | `mars_stn_mark_main_longlink(name)` |

@@ -28,6 +28,12 @@ and `0` is **no checks at all**: the plan is empty, the run asks no probe and th
 report is `{"details":[]}`. It is not "run everything", which is `1 | 2 | 4` —
 `Mode.all` in Swift.
 
+An empty run is what Rust and Android give you for `0`. The C ABI — and Swift,
+Kotlin/Native and every other caller of it — refuses a mode with no bit in it
+outright: `mars_sdt_start_active_check` answers `MARS_SDT_ERR_BAD_ARG`, so what
+an app on those platforms gets for `0` is a start that did not happen and no
+report, and not an empty one.
+
 Swift takes them as a set, `mode: [.basic, .long]`, and Objective-C keeps the
 integer: `mode: NET_CHECK_BASIC | NET_CHECK_LONG`.
 

@@ -23,7 +23,8 @@ and the checks, run them, take the report — and the report is the same
 | the report | `Callback::ReportNetCheckResult` | `report_json(&results)` | `takeReport()`, or the callback | `takeReport()` | `mars_sdt_take_report(buf, len)` |
 
 The mode is the same bit set — ping and DNS, then TCP, then the HTTP check of the
-net-check CGI — and `0` is still no checks at all. In Rust the bits have names:
+net-check CGI — and `0` is still no checks at all, which in Rust and in Android is
+an empty run and on the C ABI is a start it refuses. In Rust the bits have names:
 `Mode::NONE`, `BASIC`, `LONG`, `SHORT` and `ALL`, put together with `|`, and
 `mode.bits()` hands back the `i32` the upstream call takes. See
 [the checks](/sdt/checks).

@@ -214,7 +214,7 @@ above do it, and so does an app that closes its appender.
 |---|---|---|
 | `maxFileSizeBytes` | a file is closed and a new one opened once it reaches this many bytes | `0` — never split |
 | `maxAliveTimeSeconds` | a file older than this many seconds is dropped | `0` — ten days (anything under a day is raised to ten) |
-| `cacheDays` | an async cache file older than this many days is dropped | `0` — no cache file at all: async records go straight to the log |
+| `cacheDays` | how many days a file staged in the cache directory waits before it is moved into the log directory | `0` — nothing is staged: the day's file is written in the log directory |
 
 ## Reading a file back
 

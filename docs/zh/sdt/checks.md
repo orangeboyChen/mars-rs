@@ -27,6 +27,11 @@
 **一项都不跑**：计划是空的，这一趟不问任何探测，报告是 `{"details":[]}`。它不是“全
 部都跑”，全部都跑是 `1 | 2 | 4`，在 Swift 里是 `Mode.all`。
 
+空跑一趟是 Rust 和 Android 给 `0` 的答案。C ABI —— 以及 Swift、Kotlin/Native
+和其他所有走它的调用方 —— 直接拒绝一个没有任何 bit 的 mode：
+`mars_sdt_start_active_check` 回答 `MARS_SDT_ERR_BAD_ARG`，所以这些平台上
+`0` 换来的是“没启动”和一份拿不到的报告，而不是一份空报告。
+
 Swift 把它们当成一个集合来收，`mode: [.basic, .long]`；Objective-C 还是用那个整
 数：`mode: NET_CHECK_BASIC | NET_CHECK_LONG`。
 
