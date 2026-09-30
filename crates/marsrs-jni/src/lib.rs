@@ -142,12 +142,22 @@ pub(crate) fn write_impl(instance: u64, level: LogLevel, tag: Cow<'_, str>, log:
     if level == LogLevel::None {
         return false;
     }
+    // An empty body writes nothing, and an empty tag is a tag that was not
+    // given, which is what the C ABI answers for the same call: every seam
+    // but this one goes through it, so the same Kotlin on Android and on
+    // iOS has to write the same record. A message that came out empty is a
+    // line in the file that says nothing and cannot be told from one the
+    // app wrote, and a `[tag]` field of no characters is a field the C ABI
+    // leaves out.
+    if log.is_empty() {
+        return false;
+    }
     if !is_enabled_for(instance, level) {
         return false;
     }
     let info = XLoggerInfo {
         level,
-        tag: Some(tag),
+        tag: (!tag.is_empty()).then_some(tag),
         filename: None,
         func_name: None,
         line: 0,
@@ -372,6 +382,38 @@ mod tests {
         let bytes = std::fs::read(&files[0]).expect("the file reads");
         let text = String::from_utf8_lossy(&bytes);
         assert!(!text.contains("not logged"), "{text}");
+
+        release_instance_impl("Mars");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A record with nothing in it is not written: what the C ABI answers for
+    /// the same call, and so what every seam but this one does. Two `Xlog`s of
+    /// one source — an Android one going through here and an iOS one going
+    /// through the C ABI — have to write the same file.
+    ///
+    /// The other half of that answer, a tag of no characters being a tag that
+    /// was not given, is in the body above and not here: the body of a record
+    /// is compressed, so a `.xlog` is not a file a test can read the `[tag]`
+    /// field out of.
+    #[test]
+    fn an_empty_record_is_not_written() {
+        let _guard = crate::test_lock();
+        let dir = logdir("empty-record");
+
+        let instance = new_instance_impl(config(&dir), LogLevel::Verbose) as u64;
+        assert!(
+            !write_impl(instance, LogLevel::Info, "Net".into(), ""),
+            "a record with no body is not written"
+        );
+        // and the one beside it, which has a body, is
+        assert!(write_impl(
+            instance,
+            LogLevel::Info,
+            Cow::Borrowed(""),
+            "tagged by nobody"
+        ));
+        flush_now_impl(instance);
 
         release_instance_impl("Mars");
         let _ = std::fs::remove_dir_all(&dir);
