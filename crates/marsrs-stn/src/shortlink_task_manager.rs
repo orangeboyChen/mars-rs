@@ -693,11 +693,22 @@ impl ShortLinkTaskManager {
                 );
                 Some(handle_of(ended))
             }
-            // `kTaskFailHandleDefault` and anything the app made up: the
-            // C++'s `default:`
-            TaskFailHandleType::Default
-            | TaskFailHandleType::SlientTaskEnd
-            | TaskFailHandleType::TaskTimeout => {
+            TaskFailHandleType::SlientTaskEnd => {
+                // over, and the app is not told: what the app asked for is a
+                // task that goes away without a word, which is not a task the
+                // queue tries again and not one it reports. The long link's
+                // `__SingleRespHandle` answers the same handle the same way,
+                // and its run is over like every other task's that left the
+                // queue.
+                let _ = self.stop_run_at(at);
+                self.tasks.remove(at);
+                Some(RespHandle::Ended)
+            }
+            // `kTaskFailHandleDefault` and `kTaskFailHandleTaskTimeout`: the
+            // C++'s `default:`. Both fail the try and hand the code the
+            // decoder read to `__SingleRespHandle`, and they report different
+            // things to the app.
+            TaskFailHandleType::Default | TaskFailHandleType::TaskTimeout => {
                 let ended = self.single_resp_handle_at(
                     now,
                     at,
@@ -706,7 +717,16 @@ impl ShortLinkTaskManager {
                     handle,
                     profile.clone(),
                 );
-                self.notify_network_err(ErrCmdType::EnDecode, handle as i32, &profile);
+                let reported = match handle {
+                    // `fun_notify_network_err_(..., err_code, ...)`: what the
+                    // app's own decoder read out of the body, which a host
+                    // reads the reason off. `-1` is not a reason, and the
+                    // long link reports the code for the same handle
+                    TaskFailHandleType::Default => err_code,
+                    // a handle with no code of its own names itself
+                    made_up => made_up as i32,
+                };
+                self.notify_network_err(ErrCmdType::EnDecode, reported, &profile);
                 Some(handle_of(ended))
             }
         }
@@ -2113,6 +2133,72 @@ mod tests {
         );
         assert!(manager.is_empty());
         assert_eq!(manager.tasks_continuous_fail_count(), 1);
+    }
+
+    /// `kTaskSlientHandleTaskEnd` — a task the app wanted gone without a word.
+    /// It is not retried and it is not reported: neither the app's callback nor
+    /// its network-error report is asked about it, and the run that was out is
+    /// dropped like every other task's that left the queue.
+    #[test]
+    fn a_task_the_app_asked_to_end_without_a_word_leaves_and_is_told_to_nobody() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        let ended = endings(&mut manager);
+        let reported: PairEnded = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&reported);
+        manager.set_notify_network_err(move |err_type, err_code, ip, _host, port| {
+            recorder
+                .lock()
+                .unwrap()
+                .push((err_type, err_code, ip.to_string(), port));
+        });
+        let dropped: Arc<Mutex<Vec<RunId>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&dropped);
+        manager.set_destroy_run(move |run| recorder.lock().unwrap().push(run));
+        manager.set_buf2resp(|_task, _body, _channel| (0, TaskFailHandleType::SlientTaskEnd));
+
+        manager.start_task_at(100_000, task(7), prepare());
+        assert_eq!(
+            manager.on_response_at(100_500, RunId(7), answered(b"hello")),
+            Some(RespHandle::Ended)
+        );
+
+        assert!(manager.is_empty(), "not one try is left in the queue");
+        assert!(ended.lock().unwrap().is_empty(), "the app is told nothing");
+        assert!(
+            reported.lock().unwrap().is_empty(),
+            "and its error report is not asked either"
+        );
+        assert_eq!(*dropped.lock().unwrap(), vec![RunId(7)]);
+    }
+
+    /// `kTaskFailHandleDefault` is the ordinary "try me again" answer, and the
+    /// code it carries is the one the app's own decoder read out of the body.
+    /// What the app is told about the network is that code and not the handle,
+    /// which says only "try me again" — the long link reports the same pair for
+    /// the same handle.
+    #[test]
+    fn a_task_the_app_said_to_try_again_is_reported_with_the_code_its_decoder_read() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        let reported: PairEnded = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&reported);
+        manager.set_notify_network_err(move |err_type, err_code, ip, _host, port| {
+            recorder
+                .lock()
+                .unwrap()
+                .push((err_type, err_code, ip.to_string(), port));
+        });
+        manager.set_buf2resp(|_task, _body, _channel| (-500, TaskFailHandleType::Default));
+
+        manager.start_task_at(100_000, task(7), prepare());
+        manager.on_response_at(100_500, RunId(7), answered(b"hello"));
+
+        assert_eq!(
+            *reported.lock().unwrap(),
+            vec![(ErrCmdType::EnDecode, -500, String::new(), 0)],
+            "and not the -1 that only says the task is to be tried again"
+        );
     }
 
     /// The window both queues are handed is one reading of the network, so
