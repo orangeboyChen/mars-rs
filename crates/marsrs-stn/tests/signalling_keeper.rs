@@ -99,11 +99,14 @@ fn a_keep_time_that_ran_out_stops_the_signalling() {
     assert!(!keeper.is_keeping());
     assert_eq!(keeper.due_time(), Some(5_000), "the post is not cancelled");
 
-    // a clock that went backwards is treated the same way
-    let (mut backwards, _seen) = keeper_that_records();
-    backwards.keep_at(5_000);
-    backwards.on_network_data_changed_at(4_000);
-    assert!(!backwards.is_keeping());
+    // a reading carried here one turn later than the data it is the reading of
+    // is not a clock that went backwards: data that moved before the touch
+    // still says the mapping is busy
+    let (mut carried, _seen) = keeper_that_records();
+    carried.keep_at(5_000);
+    carried.on_network_data_changed_at(4_000);
+    assert!(carried.is_keeping());
+    assert_eq!(carried.due_time(), Some(6_000));
 
     set_strategy(DEFAULT_PERIOD, DEFAULT_KEEP_TIME);
     drop(guard);

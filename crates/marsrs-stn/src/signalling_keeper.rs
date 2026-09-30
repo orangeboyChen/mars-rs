@@ -194,17 +194,24 @@ impl SignallingKeeper {
     /// The same, with the reading handed in: while the keeper is keeping and
     /// its `keepTime` has not run out, the next buffer is posted `period`
     /// later; once it has, the signalling stops.
+    ///
+    /// The reading is the data's, and not this call's: [`NetCore::feed_signalling`]
+    /// carries it here a turn later than the link that saw it, so it can be an
+    /// older one than the touch the `keepTime` is measured from. What ends the
+    /// signalling is the `keepTime` running out, so a reading from before the
+    /// touch is one from inside it, and not a clock that went backwards — the
+    /// C++'s `xassert2(now >= last_touch_time_)` is an assert about its own
+    /// clock, which is read when the signal is delivered and not carried.
     pub fn on_network_data_changed_at(&mut self, now: u64) {
         if !self.keeping {
             return;
         }
-        // `xassert2(now >= last_touch_time_)`, and the C++ treats a clock that
-        // went backwards the same way it treats a `keepTime` that ran out.
         let Some(last) = self.last_touch_time else {
             self.keeping = false;
             return;
         };
-        if now < last || now.saturating_sub(last) > keep_time() {
+        let now = now.max(last);
+        if now.saturating_sub(last) > keep_time() {
             self.keeping = false;
             return;
         }
@@ -345,11 +352,15 @@ mod tests {
         keeper.on_network_data_changed_at(5_000);
         assert_eq!(keeper.due_time(), Some(4_000 + 1_000));
 
-        // a clock that went backwards is treated the same way
+        // a reading carried here one turn later than the data it is the
+        // reading of is not a clock that went backwards: data that moved
+        // before the touch still says the mapping is busy, so the `keepTime`
+        // is measured from the touch and the next buffer is posted after it
         let mut keeper = SignallingKeeper::new();
         keeper.keep_at(5_000);
         keeper.on_network_data_changed_at(4_000);
-        assert!(!keeper.is_keeping());
+        assert!(keeper.is_keeping());
+        assert_eq!(keeper.due_time(), Some(5_000 + 1_000));
 
         set_strategy(DEFAULT_PERIOD, DEFAULT_KEEP_TIME);
         drop(guard);
