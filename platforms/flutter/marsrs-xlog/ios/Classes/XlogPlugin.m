@@ -384,9 +384,14 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
 /// the banner that ends the file, so it runs off the thread the call came in
 /// on — the app's main thread, the one the UI draws on — the way `flush:` does
 /// it. The handle is read and the prefix is taken out of `instances` here and
-/// not in the block, because the dictionary is this thread's: a reopen of the
-/// prefix that lands while the drain is queued is a reopen of an appender this
-/// close does not hold.
+/// not in the block, because the dictionary is this thread's: a second `close`
+/// of the prefix that lands before the drain runs finds nothing and releases
+/// nothing twice.
+///
+/// Not what keeps a reopen safe, though: a reopen is answered the handle that
+/// is still there, and the release below closes that one — so what an app owes
+/// a prefix it closed is the `await` of this call, which is what the Dart
+/// `open` of the same prefix waits for.
 - (void)close:(FlutterMethodCall *)call result:(FlutterResult)result {
   NSString *namePrefix = XlogString(call.arguments, @"namePrefix");
   NSNumber *handle = self.instances[namePrefix];

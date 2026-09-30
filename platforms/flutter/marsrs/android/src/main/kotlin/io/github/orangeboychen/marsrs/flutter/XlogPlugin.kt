@@ -269,8 +269,13 @@ class XlogPlugin :
     private fun close(call: MethodCall, result: Result) {
         val namePrefix = call.string("namePrefix")
         // Taken out of [appenders] here, and not on the queue below: the map is
-        // this thread's, so a reopen of the prefix that lands while the drain
-        // is still queued is a reopen of an appender this close does not hold.
+        // this thread's, so a second `close` of the prefix that lands before
+        // the drain runs finds nothing and releases nothing twice.
+        //
+        // Not what keeps a reopen safe, though: a reopen is answered the handle
+        // that is still there, and the release below closes that one — so what
+        // an app owes a prefix it closed is the `await` of this call, which is
+        // what the Dart `open` of the same prefix waits for.
         val appender = appenders.remove(namePrefix)
         if (appender == null) {
             result.success(null)
