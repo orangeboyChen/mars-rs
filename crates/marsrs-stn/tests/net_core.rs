@@ -869,6 +869,47 @@ fn task_of(taskid: u32) -> Task {
     task
 }
 
+/// The channel the queue asks is the link the core made, and not one nobody
+/// wired. Every other sample here hands the queue a channel of its own, which
+/// is the app's right and hides what the core leaves it with: a task put on a
+/// long link sat in the queue until its own timeout ran out, and the link was
+/// never asked for it at all. What shows it is a core with no hooks of the
+/// app's — what a task goes out on is then the link's own queue, which is what
+/// the host's run writes off.
+#[test]
+fn a_task_goes_out_on_the_link_the_core_made_and_not_on_a_channel_nobody_wired() {
+    let mut core = NetCore::new_at(START);
+    core.set_net_info(|| NET_TYPE_WIFI);
+    core.set_clock(|| NOW_SECS);
+    core.longlink()
+        .set_req2buf(|task, _channel| Ok(task.cgi.clone().into_bytes()));
+
+    let link = Arc::clone(core.long_link(MAIN).expect("the default link"));
+    link.lock().unwrap().set_status(LongLinkStatus::Connected);
+
+    let mut task = Task::new(7, 12);
+    task.cgi = "/cgi-bin/7".to_string();
+    task.channel_select = Task::CHANNEL_LONG;
+    task.total_timeout = 10 * 60 * 1000;
+    assert!(core.start_task_at(START, task));
+
+    let queued: Vec<(u32, Vec<u8>)> = link
+        .lock()
+        .unwrap()
+        .queued()
+        .iter()
+        .map(|data| (data.task.taskid, data.buffer.clone()))
+        .collect();
+    assert_eq!(queued.len(), 1, "one task went out on the link");
+    assert_eq!(queued[0].0, 7);
+    assert!(
+        queued[0].1.ends_with(b"/cgi-bin/7"),
+        "and what it carries is the body the app wrote: {:?}",
+        queued[0].1
+    );
+    assert!(core.longlink().has_task(7), "the queue still waits on it");
+}
+
 #[test]
 fn an_encoder_the_app_set_is_the_one_every_link_is_made_with() {
     let mut core = NetCore::with_encoder_at(START, true, LongLinkEncoder::new());

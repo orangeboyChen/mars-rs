@@ -62,13 +62,13 @@ use marsrs_comm::tickcount::gettickcount;
 use crate::anti_avalanche::AntiAvalanche;
 use crate::dynamic_timeout::{DynamicTimeout, NetworkKind};
 use crate::hook::Hook;
-use crate::long_link::LongLink;
+use crate::long_link::{LongLink, MakeSure};
 use crate::longlink_identify_checker::{
     GetIdentifyCheckBuffer, IdentifyBuffer, OnIdentifyResponse,
 };
 use crate::net_source::NO_NET;
 use crate::task_profile::{
-    ConnectProfile, ErrCmdType, PrepareProfile, TaskFailHandleType, TaskProfile,
+    ConnectProfile, ErrCmdType, PrepareProfile, RunId, TaskFailHandleType, TaskProfile,
     LOCAL_CHANNEL_SELECT, LOCAL_NO_NET, LOCAL_RESET, LOCAL_START_TASK_FAIL, LOCAL_TASK_PARAM,
 };
 use crate::{
@@ -225,6 +225,18 @@ fn poisoned<T>(poisoned: PoisonError<T>) -> T {
     poisoned.into_inner()
 }
 
+/// What the queue's channel hooks hold: the link of every name in
+/// [`NetCore::links`], shared with the core, which is what makes or throws one
+/// away.
+type LongLinkChannels = Arc<Mutex<HashMap<String, Arc<Mutex<LongLink>>>>>;
+
+/// The long link of `name`, out of the map the queue's channel hooks hold;
+/// [`None`] is a channel the core has no link for, which is every question
+/// asked of a name that was never made, or of one that was thrown away.
+fn channel_of(channels: &LongLinkChannels, name: &str) -> Option<Arc<Mutex<LongLink>>> {
+    channels.lock().unwrap_or_else(poisoned).get(name).cloned()
+}
+
 fn unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -317,6 +329,14 @@ pub struct NetCore {
     /// the links themselves here, because a link is what the multi-long-link
     /// APIs hand out.
     links: HashMap<String, LongLinkMetaData>,
+    /// The channel of every long link of [`NetCore::links`], by the same name.
+    ///
+    /// What a long-link channel is asked is asked of a name, and the queue asks
+    /// it through one hook for every channel — so what a hook holds is a map of
+    /// them and not one link. This is the half of [`NetCore::links`] a closure
+    /// can own, and it is kept beside it: a link made or thrown away is put in
+    /// or taken out of both.
+    channels: LongLinkChannels,
     /// Which of [`NetCore::links`] is `Config().isMain()`: the C++ marks the
     /// config, and a port answers with the name instead of writing to a value
     /// the link was made from.
@@ -407,6 +427,7 @@ impl NetCore {
             longlink: LongLinkTaskManager::new(),
             timing_sync: TimingSync::new_at(now),
             links: HashMap::new(),
+            channels: Arc::new(Mutex::new(HashMap::new())),
             default_link: None,
             factory: ChannelFactory::new(),
             anti_avalanche: Arc::new(Mutex::new(AntiAvalanche::new_at(false, now))),
@@ -659,6 +680,93 @@ impl NetCore {
                 NetworkKind::Mobile
             } else {
                 NetworkKind::Wifi
+            }
+        });
+
+        self.wire_longlink_channels();
+    }
+
+    /// What a long-link channel is, and how the queue of long-link tasks reaches
+    /// it: the send, the stop, the disconnect, the reset, and the two questions
+    /// a task asks before it goes out.
+    ///
+    /// The links are the core's — the C++'s `LongLinkMetaData` is what carries
+    /// these, and the port keeps the links in the core — so the core is the host
+    /// that wires them, and a link made after this call is reached through the
+    /// map the hooks hold. Left unwired, the queue answered its own: a channel
+    /// that is up whether or not it is, and a run for a request that was never
+    /// pushed onto the link at all. A task put on a long link then sat there
+    /// until its own timeout ran out — `LOCAL_TASK_TIMEOUT`, minutes and not
+    /// seconds, and an answer that never came is what a first-package timeout
+    /// is for — and a link that drew a bad answer was never taken down, which
+    /// is the other thing a queue does with one.
+    ///
+    /// One hook per question and one map for every name, which is why these are
+    /// wired once and not when a link is made: a host that wires its own over
+    /// them does it after this call, and keeps them.
+    fn wire_longlink_channels(&mut self) {
+        let channels = Arc::clone(&self.channels);
+        self.longlink.set_make_sure_connected(move |name| {
+            let Some(link) = channel_of(&channels, name) else {
+                return false;
+            };
+            // `Monitor()->MakeSureConnected()`: the C++ reads the `bool` and
+            // throws the `newone` away, and so does this — a link that is
+            // connecting is not one a task goes out on yet.
+            let status = link.lock().unwrap_or_else(poisoned).make_sure_connected();
+            status == MakeSure::Connected
+        });
+
+        let channels = Arc::clone(&self.channels);
+        self.longlink.set_channel_profile(move |name| {
+            let Some(link) = channel_of(&channels, name) else {
+                return ConnectProfile::new();
+            };
+            let link = link.lock().unwrap_or_else(poisoned);
+            link.profile().clone()
+        });
+
+        let channels = Arc::clone(&self.channels);
+        self.longlink.set_send(move |name, task, body| {
+            let link = channel_of(&channels, name)?;
+            let mut link = link.lock().unwrap_or_else(poisoned);
+            // `Channel()->Send(...)`: the request goes on the link's own queue,
+            // and what writes it is the host's run of the link and not this
+            // call. `None` is a link that is not up, which leaves the task in
+            // the queue to be tried again.
+            if !link.send(task.clone(), body) {
+                return None;
+            }
+            // The run is named by the task, which is what the queue asks about
+            // it — the port's link has no run of its own to hand out, and
+            // `LongLink::Send` answers with whether it took the request.
+            Some(RunId(u64::from(task.taskid)))
+        });
+
+        let channels = Arc::clone(&self.channels);
+        self.longlink.set_stop(move |name, taskid| {
+            if let Some(link) = channel_of(&channels, name) {
+                let _ = link.lock().unwrap_or_else(poisoned).stop(taskid);
+            }
+        });
+
+        let channels = Arc::clone(&self.channels);
+        self.longlink.set_disconnect(move |name, code| {
+            if let Some(link) = channel_of(&channels, name) {
+                link.lock().unwrap_or_else(poisoned).disconnect(code);
+            }
+        });
+
+        let channels = Arc::clone(&self.channels);
+        self.longlink.set_reset_channel(move |name| {
+            // `RedoTasks`' own: the link is taken down with `kReset`, and made
+            // again by the next question a task asks of it. The connect is
+            // cancelled and the server's trigger taken off inside the link,
+            // which is where the C++ does both.
+            if let Some(link) = channel_of(&channels, name) {
+                link.lock()
+                    .unwrap_or_else(poisoned)
+                    .disconnect(DisconnectInternalCode::Reset);
             }
         });
     }
@@ -1764,6 +1872,12 @@ impl NetCore {
         let link = self.factory.create_longlink(&config);
         let meta = LongLinkMetaData::new(config.clone(), link);
         self.links.insert(name.clone(), meta);
+        // and the queue's way of reaching it, which is the same name in the
+        // map its channel hooks were wired with
+        self.channels.lock().unwrap_or_else(poisoned).insert(
+            name.clone(),
+            Arc::clone(self.links.get(&name).expect("the link just made").channel()),
+        );
         if config.is_main() {
             self.default_link = Some(name.clone());
         }
@@ -1787,6 +1901,7 @@ impl NetCore {
         }
         self.longlink.remove_long_link_at(now, name);
         self.links.remove(name);
+        self.channels.lock().unwrap_or_else(poisoned).remove(name);
         if self.default_link.as_deref() == Some(name) {
             self.default_link = None;
         }
@@ -1947,6 +2062,7 @@ impl NetCore {
     pub fn release(&mut self) -> Vec<u32> {
         let cleared = self.clear_tasks();
         self.links.clear();
+        self.channels.lock().unwrap_or_else(poisoned).clear();
         self.default_link = None;
         self.timing_sync.cancel();
         self.released = true;
