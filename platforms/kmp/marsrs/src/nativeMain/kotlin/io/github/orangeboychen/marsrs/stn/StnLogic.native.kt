@@ -138,7 +138,15 @@ public actual object StnLogic {
         // earliest — after the swap, which is what the C ABI asks for: `ctx`
         // has to stay alive until another `mars_stn_set_app` takes its place.
         //
-        previous?.dispose()
+        // Released twice, because there are two things to release: `dispose` of
+        // the reference is the reference, and the copies a box holds are its
+        // own — they are `nativeHeap` allocations, which nothing frees but
+        // [AppBox.dispose], and a box the collector takes is one that leaks
+        // them.
+        previous?.let {
+            it.get().dispose()
+            it.dispose()
+        }
     }
 
     public actual fun reset() {
