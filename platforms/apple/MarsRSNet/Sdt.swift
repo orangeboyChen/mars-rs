@@ -369,7 +369,7 @@ public final class MarsSdt: NSObject {
         mode: Mode,
         timeout: UInt32
     ) -> Int32 {
-        return startActiveCheck(
+        startActiveCheck(
             longLink: longLink,
             shortLink: shortLink,
             mode: mode.rawValue,
