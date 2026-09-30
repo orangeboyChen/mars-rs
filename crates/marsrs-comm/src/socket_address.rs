@@ -184,8 +184,11 @@ impl SocketAddress {
     /// `INADDR_ANY`, not the broadcast address and not the loopback address
     /// (unless loopback is allowed).
     ///
-    /// A v6 address that is neither v4-mapped nor NAT64 is taken as it is —
-    /// the C++ answers `true` for it with a `// TODO`.
+    /// A v6 address that is not v4-mapped is taken as it is — a NAT64 one
+    /// included, whose embedded address is a v4 one that may well be the
+    /// loopback — and the C++ answers `true` for every one of them with a
+    /// `// TODO` (`socket_address.cc:237`), so a caller asking whether it may
+    /// connect is told it may.
     pub fn valid_server_address(&self, allow_loopback: bool, ignore_port: bool) -> bool {
         let host = match self.addr {
             Address::V4(v4, port) => {
