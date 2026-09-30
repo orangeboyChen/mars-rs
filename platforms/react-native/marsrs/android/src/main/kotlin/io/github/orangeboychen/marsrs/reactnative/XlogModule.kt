@@ -273,17 +273,29 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      *
      * Closed on the queue and not on this thread, which is the JS thread,
      * because `Xlog.close` is itself a drain; and `shutdown` runs what it was
-     * handed before it stops, so these do run. A queue that was shut down
-     * already — an `invalidate` before this one — was handed them then.
+     * handed before it stops, so these do run. What is not left to the queue
+     * is the map: [appenders] is emptied before the drain is handed over, so a
+     * `close` that arrives in the window between the two has no appender of
+     * its own to drain on the JS thread. A queue that refuses the drain — an
+     * `invalidate` before this one — is one this closes here instead.
      */
     private fun closeAll() {
+        // Taken out of [appenders] here, and not on the queue below: a `close`
+        // of a prefix that lands before the drain runs is then a `close` with
+        // no appender to find, where the old order left it in the map for the
+        // length of the drain — and the window between this call and
+        // `flushQueue.shutdown()` is exactly when such a `close` arrives,
+        // because `shutdown` refuses what it is handed next and not what is
+        // already queued.
+        val closing = appenders.values.toList()
+        appenders.clear()
         try {
-            flushQueue.execute {
-                appenders.values.forEach { it.close() }
-                appenders.clear()
-            }
+            flushQueue.execute { closing.forEach { it.close() } }
         } catch (e: RejectedExecutionException) {
-            appenders.clear()
+            // A queue that refuses the drain is one this closes here: an
+            // appender that is going away with the module is drained now or
+            // not at all, and the records it still holds go with it.
+            closing.forEach { it.close() }
         }
     }
 
