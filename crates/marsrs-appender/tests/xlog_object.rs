@@ -158,7 +158,7 @@ fn an_alive_time_below_a_day_is_refused_and_the_getter_says_so() {
     assert_eq!(
         xlog.max_alive_time_seconds(),
         0,
-        "ten days is what is in force, and not the hour that was refused"
+        "what this `Xlog` last set is what it answers, and the hour was refused"
     );
 
     // A value the appender does take is the one the getter answers.
