@@ -465,10 +465,14 @@ pub fn set_max_file_size(handle: XloggerHandle, bytes: u64) {
 }
 
 /// `mars::xlog::SetMaxAliveTime` — per instance.
-pub fn set_max_alive_duration(handle: XloggerHandle, secs: u64) {
+///
+/// Whether `secs` was applied is what the answer says: the appender refuses a
+/// value below one day, the way `open` refuses one, and a caller that reports
+/// the value it asked for would be reporting a limit no file is held to.
+pub fn set_max_alive_duration(handle: XloggerHandle, secs: u64) -> bool {
     match target(handle) {
         Target::Instance(id) => appender_set_max_alive_duration_instance(id, secs),
-        Target::Gone => {}
+        Target::Gone => false,
     }
 }
 

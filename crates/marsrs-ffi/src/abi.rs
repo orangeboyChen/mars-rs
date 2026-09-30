@@ -562,7 +562,7 @@ pub extern "C" fn mars_xlog_set_max_alive_duration_instance(
     instance: c_longlong,
     seconds: c_longlong,
 ) {
-    guard((), || {
+    guard(false, || {
         set_max_alive_duration(instance as u64, seconds.max(0) as u64)
     });
 }

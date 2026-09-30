@@ -197,9 +197,11 @@ pub(crate) fn set_max_file_size_impl(instance: u64, size: jlong) {
     set_max_file_size(instance, size.max(0) as u64)
 }
 
-/// `Xlog.setMaxAliveTime` body.
+/// `Xlog.setMaxAliveTime` body; a value below one day is the appender's to
+/// refuse, and the answer the Rust api gives is the one Java's own `Xlog`
+/// mirrors — see [`crate::set_max_alive_duration`].
 pub(crate) fn set_max_alive_time_impl(instance: u64, seconds: jlong) {
-    set_max_alive_duration(instance, seconds.max(0) as u64)
+    let _ = set_max_alive_duration(instance, seconds.max(0) as u64);
 }
 
 /// The `native` methods of `io.github.orangeboychen.marsrs.stn.StnLogic`.

@@ -286,11 +286,10 @@ pub(crate) fn appender_set_max_file_size_instance(id: AppenderId, bytes: u64) {
     }
 }
 
-/// Sets the expiry for a specific instance (values below one day are ignored).
-pub(crate) fn appender_set_max_alive_duration_instance(id: AppenderId, secs: u64) {
-    if let Some(appender) = instance(id) {
-        appender.set_max_alive_duration(secs);
-    }
+/// Sets the expiry for a specific instance; `false` for an unknown id, or
+/// when the appender refused the value for being below one day.
+pub(crate) fn appender_set_max_alive_duration_instance(id: AppenderId, secs: u64) -> bool {
+    instance(id).is_some_and(|appender| appender.set_max_alive_duration(secs))
 }
 
 /// The log directory of a specific instance; `None` for an unknown id.

@@ -137,9 +137,33 @@ fn the_four_the_appender_has_no_getter_for_answer_what_was_set() {
     xlog.set_max_file_size_bytes(1 << 20);
     assert_eq!(xlog.max_file_size_bytes(), 1 << 20);
 
+    // Three days, and not an hour: a limit below one day is one the appender
+    // refuses, and the getter answers what is in force — see the test below.
     assert_eq!(xlog.max_alive_time_seconds(), 0);
+    xlog.set_max_alive_time_seconds(3 * 24 * 60 * 60);
+    assert_eq!(xlog.max_alive_time_seconds(), 3 * 24 * 60 * 60);
+}
+
+/// The one of the four the appender can refuse: a value below one day.
+///
+/// The getter answers what the appender holds files to, and not what was
+/// asked for, because the appender is what deletes them. An app that reads
+/// back an hour it never got stops uploading the logs it believes are gone.
+#[test]
+fn an_alive_time_below_a_day_is_refused_and_the_getter_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let xlog = Xlog::open(config(dir.path(), "alive"), LogLevel::Info).unwrap();
+
     xlog.set_max_alive_time_seconds(3600);
-    assert_eq!(xlog.max_alive_time_seconds(), 3600);
+    assert_eq!(
+        xlog.max_alive_time_seconds(),
+        0,
+        "ten days is what is in force, and not the hour that was refused"
+    );
+
+    // A value the appender does take is the one the getter answers.
+    xlog.set_max_alive_time_seconds(3 * 24 * 60 * 60);
+    assert_eq!(xlog.max_alive_time_seconds(), 3 * 24 * 60 * 60);
 }
 
 #[test]

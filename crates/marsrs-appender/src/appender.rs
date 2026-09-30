@@ -2065,15 +2065,17 @@ impl Appender {
     ///
     /// A value below [`MIN_LOG_ALIVE_TIME`] is refused, the way `open` refuses
     /// one: an app that asks to keep logs for less than a day keeps them for
-    /// the C++'s own ten.
-    pub(crate) fn set_max_alive_duration(&self, secs: u64) {
+    /// the C++'s own ten. Whether `secs` was applied is what the answer says —
+    /// a caller that keeps it is one that can repeat to *its* caller what is
+    /// in force, and not what was asked for.
+    pub(crate) fn set_max_alive_duration(&self, secs: u64) -> bool {
         // `try_from` and not `as`: a `u64` past `i64::MAX` cast that way comes
         // out negative, and a negative limit is one the clamp never accepts.
         let Ok(secs) = i64::try_from(secs) else {
-            return;
+            return false;
         };
         if secs < MIN_LOG_ALIVE_TIME {
-            return;
+            return false;
         }
         let mut inner = self.lock();
         inner.max_alive_time = secs;
@@ -2084,6 +2086,7 @@ impl Appender {
             }
             del_timeout_file(&me.config.logdir, secs, &nameprefix);
         });
+        true
     }
 
     /// The prefix every file of this appender starts with.

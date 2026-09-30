@@ -228,13 +228,20 @@ impl Xlog {
     }
 
     /// Sets how long a log file is kept; a no-op once this `Xlog` is closed.
+    ///
+    /// A value below one day is refused, the way the C++ refuses one, and
+    /// [`Self::max_alive_time_seconds`] then goes on answering what is in
+    /// force: the setter is the only writer of that value, and an answer that
+    /// says otherwise is an app believing its logs are dropped after an hour
+    /// while the appender keeps them for ten days.
     pub fn set_max_alive_time_seconds(&self, seconds: u64) {
         let Some(target) = self.target() else {
             return;
         };
-        self.max_alive_time_seconds
-            .store(seconds, Ordering::Relaxed);
-        category_set_max_alive_duration(target.0, seconds);
+        if category_set_max_alive_duration(target.0, seconds) {
+            self.max_alive_time_seconds
+                .store(seconds, Ordering::Relaxed);
+        }
     }
 
     /// Whether a record of `level` would be written: what an app asks before it
