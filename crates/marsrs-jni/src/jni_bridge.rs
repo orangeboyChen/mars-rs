@@ -855,15 +855,24 @@ fn string_array_list(env: &mut Env<'_>, values: &[String]) -> jobject {
         return std::ptr::null_mut();
     };
     for value in values {
+        // A string the JVM would not make is a list the call answers `null`
+        // for, and not one that goes on without it: a caller cannot tell a
+        // short list from a whole one, and this one names the libraries the
+        // port is made of. What a failed call left pending is left for Java
+        // to throw at the return — this runs on the thread the app called
+        // in on, where an exception has somewhere to go.
         let Ok(text) = env.new_string(value) else {
-            continue;
+            return std::ptr::null_mut();
         };
-        let _ = env.call_method(
+        let added = env.call_method(
             &list,
             jni_str!("add"),
             jni_sig!("(Ljava/lang/Object;)Z"),
             &[JValue::Object(&JObject::from(text))],
         );
+        if added.is_err() {
+            return std::ptr::null_mut();
+        }
     }
     list.into_raw()
 }
@@ -1318,7 +1327,9 @@ pub(crate) fn ask_java(question: Question) -> Answer {
             let Some(class) = class_of(|classes| &classes.stn_callback) else {
                 return Ok(Answer::Nothing);
             };
-            Ok(ask_stn(env, class, question))
+            let answer = ask_stn(env, class, question);
+            clear_what_is_pending(env);
+            Ok(answer)
         })
         .unwrap_or(Answer::Nothing)
     })
@@ -1592,13 +1603,29 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: &JClass<'_>, question: Question) -> Ans
 /// anybody ever seeing it.
 fn clear_pending<T>(env: &Env<'_>, called: jni::errors::Result<T>) -> jni::errors::Result<T> {
     if matches!(called, Err(jni::errors::Error::JavaException)) {
-        env.exception_clear();
-        let _ = writeln!(
-            std::io::stderr(),
-            "marsrsxlog: a Java call left an exception pending"
-        );
+        clear_what_is_pending(env);
     }
     called
+}
+
+/// Clears the exception that is pending, and says so.
+///
+/// [`clear_pending`] answers one call that failed, and there are ways a
+/// question asked here leaves one behind that it cannot see: the `return` of
+/// an arm that made the call and then read nothing out of it, a `new_string`
+/// that answered nothing, a helper that answers out of the value rather than
+/// out of the call. So every question clears again when it is over — a thread
+/// Rust attached discards what is pending at detach, and until then every
+/// call made on it is one JNI skips.
+fn clear_what_is_pending(env: &Env<'_>) {
+    if !env.exception_check() {
+        return;
+    }
+    env.exception_clear();
+    let _ = writeln!(
+        std::io::stderr(),
+        "marsrsxlog: a Java call left an exception pending"
+    );
 }
 
 /// A `Z` Java answered with — `false` for a call that could not be made.
@@ -1723,7 +1750,8 @@ fn cgi_profile<'a>(env: &mut Env<'a>, profile: &CgiProfile) -> Option<JObject<'a
     // class made from one answers `ClassNotFoundException`, and a profile
     // there is no class for is an `onTaskEnd` the app is never called on.
     let class = class_of(|classes| &classes.stn_cgi_profile)?;
-    let Ok(object) = env.new_object(class, jni_sig!("()V"), &[]) else {
+    let created = env.new_object(class, jni_sig!("()V"), &[]);
+    let Ok(object) = clear_pending(env, created) else {
         return None;
     };
     for (name, value) in [
@@ -1766,13 +1794,23 @@ fn cgi_profile<'a>(env: &mut Env<'a>, profile: &CgiProfile) -> Option<JObject<'a
         ),
         (jni_str!("rtt"), profile.rtt as i64),
     ] {
-        let _ = env.set_field(&object, name, jni_sig!("J"), JValue::Long(value));
+        // A field that could not be set leaves its exception pending, and
+        // JNI answers every call behind it — the next field, and then
+        // `onTaskEnd` itself — with `JavaException` without making it: the
+        // app would be told nothing at all about a task that ended, and the
+        // exception would die at detach with nobody reading it. What failed
+        // is cleared and said on stderr, and the profile is filled in as far
+        // as it got; a field that was never reached keeps the `0` Java gave
+        // it, which is the answer of a stage that never ran.
+        let set = env.set_field(&object, name, jni_sig!("J"), JValue::Long(value));
+        clear_pending(env, set).ok();
     }
     for (name, value) in [
         (jni_str!("channelType"), profile.channel_type),
         (jni_str!("protocolType"), profile.transport_protocol),
     ] {
-        let _ = env.set_field(&object, name, jni_sig!("I"), JValue::Int(value));
+        let set = env.set_field(&object, name, jni_sig!("I"), JValue::Int(value));
+        clear_pending(env, set).ok();
     }
     Some(object)
 }
@@ -1803,7 +1841,9 @@ pub(crate) fn ask_app_logic(question: AppQuestion) -> AppAnswer {
             let Some(class) = class_of(|classes| &classes.app_logic) else {
                 return Ok(AppAnswer::Nothing);
             };
-            Ok(ask_app(env, class, question))
+            let answer = ask_app(env, class, question);
+            clear_what_is_pending(env);
+            Ok(answer)
         })
         .unwrap_or(AppAnswer::Nothing)
     })
@@ -1885,7 +1925,9 @@ pub(crate) fn ask_platform_comm(question: PlatformQuestion) -> PlatformAnswer {
             let Some(class) = class_of(|classes| &classes.platform_comm) else {
                 return Ok(PlatformAnswer::Nothing);
             };
-            Ok(ask_platform(env, class, question))
+            let answer = ask_platform(env, class, question);
+            clear_what_is_pending(env);
+            Ok(answer)
         })
         .unwrap_or(PlatformAnswer::Nothing)
     })
@@ -2334,7 +2376,9 @@ pub(crate) fn ask_probe(query: ProbeQuery) -> ProbeAnswer {
             let Some(class) = class_of(|classes| &classes.sdt_logic) else {
                 return Ok(ProbeAnswer::Nothing);
             };
-            Ok(ask_probe_of(env, class, query))
+            let answer = ask_probe_of(env, class, query);
+            clear_what_is_pending(env);
+            Ok(answer)
         })
         .unwrap_or(ProbeAnswer::Nothing)
     })
