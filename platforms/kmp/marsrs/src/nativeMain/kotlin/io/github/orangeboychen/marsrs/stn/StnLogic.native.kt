@@ -48,7 +48,7 @@ import io.github.orangeboychen.marsrs.net.ffi.mars_stn_stop_signalling
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_stop_task
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_touch_tasks
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_trig_nooping
-import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.COpaquePointer
@@ -93,20 +93,41 @@ public actual object StnLogic {
      * The app that is installed, which is the only thing the C ABI does not give
      * back: `setApp` remembers it so that the next app releases it.
      *
-     * Swapped and not written, because `setApp` is a read-modify-write and a
-     * plain field is two of them: two threads that read the same app both
-     * dispose it — a box the C side may still be handing to a question — and
-     * two that read none leave one of the two boxes pinned for the process.
+     * Read and written under [swap], because `setApp` is three steps and not
+     * one — remember the new app, hand it to the C ABI, release the old one —
+     * and two threads left to run them in any order leave the C ABI holding
+     * the context of a box the other one has already released. Making the
+     * field atomic is not enough: it is the install and the release that have
+     * to be one step, and not only the write of the field.
      */
-    private val installed = AtomicReference<StableRef<AppBox>?>(null)
+    private var installed: StableRef<AppBox>? = null
+
+    /**
+     * The lock `setApp` holds over those three steps, and the only one in this
+     * file: a question is asked with the logic held, so nothing else here can
+     * wait for a thread that is inside one.
+     *
+     * A spin and not a mutex, which is what `kotlin.concurrent.atomics` gives
+     * on every target this module builds, and an app is installed once — a
+     * thread that waits is one that waits microseconds.
+     */
+    private val swap = AtomicInt(0)
 
     public actual fun setApp(ask: ((Question) -> Answer)?) {
         val reference = if (ask == null) null else StableRef.create(AppBox(ask))
-        val previous = installed.getAndSet(reference)
-        if (reference == null) {
-            mars_stn_set_app(null, null)
-        } else {
-            mars_stn_set_app(reference.asCPointer(), staticCFunction(::asked))
+        while (!swap.compareAndSet(0, 1)) {
+            // another `setApp` is between two of its steps
+        }
+        val previous = installed
+        try {
+            if (reference == null) {
+                mars_stn_set_app(null, null)
+            } else {
+                mars_stn_set_app(reference.asCPointer(), staticCFunction(::asked))
+            }
+            installed = reference
+        } finally {
+            swap.value = 0
         }
         // The box of the app before this one is held until the swap is over, and
         // not released by the assignment that replaces it: a question can be in
@@ -114,7 +135,9 @@ public actual object StnLogic {
         // pointer it was handed, so a box freed before `mars_stn_set_app` has put
         // the new context in its place is a question that dereferences a freed
         // one. Both are locals of this call, so the old box dies here at the
-        // earliest — after the swap.
+        // earliest — after the swap, which is what the C ABI asks for: `ctx`
+        // has to stay alive until another `mars_stn_set_app` takes its place.
+        //
         previous?.dispose()
     }
 
