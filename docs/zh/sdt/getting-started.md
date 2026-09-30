@@ -10,7 +10,7 @@ SDT 回答一个问题：*这台手机为什么连不上服务器？* 它拿两�
 | 你的 App 是 | 谁带着 SDT | 怎么拿到它 |
 |---|---|---|
 | Rust | `marsrs`（`marsrs-xlog` 里一点都没有） | `marsrs::sdt` |
-| iOS / watchOS，Swift | `MarsRSNet` 这个 product，或 `MarsRS` | `MarsSdt` |
+| iOS / watchOS，Swift 或 Objective-C | `MarsRSNet` 这个 product 或 pod，或 `MarsRS` | `MarsSdt` |
 | Android，Kotlin 或 Java | JitPack 上的 `marsrs`，不是 `xlog` | `io.github.orangeboychen.marsrs.sdt.SdtLogic` |
 | Kotlin Multiplatform | `marsrs-kmp`，不是 `xlog-kmp` | `io.github.orangeboychen.marsrs.sdt.SdtLogic` |
 | 有 C FFI 的任何东西 | `include/mars_sdt.h` | `mars_sdt_*` |
@@ -129,6 +129,11 @@ if let report = MarsSdt.takeReport() { send(report) }
 
 `MarsSdt.takeReport()` 的 buffer 从 4 KB 起、翻倍到 1 MB，所以取报告的 App 问一次
 就行，不用估大小。
+
+`MarsSdt` 是同一份 framework 上的类，所以 Objective-C 写的 App 也是从
+`MarsRSNet-Swift.h` 跑这三个调用：probe 是一个 block，五种回答是 `MarsSdtResult`
+的五个类方法。它摸不到的只有 `MarsSdt.plan` —— 枚举数组没有对应的 Objective-C
+类型，所以 [计划](/zh/sdt/checks) 仍归 Swift。
 
 ## Android
 

@@ -63,6 +63,20 @@ Native packages carry, member for member:
 | `xlog.close()` | closes the appender |
 | `xlog.isOpen` | whether it is still open |
 
+What the file being written is, and what a whole day of them are:
+
+| | |
+|---|---|
+| `xlog.currentLogPath` | the file this appender is writing to; `undefined` until the day's first record opens one |
+| `xlog.logFiles(daysAgo)` | that day's files that are *there* — `0` is today, `1` is yesterday |
+| `xlog.logFileNames(daysAgo)` | that day's paths, whether or not they are there yet |
+
+A day is asked about by this appender's prefix and directory, and not by a
+handle, so the answer is the same whether or not the appender is open. `open` is
+the only static of the class: there is no process-wide appender here to ask about,
+and an app that opens one `Xlog` per prefix drains each of them with its own
+`flushNow()`.
+
 `Xlog.open` of a `namePrefix` that is already open answers the appender that is
 open and not a second one: the native side is one appender per prefix, so two
 `Xlog`s of one prefix are one appender, and `close` on either closes both.

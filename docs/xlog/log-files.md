@@ -27,6 +27,10 @@ appender_get_current_log_path()          // the process-wide appender's
 Xlog.currentLogPath
 ```
 
+```typescript [HarmonyOS]
+xlog.currentLogPath             // undefined until the day's first record opens one
+```
+
 ```c [C]
 char path[512];
 mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK, or a negative code
@@ -34,9 +38,11 @@ mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK, or a negative 
 
 :::
 
-Those three are the ones that answer it. The rest leave the app to name the
+Those four are the ones that answer it. The rest leave the app to name the
 file itself, which is the two things it gave the config: the directory and the
-prefix, with the day in between.
+prefix, with the day in between. The Swift and the C one are the process-wide
+appender's, which is the one `mars_xlog_open` opens; HarmonyOS has no
+process-wide appender, so `xlog.currentLogPath` is the `Xlog` it was asked on.
 
 A whole *day* of files is what an app that uploads yesterday's asks for, and
 there are two calls for it: the files that are there, and the names the day is
@@ -54,6 +60,11 @@ Xlog.logFiles(daysAgo: 1, prefix: "marsrs", logDirectory: logDir)
 Xlog.logFileNames(daysAgo: 1, prefix: "marsrs", logDirectory: logDir)
 ```
 
+```typescript [HarmonyOS]
+xlog.logFiles(1)
+xlog.logFileNames(1)
+```
+
 ```c [C]
 char path[512];
 // index 0, 1, 2 …; a negative code — MARS_XLOG_ERR_NO_PATH — is the end of the list
@@ -63,10 +74,11 @@ mars_xlog_make_logfile_name(1, "marsrs", log_dir, 0, path, sizeof path);
 
 :::
 
-`0` is today and `1` is yesterday. Rust and Swift answer the day's list in one
-call; the C ABI answers one index of it at a time, and the two Swift calls are
-that walk. Names answer two where files answer one when a cache dir is given and
-the file is there: the log-dir file and its twin in the cache dir.
+`0` is today and `1` is yesterday. Rust, Swift and HarmonyOS answer the day's
+list in one call; the C ABI answers one index of it at a time, and the two calls
+of the other three are that walk. Names answer two where files answer one when a
+cache dir is given and the file is there: the log-dir file and its twin in the
+cache dir.
 
 ## Async: the record may still be in the cache
 
@@ -130,6 +142,9 @@ and its `await flush()` is a `Future` written against `std::thread::spawn` — n
 runtime, and any executor waits on it. Dart has no `flushNow()`, because a
 method channel cannot block the Dart side of it, and HarmonyOS has no `await flush()`, because every method of
 its NAPI module is synchronous.
+
+All three are one appender's. An app that opens one `Xlog` per prefix holds that
+many, and drains each of them with its own `flushNow()`.
 
 ## When the app goes away
 

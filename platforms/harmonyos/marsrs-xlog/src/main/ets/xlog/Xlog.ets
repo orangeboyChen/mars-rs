@@ -23,6 +23,13 @@ import { XlogConfig } from './XlogConfig';
 // off its own thread gives `flushNow()` a thread of its own, and one that wants
 // it off the writer's and off no thread of the app's calls `requestFlush()`.
 //
+// Where the file being written is, and where a whole day's files are, are asked
+// here too — `currentLogPath`, `logFiles` and `logFileNames`. They are members of
+// the `Xlog` and not statics of the class, because they are questions about *this*
+// appender: the port has no process-wide appender to ask about, so a `Xlog.` of
+// one would be a call with nothing behind it. `open` is the only static here, as
+// it is in the Kotlin Multiplatform module every platform is shaped after.
+//
 // Five settings are properties and not `setLevel` / `getLevel` pairs, because a
 // property is the Kotlin and the Swift spelling. `xlog.level` reads the
 // appender's own — `mars_xlog_get_level`, the one of the five the C ABI has a
@@ -57,6 +64,10 @@ export class Xlog {
    * with: the `namePrefix` of the Kotlin and of the Swift. */
   readonly namePrefix: string;
 
+  /** The directory those files are in: what a day of them is asked about by, and
+   * the one field of the config with no default. */
+  private readonly logDir: string;
+
   private currentLevel: LogLevel = LogLevel.Info;
 
   private currentMode: AppenderMode = AppenderMode.Async;
@@ -72,6 +83,7 @@ export class Xlog {
 
   private constructor(config: XlogConfig) {
     this.namePrefix = config.namePrefix || DEFAULT_NAME_PREFIX;
+    this.logDir = config.logDir;
     this.currentLevel = config.level ?? LogLevel.Info;
     this.currentMode = config.mode ?? AppenderMode.Async;
   }
@@ -182,6 +194,21 @@ export class Xlog {
     this.currentMaxAliveTime = seconds;
   }
 
+  /** `mars_xlog_current_log_path_instance`: the file this appender is writing
+   * to, or `undefined` when it has none open — the first record of a day is what
+   * opens one.
+   *
+   * A day is one file, so this is the path an app hands to something that reads
+   * the log while it is being written. What an app that uploads a whole day asks
+   * for is `Xlog.logFiles`, which names that day's files whether or not this one
+   * is among them. */
+  get currentLogPath(): string | undefined {
+    if (!this.opened) {
+      return undefined;
+    }
+    return xlogNapi.currentLogPath(this.namePrefix);
+  }
+
   /** Whether a record at `level` is written: the appender's own answer, and the
    * one the Swift's `isLoggable` and the Kotlin's give. An app asks it before it
    * builds a message that is expensive to build. */
@@ -279,5 +306,26 @@ export class Xlog {
     this.opened = false;
     openAppenders.delete(this.namePrefix);
     xlogNapi.close(this.namePrefix);
+  }
+
+  /** `mars_xlog_getfilepath_from_timespan`: the files of `daysAgo` days ago that
+   * are *there*, in this appender's directory and under this appender's prefix —
+   * `[]` when the day has none. `0` is today, `1` is yesterday, and so on.
+   *
+   * This is a day of files and not the file being written: what
+   * `currentLogPath` answers is one, and it is the one open now. */
+  logFiles(daysAgo: number): string[] {
+    return xlogNapi.logFiles(daysAgo, this.namePrefix, this.logDir);
+  }
+
+  /** `mars_xlog_make_logfile_name`: the paths of the log files of `daysAgo` days
+   * ago whether or not they are *there yet* — the name an app that is about to
+   * write, or that is naming a file to someone else, asks for.
+   *
+   * A day's answer is two where `logFiles` answers one, when a cache dir is
+   * given and the file is there: the log-dir file and its twin in the cache
+   * dir. */
+  logFileNames(daysAgo: number): string[] {
+    return xlogNapi.logFileNames(daysAgo, this.namePrefix, this.logDir);
   }
 }

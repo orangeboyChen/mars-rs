@@ -42,37 +42,37 @@ internal final class ProbeBox {
         // `MarsSdtAnswer` is read for the `kind` in it and left alone for the
         // others, which is what the header promises the diagnosis does.
         var answer = MarsSdtAnswer()
-        switch result {
+        switch result.probe {
         case .nothing:
             answer.kind = MarsSdtNothing
 
-        case let .dns(errorCode, rtt, addresses):
+        case .dns:
             answer.kind = MarsSdtDns
-            answer.error_code = errorCode
-            answer.rtt = rtt
-            answer.ips = held.strings(addresses)
-            answer.ip_count = UInt32(addresses.count)
+            answer.error_code = result.errorCode
+            answer.rtt = result.rtt
+            answer.ips = held.strings(result.addresses)
+            answer.ip_count = UInt32(result.addresses.count)
 
-        case let .tcp(errorCode, rtt, noop):
+        case .tcp:
             answer.kind = MarsSdtTcp
-            answer.error_code = errorCode
-            answer.rtt = rtt
-            answer.sent = noop.sent
-            answer.received = noop.received
-            answer.is_noop_resp = noop.isNoopResponse ? 1 : 0
+            answer.error_code = result.errorCode
+            answer.rtt = result.rtt
+            answer.sent = result.noop?.sent ?? 0
+            answer.received = result.noop?.received ?? 0
+            answer.is_noop_resp = result.noop?.isNoopResponse == true ? 1 : 0
 
-        case let .http(errorCode, rtt, statusCode):
+        case .http:
             answer.kind = MarsSdtHttp
-            answer.error_code = errorCode
-            answer.rtt = rtt
-            answer.status_code = statusCode
+            answer.error_code = result.errorCode
+            answer.rtt = result.rtt
+            answer.status_code = result.statusCode
 
-        case let .ping(errorCode, rtt, lossRate, averageRTT):
+        case .ping:
             answer.kind = MarsSdtPing
-            answer.error_code = errorCode
-            answer.rtt = rtt
-            answer.loss_rate = lossRate
-            answer.avgrtt = averageRTT
+            answer.error_code = result.errorCode
+            answer.rtt = result.rtt
+            answer.loss_rate = result.lossRate
+            answer.avgrtt = result.averageRTT
         }
         return answer
     }
@@ -80,7 +80,7 @@ internal final class ProbeBox {
 
 extension MarsSdt.Query {
     /// What the diagnosis asked, as the Swift reads it.
-    internal init(_ query: MarsSdtQuery) {
+    internal convenience init(_ query: MarsSdtQuery) {
         self.init(
             probe: MarsSdt.Probe(rawValue: query.kind.rawValue) ?? .nothing,
             host: String(cString: query.host),

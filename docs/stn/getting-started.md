@@ -22,7 +22,7 @@ a reason to pick: STN sends the task on the first link that is up.
 | your app is | what carries STN | how you reach it |
 |---|---|---|
 | Rust | `marsrs` (`marsrs-xlog` has none of it) | `marsrs::stn` |
-| iOS / watchOS, Swift | the `MarsRSNet` product, or `MarsRS` | `MarsStn` |
+| iOS / watchOS, Swift or Objective-C | the `MarsRSNet` product or pod, or `MarsRS` | `MarsStn` |
 | Android, Kotlin or Java | `marsrs` on JitPack, not `xlog` | `io.github.orangeboychen.marsrs.stn.StnLogic` |
 | Kotlin Multiplatform | `marsrs-kmp`, not `xlog-kmp` | `io.github.orangeboychen.marsrs.stn.StnLogic` |
 | anything with a C FFI | `include/mars_stn.h` | `mars_stn_*` |
@@ -213,15 +213,57 @@ MarsStn.start(task)
 // 3. the run loop — `dueTime` is how many milliseconds the pass may wait,
 //    and it is `nil` when there is nothing to wait for
 while let wait = MarsStn.dueTime {
-    Thread.sleep(forTimeInterval: Double(wait) / 1000)
+    Thread.sleep(forTimeInterval: wait.doubleValue / 1000)
     MarsStn.runPending()
 }
 ```
 
-`MarsStn` is one `enum` of statics over the `mars_stn_*` of the C ABI, and the
-pod is the same Swift over the same framework. Objective-C does not see it: a
-Swift `enum` of static members is not a type Objective-C can import, so an app
-that runs a task writes that part in Swift.
+`MarsStn` is one class of statics over the `mars_stn_*` of the C ABI, and the pod
+is the same Swift over the same framework — so an app written in Objective-C runs
+the same pipeline, out of the header the compiler writes into
+`MarsRSNet-Swift.h`:
+
+```objc
+@import MarsRSNet;
+
+// 1. the app is one block: a question in, an answer out
+[MarsStn setApp:^StnAnswer *(StnQuestion *question) {
+    switch (question.kind) {
+    case StnQuestionKindReq2Buf:
+        return [StnAnswer encoded:[self encodeTask:question.task]];
+    case StnQuestionKindBuf2Resp:
+        [self handleBody:question.body];
+        return [StnAnswer decodedWithErrorCode:0 handle:MarsStnFailHandleNormal];
+    case StnQuestionKindOnTaskEnd:
+        return [StnAnswer endedWithErrorCode:0];
+    default:
+        return [StnAnswer nothing];
+    }
+}];
+
+// 2. one task
+StnTask *task = [[StnTask alloc] initWithChannelSelect:MarsStnChannelShort];
+task.taskID = [MarsStn generateTaskID];
+task.cgi = @"/cgi-bin/hello";
+task.shortLinkHosts = @[@"example.com"];
+task.totalTimeout = 10_000;
+[MarsStn start:task];
+
+// 3. the run loop — `dueTime` is how many milliseconds the pass may wait,
+//    and it is nil when there is nothing to wait for
+NSNumber *wait = MarsStn.dueTime;
+while (wait) {
+    [NSThread sleepForTimeInterval:wait.doubleValue / 1000];
+    [MarsStn runPending];
+    wait = MarsStn.dueTime;
+}
+```
+
+The nine answers are the nine class methods of `StnAnswer` — `[StnAnswer
+encoded:]`, `[StnAnswer decodedWithErrorCode:handle:]` — and not a `switch` over
+a case that carries a value, which is a thing Objective-C has no spelling for. A
+task's `channelSelect` is one `MarsStnChannel` for the same reason: `.both` is
+the short link and the long one, because Objective-C has no set of flags.
 
 ## Android
 

@@ -52,6 +52,13 @@
 // unspelled lands on the same appender either way.
 static const char* const kDefaultNamePrefix = "xlog";
 
+// The buffer the path symbols write into, and the one the two that answer a list
+// write into for one index at a time. A path never fills it: what a symbol
+// answers is how many bytes it wrote, so a path longer than this is an error
+// rather than a string cut off — which is the same bet the C ABI asks a C caller
+// to make when it hands it a buffer of its own.
+static const unsigned int kPathBufferSize = 1024;
+
 // One appender this module has opened, by name prefix.
 typedef struct {
     char* prefix;
@@ -246,6 +253,30 @@ static napi_value Undefined(napi_env env) {
 
 // --- open(config): boolean -------------------------------------------------
 
+// The `MarsXLogConfig` of an ArkTS configuration object: the eight fields of the
+// C struct, each of them read the way the C++'s own `XLogConfig` defaults it,
+// and `logDir` NULL when there is none — which is how `Open` knows the appender
+// would refuse the config.
+static void FillConfig(napi_env env, napi_value object, MarsXLogConfig* config) {
+    config->mode = NamedInt(env, object, "mode", MarsAppenderAsync);
+    config->log_dir = NamedString(env, object, "logDir", NULL);
+    config->name_prefix = NamedString(env, object, "namePrefix", kDefaultNamePrefix);
+    config->pub_key = NamedString(env, object, "pubKey", NULL);
+    config->compress_mode = NamedInt(env, object, "compressMode", MarsCompressZlib);
+    config->compress_level = NamedInt(env, object, "compressLevel", 0);
+    config->cache_dir = NamedString(env, object, "cacheDir", NULL);
+    config->cache_days = NamedInt(env, object, "cacheDays", 0);
+}
+
+// The four strings `FillConfig` malloc'd, which are the config's and nobody
+// else's: the C ABI copied out of them whatever it needed before it answered.
+static void FreeConfig(MarsXLogConfig* config) {
+    free((void*)config->log_dir);
+    free((void*)config->name_prefix);
+    free((void*)config->pub_key);
+    free((void*)config->cache_dir);
+}
+
 static napi_value Open(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value argv[1] = {NULL};
@@ -255,64 +286,43 @@ static napi_value Open(napi_env env, napi_callback_info info) {
         return Boolean(env, false);
     }
 
+    MarsXLogConfig config;
+    FillConfig(env, argv[0], &config);
+    int level = NamedInt(env, argv[0], "level", MarsLevelInfo);
+
     // `logDir` is the one field with no default, and the C ABI answers
     // MARS_XLOG_ERR_EMPTY_LOG_DIR without it: an appender with nowhere to write
     // is refused here rather than opened and found empty.
-    char* logDir = NamedString(env, argv[0], "logDir", NULL);
-    if (logDir == NULL) {
-        return Boolean(env, false);
-    }
-    char* namePrefix = NamedString(env, argv[0], "namePrefix", kDefaultNamePrefix);
-    char* pubKey = NamedString(env, argv[0], "pubKey", NULL);
-    char* cacheDir = NamedString(env, argv[0], "cacheDir", NULL);
-    if (namePrefix == NULL) {
-        free(logDir);
-        free(pubKey);
-        free(cacheDir);
-        return Boolean(env, false);
-    }
-
-    MarsXLogConfig config;
-    config.mode = NamedInt(env, argv[0], "mode", MarsAppenderAsync);
-    config.log_dir = logDir;
-    config.name_prefix = namePrefix;
-    config.pub_key = pubKey;
-    config.compress_mode = NamedInt(env, argv[0], "compressMode", MarsCompressZlib);
-    config.compress_level = NamedInt(env, argv[0], "compressLevel", 0);
-    config.cache_dir = cacheDir;
-    config.cache_days = NamedInt(env, argv[0], "cacheDays", 0);
-    int level = NamedInt(env, argv[0], "level", MarsLevelInfo);
-
-    long long handle = mars_xlog_get_instance(namePrefix);
+    long long handle = 0;
     int opened = 0;
-    if (handle == 0) {
-        // A config the C ABI refuses is a negative `MARS_XLOG_ERR_*` code and
-        // never `0`, which is the process-wide appender: an `open` that read `0`
-        // as "opened" would register a logger this module never opened, and every
-        // call after this one would write through it.
-        handle = mars_xlog_new_instance(&config, level);
-        opened = handle > 0;
-    }
-    if (handle > 0 && !Remember(namePrefix, handle)) {
-        // The table is what every call after this one goes through, so an
-        // appender it cannot remember is an appender it cannot reach: closed
-        // again, rather than opened and left for the process to leak.
-        //
-        // Only the instance this call opened is the one closed here. A handle
-        // `get_instance` answered with is an appender someone else registered
-        // under this prefix — a release by name is the release of theirs, and
-        // it would close a live logger, and flush its cache, out from under
-        // whoever opened it.
-        if (opened) {
-            mars_xlog_release_instance(namePrefix);
+    if (config.log_dir != NULL && config.name_prefix != NULL) {
+        handle = mars_xlog_get_instance(config.name_prefix);
+        if (handle == 0) {
+            // A config the C ABI refuses is a negative `MARS_XLOG_ERR_*` code
+            // and never `0`, which is the process-wide appender: an `open` that
+            // read `0` as "opened" would register a logger this module never
+            // opened, and every call after this one would write through it.
+            handle = mars_xlog_new_instance(&config, level);
+            opened = handle > 0;
         }
-        handle = 0;
+        if (handle > 0 && !Remember(config.name_prefix, handle)) {
+            // The table is what every call after this one goes through, so an
+            // appender it cannot remember is an appender it cannot reach: closed
+            // again, rather than opened and left for the process to leak.
+            //
+            // Only the instance this call opened is the one closed here. A
+            // handle `get_instance` answered with is an appender someone else
+            // registered under this prefix — a release by name is the release
+            // of theirs, and it would close a live logger, and flush its cache,
+            // out from under whoever opened it.
+            if (opened) {
+                mars_xlog_release_instance(config.name_prefix);
+            }
+            handle = 0;
+        }
     }
 
-    free(logDir);
-    free(namePrefix);
-    free(pubKey);
-    free(cacheDir);
+    FreeConfig(&config);
     return Boolean(env, handle > 0);
 }
 
@@ -529,6 +539,88 @@ static napi_value FlushNow(napi_env env, napi_callback_info info) {
     return Undefined(env);
 }
 
+// --- the files the appender writes ----------------------------------------
+
+// One of the two symbols that answer a list of paths one index at a time —
+// `mars_xlog_getfilepath_from_timespan` and `mars_xlog_make_logfile_name`, which
+// the C++ fills a `std::vector` with and a C caller walks. The two take the same
+// six arguments, so one walk is the walk of both.
+typedef int (*PathAt)(int, const char*, const char*, unsigned int, char*, unsigned int);
+
+// What `pathAt` answers for index after index, as an ArkTS array of strings,
+// starting at `0` and stopping at the first index it answers nothing for — a
+// negative code, or a path of no length. The walk is this module's and not the
+// app's, because an index is not a thing an ArkTS caller can ask for: what it
+// wants is the day's files, and what the C ABI answers is one of them.
+static napi_value Paths(napi_env env, napi_callback_info info, PathAt pathAt) {
+    size_t argc = 3;
+    napi_value argv[3] = {NULL, NULL, NULL};
+    napi_value self = NULL;
+    napi_value list = NULL;
+    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || argc < 3 ||
+        napi_create_array(env, &list) != napi_ok) {
+        return Undefined(env);
+    }
+    int32_t daysAgo = 0;
+    napi_get_value_int32(env, argv[0], &daysAgo);
+    char* prefix = CopyString(env, argv[1]);
+    char* logDir = CopyString(env, argv[2]);
+    char buffer[kPathBufferSize] = {0};
+    for (unsigned int index = 0;; ++index) {
+        int written = pathAt(daysAgo, prefix == NULL ? "" : prefix, logDir == NULL ? "" : logDir,
+                             index, buffer, kPathBufferSize);
+        if (written <= 0) {
+            break;
+        }
+        napi_value path = NULL;
+        if (napi_create_string_utf8(env, buffer, (size_t)written, &path) == napi_ok) {
+            napi_set_element(env, list, index, path);
+        }
+    }
+    free(prefix);
+    free(logDir);
+    return list;
+}
+
+// `mars_xlog_getfilepath_from_timespan`: the log files of `daysAgo` days ago
+// that are *there* — what an app that uploads yesterday's opens.
+static napi_value LogFiles(napi_env env, napi_callback_info info) {
+    return Paths(env, info, mars_xlog_getfilepath_from_timespan);
+}
+
+// `mars_xlog_make_logfile_name`: the paths of `daysAgo` days ago whether or not
+// they are there yet — the name an app that is about to write, or that is naming
+// a file to someone else, asks for. It answers two where `LogFiles` answers one
+// when a cache dir is given and the file is there: the log-dir file and its twin
+// in the cache dir.
+static napi_value LogFileNames(napi_env env, napi_callback_info info) {
+    return Paths(env, info, mars_xlog_make_logfile_name);
+}
+
+// `mars_xlog_current_log_path_instance`: the file this appender is writing to, or
+// `undefined` when it has none open — the first record of the day is what opens
+// one. This is the per-instance spelling and not the process-wide
+// `mars_xlog_current_log_path`, because no symbol of the C ABI installs a
+// process-wide appender: every `Xlog` of this module is an instance.
+static napi_value CurrentLogPath(napi_env env, napi_callback_info info) {
+    char* namePrefix = ArgString(env, info, 0);
+    long long handle = HandleOf(namePrefix);
+    free(namePrefix);
+    if (handle == 0) {
+        return Undefined(env);
+    }
+    char buffer[kPathBufferSize] = {0};
+    int written = mars_xlog_current_log_path_instance(handle, buffer, kPathBufferSize);
+    if (written <= 0) {
+        return Undefined(env);
+    }
+    napi_value path = NULL;
+    if (napi_create_string_utf8(env, buffer, (size_t)written, &path) != napi_ok) {
+        return Undefined(env);
+    }
+    return path;
+}
+
 static napi_value Close(napi_env env, napi_callback_info info) {
     char* namePrefix = ArgString(env, info, 0);
     if (namePrefix == NULL) {
@@ -565,6 +657,9 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"log", NULL, Log, NULL, NULL, NULL, napi_default, NULL},
         {"requestFlush", NULL, RequestFlush, NULL, NULL, NULL, napi_default, NULL},
         {"flushNow", NULL, FlushNow, NULL, NULL, NULL, napi_default, NULL},
+        {"currentLogPath", NULL, CurrentLogPath, NULL, NULL, NULL, napi_default, NULL},
+        {"logFiles", NULL, LogFiles, NULL, NULL, NULL, napi_default, NULL},
+        {"logFileNames", NULL, LogFileNames, NULL, NULL, NULL, napi_default, NULL},
         {"close", NULL, Close, NULL, NULL, NULL, napi_default, NULL},
     };
     napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties);

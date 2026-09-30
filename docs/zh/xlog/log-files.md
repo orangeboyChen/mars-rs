@@ -26,6 +26,10 @@ appender_get_current_log_path()          // 进程级那个 appender 的
 Xlog.currentLogPath
 ```
 
+```typescript [HarmonyOS]
+xlog.currentLogPath             // 当天第一条记录写出之前是 undefined
+```
+
 ```c [C]
 char path[512];
 mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK，或负的错误码
@@ -33,8 +37,10 @@ mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK，或负的错�
 
 :::
 
-能给出这个路径的就是这三个包。其余平台要 App 自己拼出文件名，拼的时候用的还是交给
-配置的那两样：目录和前缀，中间夹着当天日期。
+能给出这个路径的就是这四个包。其余平台要 App 自己拼出文件名，拼的时候用的还是交给
+配置的那两样：目录和前缀，中间夹着当天日期。Swift 和 C 给的是进程级那个 appender 的，
+也就是 `mars_xlog_open` 打开的那个；鸿蒙没有进程级的 appender，所以
+`xlog.currentLogPath` 是问的那个 `Xlog` 自己的。
 
 一整**天**的文件是另一件事，要上传昨天日志的 App 问的就是它。这里有两个调用：一个是
 确实存在的那些文件，一个是这一天会写进哪几个名字 —— 不管文件在不在：
@@ -51,6 +57,11 @@ Xlog.logFiles(daysAgo: 1, prefix: "marsrs", logDirectory: logDir)
 Xlog.logFileNames(daysAgo: 1, prefix: "marsrs", logDirectory: logDir)
 ```
 
+```typescript [HarmonyOS]
+xlog.logFiles(1)
+xlog.logFileNames(1)
+```
+
 ```c [C]
 char path[512];
 // 下标 0、1、2 ……；负的错误码 —— MARS_XLOG_ERR_NO_PATH —— 表示后面没有了
@@ -60,8 +71,8 @@ mars_xlog_make_logfile_name(1, "marsrs", log_dir, 0, path, sizeof path);
 
 :::
 
-`0` 是今天，`1` 是昨天。Rust 和 Swift 一次给出这一天的全部；C ABI 一次只给一个下标，
-Swift 那两个调用做的就是一趟走完它的事。配了缓存目录、而且文件确实存在时，“名字”
+`0` 是今天，`1` 是昨天。Rust、Swift 和鸿蒙一次给出这一天的全部；C ABI 一次只给一个下标，
+另外三个包的那两个调用做的就是一趟走完它的事。配了缓存目录、而且文件确实存在时，“名字”
 会比“文件”多出一个：日志目录里那个，和它在缓存目录里的孪生文件。
 
 ## 异步：记录可能还在缓存里
@@ -123,6 +134,9 @@ mars_xlog_flush_now_instance(0);
 —— method channel 阻塞不了 Dart 这一侧；HarmonyOS 没有 `await flush()` —— 它的
 NAPI 每个方法都是同步的。Rust 三个都有，它的 `await flush()` 是一个用
 `std::thread::spawn` 写出来的 `Future`：不需要 runtime，任何执行器都能等它。
+
+这三个都只是**一个** appender 的。一个前缀开一个 `Xlog` 的 App 手里就有那么多个
+appender，每个都用它自己的 `flushNow()` 排空。
 
 ## App 退出的时候
 

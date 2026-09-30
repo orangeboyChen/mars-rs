@@ -154,9 +154,13 @@ log.isConsoleLogEnabled = YES;
 ```
 
 Objective-C 没有 `#file` 可填，所以这里写的记录带的是空文件名和行号 0，除非用长形
-式把它们写上 —— `[log log:message:tag:file:function:line:]`。Objective-C 拿不到的
-是网络那一半：`MarsStn` 和 `MarsSdt` 是 Swift 类型，要跑任务或诊断的 App 得把那
-部分写在 Swift 里。
+式把它们写上 —— `[log log:message:tag:file:function:line:]`。
+
+网络那一半同样是 `@objc` 的：`MarsStn` 和 `MarsSdt` 是同一份 framework 上的类，
+[任务流水线](/zh/stn/getting-started) 和 [网络诊断](/zh/sdt/getting-started)
+里都有 Swift 写法旁边那份 Objective-C 写法。Objective-C 摸不到的只有一个属性 ——
+`MarsSdt.plan`，一个枚举数组，它没有对应的 Objective-C 类型 —— 以及控制台 sink，它
+接的是一个 C 函数指针。
 
 ## Android
 

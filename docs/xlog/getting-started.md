@@ -171,9 +171,14 @@ log.isConsoleLogEnabled = YES;
 
 Objective-C has no `#file` to fill a call site with, so a record written here
 carries an empty file and the line 0 unless the long form names them — `[log
-log:message:tag:file:function:line:]`. What Objective-C does not get is the net
-half: `MarsStn` and `MarsSdt` are Swift types, so an app that runs a task or a
-diagnosis writes that part in Swift.
+log:message:tag:file:function:line:]`.
+
+The net half is `@objc` as well: `MarsStn` and `MarsSdt` are classes over the
+same framework, and [the task pipeline](/stn/getting-started) and
+[the network diagnosis](/sdt/getting-started) carry the Objective-C spelling
+beside the Swift one. What Objective-C does not reach is one property —
+`MarsSdt.plan`, an array of enums, which has no Objective-C type — and the
+console sink, which takes a C function pointer.
 
 ## Android
 
