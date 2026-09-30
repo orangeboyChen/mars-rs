@@ -2,12 +2,13 @@
 //! off a backup ip.
 //!
 //! While the app is active the C++ posts a check every [`TIME_CHECK_PERIOD`].
-//! Each one asks three questions before it does anything: is the long link on a
-//! backup ip ([`IpSourceType::Backup`]), is no check already running, and did
-//! fewer than [`MAX_SPEED_TEST_COUNT`] of them happen in the last
-//! [`INTERVAL_TIME`]? Then it resolves the host the link is on, picks one ip
-//! and one port out of what dns and `NetSource` give it at random, and asks
-//! whether that pair can be reached. A pair that can is one whose ban is
+//! Each one asks three questions before it does anything: is the long link on
+//! a backup ip ([`IpSourceType::Backup`]), is no check already running, and
+//! did no more than [`MAX_SPEED_TEST_COUNT`] of them happen in the last
+//! [`INTERVAL_TIME`] — one test more than the name says, which is what that
+//! const's own doc is about? Then it resolves the host the link is on, picks
+//! one ip and one port out of what dns and `NetSource` give it at random, and
+//! asks whether that pair can be reached. A pair that can is one whose ban is
 //! lifted, and the app is told — which is what makes the long link drop and
 //! connect again on a better ip.
 //!
