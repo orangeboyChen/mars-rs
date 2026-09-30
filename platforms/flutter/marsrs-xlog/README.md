@@ -63,7 +63,7 @@ package out of it.
 
 ## Why it is called xlog's
 
-The C ABI is 28 `mars_xlog_*` symbols and nothing else, and
+The C ABI is 23 `mars_xlog_*` symbols and nothing else, and
 `scripts/build_xcframework.sh` fails the day it is not — the same reason the
 framework and the AAR are called xlog's. The pair's other half is `marsrs`, the
 whole-port plugin, and STN and SDT land in that one and in nothing here. Take
