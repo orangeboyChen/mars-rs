@@ -977,8 +977,14 @@ mod tests {
 
     #[test]
     fn no_hosts_is_an_empty_request() {
+        // A count of four and not of zero: with none the loop would add
+        // nothing whether the null guard is there or not, and the guard is
+        // what this test is about — a caller that says "four hosts" and
+        // hands over no pointer is answered an empty map and not read
+        // through.
+        //
         // SAFETY: null is explicitly allowed by the contract.
-        let items = unsafe { hosts_from_c(std::ptr::null(), 0) };
+        let items = unsafe { hosts_from_c(std::ptr::null(), 4) };
         assert!(items.is_empty());
     }
 
