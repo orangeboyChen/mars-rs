@@ -1169,7 +1169,12 @@ impl NetCore {
         if let Some(process) = self.task_process.as_mut() {
             process(&mut task);
         }
-        prepare.end_process_hosts_time = now;
+        // The clock's own reading, and not the tick the task came in with:
+        // the difference of the two is what the C++ logs as the cost of its
+        // `task_process_hook_`, and a copy of `now` into both is a cost of
+        // zero however long the hook took. It is the same pair
+        // `DnsProfile::end_time` is the end of.
+        prepare.end_process_hosts_time = gettickcount();
 
         if task.channel_select == 0 {
             self.end_task_at(
@@ -4086,6 +4091,35 @@ mod tests {
         assert_eq!(untold.len(), 6, "an app that never went inactive");
         assert_eq!(background.len(), 4, "the quota shared out over two hosts");
         assert_eq!(foreground.len(), 6, "five from one host, and one more");
+    }
+
+    /// The two readings the C++ logs the difference of as the cost of its
+    /// `task_process_hook_`: the end is a second reading of the clock and not
+    /// a copy of the tick the task was asked at, which would be a cost of
+    /// zero whatever the hook did.
+    #[test]
+    fn the_end_of_the_hosts_hook_is_the_clock_and_not_the_tick_it_began_at() {
+        let (mut core, _rec) = wired();
+        core.set_task_process(|_task| {});
+
+        let mut only_short = task(11);
+        only_short.channel_select = Task::CHANNEL_SHORT;
+        let before = gettickcount();
+        assert!(core.start_task_at(NOW, only_short));
+        let after = gettickcount();
+
+        let tasks = core.shortlink().tasks();
+        assert_eq!(tasks.len(), 1, "the task went out on the short link");
+        let prepare = &tasks[0].prepare_profile;
+        assert_eq!(
+            prepare.begin_process_hosts_time, NOW,
+            "the tick the task was asked at"
+        );
+        assert!(
+            (before..=after).contains(&prepare.end_process_hosts_time),
+            "the end is a reading taken while the hook ran, and not {NOW}: {}",
+            prepare.end_process_hosts_time
+        );
     }
 
     #[test]
