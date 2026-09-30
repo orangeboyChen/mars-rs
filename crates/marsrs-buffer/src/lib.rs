@@ -167,6 +167,14 @@ impl LogBuffer {
                     > max_length
                 {
                     raw_log_len = max_length.saturating_sub(HEADER_LEN + TAILER_LEN);
+                    // The clamp has to land in the region and not only in
+                    // `self.length`: `flush` copies the header out with the
+                    // payload, so a block that still claims the length a dead
+                    // process was interrupted leaving is one `get_period_logs`
+                    // reaches `pos + len + TAILER_LEN > file_size` on and drops
+                    // whole — every record in the block, and not just the tail
+                    // that never made it.
+                    LogCrypt::set_log_len(region, u32::try_from(raw_log_len).unwrap_or(u32::MAX));
                 }
                 self.length = raw_log_len.saturating_add(HEADER_LEN).min(max_length);
             }
@@ -332,7 +340,12 @@ impl LogBuffer {
         // `__Flush()`
         LogCrypt::update_log_hour(region);
 
-        let flush_len = self.length;
+        // `min(region.len())` because the length is this buffer's and the
+        // region is a parameter: a caller that hands `flush` a shorter slice
+        // than the one `attach` or `write` sized the buffer against would
+        // otherwise index past its end — in a logging library, where the
+        // panic is worse than the record it is trying to save.
+        let flush_len = self.length.min(region.len());
         out.write(&region[..flush_len]);
 
         // The tailer goes into `out` and not into the region. It is what ends a
@@ -560,10 +573,17 @@ mod tests {
         buf.attach(&mut region);
         assert_eq!(buf.len(), HEADER_LEN + 100);
 
-        // An oversized length is clamped so header + payload + tailer fit.
+        // An oversized length is clamped so header + payload + tailer fit —
+        // and the clamp is written back into the header, because what `flush`
+        // copies out of the region is the header and the payload together.
         le::write_u32(&mut region, 5, u32::MAX);
         buf.attach(&mut region);
         assert_eq!(buf.len(), REGION_LEN - TAILER_LEN);
+        assert_eq!(
+            LogCrypt::get_log_len(&region),
+            (REGION_LEN - TAILER_LEN - HEADER_LEN) as u32,
+            "the header still claims a payload the region cannot hold"
+        );
 
         // An unknown magic resets the buffer.
         region[0] = 0xAB;

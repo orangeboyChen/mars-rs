@@ -367,6 +367,21 @@ impl LogCrypt {
         le::write_u32(data, off::LENGTH, current);
     }
 
+    /// `LogCrypt::SetLogLen()` — writes the payload length the header records,
+    /// absolutely, where [`Self::update_log_len`] only adds to it.
+    ///
+    /// What wants it is a header recovered from a cache file: [`Self::fix`]
+    /// reads a length a process was interrupted leaving, and a length that
+    /// cannot fit the region it was read from has to be written back as the one
+    /// that can — a block that claims bytes the region never held is one a
+    /// reader throws away whole.
+    pub fn set_log_len(data: &mut [u8], len: u32) {
+        if data.len() < HEADER_LEN {
+            return;
+        }
+        le::write_u32(data, off::LENGTH, len);
+    }
+
     /// `LogCrypt::SetTailerInfo()` — writes `magic_end` at `data[0]`.
     ///
     /// Callers pass the slice starting at the tailer offset.
