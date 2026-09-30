@@ -31,10 +31,16 @@ ndk_bin="$ndk_dir/toolchains/llvm/prebuilt/linux-x86_64/bin"
 [ -d "$ndk_bin" ] || { echo "::error::no NDK $ndk_version under $android_home"; exit 1; }
 
 # abi:rust-target:clang
+#
+# 21 in every clang, and not the 24 they used to name: every module an app
+# takes declares `minSdk 21`, so the `.so` this lays out is loaded on an API
+# 21 device, and a library linked against a newer platform may name a symbol
+# that device's libc does not have — a `dlopen` that fails on the oldest
+# device the manifest promised.
 abis=(
-    "arm64-v8a:aarch64-linux-android:aarch64-linux-android24-clang"
-    "armeabi-v7a:armv7-linux-androideabi:armv7a-linux-androideabi24-clang"
-    "x86_64:x86_64-linux-android:x86_64-linux-android24-clang"
+    "arm64-v8a:aarch64-linux-android:aarch64-linux-android21-clang"
+    "armeabi-v7a:armv7-linux-androideabi:armv7a-linux-androideabi21-clang"
+    "x86_64:x86_64-linux-android:x86_64-linux-android21-clang"
 )
 
 targets=()

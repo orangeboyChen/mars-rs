@@ -285,8 +285,13 @@ jobs:
           # same two crates, so what a matrix of two bought was a second
           # check-out, a second toolchain, a second NDK install and a second
           # cold cache — for one command each.
-          for entry in aarch64-linux-android:aarch64-linux-android24-clang \
-                       armv7-linux-androideabi:armv7a-linux-androideabi24-clang; do
+          # 21 and not 24, which is what this used to build: every module an
+          # app takes declares `minSdk 21`, so the `.so` an AAR carries is
+          # loaded on an API 21 device, and a library linked against a newer
+          # platform may name a symbol that device's libc does not have — a
+          # `dlopen` that fails on the oldest device the manifest promised.
+          for entry in aarch64-linux-android:aarch64-linux-android21-clang \
+                       armv7-linux-androideabi:armv7a-linux-androideabi21-clang; do
             target="${entry%%:*}"
             clang="$ndk_bin/${entry##*:}"
             test -x "$clang"
