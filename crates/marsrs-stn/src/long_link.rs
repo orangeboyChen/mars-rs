@@ -1567,9 +1567,16 @@ impl LongLink {
     /// so the answer of a noop the app asked for is what the profile of the
     /// heartbeat before it ends up saying.
     pub fn trig_noop_at(&mut self, now: u64) {
+        // What the flag was before this call is what it is put back to when
+        // nothing went out: a noop that did not go out is not a heartbeat that
+        // is out, but one that was already out when this was asked for is, and
+        // clearing the flag here throws its answer away — `noop_resp_at` ends
+        // nothing for a heartbeat it does not think is out, and
+        // `is_noop_timed_out` never fires for one.
+        let was_nooping = self.nooping;
         self.nooping = true;
         let sent = self.noop_req_at(now, false);
-        if !sent && self.nooping {
+        if !sent && !was_nooping {
             self.nooping = false;
         }
     }
@@ -1582,17 +1589,20 @@ impl LongLink {
     /// `__NoopReq(_log, _alarm, need_active_timeout)` — the noop itself, or the
     /// identify check the app answered with when there is one to send.
     ///
-    /// Either way the timeout alarm is started, and cancelled again when
-    /// nothing went out: the C++ starts it, sends, and starts it once more,
-    /// which is the same reading twice.
+    /// The timeout alarm is started for what went out, and not asked for before
+    /// it is known whether anything does: a noop that did not go out leaves
+    /// the alarm that is already waiting alone, and that alarm is the watchdog
+    /// of the heartbeat which *is* out — the one the interval sent while this
+    /// one was being asked for. Cancelling it first and starting it again after
+    /// the send is a heartbeat with no watchdog in between, and worse, none at
+    /// all when the send does not happen: `is_noop_timed_out` never fires for
+    /// it, and the answer the server sends ends nothing.
     pub fn noop_req_at(&mut self, now: u64, need_active_timeout: bool) -> bool {
         let wait = if need_active_timeout {
             NOOP_ACTIVE_TIMEOUT
         } else {
             NOOP_TIMEOUT
         };
-        self.noop_timeout.cancel();
-        self.noop_timeout.start_at(now, wait);
 
         let sent = match self.identify.get_identify_buffer() {
             Some((buffer, cmdid)) => {
@@ -1605,11 +1615,12 @@ impl LongLink {
             }
             None => self.send_noop_when_no_data(),
         };
-
         if !sent {
-            self.noop_timeout.cancel();
+            return false;
         }
-        sent
+        self.noop_timeout.cancel();
+        self.noop_timeout.start_at(now, wait);
+        true
     }
 
     /// `__NoopResp(...)` — whether what came back is the answer to the

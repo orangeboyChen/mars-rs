@@ -539,6 +539,44 @@ fn the_answer_of_a_noop_the_app_asked_for_is_what_the_heartbeat_before_it_report
 }
 
 #[test]
+fn a_heartbeat_the_app_asked_for_and_did_not_send_leaves_the_one_out_alone() {
+    let (mut link, _) = a_connected_longlink();
+
+    // the heartbeat of the interval: on the queue, waiting for the host's run
+    // to write it, and with eight seconds to answer in
+    assert!(link.send_heartbeat_at(1_000, false, false));
+    assert!(link.is_nooping());
+    assert_eq!(link.noop_timeout_due(), Some(1_000 + 8 * 1000));
+
+    // `TrigNoop` while that one is still on the queue: a noop goes out only
+    // when there is nothing waiting to be written, so nothing goes out — and
+    // the heartbeat that is out is still out, with the watchdog it was given
+    link.trig_noop_at(1_100);
+    assert_eq!(link.queued().len(), 1, "nothing was put on the queue");
+    assert_eq!(link.queued()[0].task.taskid, Task::NOOP_TASK_ID);
+    assert!(link.is_nooping(), "the heartbeat is still out");
+    assert_eq!(
+        link.noop_timeout_due(),
+        Some(1_000 + 8 * 1000),
+        "the watchdog of the heartbeat that is out, and not one restarted"
+    );
+
+    // so an answer that does not come is a timeout that ends the run
+    assert!(!link.is_noop_timed_out());
+    assert!(link.on_noop_alarm_at(1_000 + 8 * 1000, true));
+    assert!(link.is_noop_timed_out());
+
+    // ... and an answer that does, though late, still ends the heartbeat
+    assert!(link.noop_resp_at(
+        1_000 + 8 * 1000 + 100,
+        marsrs_stn::longlink::NOOP_CMDID,
+        Task::NOOP_TASK_ID,
+        &[]
+    ));
+    assert!(!link.is_nooping());
+}
+
+#[test]
 fn the_heartbeat_the_app_asks_for_is_not_the_one_the_interval_asked_for() {
     let (mut link, _) = a_connected_longlink();
     let said: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
