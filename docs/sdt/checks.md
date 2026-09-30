@@ -12,8 +12,8 @@ turned into a plan you can read before anything is probed.
 | dns against another server, to compare with | `NetCheckType::NewDnsCheck` | `.newDns` | `Check.NewDns` | `2` | `MarsSdtCheckNewDns` |
 | tcp | `NetCheckType::TcpCheck` | `.tcp` | `Check.Tcp` | `3` | `MarsSdtCheckTcp` |
 | http | `NetCheckType::HttpCheck` | `.http` | `Check.Http` | `4` | `MarsSdtCheckHttp` |
-| traceroute — planned, no probe asked for it yet | `NetCheckType::TracerouteCheck` | `.traceroute` | `Check.Traceroute` | `5` | `MarsSdtCheckTraceroute` |
-| the request's own buffer — same | `NetCheckType::ReqBufCheck` | `.reqBuf` | `Check.ReqBuf` | `6` | `MarsSdtCheckReqBuf` |
+| traceroute — planned, no probe asked for it yet | `NetCheckType::TracerouteCheck` | `.traceroute` | `Check.Traceroute` | — | `MarsSdtCheckTraceroute` |
+| the request's own buffer — same | `NetCheckType::ReqBufCheck` | `.reqBuf` | `Check.ReqBuf` | — | `MarsSdtCheckReqBuf` |
 
 ## The bits the mode is made of
 

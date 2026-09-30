@@ -12,8 +12,8 @@
 | 对着另一个服务器做的 dns，用来比 | `NetCheckType::NewDnsCheck` | `.newDns` | `Check.NewDns` | `2` | `MarsSdtCheckNewDns` |
 | tcp | `NetCheckType::TcpCheck` | `.tcp` | `Check.Tcp` | `3` | `MarsSdtCheckTcp` |
 | http | `NetCheckType::HttpCheck` | `.http` | `Check.Http` | `4` | `MarsSdtCheckHttp` |
-| traceroute —— 有计划，但还没有探测问它 | `NetCheckType::TracerouteCheck` | `.traceroute` | `Check.Traceroute` | `5` | `MarsSdtCheckTraceroute` |
-| 请求自己的 buffer —— 同上 | `NetCheckType::ReqBufCheck` | `.reqBuf` | `Check.ReqBuf` | `6` | `MarsSdtCheckReqBuf` |
+| traceroute —— 有计划，但还没有探测问它 | `NetCheckType::TracerouteCheck` | `.traceroute` | `Check.Traceroute` | — | `MarsSdtCheckTraceroute` |
+| 请求自己的 buffer —— 同上 | `NetCheckType::ReqBufCheck` | `.reqBuf` | `Check.ReqBuf` | — | `MarsSdtCheckReqBuf` |
 
 ## mode 由哪些 bit 组成
 
