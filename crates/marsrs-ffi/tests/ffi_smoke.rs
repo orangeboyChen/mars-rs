@@ -318,7 +318,17 @@ fn the_level_one_function_sets_is_the_one_every_write_sees() {
         "a-level-none-filter-drops-everything"
     ));
 
+    // The other half of the property, without which the assertion above is one
+    // a write that never works at all would pass: the same write, through the
+    // same handle, lands when the filter lets it through.
     mars_xlog_set_level_instance(log, 0); // back to Verbose
+    write(log, 5, "smoke", "a-verbose-filter-keeps-everything");
+    mars_xlog_flush_now_instance(log);
+    let bytes = fs::read(log_file(dir.path())).unwrap();
+    assert!(
+        any_view_contains(&bytes, "a-verbose-filter-keeps-everything"),
+        "a write the filter lets through was dropped anyway"
+    );
 }
 
 #[test]
