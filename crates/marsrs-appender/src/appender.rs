@@ -1565,9 +1565,7 @@ impl Appender {
                 guard.config.mode = AppenderMode::Sync;
                 let reached = guard.drain_leftover(leftover.as_slice());
                 drop(guard);
-                if reached {
-                    appender.clear_cache_file_if_heap();
-                }
+                appender.clear_cache_file_when_drained(reached);
                 return Err(err);
             }
         }
@@ -1595,10 +1593,12 @@ impl Appender {
             }
             // A slot with no mapping keeps its bytes, so once the records above
             // are in a log the file has to be emptied or the next start appends
-            // them a second time — once per start, forever. (With a mapping,
-            // `buffer_drained` zeroes it in place.) Clearing it while the write
-            // has not happened is what would lose them.
-            appender.clear_cache_file_if_heap();
+            // them a second time. (With a mapping, `buffer_drained` zeroes it in
+            // place.) A block that reached *no* log is the other case, and the
+            // file is then the only copy of it there is: what carries the
+            // records from here is `AppenderInner::pending`, which is memory,
+            // and a second refusal gives a batch up for good.
+            appender.clear_cache_file_when_drained(reached);
         }
 
         // What a configured `pub_key` does *not* buy, said in the file before
@@ -1941,7 +1941,22 @@ impl Appender {
         // what `drain_buffer` did on its way through. What is *not* done is
         // giving the region up when the write failed: those records are still
         // only in the cache file, and the next start recovers them from it.
-        if drained {
+        self.clear_cache_file_when_drained(drained);
+    }
+
+    /// Empties this appender's own cache file when the block it held reached a
+    /// log — and leaves it alone when it did not.
+    ///
+    /// The file is emptied because a slot with no mapping keeps its bytes, so a
+    /// block that is already in a log would be appended again at the next
+    /// start. It is *not* emptied for a block that reached no log, because then
+    /// it is the only copy of that block there is: the batch is in
+    /// [`AppenderInner::pending`] until a later flush writes it, and a batch
+    /// [`AppenderInner::refuse_pending`] gives up is a batch no start can
+    /// recover. A duplicate is what a crash between the two costs; an empty
+    /// file is what it costs when the block is dropped with the batch.
+    fn clear_cache_file_when_drained(&self, reached: bool) {
+        if reached {
             self.clear_cache_file_if_heap();
         }
     }
@@ -3294,6 +3309,46 @@ mod tests {
             &cached[..8],
             "the record of the file is in the region, so `close()` may empty the file"
         );
+    }
+
+    /// The one case in which emptying the cache file is a loss: the block it
+    /// held was copied out and then reached no log.
+    ///
+    /// With a mapping, `buffer_drained` zeroes the region in place and the file
+    /// follows it, so what is left of the block is `pending` — memory. Without
+    /// one, the file is a second copy, and it is the copy a later start would
+    /// recover the records from: emptying it over a batch `pending` has not
+    /// written yet is what loses a crashed run's records.
+    #[test]
+    fn a_cache_file_is_emptied_only_once_its_block_reached_a_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Sync), 0, 0).unwrap();
+        let path = {
+            let mut guard = appender.lock();
+            // The heap path, where the file is a copy of the region and not the
+            // region itself: the one in which emptying it is a loss. The
+            // mapping is given up before the file is touched — truncating a
+            // file a live mapping covers is a SIGBUS on the next touch of it.
+            guard.region = Region::heap();
+            guard.use_mmap = false;
+            guard.cache_path().expect("the appender claimed a slot")
+        };
+        // A block no log has taken.
+        fs::write(&path, vec![7u8; BUFFER_BLOCK_LENGTH]).unwrap();
+
+        appender.clear_cache_file_when_drained(false);
+        assert!(
+            fs::read(&path).unwrap().iter().any(|byte| *byte != 0),
+            "the file was emptied over a block no log holds"
+        );
+
+        appender.clear_cache_file_when_drained(true);
+        assert_eq!(
+            fs::metadata(&path).unwrap().len(),
+            0,
+            "the block is in a log now, so the next start must not append it again"
+        );
+        appender.close();
     }
 
     #[test]
