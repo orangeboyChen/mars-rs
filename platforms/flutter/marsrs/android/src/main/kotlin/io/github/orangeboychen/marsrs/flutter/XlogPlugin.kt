@@ -71,7 +71,6 @@ class XlogPlugin :
                 "flush" -> flush(call, result)
                 "requestFlush" -> requestFlush(call, result)
                 "setLevel" -> setLevel(call, result)
-                "getLevel" -> getLevel(call, result)
                 "setMode" -> setMode(call, result)
                 "setConsoleLogEnabled" -> setConsoleLogEnabled(call, result)
                 "setMaxFileSize" -> setMaxFileSize(call, result)
@@ -153,11 +152,6 @@ class XlogPlugin :
     private fun setLevel(call: MethodCall, result: Result) {
         call.appender().level = LogLevel.of(call.int("level", LogLevel.INFO.ordinal))
         result.success(null)
-    }
-
-    /** `Xlog.level`, read: what `marsrs-jni` answers, and not what Kotlin holds. */
-    private fun getLevel(call: MethodCall, result: Result) {
-        result.success(call.appender().level.ordinal)
     }
 
     /** `Xlog.mode`. */

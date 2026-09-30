@@ -57,7 +57,8 @@
 # is the diagnosis. The Android and Kotlin Multiplatform packages are split the
 # same way — and the Kotlin ones are named before the packages exist, because a
 # glob that matches nothing today matches the day the directory under it lands.
-# `kmp/marsrs/src/**/xlog/**`, up under `area: xlog`, is in the same state.
+# `platforms/kmp/marsrs/src/**/xlog/**`, up under `area: xlog`, is in the same
+# state.
 'area: stn':
 - changed-files:
   - any-glob-to-any-file:

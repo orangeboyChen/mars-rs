@@ -268,6 +268,14 @@ fn a_day_of_names_is_answered_before_the_files_are_there() {
     );
 
     // A day that has not happened yet is not one, and a negative `daysAgo`
-    // does not ask for it.
-    assert_eq!(xlog.log_file_names(-1), xlog.log_file_names(0));
+    // does not ask for it — it asks for the day that is here. Both answers
+    // are taken before the comparison, so a run that straddles midnight
+    // compares two names of the same day and not of two.
+    let today = xlog.log_file_names(0);
+    assert_eq!(
+        xlog.log_file_names(-1),
+        today,
+        "a negative day asked for tomorrow"
+    );
+    assert_eq!(xlog.log_files(-1), xlog.log_files(0));
 }

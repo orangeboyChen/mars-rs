@@ -1983,8 +1983,12 @@ impl Appender {
         // Same clamp as `make_logfile_name`: a negative day is not a day.
         let tv = now_secs().saturating_sub(timespan.max(0).saturating_mul(SECONDS_PER_DAY));
         let mut paths = get_file_paths_from_timeval(tv, &logdir, prefix, LOG_EXT);
-        if let Some(cachedir) = cachedir {
-            paths.extend(get_file_paths_from_timeval(tv, &cachedir, prefix, LOG_EXT));
+        // The cache directory's own files, beside the log directory's. A cache
+        // dir of the log dir's own is neither: it would add the same file a
+        // second time, and an uploader that walks this answer would upload the
+        // day twice.
+        if let Some(cachedir) = cachedir.as_deref().filter(|dir| *dir != logdir.as_path()) {
+            paths.extend(get_file_paths_from_timeval(tv, cachedir, prefix, LOG_EXT));
         }
         paths
     }

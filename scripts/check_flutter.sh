@@ -66,7 +66,6 @@ declare -a required=(
     flush
     requestFlush
     setLevel
-    getLevel
     setMode
     setConsoleLogEnabled
     setMaxFileSize

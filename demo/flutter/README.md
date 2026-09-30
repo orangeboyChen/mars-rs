@@ -30,7 +30,8 @@ this README is the only thing it may overwrite.
   empties when space runs short, which is exactly when a log matters.
 - `WidgetsBindingObserver` in `_LogPageState` — the app leaves the screen and the
   appender is drained there, because Android and iOS may end the process without
-  another word. `xlog.close()` in `dispose` is the other half.
+  another word. The appender is never closed: it lives as long as the app does,
+  and a drain nobody has waited for is a drain that may not have happened.
 
 `marsrs_xlog` is the plugin an app that only logs takes; `marsrs` is the whole
 port. An app takes one of the two and never both — both carry the same native

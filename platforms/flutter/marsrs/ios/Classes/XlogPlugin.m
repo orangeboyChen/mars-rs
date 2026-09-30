@@ -132,8 +132,6 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
     [self requestFlush:call result:result];
   } else if ([call.method isEqualToString:@"setLevel"]) {
     [self setLevel:call result:result];
-  } else if ([call.method isEqualToString:@"getLevel"]) {
-    [self getLevel:call result:result];
   } else if ([call.method isEqualToString:@"setMode"]) {
     [self setMode:call result:result];
   } else if ([call.method isEqualToString:@"setConsoleLogEnabled"]) {
@@ -323,14 +321,6 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   XlogAnswer(result, nil);
 }
 
-/// `mars_xlog_get_level`: what the appender answers, and not what Dart holds.
-- (void)getLevel:(FlutterMethodCall *)call result:(FlutterResult)result {
-  long long instance = [self instanceForCall:call result:result];
-  if (instance == 0) {
-    return;
-  }
-  XlogAnswer(result, @(mars_xlog_get_level(instance)));
-}
 
 /// `mars_xlog_set_mode_instance`.
 - (void)setMode:(FlutterMethodCall *)call result:(FlutterResult)result {

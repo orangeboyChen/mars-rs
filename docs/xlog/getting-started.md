@@ -288,10 +288,10 @@ something an app can act on answer a `Future` — the appender `Xlog.open` opens
 the drain `await flush()` waits for, `close()`, the answer `isLoggable` gives,
 and the three that name files: `currentLogPath()`, `logFiles(daysAgo)` and
 `logFileNames(daysAgo)`. What Dart has no face for is the blocking drain: a
-channel cannot block
-this side of it, so what Dart gets is the other two — `requestFlush()`, which
-asks for the drain and returns at once with nothing to say about when it is
-over, and `await xlog.flush()`, which answers when it is. Neither
+channel cannot block this side of it, so what Dart gets is the other two:
+`requestFlush()`, which asks for the drain and returns at once with nothing to
+say about when it is over, and `await xlog.flush()`, which answers when it is.
+Neither
 [the task pipeline](/stn/getting-started) nor
 [the network diagnosis](/sdt/getting-started) is in the Dart yet: the plugin is
 the logger, in both of its packages.
