@@ -68,7 +68,7 @@
 # reads `name`, `hosts` and `ports` off every element of the array it is handed.
 -keep,allowoptimization class io.github.orangeboychen.marsrs.sdt.SdtLogic$Link { *; }
 
-# `stn_c2java.rs`: the fifteen `ICallBack` questions, and the task and the
+# `stn_c2java.rs`: the fourteen `ICallBack` questions, and the task and the
 # profile the two halves pass to each other
 -keep,allowoptimization class io.github.orangeboychen.marsrs.stn.StnLogic { *; }
 -keep,allowoptimization class io.github.orangeboychen.marsrs.stn.StnLogic$Task { *; }
