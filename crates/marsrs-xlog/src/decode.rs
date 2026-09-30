@@ -175,6 +175,42 @@ impl std::fmt::Display for DecodeError {
 
 impl std::error::Error for DecodeError {}
 
+/// [`decode_records`], and how many of the file's records it read and did not.
+///
+/// The text alone is what a caller that reads a log wants, and it is all
+/// [`decode_records`] answers with. What it cannot say is whether the file
+/// read at all: a `--privkey` of the wrong pair leaves every record
+/// unreadable, and a text of nothing but markers is not one an operator can
+/// tell from a log that said so — the command answered well and read no log
+/// at all. [`decode_records_counted`] is the walk that says both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decoded {
+    /// The log text of the records that came out, in the order they stand in
+    /// the file, with a marker where a record's text did not.
+    pub text: Vec<u8>,
+    /// How many records the walk found, the ones whose text did not come out
+    /// included.
+    pub records: usize,
+    /// How many of [`Decoded::records`] whose text did not come out: a client
+    /// public key that is not a point, a private key no secret comes out of, a
+    /// stream that will not inflate. A span of damage is not a record, so it
+    /// is not counted here.
+    pub unreadable: usize,
+}
+
+impl Decoded {
+    /// Whether the walk read a record and no text came out of any of them: a
+    /// file that answers this is a file of markers and nothing else, which is
+    /// what a key of another pair reads.
+    ///
+    /// A file with no record in it at all is not this — it is a
+    /// [`DecodeError`], and the walk says so — so a file that answers here is
+    /// one that was read and gave nothing back.
+    pub fn nothing_came_out(&self) -> bool {
+        self.records > 0 && self.unreadable == self.records
+    }
+}
+
 /// Walks every record of `data` and concatenates the recovered log text, the
 /// way `decode_log_file.c` does over a buffer of its own.
 ///
@@ -186,21 +222,36 @@ impl std::error::Error for DecodeError {}
 /// file with no record in it at all, and an encrypted record met with no
 /// private key at all: [`DecodeError::recovered`] is what was read before
 /// either.
+///
+/// [`decode_records_counted`] is this walk and the two counts beside the text:
+/// take it when the caller has to say whether the file read at all.
 pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>, DecodeError> {
+    Ok(decode_records_counted(data, privkey)?.text)
+}
+
+/// [`decode_records`], and how many of the file's records the walk read and
+/// did not read: see [`Decoded`].
+pub fn decode_records_counted(
+    data: &[u8],
+    privkey: Option<&[u8; 32]>,
+) -> Result<Decoded, DecodeError> {
     decode_records_within(data, privkey, MAX_PLAIN_LEN)
 }
 
-/// [`decode_records`] with the ceiling the caller names instead of
+/// [`decode_records_counted`] with the ceiling the caller names instead of
 /// [`MAX_PLAIN_LEN`]: the ceiling is 256 MiB, and a file that reaches it is not
 /// one a test can build, so what a test asks about the ceiling it asks here.
 fn decode_records_within(
     data: &[u8],
     privkey: Option<&[u8; 32]>,
     max_plain: usize,
-) -> Result<Vec<u8>, DecodeError> {
+) -> Result<Decoded, DecodeError> {
     let mut plain = Vec::new();
     let mut offset = 0;
     let mut blocks = 0;
+    // How many of `blocks` the walk found and did not read: what a caller
+    // asking whether the file read at all is asking about.
+    let mut unreadable = 0;
     // `decode_log_file.c`'s file-static `int lastseq`, reset per file: a hole
     // is a hole in one file's own numbering, and not in the one read before it.
     let mut lastseq: u16 = 0;
@@ -269,8 +320,8 @@ fn decode_records_within(
                 }
                 offset = next;
                 blocks += 1;
+                unreadable += 1;
             }
-            // The C reads the sequence and writes its marker before it tries
             // the body, so a record the walk ends on still names the hole
             // standing in front of it: what was read before the record that
             // ended it includes that marker.
@@ -284,7 +335,11 @@ fn decode_records_within(
     match stopped {
         // Every record decoded — or a tail too short to hold one, which is not
         // damage: a block the writer never finished is not in the file.
-        None if blocks > 0 => Ok(plain),
+        None if blocks > 0 => Ok(Decoded {
+            text: plain,
+            records: blocks,
+            unreadable,
+        }),
         None => Err(DecodeError {
             recovered: plain,
             reason: "no record found".into(),
@@ -886,6 +941,6 @@ mod tests {
         file.extend_from_slice(&EMPTY_RECORD);
 
         let plain = decode_records_within(&file, None, 1_024).expect("the walk went on");
-        assert!(String::from_utf8_lossy(&plain).contains(DAMAGE_MARKER));
+        assert!(String::from_utf8_lossy(&plain.text).contains(DAMAGE_MARKER));
     }
 }
