@@ -514,14 +514,22 @@ fn a_reset_throws_every_task_away() {
 
     assert!(!host.logic.has_task(7));
     assert!(host.logic.is_created(), "the core is made again");
-    // and the app is still the one STN talks to
-    host.write(Some(b"/cgi-bin/9"));
-    assert!(host
+    // and the app is still the one STN talks to: an app that says it is not
+    // logged in is the only thing that can answer `false`, since the answer
+    // an app that never said is `true`
+    host.authed(false);
+    assert!(!host
         .logic
         .bridge()
         .lock()
         .unwrap()
         .makesure_authed(LONG_HOST, "user"));
+    assert_eq!(
+        host.said().authed.last(),
+        Some(&(LONG_HOST.to_string(), "user".to_string()))
+    );
+
+    host.write(Some(b"/cgi-bin/9"));
 }
 
 #[test]
