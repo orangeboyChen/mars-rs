@@ -1,5 +1,7 @@
 package io.github.orangeboychen.marsrs.sdt
 
+import android.util.Log
+
 /**
  * The Android `actual`: `libmarsrsxlog.so`, the JNI bridge of `crates/marsrs-jni`.
  *
@@ -20,6 +22,9 @@ package io.github.orangeboychen.marsrs.sdt
  * [setCallBack].
  */
 public actual object SdtLogic {
+    /** What the Android AAR's `SdtLogic` logs under, which is the same class an app sees either way. */
+    private const val TAG = "mars.SdtLogic"
+
     init {
         // `marsrsxlog`, the `crate-name` of `marsrs-jni`: loaded before the first
         // symbol of it is called, and loading it twice is nothing.
@@ -90,6 +95,15 @@ public actual object SdtLogic {
     private val runLock = Any()
 
     public actual fun runChecks(networkType: Int, probe: IProbe): Boolean {
+        // A run started from inside a run — from one of the four probes, or from
+        // the callback the report is handed to — is refused and not run:
+        // `synchronized` is reentrant, so the inner run would be let in, and the
+        // `finally` it ends with takes the probe away from the outer run, whose
+        // checks from then on ask a `null` probe and are recorded as failures.
+        if (Thread.holdsLock(runLock)) {
+            Log.w(TAG, "runChecks from inside a run of it: the second one is not started")
+            return false
+        }
         // The four probes are asked of this class's own statics, from the native
         // call below this one on the stack, on this very thread: that is why the
         // probe is a field for as long as the run is and not an argument the

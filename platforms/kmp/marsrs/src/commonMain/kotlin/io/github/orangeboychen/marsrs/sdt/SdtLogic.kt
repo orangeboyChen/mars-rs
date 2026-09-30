@@ -70,8 +70,11 @@ public expect object SdtLogic {
      * @param networkType what `PlatformComm.getNetInfo` answers on Android, and
      *                    the caller's own elsewhere
      * @param probe the four probes, asked while this runs and not after
-     * @return `false` when there was no check in flight, or when the one there
-     *         was got cancelled before its first check
+     * @return `false` when there was no check in flight, when the one there was
+     *         got cancelled before its first check, and when this was called
+     *         from inside a run of it — which is what a probe or a callback
+     *         that starts a second one is answered with, rather than with a
+     *         second run
      */
     public fun runChecks(networkType: Int, probe: IProbe): Boolean
 
