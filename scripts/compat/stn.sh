@@ -158,7 +158,9 @@ open(path, "wb").write(data[:len(data) - cut])' "$CPP_FILE" "$cut"
         else
             BYTES=FAILED
             FAILED=$((FAILED + 1))
-            cmp "$RUST_FILE" "$CPP_FILE" || true
+            # A diagnostic on stdout lands between two rows of the table
+            # this script prints, which is why it goes to stderr.
+            cmp "$RUST_FILE" "$CPP_FILE" >&2 || true
         fi
     else
         RUST_FILE="$WORK/$name.bin"

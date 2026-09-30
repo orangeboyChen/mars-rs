@@ -166,7 +166,10 @@ while read -r name mode compress sync crypt flush_every file; do
         else
             BYTES=FAILED
             FAILED=$((FAILED + 1))
-            cmp "$WORK/$name-rust.xlog" "$WORK/$name-cpp.xlog" || true
+            # The table this script prints is a markdown table, so a
+            # diagnostic on stdout lands between two rows of it; `comm.sh`
+            # sends its own to stderr for the same reason.
+            cmp "$WORK/$name-rust.xlog" "$WORK/$name-cpp.xlog" >&2 || true
         fi
     else
         BYTES="random"

@@ -126,7 +126,9 @@ while read -r name url_hex host_exp port_exp path_exp; do
     else
         READ=FAILED
         FAILED=$((FAILED + 1))
-        diff "$WORK/$name-rust.txt" "$WORK/$name-cpp.txt" || true
+        # A diagnostic on stdout lands between two rows of the table this
+        # script prints, which is why it goes to stderr.
+        diff "$WORK/$name-rust.txt" "$WORK/$name-cpp.txt" >&2 || true
     fi
 
     # 2. the reading against the answer: `host ` with nothing after it is a URL

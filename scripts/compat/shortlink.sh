@@ -110,7 +110,9 @@ while read -r name url body_hex headers; do
     else
         BYTES=FAILED
         FAILED=$((FAILED + 1))
-        cmp "$RUST_FILE" "$CPP_FILE" || true
+        # A diagnostic on stdout lands between two rows of the table this
+        # script prints, which is why it goes to stderr.
+        cmp "$RUST_FILE" "$CPP_FILE" >&2 || true
     fi
 
     # 2. each side's parser on the other side's file. The files are the same
@@ -122,7 +124,7 @@ while read -r name url body_hex headers; do
     else
         READ=FAILED
         FAILED=$((FAILED + 1))
-        diff "$WORK/$name-rc.txt" "$WORK/$name-cr.txt" || true
+        diff "$WORK/$name-rc.txt" "$WORK/$name-cr.txt" >&2 || true
     fi
 
     # 3. the body that went in is the body that came out. `body ` with nothing
