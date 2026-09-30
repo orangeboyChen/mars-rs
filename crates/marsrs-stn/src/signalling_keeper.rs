@@ -47,20 +47,25 @@ pub fn set_strategy(period: u64, keep_time: u64) {
     *strategy = (period, keep_time);
 }
 
-/// `g_period` — what [`set_strategy`] set, or [`DEFAULT_PERIOD`].
-pub fn period() -> u64 {
-    strategy()
+/// `g_period` and `g_keepTime` — what [`set_strategy`] set, or the defaults.
+///
+/// Both, and under one lock: the two are set together, and a `set_strategy`
+/// from another thread between two reads would hand out a period of one
+/// strategy beside a keep time of another.
+fn strategy_now() -> (u64, u64) {
+    *strategy()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .0
+}
+
+/// `g_period` — what [`set_strategy`] set, or [`DEFAULT_PERIOD`].
+pub fn period() -> u64 {
+    strategy_now().0
 }
 
 /// `g_keepTime` — what [`set_strategy`] set, or [`DEFAULT_KEEP_TIME`].
 pub fn keep_time() -> u64 {
-    strategy()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .1
+    strategy_now().1
 }
 
 /// `fun_send_signalling_buffer_`.
@@ -211,13 +216,15 @@ impl SignallingKeeper {
             return;
         };
         let now = now.max(last);
-        if now.saturating_sub(last) > keep_time() {
+        // one lock for the two of them: see [`strategy_now`]
+        let (period, keep_time) = strategy_now();
+        if now.saturating_sub(last) > keep_time {
             self.keeping = false;
             return;
         }
         // `CancelMessage(postid_)` + `AsyncInvokeAfter(g_period, …)`, which
         // posts one call: it runs once, `g_period` after this data
-        self.post = Post::Due(now.saturating_add(period()));
+        self.post = Post::Due(now.saturating_add(period));
     }
 
     /// `__OnTimeOut` — what the posted call does: send another buffer.
