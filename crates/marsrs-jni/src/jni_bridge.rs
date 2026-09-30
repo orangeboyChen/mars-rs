@@ -2268,10 +2268,14 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_nativeRu
     guard(|| run_checks_java_impl(network_type)) as jboolean
 }
 
-/// `SdtLogic.takeReport` — the JSON of everything the checks have reported
-/// since the last call, which is the same document
-/// `SdtLogic.ICallBack.reportSignalDetectResults` was handed; taking it empties
-/// it. `null` when there was nothing to take.
+/// `SdtLogic.takeReport` — one JSON document of everything the checks have
+/// reported since the last call; taking it empties it. `null` when there was
+/// nothing to take.
+///
+/// Not the document `SdtLogic.ICallBack.reportSignalDetectResults` was handed:
+/// that one is the report of one run, and this is one document for every run
+/// since the last call — two runs are two entries of its `details`, and not
+/// either of the two documents the callback was given.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_takeReport<'local>(
     mut env: EnvUnowned<'local>,
