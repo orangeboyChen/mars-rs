@@ -744,6 +744,12 @@ impl AppenderInner {
     }
 
     /// The cache file this appender owns, if it claimed one.
+    ///
+    /// The slot an appender claimed is its own business for as long as it
+    /// lives, and nothing in the port reads the path back out of one, so this
+    /// is asked by the tests that prove two writers get two slots and nobody
+    /// else.
+    #[cfg(test)]
     fn cache_path(&self) -> Option<PathBuf> {
         self.cache.as_ref().map(|slot| slot.path.clone())
     }
@@ -2183,6 +2189,15 @@ impl Appender {
     ///
     /// Not to be confused with `AppenderInner::cache_file_path`, which is the
     /// day's log file *inside the cache directory*.
+    ///
+    /// Which slot an instance got is not a function of its config — another
+    /// process can hold slot 0 — so the path is read back from the appender
+    /// and not worked out from the prefix. Nothing in the port asks it of a
+    /// live instance: the registry used to keep a copy of every instance's
+    /// path to hand to a recovery that was never written, and the copy was the
+    /// only thing that ever read it. What is left is the question the slot
+    /// tests ask.
+    #[cfg(test)]
     pub(crate) fn claimed_cache_path(&self) -> Option<PathBuf> {
         self.lock().cache_path()
     }

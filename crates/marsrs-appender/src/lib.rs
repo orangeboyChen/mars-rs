@@ -156,15 +156,6 @@ fn instance(id: AppenderId) -> Option<Arc<Appender>> {
     lock_instances().map.get(&id).cloned()
 }
 
-/// The cache file an instance claimed, if any.
-///
-/// Which slot an instance got is decided by the appender at open time and is
-/// not a function of the config alone — another process can hold slot 0 — so
-/// the path has to be read back from the appender.
-fn instance_cache_path(id: AppenderId) -> Option<PathBuf> {
-    instance(id).and_then(|appender| appender.claimed_cache_path())
-}
-
 /// Opens the appender of an instance.
 ///
 /// Every instance gets its own log directory, prefix, key, mode and cache
