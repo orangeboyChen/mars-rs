@@ -162,7 +162,6 @@ impl<'a> PtrBuffer<'a> {
     /// Sets the logical length (clamped to the backing region) and moves the
     /// cursor to `pos` (clamped to the new length).
     pub fn set_length(&mut self, pos: usize, length: usize) {
-        debug_assert!(pos <= length);
         self.length = length.min(self.data.len());
         self.seek(pos as isize, Seek::Start);
     }
@@ -234,6 +233,18 @@ mod tests {
         buf.set_length(6, 6);
         assert_eq!(buf.len(), 6);
         assert_eq!(buf.pos(), 6);
+    }
+
+    #[test]
+    fn set_length_clamps_a_pos_past_the_length_it_set() {
+        let mut backing = vec![0u8; 8];
+        let mut buf = PtrBuffer::new(&mut backing);
+        // What the doc promises for both of them, and what a debug build did
+        // not do: it panicked on a `pos` past `length` where a release build
+        // clamped it, so one input had two answers.
+        buf.set_length(64, 8);
+        assert_eq!(buf.len(), 8);
+        assert_eq!(buf.pos(), 8);
     }
 
     #[test]
