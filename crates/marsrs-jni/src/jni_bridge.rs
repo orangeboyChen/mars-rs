@@ -42,6 +42,7 @@ use crate::sdt::{
     cancel_active_check_impl, get_load_libraries_impl as sdt_libraries, http_netcheck_cgi_impl,
     is_checking_impl, plan_impl, report_json_impl, reset_impl as sdt_reset_impl,
     run_checks_java_impl, set_http_netcheck_cgi_impl, start_active_check_impl, take_reported_impl,
+    untake_reported_impl,
 };
 use crate::stn::{
     clear_task_impl, create_longlink_impl, destroy_longlink_impl, disable_longlink_impl,
@@ -679,7 +680,12 @@ fn string_map(env: &mut Env<'_>, map: &JObject<'_>) -> BTreeMap<String, String> 
     if map.is_null() {
         return out;
     }
-    let called = env.call_method(map, jni_str!("entrySet"), jni_sig!("()Ljava/util/Set;"), &[]);
+    let called = env.call_method(
+        map,
+        jni_str!("entrySet"),
+        jni_sig!("()Ljava/util/Set;"),
+        &[],
+    );
     let Ok(entries) = clear_pending(env, called) else {
         return out;
     };
@@ -2230,9 +2236,17 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_takeRepo
             return std::ptr::null_mut();
         }
         let json = report_json_impl(&reported);
+        // The take emptied the sink and the vec it handed over is the only
+        // copy of the report, so a document that cannot be made is one the
+        // results are put back for: `null` here is the answer of a call that
+        // failed and not of a diagnosis that reported nothing, and the app
+        // that asks again is answered with the report it was owed.
         match env.new_string(&json) {
             Ok(text) => JObject::from(text).into_raw(),
-            Err(_) => std::ptr::null_mut(),
+            Err(_) => {
+                untake_reported_impl(reported);
+                std::ptr::null_mut()
+            }
         }
     })
 }

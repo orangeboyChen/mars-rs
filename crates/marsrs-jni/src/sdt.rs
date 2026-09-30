@@ -282,6 +282,29 @@ pub fn take_reported_impl() -> Vec<CheckResultProfile> {
     })
 }
 
+/// Puts back what [`take_reported_impl`] handed over.
+///
+/// The take empties the sink, and the vec it hands over is the only copy of
+/// the report there is: a report a caller took and could not hand to Java —
+/// a `NewStringUTF` that failed, a panic caught by `guard` — was a report
+/// lost for good, and the `takeReport` the app asks again answers `null` a
+/// second time. What was reported while the report was out goes behind it, so
+/// a take answered afterwards is answered in the order the checks reported.
+pub fn untake_reported_impl(reported: Vec<CheckResultProfile>) {
+    if reported.is_empty() {
+        return;
+    }
+    with_state(|state| {
+        let mut sink = state
+            .reported
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut waiting = reported;
+        waiting.extend(std::mem::take(&mut *sink));
+        *sink = waiting;
+    })
+}
+
 /// `SdtManagerJniCallback::ReportNetCheckResult()` — hands a finished diagnosis
 /// over: the JSON [`report_json_impl`] builds goes to Java, and a copy stays
 /// here for the host ([`take_delivered_impl`]) and for the tests, which have no
@@ -425,6 +448,38 @@ mod tests {
             // what ran is what was reported
             assert_eq!(take_reported_impl().len(), 2);
             assert!(take_reported_impl().is_empty(), "taken only once");
+        })
+    }
+
+    /// The report [`take_reported_impl`] hands over is the only copy of it:
+    /// the sink is empty behind it, so a report a caller took and could not
+    /// hand to Java is one the app asks for again — and is answered `null`
+    /// for — unless it goes back.
+    #[test]
+    fn a_report_that_was_not_handed_over_is_asked_again() {
+        isolated(|| {
+            let started = || {
+                assert!(start_active_check_impl(
+                    &hosts("long.weixin.qq.com"),
+                    &hosts("short.weixin.qq.com"),
+                    NET_CHECK_BASIC,
+                    UNUSE_TIMEOUT
+                ));
+            };
+            started();
+            assert_eq!(run_checks_impl(record).len(), 2);
+            let taken = take_reported_impl();
+            assert_eq!(taken.len(), 2);
+            assert!(take_reported_impl().is_empty(), "taken only once");
+
+            // a second diagnosis, which reports while the first is out
+            started();
+            assert_eq!(run_checks_impl(record).len(), 2);
+
+            untake_reported_impl(taken);
+            // what was not handed over is asked again, and what was reported
+            // while it was out is behind it and not in front of it
+            assert_eq!(take_reported_impl().len(), 4);
         })
     }
 
