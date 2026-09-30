@@ -63,9 +63,12 @@ data class XlogConfig @JvmOverloads constructor(
      */
     val compressMode: CompressMode = CompressMode.ZLIB,
     /**
-     * How hard [compressMode] tries, `0` (the default) to `9`: `0` is the
-     * compressor's own compromise, `9` is the smallest file over the
-     * longest compression. The C++ spells the same numbers
+     * How hard [compressMode] tries, and the knob of that compressor and of
+     * nothing else: `0` (the default) to `9` for [CompressMode.ZLIB] and to
+     * `22` for [CompressMode.ZSTD]. `0` is the appender's own — the `6` the
+     * Rust config carries, which is what `mars_xlog.h` says a level of `0`
+     * asks for — and zlib compresses at the one setting the C++ uses whatever
+     * this says. The C++ spells the nine it knows
      * `COMPRESS_LEVEL1`..`COMPRESS_LEVEL9`.
      */
     val compressLevel: Int = DEFAULT_COMPRESS_LEVEL,
@@ -82,8 +85,13 @@ data class XlogConfig @JvmOverloads constructor(
         require(logDir.isNotBlank()) { "logDir must not be blank: marsrs-jni opens nothing without one" }
         require(namePrefix.isNotBlank()) { "namePrefix must not be blank: it is what an instance is looked up by" }
         require(cacheDays >= 0) { "cacheDays must not be negative, was $cacheDays" }
-        require(compressLevel in DEFAULT_COMPRESS_LEVEL..MAX_COMPRESS_LEVEL) {
-            "compressLevel must be in $DEFAULT_COMPRESS_LEVEL..$MAX_COMPRESS_LEVEL, was $compressLevel"
+        // The ceiling is the compressor's, and not one number for both: zstd
+        // takes levels zlib has no meaning for, and a config that opens on
+        // every other platform — Swift's own reads `0...22` for zstd — was
+        // refused here for being above zlib's `9`.
+        val maxLevel = if (compressMode == CompressMode.ZSTD) MAX_ZSTD_COMPRESS_LEVEL else MAX_ZLIB_COMPRESS_LEVEL
+        require(compressLevel in DEFAULT_COMPRESS_LEVEL..maxLevel) {
+            "compressLevel must be in $DEFAULT_COMPRESS_LEVEL..$maxLevel for $compressMode, was $compressLevel"
         }
     }
 
@@ -104,6 +112,7 @@ data class XlogConfig @JvmOverloads constructor(
         const val DEFAULT_NAME_PREFIX = "xlog"
         const val NO_CACHE_DAYS = 0
         const val DEFAULT_COMPRESS_LEVEL = 0
-        const val MAX_COMPRESS_LEVEL = 9
+        const val MAX_ZLIB_COMPRESS_LEVEL = 9
+        const val MAX_ZSTD_COMPRESS_LEVEL = 22
     }
 }
