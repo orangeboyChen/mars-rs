@@ -891,10 +891,24 @@ impl AppenderInner {
         // fall through to the flush threshold: returning early would leave a
         // full region until the next fatal record or the 15 minute background
         // wake-up.
-        let _written = with_record(len, |data| {
+        let written = with_record(len, |data| {
             let region = self.region.as_mut_slice();
             self.buff.write(region, data)
         });
+        // ... and a record the region had no room for is not lost either,
+        // which is where the port leaves the C++: what filled the block is
+        // records that are in no file yet, so draining it writes them *and*
+        // makes room, and the record that did not fit opens the block that
+        // comes after. One attempt, and only when the drain reached a file —
+        // one that did not has left the region as it was, and a record that
+        // cannot be written is the only thing left to do with it.
+        if !written && self.drain_buffer(false) {
+            let _retried = with_record(len, |data| {
+                let region = self.region.as_mut_slice();
+                self.buff.write(region, data)
+            });
+        }
+
         if self.buff.len() >= BUFFER_BLOCK_LENGTH / 3 || level_fatal {
             self.notify();
         }
