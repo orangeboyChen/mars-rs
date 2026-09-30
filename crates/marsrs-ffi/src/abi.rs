@@ -113,7 +113,7 @@ unsafe fn to_xlog_config(cfg: &MarsXLogConfig) -> Result<XLogConfig, c_int> {
     let (log_dir, name_prefix, pub_key, cache_dir) = unsafe {
         (
             cstr::ptr_to_path_buf(cfg.log_dir),
-            cstr::ptr_to_str_or_empty(cfg.name_prefix),
+            cstr::ptr_to_string_lossy(cfg.name_prefix),
             cstr::ptr_to_str_or_empty(cfg.pub_key),
             cstr::ptr_to_path_buf(cfg.cache_dir),
         )
@@ -129,12 +129,14 @@ unsafe fn to_xlog_config(cfg: &MarsXLogConfig) -> Result<XLogConfig, c_int> {
     // prefix-based — substituting "Mars" would stop the Rust port from draining
     // (or being drained by) a C++ process's cache file. The prefix does go
     // through UTF-8, `XLogConfig` storing a `String`, so a non-UTF-8 one is
-    // converted lossily; the directories above are byte-exact.
+    // converted lossily and not to the empty prefix, which is the name of
+    // another appender and not of a prefix that failed; the directories above
+    // are byte-exact.
     let defaults = XLogConfig::default();
     Ok(XLogConfig {
         mode,
         logdir: log_dir,
-        nameprefix: name_prefix.to_string(),
+        nameprefix: name_prefix,
         pub_key: pub_key.to_string(),
         compress_mode,
         compress_level: if cfg.compress_level > 0 {
@@ -356,6 +358,10 @@ pub unsafe extern "C" fn mars_xlog_release_instance(name_prefix: *const c_char) 
 /// that is not one writes nothing, `0` among them — no symbol of this ABI
 /// installs a process-wide appender for it to write through.
 ///
+/// A null `log` is the C++'s own `NULL == _log`: the write happens, at
+/// `Fatal`, and says so — which is the one case a caller is told about a
+/// body it never gave. An empty one is not written at all.
+///
 /// # Safety
 ///
 /// `tag`, `filename`, `func_name` and `log` must each be null, or a NUL-terminated C string
@@ -372,15 +378,33 @@ pub unsafe extern "C" fn mars_xlog_write_instance(
 ) {
     let _ = guard(0, || {
         // SAFETY: every pointer is null-checked inside the helpers.
-        let (tag, filename, func_name, log) = unsafe {
+        let (tag, filename, func_name) = unsafe {
             (
                 cstr::ptr_to_str_or_empty(tag),
                 cstr::ptr_to_str_or_empty(filename),
                 cstr::ptr_to_str_or_empty(func_name),
-                cstr::ptr_to_str_or_empty(log),
             )
         };
-        if log.is_empty() {
+        // A body that is not UTF-8 keeps what it can of itself, the way a
+        // prefix does: `ptr_to_str_or_empty` answers `""` for the whole of
+        // one whose single byte fails to decode, and `""` is what the check
+        // below drops — a GBK message would have disappeared instead of
+        // being written. A null one is kept as `None`, which is the `NULL ==
+        // _log` the appender promotes. Borrowed while the body is UTF-8, so
+        // the write itself still costs no allocation.
+        let log = if log.is_null() {
+            None
+        } else {
+            // SAFETY: `log` is non-null and — per the caller's contract —
+            // points to a valid NUL-terminated string that outlives this call.
+            Some(match unsafe { cstr::ptr_to_str(log) } {
+                Some(log) => Cow::Borrowed(log),
+                None => Cow::Owned(unsafe { cstr::ptr_to_string_lossy(log) }),
+            })
+        };
+        // An empty body writes nothing. A null one is not empty but absent,
+        // and it is written: `NULL == _log` is the appender's own promotion.
+        if log.as_deref() == Some("") {
             return 0;
         }
         // A record's level is `Verbose..=Fatal` here as well: `kLevelNone` is
@@ -405,7 +429,7 @@ pub unsafe extern "C" fn mars_xlog_write_instance(
             timeval: state::now_timeval(),
             trace_log: 0,
         };
-        marsrs_appender::xlogger_write(instance as u64, Some(&info), Some(log));
+        marsrs_appender::xlogger_write(instance as u64, Some(&info), log.as_deref());
         0
     });
 }
@@ -665,6 +689,28 @@ mod tests {
         assert_eq!(cfg.mode, MarsAppenderMode::Sync as c_int);
         assert_eq!(cfg.compress_mode, MarsCompressMode::Zlib as c_int);
         assert_eq!(cfg.cache_days, 3);
+    }
+
+    #[test]
+    fn a_prefix_that_is_not_utf8_stays_a_prefix() {
+        let log_dir = c"/tmp/xlog";
+        let name_prefix = c"app\xffname";
+        let cfg = MarsXLogConfig {
+            mode: MarsAppenderMode::Async as c_int,
+            log_dir: log_dir.as_ptr(),
+            name_prefix: name_prefix.as_ptr(),
+            pub_key: std::ptr::null(),
+            compress_mode: MarsCompressMode::Zlib as c_int,
+            compress_level: 0,
+            cache_dir: std::ptr::null(),
+            cache_days: 0,
+        };
+        // SAFETY: every pointer of `cfg` is null or a NUL-terminated string
+        // that outlives this call.
+        let config = unsafe { to_xlog_config(&cfg) }.unwrap();
+        // Not `""`: the appender refuses an empty prefix, so a name that
+        // failed to decode would have opened nothing at all.
+        assert_eq!(config.nameprefix, "app\u{fffd}name");
     }
 
     #[test]

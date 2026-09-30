@@ -240,6 +240,56 @@ fn open_write_flush_close_lands_on_disk() {
     close();
 }
 
+/// A body one byte of which is not UTF-8 keeps what it can of itself, and a
+/// null one is the C++'s own `NULL == _log` — two ways a caller's message used
+/// to disappear without a word.
+#[test]
+fn a_body_that_is_not_utf8_is_written_and_a_null_one_is_promoted() {
+    let _g = lock();
+    let _close = CloseOnDrop;
+    let dir = tempfile::tempdir().unwrap();
+    let log = open_sync(dir.path());
+
+    let tag = CString::new("smoke").unwrap();
+    let file = CString::new("ffi_smoke.rs").unwrap();
+    let func = CString::new("a_body_that_is_not_utf8").unwrap();
+    // `h\xff i`: the shape a GBK or a Shift-JIS message has to a C ABI that
+    // reads UTF-8.
+    let body = CString::new(vec![b'h', 0xff, b' ', b'i']).unwrap();
+    unsafe {
+        mars_xlog_write_instance(
+            log,
+            2,
+            tag.as_ptr(),
+            file.as_ptr(),
+            func.as_ptr(),
+            42,
+            body.as_ptr(),
+        );
+        mars_xlog_write_instance(
+            log,
+            2,
+            tag.as_ptr(),
+            file.as_ptr(),
+            func.as_ptr(),
+            42,
+            std::ptr::null(),
+        );
+    }
+    mars_xlog_flush_now_instance(log);
+
+    let path = log_file(dir.path());
+    let bytes = fs::read(&path).unwrap();
+    assert!(
+        any_view_contains(&bytes, "h\u{fffd} i"),
+        "a body that is not UTF-8 was dropped instead of written into {path:?}"
+    );
+    assert!(
+        any_view_contains(&bytes, "NULL == _log"),
+        "a null body was dropped instead of promoted into {path:?}"
+    );
+}
+
 #[test]
 fn the_level_one_function_sets_is_the_one_every_write_sees() {
     let _g = lock();
