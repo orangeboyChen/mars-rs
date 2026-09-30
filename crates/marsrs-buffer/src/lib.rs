@@ -208,6 +208,11 @@ impl LogBuffer {
     /// `size_t` underflow here and corrupts memory instead) — a compressor that
     /// emitted nothing included, which is the same thing said by a write that
     /// put no byte of the record anywhere.
+    ///
+    /// A record that would be cut is refused rather than cut: the caller that
+    /// gets a `false` drains the block and writes the record into the next
+    /// one, so what it loses is nothing, and what it does not get is a record
+    /// whose tail is in no file and whose header says it is whole.
     pub fn write(&mut self, region: &mut [u8], data: &[u8]) -> bool {
         if data.is_empty() {
             return false;
@@ -229,6 +234,13 @@ impl LogBuffer {
                 return false;
             };
             if avail_out == 0 {
+                return false;
+            }
+            // A record the room cannot hold whole is refused for the same
+            // reason it is refused below: a compressor handed a `dst` it can
+            // fill takes the whole input and emits what fits, and the rest
+            // goes when the stream does, at the next `drained`.
+            if Compressor::worst_case(self.mode, data.len()) > avail_out {
                 return false;
             }
 
@@ -261,14 +273,19 @@ impl LogBuffer {
                 .len()
                 .saturating_sub(self.length)
                 .saturating_sub(TAILER_LEN);
-            if room == 0 {
+            // `buff_.Write(_data, _length)` — the C++ truncates the copy at
+            // `MaxLength()` but then keeps using the untruncated length, and
+            // corrupts the region. Clamping the copy stops the corruption but
+            // answers `true` for a record that was cut, which is worse than
+            // the corruption for the caller that would have written it: the
+            // appender drains a block a record did not fit and writes the
+            // record into the block that comes after, and a `true` is what
+            // keeps it from ever asking.
+            if data.len() > room {
                 return false;
             }
-            // `buff_.Write(_data, _length)` — the C++ truncates the copy at
-            // `MaxLength()` but then keeps using the untruncated length; we
-            // clamp so the follow-up crypt pass cannot read out of bounds.
-            let n = data.len().min(room);
-            region[self.length..self.length + n].copy_from_slice(&data[..n]);
+            let n = data.len();
+            region[self.length..self.length + n].copy_from_slice(data);
             n
         };
 
@@ -499,6 +516,47 @@ mod tests {
         buf.drained(&mut region);
         assert_eq!(buf.len(), 0);
         assert!(region.iter().all(|&b| b == 0), "region must be zeroed");
+    }
+
+    /// A record that does not fit the room that is left is refused, and not
+    /// cut: the caller that gets a `false` drains the block and writes the
+    /// record into the next one, so refusing costs nothing and cutting would
+    /// cost the tail of the record and every record behind it in the block.
+    #[test]
+    fn a_record_that_does_not_fit_the_room_that_is_left_is_refused() {
+        // Room for eight bytes of payload and nothing more.
+        let mut region = vec![0u8; HEADER_LEN + 8 + TAILER_LEN + 3];
+        let mut buf = LogBuffer::new(false, None, CompressMode::Zlib, 6);
+
+        assert!(buf.write(&mut region, b"12345678"));
+        assert_eq!(buf.len(), HEADER_LEN + 8);
+
+        // Three bytes are left, and this record is five.
+        assert!(!buf.write(&mut region, b"tail!"));
+        assert_eq!(buf.len(), HEADER_LEN + 8, "the half a record is not kept");
+        assert_eq!(LogCrypt::get_log_len(&region), 8);
+        assert_eq!(&region[HEADER_LEN..HEADER_LEN + 8], b"12345678");
+
+        let mut out = AutoBuffer::new();
+        let n = buf.flush(&mut region, &mut out);
+        assert_eq!(LogCrypt::get_log_len(out.as_slice()), 8);
+        assert_eq!(out.as_slice()[n - 1], magic::END);
+    }
+
+    /// The same for the compress path, where the record that does not fit is
+    /// one the stream took only part of: what a compressor did not consume is
+    /// in no window and no file, so a write that lost it has to say so.
+    #[test]
+    fn a_record_a_compressor_could_not_take_all_of_is_refused() {
+        // Incompressible, so the stream cannot shrink it into the room.
+        let record: Vec<u8> = (0..512u32)
+            .map(|index| (index.wrapping_mul(97) ^ 0x5a) as u8)
+            .collect();
+        let mut region = vec![0u8; HEADER_LEN + 64 + TAILER_LEN];
+        let mut buf = LogBuffer::new(true, None, CompressMode::Zlib, 6);
+
+        assert!(!buf.write(&mut region, &record));
+        assert_eq!(buf.len(), HEADER_LEN, "the half a record is not kept");
     }
 
     /// A record written after a drain that did not reach a file joins the block
