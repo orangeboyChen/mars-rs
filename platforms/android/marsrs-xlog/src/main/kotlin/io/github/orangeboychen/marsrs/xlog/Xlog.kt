@@ -328,6 +328,16 @@ class Xlog : Log.LogImp {
      * of the app writes through, rather than its own.
      */
     fun close() {
+        // Before the handle goes, and before the map is asked: the callback is
+        // *this* [Xlog]'s and not the prefix's. Two [Xlog]s of one [namePrefix]
+        // hold the same handle, so the one closed first is the one that took
+        // the map entry this call is about to find missing — and this one would
+        // return with its own callback still registered on the app's `Context`,
+        // which is a callback Android goes on handing a closed [Xlog] for as
+        // long as the process lives.
+        backgroundFlush?.let { registeredWith?.unregisterComponentCallbacks(it) }
+        backgroundFlush = null
+        registeredWith = null
         // The appender is the prefix's and not this wrapper's: `marsrs-jni`
         // answers an [Xlog] of the same prefix with the same handle, so every
         // one of them is closed with this one. Taking the handle out of the map
@@ -337,11 +347,6 @@ class Xlog : Log.LogImp {
         if (opened == NO_HANDLE || !openHandles.remove(namePrefix, opened)) {
             return
         }
-        // Before the handle goes: a callback left registered would be handed a
-        // closed [Xlog] by Android and would find nothing to flush.
-        backgroundFlush?.let { registeredWith?.unregisterComponentCallbacks(it) }
-        backgroundFlush = null
-        registeredWith = null
         releaseXlogInstance(namePrefix)
         handle = NO_HANDLE
     }
@@ -356,8 +361,7 @@ class Xlog : Log.LogImp {
      * `isOpen` and then `handle` is a window a [close] on another thread lands
      * in, and what comes out of it is the handle of a closed appender.
      */
-    private fun openHandle(): Long =
-        handle.takeIf { it != NO_HANDLE && it == openHandles[namePrefix] } ?: NO_HANDLE
+    private fun openHandle(): Long = handle.takeIf { it != NO_HANDLE && it == openHandles[namePrefix] } ?: NO_HANDLE
 
     /**
      * The handle of this appender, or [IllegalStateException] when there is
@@ -382,10 +386,16 @@ class Xlog : Log.LogImp {
     /**
      * The callback that flushes this [Xlog] when the app's UI is no longer on
      * screen; `null` when it was built without a `Context`.
+     *
+     * Volatile, like [handle] beside it: it is written by the constructor and
+     * read by [close], which is a call an app makes on a thread of its own, and
+     * a [close] that cannot see the callback is one that never unregisters it.
      */
+    @Volatile
     private var backgroundFlush: BackgroundFlush? = null
 
     /** The `Context` [backgroundFlush] was registered with, and what [close] unregisters it from. */
+    @Volatile
     private var registeredWith: Context? = null
 
     /**
