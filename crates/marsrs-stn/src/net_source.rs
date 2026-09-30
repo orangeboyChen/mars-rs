@@ -462,15 +462,15 @@ impl NetSource {
         config: &LonglinkConfig,
         extra: &ExtraInfo,
     ) -> Vec<IpPortItem> {
-        if let Some(items) = self.longlink_debug_ip_port(config) {
-            return items;
-        }
-
         let hosts: Vec<String> = if config.host_list.is_empty() {
             self.longlink_hosts.clone()
         } else {
             config.host_list.clone()
         };
+        if let Some(items) = self.longlink_debug_ip_port(config) {
+            return items;
+        }
+
         if hosts.is_empty() {
             return Vec::new();
         }
@@ -1016,9 +1016,11 @@ impl NetSource {
             // is already longer than the count — and a `needcount` that is not
             // a length keeps every pair
             let need = count.checked_sub(so_far.len()).unwrap_or(usize::MAX);
+            // `CanUseIPv6()`, and not a `true` the C++ cannot say: what the app
+            // forbade is not offered first
             made = self
                 .ipport_strategy
-                .sort_and_filter_at(now, made, need, true);
+                .sort_and_filter_at(now, made, need, self.ipv6_enabled);
         }
 
         Some(made)
@@ -1170,6 +1172,43 @@ mod tests {
         source.set_new_dns(|_, _, _| vec!["1.1.1.1".to_string()]);
         let items = source.get_longlink_items(&LonglinkConfig::new("main"));
         assert!(items.is_empty(), "no host, and nothing resolved");
+    }
+
+    /// One long-link host, one port, and a dns that answers a v4 address first
+    /// and a v6 one after it: what the two sorts do with the same two pairs is
+    /// the only thing that tells `CanUseIPv6()` apart.
+    fn a_source_with_both_families() -> NetSource {
+        let mut source = NetSource::new_at(0);
+        source.set_longlink(vec!["long.example".to_string()], vec![80], "");
+        source.set_is_active(|| true);
+        source.set_net_info(|| 1);
+        source.set_new_dns(|_, _, _| vec!["1.1.1.1".to_string(), "2001:db8::1".to_string()]);
+        source.set_random(|_| 0);
+        source
+    }
+
+    #[test]
+    fn the_family_the_app_forbade_is_not_the_one_offered_first() {
+        // `CanUseIPv6()`: with it on, one of each family in turn, and the v6
+        // pair is the first of them
+        let mut source = a_source_with_both_families();
+        let items = source.get_longlink_items(&LonglinkConfig::new("main"));
+        assert_eq!(
+            ips(&items),
+            vec!["2001:db8::1".to_string(), "1.1.1.1".to_string()]
+        );
+
+        // `DisableIPv6()` — and the pairs come out in the order the dns
+        // answered them in, v6 or no v6, instead of being offered ahead of
+        // everything on a network the app said it had no use for
+        let mut source = a_source_with_both_families();
+        source.disable_ipv6();
+        assert!(!source.can_use_ipv6());
+        let items = source.get_longlink_items(&LonglinkConfig::new("main"));
+        assert_eq!(
+            ips(&items),
+            vec!["1.1.1.1".to_string(), "2001:db8::1".to_string()]
+        );
     }
 
     #[test]
