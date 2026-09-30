@@ -210,8 +210,9 @@ fn unpack_simple(opts: &Opts) -> Result<(), String> {
 /// the same line on every run.
 fn socket(opts: &Opts) -> Result<(), String> {
     // A port is a `u16` and not a `u32` with its top half cut off: `--port
-    // 65536` used to come back as `0`, and a socket at port 0 is one the
-    // harness below reports as unspec.
+    // 65536` used to come back as `0`. A port of `0` is not an unspec socket
+    // either — the family below is the address's, so what `0` costs is
+    // `valid_server_address`, and nothing else.
     let port = port(opts)?;
     let mut addr = match (opts.value("ip"), opts.value("v4"), opts.value("v6")) {
         (Some(ip), _, _) => SocketAddress::new(ip, port),
