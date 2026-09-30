@@ -29,7 +29,11 @@ cargo build --manifest-path "$REPO/Cargo.toml" -p marsrs-compat --release
 RUST=$REPO/target/release/sdt-compat
 CPP=$OUT/upstream_sdt
 
-if [ ! -x "$CPP" ]; then
+# … or older than the harness it was built out of: an edit to
+# `upstream_sdt.cpp` is otherwise a binary that keeps answering for a source
+# it no longer matches, and the C++ column of the table below is then not
+# the C++ of this tree.
+if [ ! -x "$CPP" ] || [ "$REPO/scripts/compat/upstream_sdt.cpp" -nt "$CPP" ]; then
     MARS_SRC="$REPO/scripts/compat/upstream_sdt.cpp" \
     MARS_SRCS="$UP/mars/comm/strutil.cc \
                $UP/mars/comm/unix/xlogger_threadinfo.cc \

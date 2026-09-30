@@ -35,7 +35,15 @@ cargo build --manifest-path "$REPO/Cargo.toml" -p marsrs-compat --release
 cargo build --manifest-path "$REPO/Cargo.toml" -p marsrs-appender --release \
     --example xlog_file
 
-if [ ! -x "$OUT/upstream_encode" ] || [ ! -x "$OUT/upstream_decode" ]; then
+# … or older than anything it was built out of: the encoder's own source, the
+# script that patches upstream's decoder, and the manifest whose keys that
+# patch writes into it. A binary that outlives its sources answers with the
+# C++ of the day it was built, and the table below would print that as the
+# C++ answer.
+if [ ! -x "$OUT/upstream_encode" ] || [ ! -x "$OUT/upstream_decode" ] \
+    || [ "$REPO/scripts/compat/upstream_encode.cpp" -nt "$OUT/upstream_encode" ] \
+    || [ "$REPO/scripts/compat/upstream_compat.sh" -nt "$OUT/upstream_decode" ] \
+    || [ "$MANIFEST" -nt "$OUT/upstream_decode" ]; then
     sh "$REPO/scripts/compat/upstream_compat.sh" "$OUT" > /dev/null
 fi
 
