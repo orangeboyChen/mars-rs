@@ -7,11 +7,12 @@
 //! and is swept once an hour, where entries that are still hot are kept (with a
 //! reduced count) and cold ones are dropped.
 //!
-//! The count is a burst's: a body that comes back after
-//! [`RESET_RECORD_INTERVAL`] starts over. One that only ever went up would
-//! refuse a task for the rest of the hour — and once it was over the count,
-//! for good — because the task had sent the same body a hundred times
-//! slowly, which is not what the gate is for.
+//! The count is not a burst's: nothing but the sweep lowers it, so a body
+//! that is sent a hundred times slowly crosses the line the same way one
+//! sent a hundred times at once does. A record that is still hot when the
+//! sweep comes round is not dropped, and is not refused for good either —
+//! its count is lowered to [`NOT_CLEAR_INTERCEPT_COUNT_RETRY`], which is
+//! under [`RECORD_INTERCEPT_COUNT`].
 
 use crate::task::Task;
 use marsrs_comm::adler32::adler32;
@@ -29,9 +30,6 @@ pub const NOT_CLEAR_INTERCEPT_COUNT: u32 = 75;
 pub const NOT_CLEAR_INTERCEPT_INTERVAL: u64 = 10 * 60 * 1000;
 /// How often the table is swept.
 pub const RUN_CLEAR_RECORDS_INTERVAL: u64 = 60 * 60 * 1000;
-/// How long a body may be away before the next send of it starts a new
-/// burst instead of adding to the one before.
-pub const RESET_RECORD_INTERVAL: u64 = 200;
 
 /// One body's send history, kept until an hourly sweep finds it cold.
 #[derive(Debug, Clone, Copy)]
@@ -96,11 +94,12 @@ impl FrequencyLimit {
         let hash = adler32(body);
         match self.locate(hash) {
             Some(index) => {
+                // `Check()` of the C++: the span is reported and the record is
+                // counted, and nothing here starts a new one. A reset on the
+                // span would make the gate one a body never reached, since
+                // any two sends of it a fifth of a second apart are a new
+                // count of 1.
                 let span = now.saturating_sub(self.records[index].last_update);
-                if RESET_RECORD_INTERVAL <= span {
-                    self.reset(index, now);
-                    return (true, span);
-                }
                 self.update(index, now);
                 (self.records[index].count <= RECORD_INTERCEPT_COUNT, span)
             }
@@ -151,14 +150,6 @@ impl FrequencyLimit {
             count: 1,
             last_update: now,
         });
-    }
-
-    /// The record of one burst, ended: what is counted from here is the
-    /// burst this send starts, and not the one that ended
-    /// [`RESET_RECORD_INTERVAL`] ago.
-    fn reset(&mut self, index: usize, now: u64) {
-        self.records[index].count = 1;
-        self.records[index].last_update = now;
     }
 
     fn update(&mut self, index: usize, now: u64) {
