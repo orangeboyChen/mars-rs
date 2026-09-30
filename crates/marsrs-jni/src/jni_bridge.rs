@@ -196,6 +196,13 @@ pub unsafe extern "system" fn JNI_OnLoad(
 /// Without a VM (a unit test, or a host that linked the library instead of
 /// loading it from Java) there is nobody to tell, and the report stays where
 /// [`crate::sdt`] recorded it; nothing here panics into Rust either way.
+///
+/// A callback that threw is answered here and not by the next call — see
+/// [`clear_pending`]. This is the one C2Java call of the port that is a `V`
+/// and not a question: the app's handler gets the report and answers nothing,
+/// so there is no answer to read the failure out of, and the thread it runs
+/// on was attached by Rust, which discards a pending exception at detach
+/// without anybody ever seeing it.
 pub fn report_signal_detect_results(json: String) {
     guard(|| {
         let Some(vm) = VM.get() else {
@@ -208,13 +215,18 @@ pub fn report_signal_detect_results(json: String) {
             let Some(class) = class_of(|classes| &classes.sdt_logic) else {
                 return Ok(());
             };
-            let message = JObject::from(env.new_string(&json)?);
-            env.call_static_method(
+            let message = env.new_string(&json);
+            let Ok(message) = clear_pending(env, message) else {
+                return Ok(());
+            };
+            let message = JObject::from(message);
+            let called = env.call_static_method(
                 class,
                 jni_str!("reportSignalDetectResults"),
                 jni_sig!("(Ljava/lang/String;)V"),
                 &[JValue::Object(&message)],
-            )?;
+            );
+            void_of(env, called);
             Ok::<_, jni::errors::Error>(())
         });
     })
