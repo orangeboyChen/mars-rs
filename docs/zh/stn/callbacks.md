@@ -7,7 +7,7 @@
 | 你的 App 是 | 谁来回答 |
 |---|---|
 | Rust | `impl App for MyApp`，交给 `stn.set_callback(MyApp)` |
-| iOS / watchOS，Swift | 一个闭包，交给 `MarsStn.setApp { … }` |
+| iOS / watchOS，Swift 或 Objective-C | 一个闭包交给 `MarsStn.setApp { … }`，或者 `[MarsStn setApp:]` 接的那个 block |
 | Android，Kotlin 或 Java | `StnLogic.ICallBack`，交给 `StnLogic.setCallBack(…)` |
 | Kotlin Multiplatform | 一个 `ask`，交给 `StnLogic.setApp { … }` |
 | 有 C FFI 的任何东西 | 一个函数指针，交给 `mars_stn_set_app(ctx, ask)` |

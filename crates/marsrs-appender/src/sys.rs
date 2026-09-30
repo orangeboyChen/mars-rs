@@ -337,7 +337,7 @@ pub fn lock_excludes(path: &Path) -> bool {
     // handle holds open is denied unless that handle asked for delete
     // sharing, which `File::options` does not — and a probe left behind in
     // the log directory is a file an app did not write.
-    let mut remove = RemoveOnDrop {
+    let remove = RemoveOnDrop {
         file: Some(first),
         path: &probe,
     };

@@ -11,7 +11,7 @@ why STN is not working.
 | your app is | what carries SDT | how you reach it |
 |---|---|---|
 | Rust | `marsrs` (`marsrs-xlog` has none of it) | `marsrs::sdt` |
-| iOS / watchOS, Swift | the `MarsRSNet` product, or `MarsRS` | `MarsSdt` |
+| iOS / watchOS, Swift or Objective-C | the `MarsRSNet` product or pod, or `MarsRS` | `MarsSdt` |
 | Android, Kotlin or Java | `marsrs` on JitPack, not `xlog` | `io.github.orangeboychen.marsrs.sdt.SdtLogic` |
 | Kotlin Multiplatform | `marsrs-kmp`, not `xlog-kmp` | `io.github.orangeboychen.marsrs.sdt.SdtLogic` |
 | anything with a C FFI | `include/mars_sdt.h` | `mars_sdt_*` |
@@ -129,6 +129,12 @@ if let report = MarsSdt.takeReport() { send(report) }
 
 `MarsSdt.takeReport()` starts its buffer at 4 KB and doubles up to 1 MB, so an
 app that takes the report asks for it once and does not size anything.
+
+`MarsSdt` is a class over the same framework, so an app written in Objective-C
+runs the same three calls out of `MarsRSNet-Swift.h`: the probe is a block, and
+the five answers are the five class methods of `MarsSdtResult`. The one thing it
+does not reach is `MarsSdt.plan` — an array of enums has no Objective-C type,
+so [the plan](/sdt/checks) stays Swift's.
 
 ## Android
 

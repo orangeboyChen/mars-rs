@@ -100,11 +100,14 @@ internal func strings(from list: MarsStnStrings) -> [String] {
 
 /// The bytes of `pointer` and `count`; nothing when there is no pointer, which
 /// is what the C ABI hands for a body it does not have.
-internal func bytes(from pointer: UnsafePointer<UInt8>?, count: UInt32) -> [UInt8] {
+///
+/// `Data` and not `[UInt8]`: it is the bytes of one record or of one request,
+/// and it is what crosses into Objective-C as an `NSData`.
+internal func data(from pointer: UnsafePointer<UInt8>?, count: UInt32) -> Data {
     guard let pointer else {
-        return []
+        return Data()
     }
-    return [UInt8](UnsafeBufferPointer(start: pointer, count: Int(count)))
+    return Data(bytes: pointer, count: Int(count))
 }
 
 /// One answer's worth of C memory, owned here and thrown away when the next
@@ -137,14 +140,20 @@ internal struct Held {
 
     /// The copy of `value`, as the pointer and count a `const unsigned char*`
     /// wants; `nil` for nothing, which is an empty body and not one that is read.
-    internal mutating func bytes(_ value: [UInt8]) -> UnsafePointer<UInt8>? {
-        guard !value.isEmpty else {
+    ///
+    /// Any `Sequence` of bytes and not a `[UInt8]`, because a body is a `Data`
+    /// here: the two are the same copy, and one spelling is what the two callers
+    /// want.
+    internal mutating func bytes<Bytes: Sequence>(_ value: Bytes) -> UnsafePointer<UInt8>?
+    where Bytes.Element == UInt8 {
+        let copy = Array(value)
+        guard !copy.isEmpty else {
             return nil
         }
-        let copy = UnsafeMutablePointer<UInt8>.allocate(capacity: value.count)
-        _ = UnsafeMutableBufferPointer(start: copy, count: value.count).initialize(from: value)
-        arrays.append(UnsafeMutableRawPointer(copy))
-        return UnsafePointer(copy)
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: copy.count)
+        _ = UnsafeMutableBufferPointer(start: buffer, count: copy.count).initialize(from: copy)
+        arrays.append(UnsafeMutableRawPointer(buffer))
+        return UnsafePointer(buffer)
     }
 
     /// Throws away everything the answer before this one was made of.

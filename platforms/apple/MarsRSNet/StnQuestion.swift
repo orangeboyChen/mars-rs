@@ -16,11 +16,17 @@ import Foundation
 /// `port` the pair of the two network errors; `channelID` the link of `onPush`,
 /// `identifyCheckBuffer` and `identifyResponse`; `body` what was pushed, what
 /// came back and what the server answered.
-public struct StnQuestion {
+///
+/// A class and not a struct, because an app that writes Objective-C is asked too
+/// — the reason `XlogConfig` is a class and not a struct. What it is made of is
+/// the same readings either way.
+@objc
+public final class StnQuestion: NSObject {
     /// Which of the eighteen questions STN asked.
     ///
     /// The integers are the C ABI's own: they name a question, the way the
     /// C++'s eighteen virtuals do by name.
+    @objc(StnQuestionKind)
     public enum Kind: UInt32 {
         /// Nothing was asked: what a question starts out as, and what no
         /// question is ever asked as.
@@ -67,37 +73,44 @@ public struct StnQuestion {
 
     /// The connect a task ran on, as the app's report wants it: every reading is
     /// a `gettickcount()`.
-    public struct CgiProfile {
+    @objc(StnQuestionCgiProfile)
+    public final class CgiProfile: NSObject {
         /// When the run began.
-        public let startTime: UInt64
+        @objc public let startTime: UInt64
         /// When the connect began.
-        public let startConnectTime: UInt64
+        @objc public let startConnectTime: UInt64
         /// When it came back, socket or no socket.
-        public let connectSuccessfulTime: UInt64
+        @objc public let connectSuccessfulTime: UInt64
         /// When the request went out.
-        public let startSendPacketTime: UInt64
+        @objc public let startSendPacketTime: UInt64
         /// When the write was done.
-        public let sendPacketFinishedTime: UInt64
+        @objc public let sendPacketFinishedTime: UInt64
         /// When the read of the answer began.
-        public let startReadPacketTime: UInt64
+        @objc public let startReadPacketTime: UInt64
         /// When the last of it came back.
-        public let readPacketFinishedTime: UInt64
+        @objc public let readPacketFinishedTime: UInt64
         /// When the app was handed the task to write its request.
-        public let startEncodePacketTime: UInt64
+        @objc public let startEncodePacketTime: UInt64
         /// When the request came back.
-        public let encodePacketFinishedTime: UInt64
+        @objc public let encodePacketFinishedTime: UInt64
         /// When the app was handed the answer.
-        public let startDecodePacketTime: UInt64
+        @objc public let startDecodePacketTime: UInt64
         /// When it was done reading it.
-        public let decodePacketFinishedTime: UInt64
+        @objc public let decodePacketFinishedTime: UInt64
         /// The link the task went out on.
-        public let channelType: MarsStn.Channel
+        @objc public let channelType: MarsStn.Channel
         /// How the task went out.
-        public let transportProtocol: MarsStn.TransportProtocol
+        @objc public let transportProtocol: MarsStn.TransportProtocol
         /// How long the pair that won took to answer.
-        public let rtt: UInt32
+        @objc public let rtt: UInt32
         /// The network the connect was made on.
-        public let netType: String
+        @objc public let netType: String
+
+        deinit {
+            // Nothing to release: the readings and the one string are all this
+            // object holds, and they go with it. The declaration is what
+            // `required_deinit` asks a class for.
+        }
 
         /// The connect a question carries, as the Swift reads it.
         internal init(_ profile: MarsStnCgiProfile) {
@@ -112,29 +125,37 @@ public struct StnQuestion {
             encodePacketFinishedTime = profile.encode_packet_finished_time
             startDecodePacketTime = profile.start_decode_packet_time
             decodePacketFinishedTime = profile.decode_packet_finished_time
-            channelType = MarsStn.Channel(rawValue: profile.channel_type)
+            channelType = MarsStn.Channel(rawValue: profile.channel_type) ?? .none
             transportProtocol = MarsStn.TransportProtocol(rawValue: profile.transport_protocol) ?? .default
             rtt = profile.rtt
             netType = string(profile.nettype)
+            super.init()
         }
     }
 
     /// How a dns question went.
-    public struct DnsProfile {
+    @objc(StnQuestionDnsProfile)
+    public final class DnsProfile: NSObject {
         /// When the question was asked.
-        public let startTime: UInt64
+        @objc public let startTime: UInt64
         /// When it came back; `0` while it has not.
-        public let endTime: UInt64
+        @objc public let endTime: UInt64
         /// What was asked for.
-        public let host: String
+        @objc public let host: String
         /// One of `ErrCmdType`'s: `0` ok, `1` false, `2` dial, `3` dns, `4`
         /// socket, `5` http, `6` netmsgxp, `7` endecode, `8` server, `9` local,
         /// `10` canceld.
-        public let errType: Int32
+        @objc public let errType: Int32
         /// The code the question ended with.
-        public let errCode: Int32
+        @objc public let errCode: Int32
         /// Which dns it was: `1` the app's, `2` the platform's.
-        public let dnsType: Int32
+        @objc public let dnsType: Int32
+
+        deinit {
+            // Nothing to release: the readings and the one string are all this
+            // object holds, and they go with it. The declaration is what
+            // `required_deinit` asks a class for.
+        }
 
         /// The question a report carries, as the Swift reads it.
         internal init(_ profile: MarsStnDnsProfile) {
@@ -144,66 +165,75 @@ public struct StnQuestion {
             errType = profile.err_type
             errCode = profile.err_code
             dnsType = profile.dnstype
+            super.init()
         }
     }
 
     /// Which of the eighteen STN asked: the readings below are the ones this
     /// one names, and the rest are the zeros they start out as.
-    public let kind: Kind
+    @objc public let kind: Kind
     /// The host: `makesureAuthed`, `onNewDns`, `shortLinkNetworkError`.
-    public let host: String
+    @objc public let host: String
     /// The user: `makesureAuthed`, `req2Buf`, `buf2Resp`, `onTaskEnd`.
-    public let userID: String
+    @objc public let userID: String
     /// The link: `onPush`, `identifyCheckBuffer`, `identifyResponse`.
-    public let channelID: String
+    @objc public let channelID: String
     /// The ip a network error happened on.
-    public let ipAddress: String
+    @objc public let ipAddress: String
     /// The port a network error happened on.
-    public let port: UInt16
+    @objc public let port: UInt16
     /// `onPush`, `identifyCheckBuffer`.
-    public let cmdid: UInt32
+    @objc public let cmdid: UInt32
     /// `onPush`, `req2Buf`, `buf2Resp`, `onTaskEnd`.
-    public let taskID: UInt32
+    @objc public let taskID: UInt32
     /// `trafficData` — how much went out.
-    public let sent: Int64
+    @objc public let sent: Int64
     /// `trafficData` — how much came in.
-    public let received: Int64
+    @objc public let received: Int64
     /// `req2Buf`, `buf2Resp` — the channel the task is going out on.
-    public let channelSelect: MarsStn.Channel
+    @objc public let channelSelect: MarsStn.Channel
     /// `req2Buf` — the sequence the task goes out with.
-    public let sequence: UInt16
+    @objc public let sequence: UInt16
     /// `onPush`, `buf2Resp`, `identifyResponse` — the bytes.
-    public let body: [UInt8]
-    /// `identifyResponse` — the hash the app handed out.
-    public let hash: [UInt8]
+    @objc public let body: Data
+    /// `identifyResponse` — the `hash` of the C ABI: the hash the app handed
+    /// out, which the answer is judged against. `Hash` is not a name a class
+    /// can carry, because `NSObject` has one of its own.
+    @objc public let hashBytes: Data
     /// `onTaskEnd`, the two network errors — one of `ErrCmdType`'s: `0` ok,
     /// `1` false, `2` dial, `3` dns, `4` socket, `5` http, `6` netmsgxp,
     /// `7` endecode, `8` server, `9` local, `10` canceld.
-    public let errType: Int32
+    @objc public let errType: Int32
     /// `onTaskEnd`, the two network errors.
-    public let errCode: Int32
+    @objc public let errCode: Int32
     /// `onTaskEnd` — the connect the task ran on.
-    public let profile: CgiProfile?
+    @objc public let profile: CgiProfile?
     /// `reportTaskProfile` — the report, as the JSON
     /// `mars_stn::task_profile_json` writes.
-    public let profileJSON: String?
+    @objc public let profileJSON: String?
     /// `reportDnsProfile` — how the question went.
-    public let dns: DnsProfile?
+    @objc public let dns: DnsProfile?
     /// `reportConnectStatus` — whether STN can reach anything at all.
-    public let netStatusAll: MarsStn.NetStatus?
+    @objc public let netStatusAll: MarsStn.NetStatus
     /// `reportConnectStatus` — the long link, in the same integers.
-    public let netStatusLongLink: MarsStn.NetStatus?
+    @objc public let netStatusLongLink: MarsStn.NetStatus
     /// `longLinkStatusChange` — what the default long link is in.
-    public let linkStatus: MarsStn.LinkStatus?
+    @objc public let linkStatus: MarsStn.LinkStatus
     /// `onNewDns` — whether the host is a long-link one.
-    public let isLongLinkHost: Bool
+    @objc public let isLongLinkHost: Bool
     /// `reportTaskLimited` — what the task is being weighed against.
-    public let checkType: Int32
+    @objc public let checkType: Int32
     /// `reportTaskLimited` — what that gate weighed it against: how long ago
     /// the same body went out, or how many bytes the funnel would not take.
-    public let limit: UInt32
+    @objc public let limit: UInt32
     /// `reportTaskLimited` — the task itself.
-    public let task: StnTask?
+    @objc public let task: StnTask?
+
+    deinit {
+        // Nothing to release: every reading is a copy the C ABI's question was
+        // read into, and they go with this object. The declaration is what
+        // `required_deinit` asks a class for.
+    }
 
     /// The question STN asked, as the Swift reads it.
     ///
@@ -220,21 +250,22 @@ public struct StnQuestion {
         taskID = question.taskid
         sent = question.send
         received = question.recv
-        channelSelect = MarsStn.Channel(rawValue: question.channel_select)
+        channelSelect = MarsStn.Channel(rawValue: question.channel_select) ?? .none
         sequence = question.sequence
-        body = bytes(from: question.body, count: question.body_count)
-        hash = bytes(from: question.hash, count: question.hash_count)
+        body = data(from: question.body, count: question.body_count)
+        hashBytes = data(from: question.hash, count: question.hash_count)
         errType = question.err_type
         errCode = question.err_code
         profile = question.profile.map { CgiProfile($0.pointee) }
         profileJSON = question.profile_json.map { String(cString: $0) }
         dns = question.dns.map { DnsProfile($0.pointee) }
-        netStatusAll = MarsStn.NetStatus(rawValue: question.net_status_all)
-        netStatusLongLink = MarsStn.NetStatus(rawValue: question.net_status_longlink)
-        linkStatus = MarsStn.LinkStatus(rawValue: question.link_status)
+        netStatusAll = MarsStn.NetStatus(rawValue: question.net_status_all) ?? .none
+        netStatusLongLink = MarsStn.NetStatus(rawValue: question.net_status_longlink) ?? .none
+        linkStatus = MarsStn.LinkStatus(rawValue: question.link_status) ?? .none
         isLongLinkHost = question.longlink_host != 0
         checkType = question.check_type
         limit = question.limit
         task = question.task.map { StnTask($0.pointee) }
+        super.init()
     }
 }

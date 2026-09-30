@@ -8,7 +8,7 @@ and the rest. Every platform funnels all eighteen through one thing:
 | your app is | what answers them |
 |---|---|
 | Rust | `impl App for MyApp`, given to `stn.set_callback(MyApp)` |
-| iOS / watchOS, Swift | one closure, given to `MarsStn.setApp { … }` |
+| iOS / watchOS, Swift or Objective-C | one closure given to `MarsStn.setApp { … }`, or the block `[MarsStn setApp:]` takes |
 | Android, Kotlin or Java | `StnLogic.ICallBack`, given to `StnLogic.setCallBack(…)` |
 | Kotlin Multiplatform | one `ask`, given to `StnLogic.setApp { … }` |
 | anything with a C FFI | one function pointer, given to `mars_stn_set_app(ctx, ask)` |

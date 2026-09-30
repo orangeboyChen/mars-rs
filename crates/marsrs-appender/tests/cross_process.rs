@@ -2,20 +2,25 @@
 //! for, and the one the port's own module doc promises it gets right where
 //! the C++ does not.
 //!
-//! What is under test is that every record of every writer reaches the log.
-//! That is what stops being true the moment two writers are handed the same
-//! cache file — and the moment `sys::lock_excludes` answers `false` because a
-//! peer happened to be holding the log lock, that is exactly what happens:
-//! `claim_cache_slot` falls back to the C++'s single fixed `<prefix>.mmap3`,
-//! which two writers then write through with their own idea of its length.
+//! What is under test is that two live writers of one prefix are given two
+//! cache files, and that every record of both reaches the log. The first is
+//! the property that breaks: `sys::lock_excludes` answering `false` makes
+//! `claim_cache_slot` fall back to the C++'s single fixed `<prefix>.mmap3`,
+//! which both writers then write through with their own idea of its length —
+//! records lost, and a log that no longer frames end to end.
 //!
-//! `tests/cross_writer.rs` used to pin this and went when the process-wide
-//! appender did, so it is back — over handles, and with the two writers in
-//! two processes rather than two threads, because a shared cache region is a
+//! The count is taken while both writers are still open, and that is the
+//! whole trick: a slot is released when its writer closes, so two writers
+//! that open one after the other claim the same file quite legitimately.
+//!
+//! `tests/cross_writer.rs` used to cover this and went when the process-wide
+//! appender did, so it is back — over handles, and with the writers in two
+//! processes rather than two threads, because a shared cache region is a
 //! cross-process hazard and not a threading one.
 
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
+use std::time::{Duration, Instant};
 
 use marsrs_appender::{AppenderMode, LogLevel, XLogConfig, Xlog};
 
@@ -30,35 +35,24 @@ const DIR: &str = "MARSRS_CROSS_PROCESS_DIR";
 /// How many records each writer writes.
 const RECORDS: usize = 200;
 
+/// How long the parent waits for a child to say it is open. A child that
+/// never answers cannot hang the suite: a test that can hang is worse than
+/// one that fails.
+const WAIT: Duration = Duration::from_secs(60);
+
 #[test]
 fn two_processes_keep_every_record() {
     if let Ok(role) = std::env::var(ROLE) {
-        return write_as(
-            &role,
-            &std::env::var(DIR).expect("the child was given no directory"),
-        );
+        let dir = std::env::var(DIR).expect("the child was given no directory");
+        return write_as(&role, PathBuf::from(dir));
     }
 
     let dir = std::env::temp_dir().join(format!("marsrs-cross-process-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("the shared directory");
 
-    // Files for the sweep at `open` to walk, so the section a writer holds the
-    // log lock for is long enough for the other one to open inside it: the
-    // question this test asks is only asked at that moment, and on an empty
-    // directory the window is too short to hit.
-    for day in 0usize..400 {
-        let month = day / 31 + 1;
-        let in_month = day % 31 + 1;
-        std::fs::write(
-            dir.join(format!("shared_2025{month:02}{in_month:02}.xlog")),
-            b"",
-        )
-        .expect("a file for the sweep");
-    }
-
     let exe = std::env::current_exe().expect("the test binary's own path");
-    let mut children: Vec<_> = ["a", "b"]
+    let mut children: Vec<Child> = ["a", "b"]
         .iter()
         .map(|role| {
             Command::new(&exe)
@@ -79,6 +73,21 @@ fn two_processes_keep_every_record() {
     // the right answer by luck and not by anything this test can rely on.
     std::fs::write(dir.join("go"), b"").expect("the start signal");
 
+    let result = std::panic::catch_unwind(|| {
+        wait_for(&dir, "open");
+        count(&dir)
+    });
+    // Whatever the answer was, the children are told to stop before the
+    // failure travels: a child left waiting for a signal that never comes is
+    // a process the suite leaves behind.
+    std::fs::write(dir.join("stop"), b"").expect("the stop signal");
+    if let Err(payload) = result {
+        for child in children.iter_mut() {
+            let _ = child.wait();
+        }
+        std::panic::resume_unwind(payload);
+    }
+    wait_for(&dir, "done");
     for child in children.iter_mut() {
         let status = child.wait().expect("a child to finish");
         assert!(status.success(), "a child writer failed: {status}");
@@ -100,14 +109,54 @@ fn two_processes_keep_every_record() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// One writer: waits for the signal, opens the shared prefix, writes, drains,
-/// closes. Sync mode, because a record handed to the file in the call it was
-/// written in is the one this test can read back out of the file.
-fn write_as(role: &str, dir: &str) {
-    let dir = PathBuf::from(dir);
-    while !dir.join("go").exists() {
-        std::thread::sleep(std::time::Duration::from_millis(1));
+/// The pin: two live writers, two cache files. One means the two were handed
+/// the same slot, which is the C++'s bug and not this port's.
+fn count(dir: &Path) {
+    let slots: Vec<_> = std::fs::read_dir(dir)
+        .expect("the shared directory")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".mmap3"))
+        .collect();
+    assert_eq!(
+        slots.len(),
+        2,
+        "two live writers of one prefix claimed {slots:?} — one cache file between them \
+         means `lock_excludes` read a peer's lock as a filesystem that cannot lock"
+    );
+}
+
+/// Waits until every role has written its `<what>-<role>` marker. Panics if
+/// they never do, and never waits longer than [`WAIT`].
+fn wait_for(dir: &Path, what: &str) {
+    let started = Instant::now();
+    for role in ["a", "b"] {
+        let marker = dir.join(format!("{what}-{role}"));
+        while !marker.exists() {
+            assert!(
+                started.elapsed() < WAIT,
+                "the {role} writer never said `{what}`: {}",
+                dir.display()
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
     }
+}
+
+/// One writer: waits for the signal, opens the shared prefix, writes, drains,
+/// says it is open, and stays open until it is told to stop.
+///
+/// Sync mode, because a record handed to the file in the call it was written
+/// in is the one this test can read back out of the file. The cache file is
+/// claimed at `open` whatever the mode is, which is why the parent can count
+/// it here.
+fn write_as(role: &str, dir: PathBuf) {
+    let go = dir.join("go");
+    let started = Instant::now();
+    while !go.exists() && started.elapsed() < WAIT {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(go.exists(), "the parent never said `go`: {}", dir.display());
 
     let config = XLogConfig {
         mode: AppenderMode::Sync,
@@ -127,12 +176,26 @@ fn write_as(role: &str, dir: &str) {
         );
     }
     xlog.flush_now();
+    std::fs::write(dir.join(format!("open-{role}")), b"").expect("the marker");
+
+    // Held open while the parent counts the cache files: a writer that closed
+    // already released its slot, and the count would mean nothing.
+    //
+    // Bounded, because the parent may never reach the signal — the count is
+    // the assertion, and a failing one leaves no `stop` behind. A child that
+    // waits for it without a bound outlives the suite.
+    let stop = dir.join("stop");
+    let started = Instant::now();
+    while !stop.exists() && started.elapsed() < WAIT {
+        std::thread::sleep(Duration::from_millis(2));
+    }
     xlog.close();
+    std::fs::write(dir.join(format!("done-{role}")), b"").expect("the marker");
 }
 
 /// Every `.xlog` of the directory as one string. Sync mode stores the payload
 /// verbatim, so a record is found the way the appender's own tests find one.
-fn log_text(dir: &std::path::Path) -> String {
+fn log_text(dir: &Path) -> String {
     let mut text = String::new();
     for entry in std::fs::read_dir(dir).expect("the shared directory") {
         let path = entry.expect("a directory entry").path();
