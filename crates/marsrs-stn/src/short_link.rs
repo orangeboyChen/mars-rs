@@ -1143,8 +1143,16 @@ impl ShortLink {
                     self.profile.socket_fd = socket;
                 }
                 // the server said close, so the task's own `Keep-Alive` is not
-                // one after all
-                KeepAlive::Closed => self.keep_alive = false,
+                // one after all — and the socket is the link's to close at the
+                // end of the run, not the pool's to keep: the queue decides
+                // what it may cache by whether the profile still names one, so
+                // a profile left holding this socket had it cached and closed
+                // a second time, by whoever was given the number next
+                KeepAlive::Closed => {
+                    self.keep_alive = false;
+                    self.profile.socket_fd = SocketFd::INVALID;
+                    self.profile.keepalive_timeout = 0;
+                }
             }
         }
 
@@ -2845,6 +2853,30 @@ mod tests {
             Some(Ok(b"hello".to_vec()))
         );
         assert_eq!(seen.closed().len(), 1, "the socket was not kept");
+    }
+
+    /// The queue reads `ConnectProfile::socket_fd` to decide what it may hand
+    /// to the pool, so a socket the server said to close has to leave the
+    /// profile: it is closed at the end of the run, and a pool that was given
+    /// it would close the number again — on whatever descriptor owns it by
+    /// then.
+    #[test]
+    fn a_socket_the_server_said_to_close_is_one_the_profile_does_not_name() {
+        let seen = Seen::default();
+        let (mut link, socket) = reused(&seen);
+        link.write_at(1100, socket, b"hello").unwrap();
+
+        let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
+        assert_eq!(
+            link.read_at(1200, socket, Ok(answer)),
+            Read::Done(Ok(b"hello".to_vec()))
+        );
+        assert!(!link.is_keep_alive(), "the server has the last word");
+        assert!(
+            !link.profile().socket_fd.is_valid(),
+            "the socket the pool would have been given"
+        );
+        assert_eq!(link.profile().keepalive_timeout, 0);
     }
 
     #[test]
