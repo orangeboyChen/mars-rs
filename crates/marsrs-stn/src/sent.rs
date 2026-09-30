@@ -356,7 +356,7 @@ impl Ends {
 /// delay [`StnLogic::due_delay`] answers, which is the number a *host*
 /// schedules a run loop of its own with: how long it may wait is what that
 /// delay says, and a host that is woken before it is up is a host that comes
-/// back early. Nothing wakes this thread, so see [`drain`].
+/// back early. Nothing wakes this thread, so see `drain`.
 #[derive(Debug)]
 pub struct Driver {
     stop: Arc<std::sync::atomic::AtomicBool>,
