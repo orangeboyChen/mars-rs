@@ -351,9 +351,10 @@ cc -I include -o app app.c libmars_ffi.a -lpthread -ldl     # 静态
 cc -I include -o app app.c -L. -lmars_ffi                  # 动态
 ```
 
-每个返回 `int` 的调用回答 `MARS_XLOG_OK`（0）或一个负的 `MARS_XLOG_ERR_*` —— 只有
-那三个回答路径的例外，它们回答的是写进去的字节数 —— C ABI 里没有任何东西会把栈展开到
-C 里。
+每个回答 `int` 的调用回答 `MARS_XLOG_OK`（0）或一个负的 `MARS_XLOG_ERR_*`，C ABI
+里没有任何东西会把栈展开到 C 里。有三个回答的 `int` 不是状态：那三个回答路径的回答是
+写进去的字节数，`mars_xlog_is_enabled_for` 回答 1 或 0，`mars_xlog_get_level`
+回答级别本身 —— 句柄没指向任何 appender 时回答 `-1`，那不是错误码。
 
 ## C++
 

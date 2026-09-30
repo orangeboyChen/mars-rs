@@ -309,8 +309,9 @@ pub fn unlock(file: &File) -> bool {
 /// The answer is probed rather than assumed, by locking the path twice —
 /// but **not** `path` itself, and that is the whole trick.
 ///
-/// `path` is the lock every writer of this log directory takes and releases
-/// around the sections that move files. Probing it directly reads "another
+/// `path` is the lock every writer of this directory takes and releases
+/// around the sections that move files — the log directory's when the appender
+/// has no cache directory of its own, and the cache directory's when it has. Probing it directly reads "another
 /// writer is in a locked section right now" as "locking excludes nobody on
 /// this filesystem": the first `try_lock` is denied, the probe answers
 /// `false`, and the caller falls back to the unprotected behaviour — which,
@@ -322,9 +323,7 @@ pub fn unlock(file: &File) -> bool {
 /// `create_new`, so an existing file can only mean this is not the first
 /// probe of that name, and removed again on the way out.
 pub fn lock_excludes(path: &Path) -> bool {
-    let Some(probe) = probe_path(path) else {
-        return false;
-    };
+    let probe = probe_path(path);
     let Ok(first) = File::options()
         .read(true)
         .write(true)
@@ -333,9 +332,16 @@ pub fn lock_excludes(path: &Path) -> bool {
     else {
         return false;
     };
-    // Whatever happens now, the probe file does not outlive the question.
-    let _remove = RemoveOnDrop(&probe);
-    if !try_lock_exclusive(&first) {
+    // The guard owns the handle as well as the name, so the file is closed
+    // before it is unlinked: on Windows a `remove_file` of a file another
+    // handle holds open is denied unless that handle asked for delete
+    // sharing, which `File::options` does not — and a probe left behind in
+    // the log directory is a file an app did not write.
+    let mut remove = RemoveOnDrop {
+        file: Some(first),
+        path: &probe,
+    };
+    if !try_lock_exclusive(remove.file.as_ref().expect("the handle is there")) {
         return false;
     }
     let Ok(second) = File::options().read(true).write(true).open(&probe) else {
@@ -346,21 +352,28 @@ pub fn lock_excludes(path: &Path) -> bool {
 }
 
 /// A sibling of `path` no other writer of it will ever have open: same
-/// directory, because whether locking excludes anybody is a property of the
-/// filesystem and not of the name.
-fn probe_path(path: &Path) -> Option<std::path::PathBuf> {
+/// directory and therefore same filesystem, because whether locking excludes
+/// anybody is a property of the filesystem and not of the name.
+fn probe_path(path: &Path) -> std::path::PathBuf {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let name = path.file_name()?.to_str()?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("lock");
     let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    Some(path.with_file_name(format!("{name}.{}.{unique}.probe", std::process::id())))
+    path.with_file_name(format!("{name}.{}.{unique}.probe", std::process::id()))
 }
 
-/// Unlinks `0` on the way out, whatever the answer was.
-struct RemoveOnDrop<'a>(&'a Path);
+/// Closes `file` and unlinks `path`, on the way out whatever the answer was.
+struct RemoveOnDrop<'a> {
+    file: Option<File>,
+    path: &'a Path,
+}
 
 impl Drop for RemoveOnDrop<'_> {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(self.0);
+        drop(self.file.take());
+        let _ = std::fs::remove_file(self.path);
     }
 }
 

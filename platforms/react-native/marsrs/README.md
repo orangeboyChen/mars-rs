@@ -59,7 +59,7 @@ compiles — there is no build step, and `npm run typecheck` is the only script.
 `src/NativeXlog.ts` is the spec React Native's codegen reads, and
 `codegenConfig` in `package.json` is what points it at `src`: `NativeXlogSpec`
 is generated into the app's `React-Codegen` pod and into the Android build, and
-neither half of the module has to be told the thirteen signatures twice.
+neither half of the module has to be told the sixteen signatures twice.
 
 ## What each platform resolves
 

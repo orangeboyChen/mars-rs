@@ -380,9 +380,12 @@ cc -I include -o app app.c libmars_ffi.a -lpthread -ldl     # static
 cc -I include -o app app.c -L. -lmars_ffi                  # shared
 ```
 
-Every call that returns an `int` answers `MARS_XLOG_OK` (0) or a negative
-`MARS_XLOG_ERR_*` — except the three that name a path, which answer the number
-of bytes they wrote instead — and nothing in the C ABI unwinds into C.
+Every call that answers an `int` answers `MARS_XLOG_OK` (0) or a negative
+`MARS_XLOG_ERR_*`, and nothing in the C ABI unwinds into C. Three calls answer
+an `int` that is not a status: the three that name a path answer the number of
+bytes they wrote, `mars_xlog_is_enabled_for` answers 1 or 0, and
+`mars_xlog_get_level` answers the level itself — or `-1` for a handle that
+names no appender, which is not an error code.
 
 ## C++
 
