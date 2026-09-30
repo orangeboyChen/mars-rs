@@ -306,14 +306,21 @@ fn map_region(file: &File) -> std::io::Result<memmap2::MmapMut> {
 ///
 /// Only needed when there is no mapping: with one, `LogBuffer::flush` and
 /// `close()` clear the bytes in place, and the file follows the mapping.
-fn clear_cache_file(path: &Path) {
-    // Truncate to zero and *keep* it at zero: `set_len` back to the block size
-    // would build the same sparse hole that the pre-allocation below exists to
-    // prevent, and a zero-length file re-arms that pre-allocation on the next
-    // open.
-    if let Ok(mut file) = OpenOptions::new().write(true).truncate(true).open(path) {
-        let _ = file.flush();
-    }
+/// Empties a cache file, through the handle that owns it and not through a
+/// second open of its path.
+///
+/// A slot is held under an exclusive lock for as long as the appender lives, and
+/// on Windows that lock is mandatory: a second open of the path is refused a
+/// share of the very bytes it locked, so a clear made through one is a clear
+/// that never happens — and the block it was meant to drop stays in the file
+/// for the next start to append a second time, once per start, forever.
+///
+/// Truncated to zero and *kept* at zero: `set_len` back to the block size would
+/// build the same sparse hole that the pre-allocation below exists to prevent,
+/// and a zero-length file re-arms that pre-allocation on the next open.
+fn clear_cache_file(file: &mut File) {
+    let _ = file.set_len(0);
+    let _ = file.flush();
 }
 
 /// Whether the whole region reads as zeros: a hole `set_len` made, with no
@@ -1988,14 +1995,16 @@ impl Appender {
     /// Only for the writer that owns the file: a cache file left behind by
     /// another process is not this appender's to clear.
     fn clear_cache_file_if_heap(&self) {
-        let (use_mmap, path) = {
-            let guard = self.lock();
-            (guard.use_mmap, guard.cache_path())
-        };
-        if !use_mmap {
-            if let Some(path) = path {
-                clear_cache_file(&path);
-            }
+        let mut guard = self.lock();
+        if guard.use_mmap {
+            return;
+        }
+        // Only for the writer that owns the file: a cache file left behind by
+        // another process is not this appender's to clear — and the handle it
+        // is cleared through is the one that owns it, which is also the one
+        // holding the lock.
+        if let Some(slot) = guard.cache.as_mut() {
+            clear_cache_file(&mut slot.file);
         }
     }
 
@@ -3331,6 +3340,28 @@ mod tests {
         );
     }
 
+    /// What the cache file of `appender` holds, read through the handle the
+    /// appender owns.
+    ///
+    /// Not `fs::read` of its path: the slot is locked exclusively for as long as
+    /// the appender lives, and on Windows that lock is mandatory, so a second
+    /// open of the path is refused the bytes it locked. `verbose_file_reads`
+    /// names `fs::read` as the shorter spelling of this, and a path is exactly
+    /// what this one cannot be given.
+    #[allow(clippy::verbose_file_reads)]
+    fn read_slot(appender: &Appender) -> Vec<u8> {
+        let mut guard = appender.lock();
+        let file = &mut guard
+            .cache
+            .as_mut()
+            .expect("the appender claimed a slot")
+            .file;
+        file.seek(SeekFrom::Start(0)).unwrap();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        bytes
+    }
+
     /// The one case in which emptying the cache file is a loss: the block it
     /// held was copied out and then reached no log.
     ///
@@ -3351,14 +3382,23 @@ mod tests {
             // file a live mapping covers is a SIGBUS on the next touch of it.
             guard.region = Region::heap();
             guard.use_mmap = false;
-            guard.cache_path().expect("the appender claimed a slot")
+            // A block no log has taken, written through the handle the appender
+            // owns and not through `fs::write` of the path: the slot is locked
+            // exclusively for as long as the appender lives, and on Windows
+            // that lock is mandatory, so a second open of the path is refused
+            // the very bytes it locked.
+            let slot = guard.cache.as_mut().expect("the appender claimed a slot");
+            slot.file.seek(SeekFrom::Start(0)).unwrap();
+            slot.file
+                .write_all(&vec![7u8; BUFFER_BLOCK_LENGTH])
+                .unwrap();
+            slot.file.flush().unwrap();
+            slot.path.clone()
         };
-        // A block no log has taken.
-        fs::write(&path, vec![7u8; BUFFER_BLOCK_LENGTH]).unwrap();
 
         appender.clear_cache_file_when_drained(false);
         assert!(
-            fs::read(&path).unwrap().iter().any(|byte| *byte != 0),
+            read_slot(&appender).iter().any(|byte| *byte != 0),
             "the file was emptied over a block no log holds"
         );
 
