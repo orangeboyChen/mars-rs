@@ -1,7 +1,7 @@
 package io.github.orangeboychen.marsrs.xlog
 
 /**
- * What an [Xlog] is opened with: the Kotlin face of the `Xlog.XLogConfig`
+ * What an [Xlog] is opened with: the Kotlin face of the `XLogConfigJni`
  * whose fields `marsrs-jni` reads by name.
  *
  * Every property has the default the C++ project's own `XLogConfig` carries,
@@ -95,8 +95,8 @@ data class XlogConfig @JvmOverloads constructor(
         }
     }
 
-    /** The `Xlog.XLogConfig` `marsrs-jni` reads this config's fields out of. */
-    internal fun toNative(): Xlog.XLogConfig = Xlog.XLogConfig().apply {
+    /** The `XLogConfigJni` `marsrs-jni` reads this config's fields out of. */
+    internal fun toNative(): XLogConfigJni = XLogConfigJni().apply {
         this.level = this@XlogConfig.level.native
         this.mode = this@XlogConfig.mode.native
         this.logdir = this@XlogConfig.logDir

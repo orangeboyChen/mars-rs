@@ -43,15 +43,15 @@ The appender is one struct of options and a handful of free calls in
 |---|---|---|
 | `appender_open(const XLogConfig&)` | `Xlog::open(config, level)` | `mars_xlog_new_instance(&config, level)` |
 | `xlogger_Write(info, log)`, or the `xinfo2` family | `xlog.log(level, tag, message)` | `mars_xlog_write_instance(handle, ...)` |
-| `appender_flush()` | `xlog.request_flush()` | `mars_xlog_request_flush_instance(0)` |
-| `appender_flush_sync()` | `xlog.flush_now()` | `mars_xlog_flush_now_instance(0)` |
+| `appender_flush()` | `xlog.request_flush()` | `mars_xlog_request_flush_instance(handle)` |
+| `appender_flush_sync()` | `xlog.flush_now()` | `mars_xlog_flush_now_instance(handle)` |
 | `appender_close()` | `xlog.close()` | `mars_xlog_release_instance(prefix)` |
-| `xlogger_SetLevel(level)` | `xlog.set_level(level)` | `mars_xlog_set_level_instance(0, level)` |
-| `appender_setmode(mode)` | `xlog.set_mode(mode)` | `mars_xlog_set_mode_instance(0, mode)` |
-| `appender_set_console_log(bool)` | `xlog.set_console_log_enabled(on)` | `mars_xlog_set_console_log_instance(0, on)` |
-| `appender_set_max_file_size(bytes)` | `xlog.set_max_file_size_bytes(bytes)` | `mars_xlog_set_max_file_size_instance(0, bytes)` |
-| `appender_set_max_alive_duration(secs)` | `xlog.set_max_alive_time_seconds(secs)` | `mars_xlog_set_max_alive_duration_instance(0, secs)` |
-| `appender_get_current_log_path(out, len)` | `xlog.current_log_path()` | `mars_xlog_current_log_path(out, len)` |
+| `xlogger_SetLevel(level)` | `xlog.set_level(level)` | `mars_xlog_set_level_instance(handle, level)` |
+| `appender_setmode(mode)` | `xlog.set_mode(mode)` | `mars_xlog_set_mode_instance(handle, mode)` |
+| `appender_set_console_log(bool)` | `xlog.set_console_log_enabled(on)` | `mars_xlog_set_console_log_instance(handle, on)` |
+| `appender_set_max_file_size(bytes)` | `xlog.set_max_file_size_bytes(bytes)` | `mars_xlog_set_max_file_size_instance(handle, bytes)` |
+| `appender_set_max_alive_duration(secs)` | `xlog.set_max_alive_time_seconds(secs)` | `mars_xlog_set_max_alive_duration_instance(handle, secs)` |
+| `appender_get_current_log_path(out, len)` | `xlog.current_log_path()` | `mars_xlog_current_log_path_instance(instance, out, len)` |
 
 The Rust column is the object an app holds — the `Xlog.open(config)` of Kotlin,
 of Dart and of TypeScript — and not the free function the C++ has: a second
@@ -70,8 +70,8 @@ opened in; here a drain is named by what the caller gets back, and what this one
 gives is no answer at all. The three are side by side on [log
 files](/xlog/log-files). The C ABI column is the same story, and it takes no
 `sync` anywhere: the C++'s `appender_flush` is
-`mars_xlog_request_flush_instance(0)` and its `appender_flush_sync` is
-`mars_xlog_flush_now_instance(0)`, and the instance pair is two calls too — what a
+`mars_xlog_request_flush_instance(handle)` and its `appender_flush_sync` is
+`mars_xlog_flush_now_instance(handle)`, and the instance pair is two calls too — what a
 caller wrote as `mars_xlog_flush_instance(handle, 0)` or `(handle, 1)` is
 `mars_xlog_request_flush_instance(handle)` or
 `mars_xlog_flush_now_instance(handle)`. The two names the process-wide pair had
@@ -110,47 +110,26 @@ and `#line`, so a record written through `log.info(message:tag:)` says where
 it was written. Kotlin's write takes a handle, a level, a tag and a message and
 nothing else, so a record written through `xlog.i(tag, message)` carries an
 empty file and the line 0 — what the C++ project's own `Log` always passed. An
-app that needs them in the record has two ways: the `XLoggerInfo` the old
-`logWrite` takes, or, in Rust, the one `Xlog::log_with_info` is handed:
-
-```rust
-xlog.log_with_info(
-    Some(&XLoggerInfo {
-        level: LogLevel::Info,
-        tag: Some("startup".into()),
-        filename: Some(file!().into()),
-        func_name: Some("main".into()),
-        line: line!() as i32,
-        ..Default::default()
-    }),
-    "cold start in 412 ms",
-);
-```
+app that needs them in the record writes them into the message, or reads the
+record back out of the file: no platform of the port fills them in for it, and
+Rust has no `#file` to fill one in with either.
 
 A second appender is where the shapes differ most. The C++ project's Java opened
 one with `Log.openLogInstance(level, mode, cacheDir, logDir, nameprefix,
 cacheDays)` and threaded the handle it answered through every call after it;
 here an appender you hold *is* the instance, so a second one is a second `Xlog`
 of a prefix of its own — `Xlog::open(config, level)` again, with the prefix the
-second one is known by — and `Xlog::open_unregistered(config, level)` for the
-one shape a prefix of its own cannot express: two appenders of one prefix in one
-process, which is what two copies of the library linked side by side are. That
-one is *not* registered under the prefix, so it is a second writer where
-`Xlog::open` would hand back the first, and it keeps a level of its own, because
-it has no category to share one with.
+second one is known by. Two appenders of one prefix in one process is the one
+shape a second prefix cannot express, and the port has no spelling of it: a
+prefix is one appender, and `Xlog::open` of a prefix that is open answers the
+appender that is open.
 
 ### From the C++ project's Java
 
-The Android package is the one place the old spelling is still there:
-`Xlog.open` with its seven arguments, `XLogConfig`, `XLoggerInfo`, `logWrite`
-and the `LEVEL_*` constants all work. What carries a `@Deprecated` — and the
-spelling that replaces it — is the seven-argument `Xlog.open`, `logWrite`, the
-`Xlog()` with no argument and the `Log` facade around them; `XLogConfig`,
-`XLoggerInfo` and the `LEVEL_*` constants carry no such pointer, so a call site
-that uses them compiles with nothing pointing it at the new spelling, and
-finding it is the app's own grep. `Log.setLogImp(Xlog())` and
-`Log.d(tag, message)` still write through the same appender `Xlog.open`
-installs, so the rest of a migration can go one call site at a time:
+None of the old spelling is there any more. The Android package is the `Xlog`
+of the Kotlin Multiplatform module, member for member, so an app that called
+`Log.d(tag, message)`, `Log.setLogImp(Xlog())` or the seven-argument `Xlog.open`
+writes the one call every platform of the port opens an appender with:
 
 ```kotlin
 // before

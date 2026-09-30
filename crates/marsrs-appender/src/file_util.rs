@@ -4,10 +4,10 @@
 //! `__GetFilePathsFromTimeval`, `__GetNextFileIndex`, `__MakeLogFileName`,
 //! `__DelTimeoutFile`, `__AppendFile`, `__MoveOldFiles`).
 //!
-//! They are `pub(crate)` because the contract only exposes the two discovery
-//! helpers ([`crate::appender_make_logfile_name`] and
-//! [`crate::appender_getfilepath_from_timespan`]); everything else stays an
-//! implementation detail of the appender.
+//! They are `pub(crate)` because the contract exposes them only through the
+//! appender: `Appender::make_logfile_name` and
+//! `Appender::getfilepath_from_timespan` are what a day of files is asked of,
+//! and everything else stays an implementation detail of the appender.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};

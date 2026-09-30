@@ -64,18 +64,17 @@ int main(void) {
      * argument and not a field of the config, because the level belongs to
      * the logger and not to the file.
      *
-     * Not handle `0`: that one names the *process-wide* appender, which is
-     * the plumbing the JNI bridge installs from Rust and which no symbol of
-     * this ABI opens, and not the thing an app holds. What this call answers
-     * when it refuses a config is a negative `MARS_XLOG_ERR_*` code, one per
-     * cause, so `0` is not the number that means "no instance" — anything
-     * that is not a positive handle is.
+     * Not handle `0`: no symbol of this ABI installs a process-wide
+     * appender, so `0` names no appender at all — it is the number
+     * `mars_xlog_new_instance` answers when it fails, and every call asked
+     * of it is a no-op. An app that holds a real handle never has to say
+     * which of the two it means.
      *
      * No Rust panic crosses this boundary either: every entry point is
      * wrapped in `catch_unwind`, and a panic becomes `MARS_XLOG_ERR_PANIC`
      * here and a no-op there. */
     long long xlog = mars_xlog_new_instance(&config, MarsLevelVerbose);
-    if (xlog <= 0) {
+    if (xlog == 0) {
         fprintf(stderr, "mars_xlog_new_instance failed for '%s' in %s\n", PREFIX, LOGDIR);
         return 1;
     }
@@ -142,12 +141,13 @@ int main(void) {
         printf("writing into:  %s\n", dir);
     }
 
-    /* Today's file, asked of the port rather than rebuilt from the date. The
-     * `0` before `path` is the index: a day split for size has a second file
-     * beside the first, and the call answers `MARS_XLOG_ERR_NO_PATH` once the
-     * caller has walked past the last one. */
+    /* Today's file, asked of the appender rather than rebuilt from the date:
+     * the call names a day out of the handle's own prefix and directory. The `0`
+     * before `path` is the index: a day split for size has a second file beside
+     * the first, and the call answers `MARS_XLOG_ERR_NO_PATH` once the caller
+     * has walked past the last one. */
     char path[1024];
-    if (mars_xlog_getfilepath_from_timespan(0, PREFIX, LOGDIR, 0, path, sizeof path) > 0) {
+    if (mars_xlog_getfilepath_from_timespan_instance(xlog, 0, 0, path, sizeof path) > 0) {
         printf("log file:      %s\n", path);
     }
 

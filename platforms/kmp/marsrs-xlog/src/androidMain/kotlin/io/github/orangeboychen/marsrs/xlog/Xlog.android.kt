@@ -1,6 +1,7 @@
 package io.github.orangeboychen.marsrs.xlog
 
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.concurrent.Volatile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -44,10 +45,16 @@ public actual class Xlog actual constructor(config: XlogConfig) {
             field = seconds
         }
 
+    /**
+     * The handle [close] takes away, and the one every member is forwarded
+     * through. Volatile because [close] may run on another thread than the
+     * writes it stops: a non-volatile `Long` is two 32-bit stores to the
+     * memory model, so a writer thread can read a handle that is half of the
+     * old one and half of the new.
+     */
     @Volatile
     private var handle: Long = NO_HANDLE
 
-    @Volatile
     private var currentMode: AppenderMode = config.mode
 
     init {
@@ -63,7 +70,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     }
 
     public actual val isOpen: Boolean
-        get() = openHandle() != NO_HANDLE
+        get() = handle != NO_HANDLE && handle == openHandles[namePrefix]
 
     public actual var level: LogLevel
         get() = LogLevel.of(getLogLevel(requireOpen()))
@@ -76,15 +83,21 @@ public actual class Xlog actual constructor(config: XlogConfig) {
             currentMode = value
         }
 
-    public actual fun isLoggable(level: LogLevel): Boolean {
-        val opened = openHandle()
-        return opened != NO_HANDLE && LogLevel.of(getLogLevel(opened)).isEnabledFor(level)
-    }
+    public actual val currentLogPath: String?
+        get() = if (isOpen) getCurrentLogPath(handle) else null
+
+    public actual fun logFiles(daysAgo: Long): List<String> =
+        if (isOpen) logFiles(handle, daysAgo)?.toList().orEmpty() else emptyList()
+
+    public actual fun logFileNames(daysAgo: Long): List<String> =
+        if (isOpen) logFileNames(handle, daysAgo)?.toList().orEmpty() else emptyList()
+
+    public actual fun isLoggable(level: LogLevel): Boolean =
+        isOpen && LogLevel.of(getLogLevel(handle)).isEnabledFor(level)
 
     public actual fun log(level: LogLevel, tag: String, message: String) {
-        val opened = openHandle()
-        if (opened != NO_HANDLE) {
-            write(opened, level.ordinal, tag, message)
+        if (isOpen) {
+            write(handle, level.ordinal, tag, message)
         }
     }
 
@@ -101,16 +114,14 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     public actual fun f(tag: String, message: String) = log(LogLevel.FATAL, tag, message)
 
     public actual fun requestFlush() {
-        val opened = openHandle()
-        if (opened != NO_HANDLE) {
-            appenderRequestFlush(opened)
+        if (isOpen) {
+            appenderRequestFlush(handle)
         }
     }
 
     public actual fun flushNow() {
-        val opened = openHandle()
-        if (opened != NO_HANDLE) {
-            appenderFlushNow(opened)
+        if (isOpen) {
+            appenderFlushNow(handle)
         }
     }
 
@@ -118,14 +129,15 @@ public actual class Xlog actual constructor(config: XlogConfig) {
         flushNow()
     }
 
+    @Synchronized
     public actual fun close() {
-        // The appender is the prefix's and not this wrapper's: `marsrs-jni`
-        // answers an [Xlog] of the same prefix with the same handle, so every
-        // one of them is closed with this one. Taking the handle out of the map
-        // is what closes it, and it is what leaves a second close — another
-        // [Xlog]'s, or another thread's — nothing to take out.
-        val opened = handle
-        if (opened == NO_HANDLE || !openHandles.remove(namePrefix, opened)) {
+        // The claim and not a question: `marsrs-jni` releases by prefix, so
+        // only one of the `Xlog`s of a prefix may release it, and the one that
+        // may is whichever takes the entry out of the table first. A `close`
+        // that finds no entry is a second one, and releasing again would close
+        // an appender a re-open of the prefix has since put there.
+        if (!openHandles.remove(namePrefix, handle)) {
+            handle = NO_HANDLE
             return
         }
         releaseXlogInstance(namePrefix)
@@ -133,29 +145,16 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     }
 
     /**
-     * The handle of this appender, [NO_HANDLE] when it is closed, read once:
-     * [handle] is what `marsrs-jni` was answered, and the map is what says the
-     * handle is still this [Xlog]'s — an [Xlog] of the same [namePrefix] is
-     * closed with this one, and the map is where that shows.
-     *
-     * One read and not two, because the two it replaces are not one answer:
-     * `isOpen` and then `handle` is a window a [close] on another thread lands
-     * in, and what comes out of it is the handle of an appender that is gone.
-     */
-    private fun openHandle(): Long = handle.takeIf { it != NO_HANDLE && it == openHandles[namePrefix] } ?: NO_HANDLE
-
-    /**
-     * The handle of this appender, or [IllegalStateException] when there is none
-     * left to forward: no handle is the process-wide appender to `marsrs-jni`, so
-     * a closed [Xlog] that handed it on would read and move the appender every
-     * other part of the app writes through, and read a level that is not its own.
+     * The handle of this appender, or [IllegalStateException] when there is
+     * none left to forward: a handle whose appender is gone is a no-op to
+     * `marsrs-jni`, so a closed [Xlog] that handed it on would silently write
+     * nothing, and read a level that is not its own.
      */
     private fun requireOpen(): Long {
-        val opened = openHandle()
-        check(opened != NO_HANDLE) {
+        check(isOpen) {
             "no appender of this Xlog is open ('$namePrefix'): Xlog.open(XlogConfig(...)) another to log again"
         }
-        return opened
+        return handle
     }
 
     // The names `marsrs-jni` exports, and the signatures it reads them under.
@@ -175,6 +174,12 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     private external fun appenderFlushNow(handle: Long)
 
     private external fun getLogLevel(handle: Long): Int
+
+    private external fun getCurrentLogPath(handle: Long): String?
+
+    private external fun logFiles(handle: Long, timespan: Long): Array<String>?
+
+    private external fun logFileNames(handle: Long, timespan: Long): Array<String>?
 
     private external fun setLogLevel(handle: Long, level: Int)
 

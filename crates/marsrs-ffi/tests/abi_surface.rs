@@ -5,22 +5,18 @@
 //! The appender they share is registered under one prefix, so the tests
 //! serialise on [`LOCK`].
 
-use std::ffi::CString;
-use std::os::raw::{c_char, c_int, c_longlong, c_uint};
+use std::ffi::{c_char, CString};
+use std::os::raw::c_int;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use mars_ffi::abi::{
-    mars_xlog_current_log_cache_path, mars_xlog_current_log_path,
-    mars_xlog_current_log_path_instance, mars_xlog_flush_now_all, mars_xlog_flush_now_instance,
-    mars_xlog_get_instance, mars_xlog_get_level, mars_xlog_getfilepath_from_timespan,
-    mars_xlog_is_enabled_for, mars_xlog_make_logfile_name, mars_xlog_new_instance,
-    mars_xlog_oneshot_flush, mars_xlog_release_instance, mars_xlog_request_flush_all,
-    mars_xlog_request_flush_instance, mars_xlog_set_console_log_instance,
-    mars_xlog_set_level_instance, mars_xlog_set_max_alive_duration_instance,
-    mars_xlog_set_max_file_size_instance, mars_xlog_set_mode_instance, mars_xlog_write_instance,
-    MarsXLogConfig, MARS_XLOG_ERR_APPENDER, MARS_XLOG_ERR_BAD_COMPRESS, MARS_XLOG_ERR_BAD_MODE,
-    MARS_XLOG_ERR_EMPTY_LOG_DIR, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE,
-    MARS_XLOG_ERR_NULL_CONFIG, MARS_XLOG_ERR_NULL_OUT,
+    mars_xlog_current_log_path_instance, mars_xlog_flush_now_instance, mars_xlog_get_instance,
+    mars_xlog_get_level, mars_xlog_getfilepath_from_timespan_instance, mars_xlog_is_enabled_for,
+    mars_xlog_make_logfile_name_instance, mars_xlog_new_instance, mars_xlog_release_instance,
+    mars_xlog_set_console_log_instance, mars_xlog_set_level_instance,
+    mars_xlog_set_max_alive_duration_instance, mars_xlog_set_max_file_size_instance,
+    mars_xlog_set_mode_instance, mars_xlog_write_instance, MarsXLogConfig, MARS_XLOG_ERR_NO_PATH,
+    MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_OUT,
 };
 
 fn serial() -> MutexGuard<'static, ()> {
@@ -48,13 +44,9 @@ struct ConfigBundle {
     raw: MarsXLogConfig,
 }
 
-/// One prefix per test, and not one prefix for the file: a prefix is one
-/// appender for the whole process, so a test that opened `Mars` and did not
-/// release it hands the next one an appender of *its* directory — and a handle
-/// into a tree that test has since deleted.
-fn make_config(dir: &std::path::Path, prefix: &str, mode: c_int, compress: c_int) -> ConfigBundle {
+fn make_config(dir: &std::path::Path, mode: c_int, compress: c_int) -> ConfigBundle {
     let log_dir = CString::new(dir.to_str().unwrap()).unwrap();
-    let prefix = CString::new(prefix).unwrap();
+    let prefix = CString::new("Mars").unwrap();
     let pub_key = CString::new("").unwrap();
     let raw = MarsXLogConfig {
         mode,
@@ -77,193 +69,62 @@ fn make_config(dir: &std::path::Path, prefix: &str, mode: c_int, compress: c_int
 #[test]
 fn a_new_instance_refuses_a_bad_config_before_touching_the_disk() {
     let _guard = serial();
-    // Every refusal is its own negative code, and not `0`: `0` is the
-    // process-wide appender, so a caller that took it for "no instance"
-    // logged through a logger it never opened. What is pinned here is which
-    // part of the config was refused, and that the disk is not touched.
-    assert_eq!(
-        unsafe { mars_xlog_new_instance(std::ptr::null(), 0) },
-        MARS_XLOG_ERR_NULL_CONFIG as c_longlong
-    );
+    // `0` is the answer to every one of these: an instance is a handle, and
+    // there is no room in one for a `MARS_XLOG_ERR_*` code. What is pinned
+    // here is that the config is refused at all, and before the disk is
+    // touched.
+    assert_eq!(unsafe { mars_xlog_new_instance(std::ptr::null(), 0) }, 0);
 
     let dir = tempdir("bad");
-    let bad_mode = make_config(&dir, "bad", 7, 0);
-    assert_eq!(
-        unsafe { mars_xlog_new_instance(&bad_mode.raw, 0) },
-        MARS_XLOG_ERR_BAD_MODE as c_longlong
-    );
-    let bad_compress = make_config(&dir, "bad", 0, 9);
-    assert_eq!(
-        unsafe { mars_xlog_new_instance(&bad_compress.raw, 0) },
-        MARS_XLOG_ERR_BAD_COMPRESS as c_longlong
-    );
+    for (mode, compress) in [(7, 0), (0, 9)] {
+        let config = make_config(&dir, mode, compress);
+        assert_eq!(unsafe { mars_xlog_new_instance(&config.raw, 0) }, 0);
+    }
 
     let empty = CString::new("").unwrap();
-    let mut config = make_config(&dir, "bad", 0, 0);
+    let mut config = make_config(&dir, 0, 0);
     config.raw.log_dir = empty.as_ptr();
-    assert_eq!(
-        unsafe { mars_xlog_new_instance(&config.raw, 0) },
-        MARS_XLOG_ERR_EMPTY_LOG_DIR as c_longlong
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// A config that is *valid* and that the appender still refuses is refused out
-/// loud: the log directory is a file, so there is nowhere to put an appender.
-///
-/// This is the case `0` used to hide — a caller took the process-wide handle
-/// for its own logger, and the first record it wrote through it went wherever
-/// the JNI bridge had put the process-wide appender, if anywhere at all.
-#[test]
-fn an_appender_that_will_not_open_is_reported_and_not_handed_out() {
-    let _guard = serial();
-    let dir = tempdir("refused");
-    let file = dir.join("not-a-directory");
-    std::fs::write(&file, b"").unwrap();
-
-    let log_dir = CString::new(file.to_str().unwrap()).unwrap();
-    let mut config = make_config(&dir, "refused", 0, 0);
-    config.raw.log_dir = log_dir.as_ptr();
-    assert_eq!(
-        unsafe { mars_xlog_new_instance(&config.raw, 0) },
-        MARS_XLOG_ERR_APPENDER as c_longlong
-    );
+    assert_eq!(unsafe { mars_xlog_new_instance(&config.raw, 0) }, 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn the_level_is_one_store_whatever_the_question_is() {
     let _guard = serial();
+    let dir = tempdir("level");
+    let config = make_config(&dir, 0, 0);
+    let handle = unsafe { mars_xlog_new_instance(&config.raw, 0) };
+    assert!(handle > 0, "an instance is a handle");
 
-    // Handle `0` is the process-wide appender, whose level is the one the
-    // store `get_level` / `is_enabled_for` / `write_instance` read. It used to
-    // be kept beside them, in the seam, and the two answered differently.
-    mars_xlog_set_level_instance(0, 3);
-    assert_eq!(mars_xlog_get_level(0), 3, "one level, two answers");
-    assert_eq!(mars_xlog_is_enabled_for(0, 2), 0);
-    assert_eq!(mars_xlog_is_enabled_for(0, 3), 1);
+    // One level, three readers: `get_level`, `is_enabled_for` and the write
+    // all read the store the setter wrote, and not a copy beside it — which
+    // is what the seam used to keep, and what made the two answer differently.
+    mars_xlog_set_level_instance(handle, 3);
+    assert_eq!(mars_xlog_get_level(handle), 3, "one level, two answers");
+    assert_eq!(mars_xlog_is_enabled_for(handle, 2), 0);
+    assert_eq!(mars_xlog_is_enabled_for(handle, 3), 1);
 
     // `MARS_LEVEL_NONE` through the instance path, which used to be dropped
     // for want of a `LogLevel` to turn it into.
-    mars_xlog_set_level_instance(0, 6);
-    assert_eq!(mars_xlog_get_level(0), 6);
-    assert_eq!(mars_xlog_is_enabled_for(0, 5), 0);
+    mars_xlog_set_level_instance(handle, 6);
+    assert_eq!(mars_xlog_get_level(handle), 6);
+    assert_eq!(mars_xlog_is_enabled_for(handle, 5), 0);
 
     // `(TLogLevel)-1` is "everything", not "nothing at all".
-    mars_xlog_set_level_instance(0, -1);
-    assert_eq!(mars_xlog_get_level(0), 0);
-    assert_eq!(mars_xlog_is_enabled_for(0, 0), 1);
+    mars_xlog_set_level_instance(handle, -1);
+    assert_eq!(mars_xlog_get_level(handle), 0);
+    assert_eq!(mars_xlog_is_enabled_for(handle, 0), 1);
 
-    mars_xlog_set_level_instance(0, 0);
-}
+    // Handle `0` is no logger at all, so neither question has a level to
+    // answer from: it answers what a released instance answers.
+    mars_xlog_set_level_instance(0, 3);
+    assert_eq!(mars_xlog_get_level(0), -1);
+    assert_eq!(mars_xlog_is_enabled_for(0, 6), 0);
 
-#[test]
-fn the_whole_abi_runs_over_one_appender() {
-    let _guard = serial();
-    let dir = tempdir("surface");
-    let config = make_config(&dir, "surface", 0, 0);
-    let handle = unsafe { mars_xlog_new_instance(&config.raw, 0) };
-    assert_ne!(handle, 0);
-    // a prefix is one appender, so a second open answers that one's handle
-    assert_eq!(unsafe { mars_xlog_new_instance(&config.raw, 0) }, handle);
-
-    let tag = CString::new("Net").unwrap();
-    let message = CString::new("hello").unwrap();
-    // null pieces are allowed
-    unsafe {
-        mars_xlog_write_instance(
-            handle,
-            2,
-            tag.as_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            message.as_ptr(),
-        );
-    }
-    unsafe {
-        mars_xlog_write_instance(
-            handle,
-            2,
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            message.as_ptr(),
-        );
-    }
-
-    // the exact level is asserted in the (single-threaded) JNI tests: another
-    // test file can close the singleton appender under this one
-    mars_xlog_set_level_instance(0, 1);
-    let level = mars_xlog_get_level(0);
-    assert!((-1..=6).contains(&level), "unexpected level {level}");
-    let _ = mars_xlog_is_enabled_for(0, 2);
-    let _ = mars_xlog_is_enabled_for(0, 0);
-    // an unknown instance has no level
-    assert_eq!(mars_xlog_get_level(0xdead_beef), -1);
-    assert_eq!(mars_xlog_is_enabled_for(0xdead_beef, 5), 0);
-
-    mars_xlog_set_console_log_instance(0, 1);
-    mars_xlog_set_console_log_instance(0, 0);
-    mars_xlog_set_max_file_size_instance(0, 0);
-    mars_xlog_set_max_file_size_instance(0, 1 << 20);
-    mars_xlog_set_max_alive_duration_instance(0, -1);
-    mars_xlog_set_max_alive_duration_instance(0, 3600);
-    mars_xlog_set_mode_instance(0, 1);
-    mars_xlog_set_mode_instance(0, 0);
-    // an unknown mode is ignored
-    mars_xlog_set_mode_instance(0, 9);
-
-    let mut path = vec![0u8; 512];
-    // The instance's own path: there is no process-wide appender for the
-    // handle-less spelling to answer for any more.
-    let written = unsafe {
-        mars_xlog_current_log_path_instance(
-            handle,
-            path.as_mut_ptr() as *mut c_char,
-            path.len() as c_uint,
-        )
-    };
-    assert!(written > 0, "no current log path: {written}");
-    assert!(std::str::from_utf8(&path[..written as usize]).is_ok());
-    // too small a buffer, and a null buffer
-    assert_eq!(
-        unsafe { mars_xlog_current_log_path_instance(handle, path.as_mut_ptr() as *mut c_char, 0) },
-        MARS_XLOG_ERR_NO_SPACE
-    );
-    assert_eq!(
-        unsafe { mars_xlog_current_log_path_instance(handle, std::ptr::null_mut(), 64) },
-        MARS_XLOG_ERR_NULL_OUT
-    );
-
-    // `char*` and not `unsigned char*`, which is what the header — and the
-    // Swift `LogPath` that follows it — declares this buffer as.
-    let mut cache = vec![0 as c_char; 512];
-    let written =
-        unsafe { mars_xlog_current_log_cache_path(cache.as_mut_ptr(), cache.len() as c_uint) };
-    assert!(written != MARS_XLOG_ERR_NULL_OUT);
-    assert_eq!(
-        unsafe { mars_xlog_current_log_cache_path(std::ptr::null_mut(), 64) },
-        MARS_XLOG_ERR_NULL_OUT
-    );
-
-    mars_xlog_request_flush_instance(0);
-    mars_xlog_flush_now_instance(0);
-    mars_xlog_request_flush_instance(0);
-    mars_xlog_flush_now_instance(0);
-    let prefix = CString::new("surface").unwrap();
+    let prefix = CString::new("Mars").unwrap();
     unsafe {
         mars_xlog_release_instance(prefix.as_ptr());
     }
-    // closed: there is no current file any more
-    let mut path = vec![0u8; 512];
-    assert_eq!(
-        unsafe {
-            mars_xlog_current_log_path(path.as_mut_ptr() as *mut c_char, path.len() as c_uint)
-        },
-        MARS_XLOG_ERR_NO_PATH
-    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -271,10 +132,10 @@ fn the_whole_abi_runs_over_one_appender() {
 fn instances_are_created_addressed_and_released() {
     let _guard = serial();
     let dir = tempdir("instances");
-    let config = make_config(&dir, "instances", 1, 1);
+    let config = make_config(&dir, 1, 1);
     let handle = unsafe { mars_xlog_new_instance(&config.raw, 2) };
     assert!(handle > 0);
-    let prefix = CString::new("instances").unwrap();
+    let prefix = CString::new("Mars").unwrap();
     assert_eq!(unsafe { mars_xlog_get_instance(prefix.as_ptr()) }, handle);
     assert_eq!(unsafe { mars_xlog_get_instance(std::ptr::null()) }, 0);
 
@@ -303,76 +164,16 @@ fn instances_are_created_addressed_and_released() {
     assert_eq!(unsafe { mars_xlog_get_instance(prefix.as_ptr()) }, 0);
 
     // a null config has no instance
-    assert_eq!(
-        unsafe { mars_xlog_new_instance(std::ptr::null(), 2) },
-        MARS_XLOG_ERR_NULL_CONFIG as c_longlong
-    );
+    assert_eq!(unsafe { mars_xlog_new_instance(std::ptr::null(), 2) }, 0);
     // an empty log dir is refused
     let empty = CString::new("").unwrap();
-    let mut broken = make_config(&dir, "instances", 0, 0);
+    let mut broken = make_config(&dir, 0, 0);
     broken.raw.log_dir = empty.as_ptr();
-    assert_eq!(
-        unsafe { mars_xlog_new_instance(&broken.raw, 2) },
-        MARS_XLOG_ERR_EMPTY_LOG_DIR as c_longlong
-    );
+    assert_eq!(unsafe { mars_xlog_new_instance(&broken.raw, 2) }, 0);
     // and so is a bad mode
-    let broken_mode = make_config(&dir, "instances", 9, 0);
-    assert_eq!(
-        unsafe { mars_xlog_new_instance(&broken_mode.raw, 2) },
-        MARS_XLOG_ERR_BAD_MODE as c_longlong
-    );
+    let broken_mode = make_config(&dir, 9, 0);
+    assert_eq!(unsafe { mars_xlog_new_instance(&broken_mode.raw, 2) }, 0);
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn the_void_symbols_survive_a_closed_appender() {
-    let _guard = serial();
-    // nothing is open: every void symbol has to be a no-op instead of a crash
-    unsafe {
-        mars_xlog_write_instance(
-            0,
-            2,
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-        );
-    }
-    unsafe {
-        mars_xlog_write_instance(
-            0,
-            2,
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-        );
-    }
-    mars_xlog_request_flush_instance(0);
-    mars_xlog_flush_now_instance(0);
-    mars_xlog_flush_now_instance(0);
-    let prefix = CString::new("surface").unwrap();
-    unsafe {
-        mars_xlog_release_instance(prefix.as_ptr());
-    }
-    mars_xlog_set_level_instance(0, 2);
-    mars_xlog_set_level_instance(0, 2);
-    mars_xlog_set_console_log_instance(0, 0);
-    mars_xlog_set_max_file_size_instance(0, 0);
-    mars_xlog_set_max_alive_duration_instance(0, 0);
-    mars_xlog_set_mode_instance(0, 0);
-    mars_xlog_set_mode_instance(0, 0);
-    unsafe {
-        mars_xlog_release_instance(std::ptr::null());
-    }
-    // the void symbols added for the rest of the C++ surface
-    mars_xlog_request_flush_all();
-    mars_xlog_flush_now_all();
-    mars_xlog_set_console_log_instance(0, 0);
-    mars_xlog_set_max_file_size_instance(0, 0);
-    mars_xlog_set_max_alive_duration_instance(0, 0);
 }
 
 /// `XloggerCategory::IsEnabledFor` is `level_ <= _level` on the **raw**
@@ -382,152 +183,201 @@ fn the_void_symbols_survive_a_closed_appender() {
 #[test]
 fn is_enabled_for_compares_the_raw_level() {
     let _guard = serial();
-    mars_xlog_set_level_instance(0, 0); // Verbose: everything passes, 6 included
-    assert_eq!(mars_xlog_is_enabled_for(0, 6), 1);
-    assert_eq!(mars_xlog_is_enabled_for(0, 5), 1);
-    // A negative level is below Verbose, so nothing passes it.
-    assert_eq!(mars_xlog_is_enabled_for(0, -1), 0);
+    let dir = tempdir("enabled");
+    let config = make_config(&dir, 0, 0);
+    let handle = unsafe { mars_xlog_new_instance(&config.raw, 0) };
+    assert!(handle > 0, "an instance is a handle");
 
-    mars_xlog_set_level_instance(0, 3); // Warn
-    assert_eq!(mars_xlog_is_enabled_for(0, 2), 0);
-    assert_eq!(mars_xlog_is_enabled_for(0, 3), 1);
+    mars_xlog_set_level_instance(handle, 0); // Verbose: everything passes, 6 included
+    assert_eq!(mars_xlog_is_enabled_for(handle, 6), 1);
+    assert_eq!(mars_xlog_is_enabled_for(handle, 5), 1);
+    // A negative level is below Verbose, so nothing passes it.
+    assert_eq!(mars_xlog_is_enabled_for(handle, -1), 0);
+
+    mars_xlog_set_level_instance(handle, 3); // Warn
+    assert_eq!(mars_xlog_is_enabled_for(handle, 2), 0);
+    assert_eq!(mars_xlog_is_enabled_for(handle, 3), 1);
     // A handle that is not one has no level to compare against.
     assert_eq!(mars_xlog_is_enabled_for(0xdead_beef, 6), 0);
+    // … and neither has handle `0`, which is no instance at all.
+    assert_eq!(mars_xlog_is_enabled_for(0, 6), 0);
+
+    let prefix = CString::new("Mars").unwrap();
+    unsafe {
+        mars_xlog_release_instance(prefix.as_ptr());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 
     mars_xlog_set_level_instance(0, 0);
 }
 
-/// `NewXloggerInstance(_config, (TLogLevel)_level)` casts the level: 6
-/// (`Xlog.LEVEL_NONE`) is how a caller asks for an instance that logs nothing,
-/// and it used to be refused — the caller got handle `0` back, which is the
-/// default logger, not an instance.
+/// The three questions about a file, asked of the instance that owns it: the
+/// directory it is writing into, and the day's files and names.
+///
+/// The walk is the C ABI's own protocol — one index at a time until it answers
+/// `MARS_XLOG_ERR_NO_PATH` — so it is pinned here too, along with the two
+/// buffer contracts: a null `out`, and one a path does not fit in.
 #[test]
-fn an_instance_can_be_opened_at_the_level_that_logs_nothing() {
+fn the_file_questions_are_answered_by_the_instance() {
     let _guard = serial();
-    let dir = tempdir("level-none");
-    let config = make_config(&dir, "level-none", 1, 0);
-    let handle = unsafe { mars_xlog_new_instance(&config.raw, 6) };
-    assert_ne!(handle, 0, "LEVEL_NONE collapsed onto the default logger");
-    assert_eq!(mars_xlog_get_level(handle), 6);
-    assert_eq!(mars_xlog_is_enabled_for(handle, 5), 0);
+    let dir = tempdir("files");
+    let config = make_config(&dir, 1, 1); // sync, zstd: a record lands at once
+    let handle = unsafe { mars_xlog_new_instance(&config.raw, 2) };
+    assert!(handle > 0);
 
-    // The instance setters of the C++ surface: `SetConsoleLogOpen`,
-    // `SetMaxFileSize`, `SetMaxAliveTime` and `FlushAll`.
+    let tag = CString::new("Net").unwrap();
+    let message = CString::new("into the day's file").unwrap();
+    unsafe {
+        mars_xlog_write_instance(
+            handle,
+            2,
+            tag.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            message.as_ptr(),
+        );
+    }
+    mars_xlog_flush_now_instance(handle);
+
+    // The directory, and not the file: the C++'s `GetCurrentLogPath` hands back
+    // `sg_logdir`.
+    let mut buffer = [0u8; 1024];
+    let size = dir.to_str().unwrap().len();
+    let written = unsafe {
+        mars_xlog_current_log_path_instance(handle, buffer.as_mut_ptr().cast(), buffer.len() as u32)
+    };
+    assert_eq!(written as usize, size);
+    assert_eq!(&buffer[..size], dir.to_str().unwrap().as_bytes());
+
+    // Today's file, and nothing beside it.
+    let files = day_paths(handle, |instance, timespan, index, out, len| unsafe {
+        mars_xlog_getfilepath_from_timespan_instance(instance, timespan, index, out, len)
+    });
+    assert_eq!(
+        files.len(),
+        1,
+        "one record in one day is one file: {files:?}"
+    );
+    assert!(files[0].starts_with(&dir), "{files:?} is not in {dir:?}");
+
+    let names = day_paths(handle, |instance, timespan, index, out, len| unsafe {
+        mars_xlog_make_logfile_name_instance(instance, timespan, index, out, len)
+    });
+    assert_eq!(names, files, "a file that is there is its own name");
+
+    // A null `out`, and one a path does not fit in.
+    assert_eq!(
+        unsafe { mars_xlog_current_log_path_instance(handle, std::ptr::null_mut(), 1024) },
+        MARS_XLOG_ERR_NULL_OUT
+    );
+    assert_eq!(
+        unsafe { mars_xlog_current_log_path_instance(handle, buffer.as_mut_ptr().cast(), 3) },
+        MARS_XLOG_ERR_NO_SPACE
+    );
+
+    // A released appender answers nothing at all.
+    let mut after = [0u8; 1024];
+    unsafe {
+        mars_xlog_release_instance(config.raw.name_prefix);
+    }
+    let closed = unsafe {
+        mars_xlog_current_log_path_instance(handle, after.as_mut_ptr().cast(), after.len() as u32)
+    };
+    assert_eq!(
+        closed, MARS_XLOG_ERR_NO_PATH,
+        "a released appender answered {closed} and not 'no path'"
+    );
+}
+
+/// The three setters the C ABI carries and no getter answers for — the mode,
+/// the console and the two sizes — are the three no test called. They are
+/// asked for here, and what is asserted is the one of the four whose effect
+/// can be seen from outside: a file that is closed once it reaches its size.
+#[test]
+fn the_setters_the_abi_has_no_getter_for_take_effect() {
+    let _guard = serial();
+    let dir = tempdir("setters");
+    let config = make_config(&dir, 1, 1); // sync, so every record is filed at once
+    let handle = unsafe { mars_xlog_new_instance(&config.raw, 2) };
+    assert!(handle > 0, "an instance is a handle");
+
+    mars_xlog_set_mode_instance(handle, 1);
     mars_xlog_set_console_log_instance(handle, 0);
-    mars_xlog_set_max_file_size_instance(handle, 0);
     mars_xlog_set_max_alive_duration_instance(handle, 0);
-    mars_xlog_flush_now_all();
+    // Small enough that one record closes the file: what shows the setter
+    // reached the appender is the second file that opens after it.
+    mars_xlog_set_max_file_size_instance(handle, 64);
 
-    let prefix = CString::new("level-none").unwrap();
+    let tag = CString::new("Net").unwrap();
+    let message =
+        CString::new("a record long enough to pass sixty-four bytes, twice over").unwrap();
+    for _ in 0..4 {
+        unsafe {
+            mars_xlog_write_instance(
+                handle,
+                2,
+                tag.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                message.as_ptr(),
+            );
+        }
+        mars_xlog_flush_now_instance(handle);
+    }
+
+    let split: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "xlog"))
+        .collect();
+    assert!(
+        split.len() > 1,
+        "a max file size of 64 bytes did not split the day: {} file(s)",
+        split.len()
+    );
+
+    // And the appender is still an appender afterwards.
+    assert_eq!(mars_xlog_get_level(handle), 2);
+    let mut out = [0u8; 1024];
+    let written = unsafe {
+        mars_xlog_current_log_path_instance(handle, out.as_mut_ptr().cast(), out.len() as u32)
+    };
+    assert!(written > 0, "the directory was answered as {written}");
+
+    let prefix = CString::new("Mars").unwrap();
     unsafe {
         mars_xlog_release_instance(prefix.as_ptr());
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `appender_oneshot_flush`, `appender_make_logfile_name` and
-/// `appender_getfilepath_from_timespan`: the recovery path and the two
-/// discovery helpers, which had no C symbol at all.
-#[test]
-fn the_recovery_and_discovery_symbols_answer() {
-    let _guard = serial();
-    let dir = tempdir("discovery");
-    let config = make_config(&dir, "discovery", 0, 0);
-    let prefix = CString::new("discovery").unwrap();
-    let log_dir = CString::new(dir.to_str().unwrap()).unwrap();
-    let mut out = vec![0u8; 512];
-
-    // A null config is an error, not a crash.
-    assert_eq!(
-        unsafe { mars_xlog_oneshot_flush(std::ptr::null()) },
-        MARS_XLOG_ERR_NULL_CONFIG
-    );
-
-    // The name of today's log file, whether or not it exists.
-    let written = unsafe {
-        mars_xlog_make_logfile_name(
-            0,
-            prefix.as_ptr(),
-            log_dir.as_ptr(),
-            0,
-            out.as_mut_ptr() as *mut c_char,
-            out.len() as c_uint,
-        )
-    };
-    assert!(written > 0, "no log file name: {written}");
-    let name = std::str::from_utf8(&out[..written as usize])
-        .unwrap()
-        .to_owned();
-    assert!(name.ends_with(".xlog"), "{name}");
-    assert!(name.contains("discovery_"), "{name}");
-    // One name today, so index 1 is past the end of the list.
-    assert_eq!(
-        unsafe {
-            mars_xlog_make_logfile_name(
+/// The index walk the two day-of-files symbols share: up to the first index
+/// they answer nothing for.
+fn day_paths(
+    handle: i64,
+    symbol: unsafe fn(i64, c_int, u32, *mut c_char, u32) -> c_int,
+) -> Vec<std::path::PathBuf> {
+    let mut walked = Vec::new();
+    let mut buffer = [0u8; 1024];
+    for index in 0..64u32 {
+        let written = unsafe {
+            symbol(
+                handle,
                 0,
-                prefix.as_ptr(),
-                log_dir.as_ptr(),
-                1,
-                out.as_mut_ptr() as *mut c_char,
-                out.len() as c_uint,
+                index,
+                buffer.as_mut_ptr().cast(),
+                buffer.len() as u32,
             )
-        },
-        MARS_XLOG_ERR_NO_PATH
-    );
-
-    // The file does not exist yet, so the timespan lookup finds nothing…
-    assert_eq!(
-        unsafe {
-            mars_xlog_getfilepath_from_timespan(
-                0,
-                prefix.as_ptr(),
-                log_dir.as_ptr(),
-                0,
-                out.as_mut_ptr() as *mut c_char,
-                out.len() as c_uint,
-            )
-        },
-        MARS_XLOG_ERR_NO_PATH
-    );
-    // …and once it does, it is listed.
-    std::fs::write(std::path::Path::new(&name), b"x").unwrap();
-    let found = unsafe {
-        mars_xlog_getfilepath_from_timespan(
-            0,
-            prefix.as_ptr(),
-            log_dir.as_ptr(),
-            0,
-            out.as_mut_ptr() as *mut c_char,
-            out.len() as c_uint,
-        )
-    };
-    assert_eq!(
-        std::str::from_utf8(&out[..found as usize]).unwrap(),
-        name,
-        "the timespan lookup reported another file"
-    );
-
-    // A too-small buffer is an error, not a truncation.
-    assert_eq!(
-        unsafe {
-            mars_xlog_make_logfile_name(
-                0,
-                prefix.as_ptr(),
-                log_dir.as_ptr(),
-                0,
-                out.as_mut_ptr() as *mut c_char,
-                4,
-            )
-        },
-        MARS_XLOG_ERR_NO_SPACE
-    );
-
-    // Recovery over a directory no appender owns: an action, never an error.
-    let action = unsafe { mars_xlog_oneshot_flush(&config.raw) };
-    assert!(
-        (0..=7).contains(&action),
-        "unexpected TFileIOAction {action}"
-    );
-
-    let _ = std::fs::remove_dir_all(&dir);
+        };
+        if written == MARS_XLOG_ERR_NO_PATH {
+            break;
+        }
+        assert!(written > 0, "index {index} answered {written}");
+        walked.push(std::path::PathBuf::from(
+            std::str::from_utf8(&buffer[..written as usize]).unwrap(),
+        ));
+    }
+    walked
 }

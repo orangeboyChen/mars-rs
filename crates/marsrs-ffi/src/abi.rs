@@ -8,15 +8,14 @@
 //! [`crate::cstr`].
 
 use std::borrow::Cow;
-use std::ffi::{c_char, c_int, c_longlong, c_uint, c_ulonglong, CString};
+use std::ffi::{c_char, c_int, c_longlong, c_uchar, c_uint, c_ulonglong};
 use std::path::Path;
-use std::sync::{Mutex, RwLock};
 
 use marsrs_appender::{
-    appender_get_current_log_path, category_set_max_alive_duration as set_max_alive_duration,
-    category_set_max_file_size as set_max_file_size, current_log_path, flush_now, flush_now_all,
-    request_flush, request_flush_all, set_console_fun, set_console_log_open, set_level,
-    xlogger_assert, AppenderMode, ConsoleFun, LogLevel, XLogConfig, XLoggerInfo, DEFAULT_HANDLE,
+    category_set_max_alive_duration as set_max_alive_duration,
+    category_set_max_file_size as set_max_file_size, current_log_path, flush_now, request_flush,
+    set_console_log_open, set_level, AppenderMode, LogLevel, XLogConfig, XLoggerInfo,
+    XloggerHandle,
 };
 use marsrs_buffer::CompressMode;
 
@@ -114,7 +113,7 @@ unsafe fn to_xlog_config(cfg: &MarsXLogConfig) -> Result<XLogConfig, c_int> {
     let (log_dir, name_prefix, pub_key, cache_dir) = unsafe {
         (
             cstr::ptr_to_path_buf(cfg.log_dir),
-            cstr::ptr_to_string_lossy(cfg.name_prefix),
+            cstr::ptr_to_str_or_empty(cfg.name_prefix),
             cstr::ptr_to_str_or_empty(cfg.pub_key),
             cstr::ptr_to_path_buf(cfg.cache_dir),
         )
@@ -130,14 +129,12 @@ unsafe fn to_xlog_config(cfg: &MarsXLogConfig) -> Result<XLogConfig, c_int> {
     // prefix-based — substituting "Mars" would stop the Rust port from draining
     // (or being drained by) a C++ process's cache file. The prefix does go
     // through UTF-8, `XLogConfig` storing a `String`, so a non-UTF-8 one is
-    // converted lossily and not to the empty prefix, which is the name of
-    // another appender and not of a prefix that failed; the directories above
-    // are byte-exact.
+    // converted lossily; the directories above are byte-exact.
     let defaults = XLogConfig::default();
     Ok(XLogConfig {
         mode,
         logdir: log_dir,
-        nameprefix: name_prefix,
+        nameprefix: name_prefix.to_string(),
         pub_key: pub_key.to_string(),
         compress_mode,
         compress_level: if cfg.compress_level > 0 {
@@ -154,207 +151,11 @@ unsafe fn to_xlog_config(cfg: &MarsXLogConfig) -> Result<XLogConfig, c_int> {
     })
 }
 
-/// `xlogger_Assert` of `mars/comm/xlogger/xloggerbase.h` — the record an
-/// assert writes, with the flattened fields [`mars_xlog_write_instance`] takes
-/// instead of an `XLoggerInfo`.
+/// The directory the appender of `instance` writes its files into.
 ///
-/// The record is `kLevelFatal` and its body is `[ASSERT(<expression>)]`
-/// followed by `message`. No level is asked: `xloggerbase.h` writes "no level
-/// filter" over `xlogger_Assert`, and the gate the C++ has is the one in its
-/// own `xassert2` macro, not in the function — a caller that wants it has
-/// [`mars_xlog_is_enabled_for`].
-///
-/// `tag`, `filename`, `func_name`, `expression` and `message` may be null;
-/// null and invalid UTF-8 become an empty string.
-///
-/// # Safety
-///
-/// `tag`, `filename`, `func_name`, `expression` and `message` must each be
-/// null, or a NUL-terminated C string that stays alive for the duration of the
-/// call.
-#[no_mangle]
-pub unsafe extern "C" fn mars_xlog_assert(
-    tag: *const c_char,
-    filename: *const c_char,
-    func_name: *const c_char,
-    line: c_int,
-    expression: *const c_char,
-    message: *const c_char,
-) {
-    guard((), || {
-        // SAFETY: each pointer is null-checked inside the helper and otherwise
-        // points to a caller-owned NUL-terminated string.
-        let (tag, filename, func_name, expression, message) = unsafe {
-            (
-                cstr::ptr_to_str_or_empty(tag),
-                cstr::ptr_to_str_or_empty(filename),
-                cstr::ptr_to_str_or_empty(func_name),
-                cstr::ptr_to_str_or_empty(expression),
-                cstr::ptr_to_str_or_empty(message),
-            )
-        };
-
-        let info = XLoggerInfo {
-            level: LogLevel::Fatal,
-            tag: opt_string(tag),
-            filename: opt_string(filename),
-            func_name: opt_string(func_name),
-            line,
-            pid: state::pid(),
-            tid: state::tid(),
-            maintid: state::main_tid(),
-            timeval: state::now_timeval(),
-            trace_log: 0,
-        };
-
-        let _written = xlogger_assert(Some(&info), expression, message);
-    });
-}
-
-/// `mars::xlog::TConsoleFun` as a C callback — where a console record goes
-/// instead of the built-in sink, which is stderr on every platform here.
-///
-/// The fields are the ones [`mars_xlog_write_instance`] takes, because that is all a C
-/// caller has ever been handed: the C++ keeps an `XLoggerInfo` and the header
-/// keeps the same fields one by one. The record is handed over unformatted,
-/// so what a console record looks like on the platform is the callback's
-/// decision.
-///
-/// A callback must not unwind. `extern "C"` is not an unwind boundary, so a
-/// Rust one that panics ends the process at the shim of its own definition
-/// before there is anything to catch on this side, and a C++ one that throws
-/// is undefined behaviour for the same reason. What the port can promise is
-/// narrower: the record is already on its way to the log file, so what a
-/// callback that panicked loses is the console copy of that one record.
-pub type MarsXLogConsoleFun =
-    unsafe extern "C" fn(c_int, *const c_char, *const c_char, *const c_char, c_int, *const c_char);
-
-/// `sg_console_fun` of `mars/xlog/objc/objc_console.mm`: the sink an app set
-/// through [`mars_xlog_set_console_fun`], `None` until it does.
-static CONSOLE_FUN: RwLock<Option<MarsXLogConsoleFun>> = RwLock::new(None);
-
-/// The lock [`mars_xlog_set_console_fun`] takes. It writes the callback here
-/// and the trampoline that reads it in `marsrs-appender`, and one thread
-/// writing between another thread's two writes leaves the pair crossed: a
-/// trampoline with no callback behind it takes the record and drops it
-/// instead of leaving it to stderr, and a callback with no trampoline is
-/// never called at all.
-static CONSOLE_FUN_LOCK: Mutex<()> = Mutex::new(());
-
-/// The Rust sink that stands in for the C callback: it is what
-/// `marsrs-appender` calls, and it is what hands the record over the boundary.
-///
-/// The strings are copied, because the C++ `ConsoleLog` hands its callback
-/// pointers that live at least as long as the call and a Rust `&str` borrowed
-/// from a `CString` on this stack is exactly that.
-fn console_fun(info: &XLoggerInfo, log: &str) {
-    // Read out and let go: the read lock is *not* held across the call. A
-    // sink that sets the sink — a logger that installs itself the first time
-    // it writes, or one that swaps in a buffered sink once its file is open —
-    // would wait for the write lock `mars_xlog_set_console_fun` takes while
-    // this thread still holds the read one, and `RwLock` is no more reentrant
-    // than `Mutex`: the thread would hang inside its own log call. What is
-    // copied is one function pointer, so a sink installed in the meantime is
-    // the next record's, which is the race `CONSOLE_FUN_LOCK` exists to keep
-    // to one half-installed pair at most.
-    let fun = {
-        let installed = CONSOLE_FUN
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *installed
-    };
-    let Some(fun) = fun else {
-        return;
-    };
-
-    let field = |value: Option<&str>| CString::new(value.unwrap_or("")).unwrap_or_default();
-    let (tag, filename, func_name) = (
-        field(info.tag.as_deref()),
-        field(info.filename.as_deref()),
-        field(info.func_name.as_deref()),
-    );
-    let log = CString::new(log).unwrap_or_default();
-
-    // SAFETY: `fun` is the callback the caller handed to
-    // `mars_xlog_set_console_fun`, and every pointer below is that of a
-    // `CString` that outlives the call.
-    unsafe {
-        fun(
-            info.level as c_int,
-            tag.as_ptr(),
-            filename.as_ptr(),
-            func_name.as_ptr(),
-            info.line,
-            log.as_ptr(),
-        );
-    }
-}
-
-/// `appender_set_console_fun` — takes the sink every console record is handed
-/// to instead of the built-in one, or takes it away again with `NULL`.
-///
-/// The C++ declares it under `#ifdef __APPLE__`, because that is where its own
-/// default sink is one an app wants to replace; the port's default sink is
-/// stderr on every platform, so there is no platform on which an app has more
-/// reason to replace it than on another.
-#[no_mangle]
-pub extern "C" fn mars_xlog_set_console_fun(fun: Option<MarsXLogConsoleFun>) {
-    guard((), || {
-        // One thread at a time, and in this order: the trampoline comes off
-        // before the callback it reads is changed, so no record can be handed
-        // to a pair that is half of one and half of the other. A record
-        // written in that window takes the built-in stderr line, which is
-        // what it would have taken with no sink set at all.
-        let _setting = CONSOLE_FUN_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        set_console_fun(None);
-        *CONSOLE_FUN
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = fun;
-        set_console_fun(fun.map(|_| console_fun as ConsoleFun));
-    });
-}
-
-/// `mars::xlog::appender_get_current_log_path(char*, unsigned int)`.
-///
-/// Copies the NUL-terminated path of the log file currently being appended to
-/// into `out`, which must have room for `len` bytes.
-///
-/// @return the number of bytes written excluding the terminating NUL, or
-/// [`MARS_XLOG_ERR_NULL_OUT`], [`MARS_XLOG_ERR_NO_SPACE`] (including `len == 0`)
-/// or [`MARS_XLOG_ERR_NO_PATH`].
-///
-/// # Safety
-///
-/// `out` must be null, or point to at least `len` writable bytes that stay alive for the duration
-/// of the call.
-#[no_mangle]
-pub unsafe extern "C" fn mars_xlog_current_log_path(out: *mut c_char, len: c_uint) -> c_int {
-    guard(MARS_XLOG_ERR_PANIC, || {
-        if out.is_null() {
-            return MARS_XLOG_ERR_NULL_OUT;
-        }
-        if len == 0 {
-            return MARS_XLOG_ERR_NO_SPACE;
-        }
-
-        let Some(path) = appender_get_current_log_path() else {
-            return MARS_XLOG_ERR_NO_PATH;
-        };
-
-        // SAFETY: `out` is non-null (checked above) and the caller promises
-        // `len` writable bytes.
-        unsafe { write_path_into(path_to_bytes(&path), out, len) }
-    })
-}
-
-/// [`mars_xlog_current_log_path`] of one instance.
-///
-/// The only spelling an app that holds an instance has: the process-wide
-/// question is about the appender the JNI bridge installs from Rust, and no
-/// symbol of this ABI opens one, so an app that opened its logger with
-/// [`mars_xlog_new_instance`] has no answer to it at all.
+/// The only spelling there is: a process-wide question would be about an
+/// appender no symbol of this ABI opens, so `0` — and every handle no
+/// appender is open for — answers [`MARS_XLOG_ERR_NO_PATH`].
 ///
 /// @return the number of bytes written excluding the terminating NUL, or
 /// [`MARS_XLOG_ERR_NULL_OUT`], [`MARS_XLOG_ERR_NO_SPACE`] (including `len == 0`)
@@ -384,20 +185,14 @@ pub unsafe extern "C" fn mars_xlog_current_log_path_instance(
 
         // SAFETY: `out` is non-null (checked above) and the caller promises
         // `len` writable bytes.
-        unsafe { write_path_into(path_to_bytes(&path), out, len) }
+        unsafe { write_path_into(path_to_bytes(&path), out as *mut c_uchar, len) }
     })
 }
+///
 /// # Safety
 ///
 /// `out` must be non-null and point to at least `len` writable bytes.
-///
-/// `char*` and not `unsigned char*`: the paths of this seam are C strings, and
-/// `mars_xlog_current_log_cache_path` declares `char* out` in the header, which
-/// is what Swift's `LogPath` takes it from. Writing through the two spellings
-/// is the same bytes either way, but a caller that passes a `char*` to a
-/// `unsigned char*` parameter is a type error on the C side and a pointer of
-/// the wrong signedness on the Rust one.
-unsafe fn write_path_into(bytes: Vec<u8>, out: *mut c_char, len: c_uint) -> c_int {
+unsafe fn write_path_into(bytes: Vec<u8>, out: *mut c_uchar, len: c_uint) -> c_int {
     if out.is_null() {
         return MARS_XLOG_ERR_NULL_OUT;
     }
@@ -413,10 +208,7 @@ unsafe fn write_path_into(bytes: Vec<u8>, out: *mut c_char, len: c_uint) -> c_in
     // both the copy and the NUL write stay in the caller's buffer. The slice is
     // sized by what is written, not by what the caller claimed.
     unsafe {
-        // `out` is a `char*` and the bytes are `u8`, which is the same width
-        // and the same layout; casting the destination is what keeps the copy
-        // a `copy_from_slice` rather than a byte loop.
-        let dst = std::slice::from_raw_parts_mut(out.cast::<u8>(), bytes.len() + 1);
+        let dst = std::slice::from_raw_parts_mut(out, bytes.len() + 1);
         dst[..bytes.len()].copy_from_slice(&bytes);
         dst[bytes.len()] = 0;
     }
@@ -494,17 +286,9 @@ fn path_to_bytes(path: &Path) -> Vec<u8> {
 /// This is the C counterpart of `mars::xlog::NewXloggerInstance`: each
 /// instance gets its own log directory, prefix, key, mode and cache file.
 ///
-/// @return the instance handle, or a negative `MARS_XLOG_ERR_*` code —
-/// [`MARS_XLOG_ERR_NULL_CONFIG`] for a null `config`,
-/// [`MARS_XLOG_ERR_BAD_MODE`] / [`MARS_XLOG_ERR_BAD_COMPRESS`] /
-/// [`MARS_XLOG_ERR_EMPTY_LOG_DIR`] for one the appender cannot use, and
-/// [`MARS_XLOG_ERR_APPENDER`] when the open itself failed.
-///
-/// `0` is *not* the answer for a failure, and never was a handle this call
-/// opens: it is the process-wide appender, so an app that took it for one and
-/// wrote through it logged into a logger it never opened, and had no way of
-/// telling that from a logger it had. A level outside `0..=5` is accepted: the
-/// C++ casts it, so `MARS_LEVEL_NONE` (6) is "an instance that logs nothing".
+/// Returns the instance handle, or `0` when `config` is null / invalid or the
+/// appender cannot be opened. A level outside `0..=5` is accepted: the C++
+/// casts it, so `MARS_LEVEL_NONE` (6) is "an instance that logs nothing".
 ///
 /// # Safety
 ///
@@ -515,18 +299,15 @@ pub unsafe extern "C" fn mars_xlog_new_instance(
     config: *const MarsXLogConfig,
     level: c_int,
 ) -> c_longlong {
-    guard(MARS_XLOG_ERR_PANIC as c_longlong, || {
+    guard(0, || {
         // SAFETY: null-checked inside `ptr_to_ref`.
         let Some(cfg) = (unsafe { cstr::ptr_to_ref(config) }) else {
-            return MARS_XLOG_ERR_NULL_CONFIG as c_longlong;
+            return 0;
         };
-        // SAFETY: `cfg` is the caller's valid config, as above.
-        let rust_config = match unsafe { to_xlog_config(cfg) } {
-            Ok(config) => config,
-            // The code says which part of the config is unusable, because a
-            // caller that only learns "no instance" cannot tell a bad mode
-            // from a log directory it has no write permission on.
-            Err(code) => return code as c_longlong,
+        // SAFETY: `cfg` is the caller's valid config, as above. A config the
+        // appender cannot use has no instance, which is what `0` means.
+        let Ok(rust_config) = (unsafe { to_xlog_config(cfg) }) else {
+            return 0;
         };
         // `NewXloggerInstance(_config, (TLogLevel)_level)`: the level is cast,
         // never checked — `MARS_LEVEL_NONE` (6) is the level a caller starts an
@@ -534,16 +315,7 @@ pub unsafe extern "C" fn mars_xlog_new_instance(
         // which silently gave back handle `0`, the appender-less default.
         let level = to_filter_level(level);
 
-        let handle = marsrs_appender::new_xlogger_instance(&rust_config, level);
-        if handle == DEFAULT_HANDLE {
-            // The appender refused the config — an empty prefix, a directory
-            // it could not create, a cache file it could not map. `DEFAULT_
-            // HANDLE` is what `new_xlogger_instance` answers for all of them,
-            // and it is `0`, the process-wide handle, so it is turned into a
-            // code here rather than handed out as a logger.
-            return MARS_XLOG_ERR_APPENDER as c_longlong;
-        }
-        handle as c_longlong
+        marsrs_appender::new_xlogger_instance(&rust_config, level) as c_longlong
     })
 }
 
@@ -578,12 +350,11 @@ pub unsafe extern "C" fn mars_xlog_release_instance(name_prefix: *const c_char) 
     });
 }
 
-/// Writes through a specific instance (`0` = the process-wide appender).
+/// Writes through a specific instance.
 ///
-/// A non-zero instance's own level decides: a record below it is dropped, and a
-/// handle that is not one writes nothing. `0` is the C++'s `xlogger_Write`,
-/// which filters nothing — the level [`mars_xlog_set_level_instance`] set for
-/// `0` is the one [`mars_xlog_is_enabled_for`] answers from.
+/// The instance's own level decides: a record below it is dropped. A handle
+/// that is not one writes nothing, `0` among them — no symbol of this ABI
+/// installs a process-wide appender for it to write through.
 ///
 /// # Safety
 ///
@@ -673,10 +444,9 @@ pub extern "C" fn mars_xlog_get_level(instance: c_longlong) -> c_int {
     })
 }
 
-/// `mars::xlog::SetLevel` for an instance: `0` is the process-wide appender,
-/// which the JNI bridge installs from Rust and no symbol of this ABI opens,
-/// so this is also how that one's level is set — and the level
-/// [`mars_xlog_get_level`] and [`mars_xlog_is_enabled_for`] answer.
+/// `mars::xlog::SetLevel` for an instance: the level [`mars_xlog_get_level`]
+/// and [`mars_xlog_is_enabled_for`] answer, and the one the instance's own
+/// writes are filtered against. A no-op for `0`, which is no instance.
 ///
 /// `kLevelNone` (6) and anything above it disables the instance, and a
 /// negative level logs everything: the C++ casts the value straight to
@@ -690,8 +460,7 @@ pub extern "C" fn mars_xlog_set_level_instance(instance: c_longlong, level: c_in
     });
 }
 
-/// `mars::xlog::SetAppenderMode` for an instance; `0` is the process-wide
-/// appender, so this is also how that one's mode is switched.
+/// `mars::xlog::SetAppenderMode` for an instance.
 #[no_mangle]
 pub extern "C" fn mars_xlog_set_mode_instance(instance: c_longlong, mode: c_int) {
     let _ = guard(0, || {
@@ -708,9 +477,9 @@ pub extern "C" fn mars_xlog_set_mode_instance(instance: c_longlong, mode: c_int)
 /// Drains one instance, signalled: the writer thread is told it may take what
 /// is in the cache to the file, and this returns at once.
 ///
-/// The instances matter: each of them owns an appender of its own, so a caller
-/// that asks the process-wide appender alone misses their records. `0` is the
-/// process-wide appender, and a handle that is not one drains nothing.
+/// The instance matters: each of them owns an appender of its own, so a drain
+/// asked of one instance is nobody else's records. A handle that is not one —
+/// `0` among them — drains nothing.
 #[no_mangle]
 pub extern "C" fn mars_xlog_request_flush_instance(instance: c_longlong) {
     let _ = guard(0, || {
@@ -721,7 +490,7 @@ pub extern "C" fn mars_xlog_request_flush_instance(instance: c_longlong) {
 
 /// Drains one instance on the calling thread: that instance's records are on
 /// the disk when this returns, which [`mars_xlog_request_flush_instance`] does
-/// not promise. `0` is the process-wide appender.
+/// not promise. A handle that is not one — `0` among them — drains nothing.
 #[no_mangle]
 pub extern "C" fn mars_xlog_flush_now_instance(instance: c_longlong) {
     let _ = guard(0, || {
@@ -730,21 +499,7 @@ pub extern "C" fn mars_xlog_flush_now_instance(instance: c_longlong) {
     });
 }
 
-/// `mars::xlog::FlushAll`, signalled: the process-wide appender *and* every
-/// instance is told its writer thread may drain, and this returns at once.
-#[no_mangle]
-pub extern "C" fn mars_xlog_request_flush_all() {
-    guard((), request_flush_all);
-}
-
-/// `mars::xlog::FlushAll` on the calling thread: every appender of this process
-/// has its records on the disk when this returns.
-#[no_mangle]
-pub extern "C" fn mars_xlog_flush_now_all() {
-    guard((), flush_now_all);
-}
-
-/// `mars::xlog::SetConsoleLogOpen` for an instance (`0` = the default logger).
+/// `mars::xlog::SetConsoleLogOpen` for an instance.
 #[no_mangle]
 pub extern "C" fn mars_xlog_set_console_log_instance(instance: c_longlong, open: c_int) {
     guard((), || set_console_log_open(instance as u64, open != 0));
@@ -767,61 +522,6 @@ pub extern "C" fn mars_xlog_set_max_alive_duration_instance(
     });
 }
 
-/// The cache directory of an instance; see [`mars_xlog_current_log_path`] for
-/// the buffer contract (`0` when there is none).
-///
-/// # Safety
-///
-/// `out` must be null, or point to at least `len` writable bytes that stay alive for the duration
-/// of the call.
-#[no_mangle]
-pub unsafe extern "C" fn mars_xlog_current_log_cache_path(out: *mut c_char, len: c_uint) -> c_int {
-    guard(MARS_XLOG_ERR_PANIC, || {
-        if out.is_null() {
-            return MARS_XLOG_ERR_NULL_OUT;
-        }
-        let Some(path) = marsrs_appender::appender_get_current_log_cache_path() else {
-            return MARS_XLOG_ERR_NO_PATH;
-        };
-        // SAFETY: the caller's buffer contract is the same as for
-        // `mars_xlog_current_log_path`.
-        unsafe { write_path_into(path.as_os_str().as_encoded_bytes().to_vec(), out, len) }
-    })
-}
-
-/// `mars::xlog::appender_oneshot_flush` — drains the cache files another
-/// process left behind, without opening an appender.
-///
-/// This is the "another process died with a full cache" recovery path. It
-/// walks `<prefix>.mmap3` and the `<prefix>_<n>.mmap3` slots next to it and
-/// leaves the ones a live writer still holds alone: reading a cache file
-/// mid-write and unlinking it loses every record that writer buffers
-/// afterwards.
-///
-/// @return the `TFileIOAction` the recovery ended in — one of
-/// `kActionNone` (0) … `kActionRemoveFailed` (7) — or a negative
-/// `MARS_XLOG_ERR_*` code when `config` is unusable.
-///
-/// # Safety
-///
-/// `config` must be null, or point to an initialised `MarsXLogConfig` that stays alive for the
-/// duration of the call; every `char*` in it must be null or a NUL-terminated string.
-#[no_mangle]
-pub unsafe extern "C" fn mars_xlog_oneshot_flush(config: *const MarsXLogConfig) -> c_int {
-    guard(MARS_XLOG_ERR_PANIC, || {
-        // SAFETY: null-checked inside `ptr_to_ref`.
-        let Some(cfg) = (unsafe { cstr::ptr_to_ref(config) }) else {
-            return MARS_XLOG_ERR_NULL_CONFIG;
-        };
-        // SAFETY: `cfg` is the caller's valid config, as above.
-        let rust_config = match unsafe { to_xlog_config(cfg) } {
-            Ok(config) => config,
-            Err(code) => return code,
-        };
-        marsrs_appender::appender_oneshot_flush(&rust_config) as c_int
-    })
-}
-
 /// `mars::xlog::appender_make_logfile_name` — the log file *name* for the day
 /// `timespan` days ago (0 = today), whether or not it exists yet.
 ///
@@ -830,33 +530,25 @@ pub unsafe extern "C" fn mars_xlog_oneshot_flush(config: *const MarsXLogConfig) 
 /// same list with `index`, starting at `0` and stopping at
 /// [`MARS_XLOG_ERR_NO_PATH`].
 ///
-/// `prefix` and `log_dir` may be null (an empty `log_dir` yields no name at
-/// all). See [`mars_xlog_current_log_path`] for the `out` contract.
+/// `instance` is a handle from [`mars_xlog_new_instance`]; a handle no appender
+/// is open for answers [`MARS_XLOG_ERR_NO_PATH`] from the first `index` on. See
+/// [`mars_xlog_current_log_path_instance`] for the `out` contract.
 ///
 /// # Safety
 ///
-/// `prefix` and `log_dir` must each be null or a NUL-terminated C string, and `out` must be null
-/// or point to at least `len` writable bytes; all of them stay alive for the duration of the
-/// call.
+/// `out` must be null or point to at least `len` writable bytes; both are
+/// checked.
 #[no_mangle]
-pub unsafe extern "C" fn mars_xlog_make_logfile_name(
+pub unsafe extern "C" fn mars_xlog_make_logfile_name_instance(
+    instance: c_longlong,
     timespan: c_int,
-    prefix: *const c_char,
-    log_dir: *const c_char,
     index: c_uint,
     out: *mut c_char,
     len: c_uint,
 ) -> c_int {
     guard(MARS_XLOG_ERR_PANIC, || {
-        // SAFETY: both pointers are null-checked inside the helpers.
-        let (prefix, log_dir) = unsafe {
-            (
-                cstr::ptr_to_str_or_empty(prefix),
-                cstr::ptr_to_path_buf(log_dir),
-            )
-        };
         let paths =
-            marsrs_appender::appender_make_logfile_name(i64::from(timespan), prefix, &log_dir);
+            marsrs_appender::current_log_file_names(instance as XloggerHandle, i64::from(timespan));
         // SAFETY: `out`/`len` are checked inside `path_at`.
         unsafe { path_at(&paths, index, out, len) }
     })
@@ -865,36 +557,24 @@ pub unsafe extern "C" fn mars_xlog_make_logfile_name(
 /// `mars::xlog::appender_getfilepath_from_timespan` — the log files that
 /// *exist* for the day `timespan` days ago (0 = today).
 ///
-/// Same protocol as [`mars_xlog_make_logfile_name`]: walk `index` from `0`
+/// Same protocol as [`mars_xlog_make_logfile_name_instance`]: walk `index` from `0`
 /// until it answers [`MARS_XLOG_ERR_NO_PATH`].
 ///
 /// # Safety
 ///
-/// `prefix` and `log_dir` must each be null or a NUL-terminated C string, and `out` must be null
-/// or point to at least `len` writable bytes; all of them stay alive for the duration of the
-/// call.
+/// `out` must be null or point to at least `len` writable bytes; both are
+/// checked.
 #[no_mangle]
-pub unsafe extern "C" fn mars_xlog_getfilepath_from_timespan(
+pub unsafe extern "C" fn mars_xlog_getfilepath_from_timespan_instance(
+    instance: c_longlong,
     timespan: c_int,
-    prefix: *const c_char,
-    log_dir: *const c_char,
     index: c_uint,
     out: *mut c_char,
     len: c_uint,
 ) -> c_int {
     guard(MARS_XLOG_ERR_PANIC, || {
-        // SAFETY: both pointers are null-checked inside the helpers.
-        let (prefix, log_dir) = unsafe {
-            (
-                cstr::ptr_to_str_or_empty(prefix),
-                cstr::ptr_to_path_buf(log_dir),
-            )
-        };
-        let paths = marsrs_appender::appender_getfilepath_from_timespan(
-            i64::from(timespan),
-            prefix,
-            &log_dir,
-        );
+        let paths =
+            marsrs_appender::current_log_files(instance as XloggerHandle, i64::from(timespan));
         // SAFETY: `out`/`len` are checked inside `path_at`.
         unsafe { path_at(&paths, index, out, len) }
     })
@@ -905,8 +585,10 @@ pub unsafe extern "C" fn mars_xlog_getfilepath_from_timespan(
 ///
 /// # Safety
 ///
-/// `out` must be null or point to at least `len` writable bytes (both are
-/// checked).
+/// `out` must be null, or point to at least `len` writable bytes that stay
+/// alive for the duration of the call. Both are checked one frame down, in
+/// [`write_path_into`], which is what answers `MARS_XLOG_ERR_NULL_OUT` and
+/// `MARS_XLOG_ERR_NO_SPACE`.
 unsafe fn path_at(
     paths: &[std::path::PathBuf],
     index: c_uint,
@@ -914,7 +596,7 @@ unsafe fn path_at(
     len: c_uint,
 ) -> c_int {
     match paths.get(index as usize) {
-        Some(path) => unsafe { write_path_into(path_to_bytes(path), out, len) },
+        Some(path) => unsafe { write_path_into(path_to_bytes(path), out as *mut c_uchar, len) },
         None => MARS_XLOG_ERR_NO_PATH,
     }
 }
@@ -983,28 +665,6 @@ mod tests {
         assert_eq!(cfg.mode, MarsAppenderMode::Sync as c_int);
         assert_eq!(cfg.compress_mode, MarsCompressMode::Zlib as c_int);
         assert_eq!(cfg.cache_days, 3);
-    }
-
-    #[test]
-    fn a_prefix_that_is_not_utf8_stays_a_prefix() {
-        let log_dir = c"/tmp/xlog";
-        let name_prefix = c"app\xffname";
-        let cfg = MarsXLogConfig {
-            mode: MarsAppenderMode::Async as c_int,
-            log_dir: log_dir.as_ptr(),
-            name_prefix: name_prefix.as_ptr(),
-            pub_key: std::ptr::null(),
-            compress_mode: MarsCompressMode::Zlib as c_int,
-            compress_level: 0,
-            cache_dir: std::ptr::null(),
-            cache_days: 0,
-        };
-        // SAFETY: every pointer of `cfg` is null or a NUL-terminated string
-        // that outlives this call.
-        let config = unsafe { to_xlog_config(&cfg) }.unwrap();
-        // Not `""`: the empty prefix is the process-wide appender's, which
-        // would make this one share its cache file and its log files.
-        assert_eq!(config.nameprefix, "app\u{fffd}name");
     }
 
     #[test]

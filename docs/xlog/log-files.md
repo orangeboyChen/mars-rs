@@ -14,35 +14,50 @@ prefix is what the appender is known by: two appenders that share one share the
 file, and closing one of them closes what the other writes through. Give a part
 of an app whose logs are read apart from the rest a prefix of its own.
 
-Where the file that is being written right now is:
+Where the appender writes:
 
 ::: code-group
 
 ```rust [Rust]
-xlog.current_log_path()                  // Option<PathBuf>
-appender_get_current_log_path()          // the process-wide appender's
+xlog.current_log_path()                  // Option<PathBuf>, and it is the directory
 ```
 
 ```swift [Swift]
-Xlog.currentLogPath
-```
-
-```typescript [HarmonyOS]
-xlog.currentLogPath             // undefined until the day's first record opens one
+log.currentLogPath
 ```
 
 ```c [C]
 char path[512];
-mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK, or a negative code
+mars_xlog_current_log_path_instance(handle, path, sizeof path);   // bytes, or a negative code
+```
+
+```kotlin [Android]
+xlog.currentLogPath
+```
+
+```kotlin [Kotlin Multiplatform]
+xlog.currentLogPath
+```
+
+```typescript [HarmonyOS]
+xlog.currentLogPath
+```
+
+```dart [Flutter]
+await xlog.currentLogPath()
+```
+
+```ts [React Native]
+xlog.currentLogPath
 ```
 
 :::
 
-Those four are the ones that answer it. The rest leave the app to name the
-file itself, which is the two things it gave the config: the directory and the
-prefix, with the day in between. The Swift and the C one are the process-wide
-appender's, which is the one `mars_xlog_open` opens; HarmonyOS has no
-process-wide appender, so `xlog.currentLogPath` is the `Xlog` it was asked on.
+Every package here answers it, and every one of them answers it about the `Xlog`
+the file belongs to — and what every one of them answers is the **directory**,
+which is what the C++'s `GetCurrentLogPath` hands back. The day's *file* is the
+question under it, so between the two an app never has to put a day's name
+together itself.
 
 A whole *day* of files is what an app that uploads yesterday's asks for, and
 there are two calls for it: the files that are there, and the names the day is
@@ -51,13 +66,30 @@ written under whether or not they are there yet.
 ::: code-group
 
 ```rust [Rust]
-appender_getfilepath_from_timespan(1, "marsrs", Path::new(log_dir))  // yesterday's, that are there
-appender_make_logfile_name(1, "marsrs", Path::new(log_dir))          // the names, whether or not
+xlog.log_files(1)      // yesterday's, that are there
+xlog.log_file_names(1) // the names, whether or not
 ```
 
 ```swift [Swift]
-Xlog.logFiles(daysAgo: 1, prefix: "marsrs", logDirectory: logDir)
-Xlog.logFileNames(daysAgo: 1, prefix: "marsrs", logDirectory: logDir)
+log.logFiles(daysAgo: 1)
+log.logFileNames(daysAgo: 1)
+```
+
+```c [C]
+char path[512];
+// index 0, 1, 2 …; a negative code — MARS_XLOG_ERR_NO_PATH — is the end of the list
+mars_xlog_getfilepath_from_timespan_instance(handle, 1, 0, path, sizeof path);
+mars_xlog_make_logfile_name_instance(handle, 1, 0, path, sizeof path);
+```
+
+```kotlin [Android]
+xlog.logFiles(1L)
+xlog.logFileNames(1L)
+```
+
+```kotlin [Kotlin Multiplatform]
+xlog.logFiles(1L)
+xlog.logFileNames(1L)
 ```
 
 ```typescript [HarmonyOS]
@@ -65,20 +97,23 @@ xlog.logFiles(1)
 xlog.logFileNames(1)
 ```
 
-```c [C]
-char path[512];
-// index 0, 1, 2 …; a negative code — MARS_XLOG_ERR_NO_PATH — is the end of the list
-mars_xlog_getfilepath_from_timespan(1, "marsrs", log_dir, 0, path, sizeof path);
-mars_xlog_make_logfile_name(1, "marsrs", log_dir, 0, path, sizeof path);
+```dart [Flutter]
+await xlog.logFiles(1)
+await xlog.logFileNames(1)
+```
+
+```ts [React Native]
+xlog.logFiles(1)
+xlog.logFileNames(1)
 ```
 
 :::
 
-`0` is today and `1` is yesterday. Rust, Swift and HarmonyOS answer the day's
-list in one call; the C ABI answers one index of it at a time, and the two calls
-of the other three are that walk. Names answer two where files answer one when a
-cache dir is given and the file is there: the log-dir file and its twin in the
-cache dir.
+`0` is today and `1` is yesterday. Rust and Swift answer the day's list in one
+call, and out of the `Xlog` the day belongs to; the C ABI answers one index of it
+at a time, and the two C calls are that walk. Names answer two where files answer
+one when a cache dir is given and the file is there: the log-dir file and its twin
+in the cache dir.
 
 ## Async: the record may still be in the cache
 
@@ -120,7 +155,7 @@ xlog.flushNow()
 ```
 
 ```c [C]
-mars_xlog_flush_now_instance(0);
+mars_xlog_flush_now_instance(handle);
 ```
 
 :::
@@ -129,9 +164,9 @@ The drain is three calls and not one with a flag:
 
 | call | what it does |
 |---|---|
-| `requestFlush()` — `xlog.request_flush()`, `mars_xlog_request_flush_instance(0)` | asks for the drain and returns at once: nothing answers when it is over, and the records are not in the file when it returns |
-| `flushNow()` — `xlog.flush_now()`, `mars_xlog_flush_now_instance(0)` | drains on the calling thread: the records are on disk when it returns |
-| `await flush()` — `xlog.flush().await`, `flush(handle)` | the same drain, handed to another thread: it answers when the records are on disk |
+| `requestFlush()` — `xlog.request_flush()`, `mars_xlog_request_flush_instance(handle)` | asks for the drain and returns at once: nothing answers when it is over, and the records are not in the file when it returns |
+| `flushNow()` — `xlog.flush_now()`, `mars_xlog_flush_now_instance(handle)` | drains on the calling thread: the records are on disk when it returns |
+| `await flush()` — `xlog.flush().await` | the same drain, handed to another thread: it answers when the records are on disk |
 
 `requestFlush()` is the one a timer calls: it asks for the drain and answers
 nothing about when it is over, and nothing is lost while it is not, because a
@@ -142,9 +177,6 @@ and its `await flush()` is a `Future` written against `std::thread::spawn` — n
 runtime, and any executor waits on it. Dart has no `flushNow()`, because a
 method channel cannot block the Dart side of it, and HarmonyOS has no `await flush()`, because every method of
 its NAPI module is synchronous.
-
-All three are one appender's. An app that opens one `Xlog` per prefix holds that
-many, and drains each of them with its own `flushNow()`.
 
 ## When the app goes away
 

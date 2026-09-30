@@ -1,4 +1,4 @@
-// The Android half of `marsrs-react-native-xlog`: the thirteen methods of the
+// The Android half of `marsrs-react-native-xlog`: the sixteen methods of the
 // `Xlog` native module, each of them a straight call of a member of `Xlog` —
 // the Kotlin face of `libmarsrsxlog.so` in the `marsrs-xlog` AAR, and the same
 // class `platforms/kmp/marsrs-xlog` publishes to a Kotlin Multiplatform app
@@ -30,9 +30,11 @@
 
 package io.github.orangeboychen.marsrs.xlog.reactnative
 
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReadableMap
+import com.facebook.react.bridge.WritableArray
 import io.github.orangeboychen.marsrs.xlog.AppenderMode
 import io.github.orangeboychen.marsrs.xlog.CompressMode
 import io.github.orangeboychen.marsrs.xlog.LogLevel
@@ -40,7 +42,6 @@ import io.github.orangeboychen.marsrs.xlog.Xlog
 import io.github.orangeboychen.marsrs.xlog.XlogConfig
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
-import java.util.concurrent.RejectedExecutionException
 
 /** The Android half of `Xlog`. */
 class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactContext) {
@@ -68,32 +69,22 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * holds for one prefix are one appender and `close` on either closes it for
      * both.
      *
-     * [XlogConfig] and [Xlog.open] are what refuse a configuration the
-     * appender cannot honour — a blank `logDir` or `namePrefix`, a compression
-     * level out of range — and their `IllegalArgumentException` is what would
-     * cross back into JS as a crash. Both are inside the `try` below for that
-     * reason, and answered as `false`: the caller's mistake to throw on, and
-     * not one to take the app with.
-     *
-     * Not theirs alone, though: `ReadableMap` throws an exception of React
-     * Native's own — a `RuntimeException` and not an
-     * `IllegalArgumentException` — for a field JS sent as `null`, or as a
-     * number where a string belongs, which a caller that crossed from plain
-     * JS does. The same crash either way, so the `try` catches every
-     * `Exception`.
+     * [Xlog.open] is what refuses a configuration the appender cannot honour —
+     * a blank `logDir` or `namePrefix`, a compression level out of range — and
+     * its `IllegalArgumentException` is what would cross back into JS as a
+     * crash, so it is caught here and answered as `false`: the caller's mistake
+     * to throw on, and not one to take the app with.
      */
     override fun open(config: ReadableMap): Boolean {
         val namePrefix = config.string("namePrefix").ifBlank { DEFAULT_NAME_PREFIX }
         if (appenders.containsKey(namePrefix)) {
             return true
         }
+        // Both calls and not the open only: `XlogConfig` is where a blank
+        // `logDir`, a negative `cacheDays` and a compression level out of
+        // range are refused, and it throws before `Xlog.open` is ever reached
+        // — so a `try` around the open alone is a `try` around nothing.
         val xlog = try {
-            // The configuration is built in here and not above the `try`: its
-            // own `require`s — the blank `logDir`, the level out of range —
-            // throw the same `IllegalArgumentException` `Xlog.open` does, and
-            // one that escapes into JS is a crash rather than a `false`. So is
-            // the exception `ReadableMap` throws for a field of the wrong
-            // type, which is why the catch below is wider than theirs.
             Xlog.open(
                 XlogConfig(
                     logDir = config.string("logDir"),
@@ -101,16 +92,18 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
                     level = LogLevel.of(config.int("level", LogLevel.INFO.ordinal)),
                     mode = appenderModeOf(config.int("mode", AppenderMode.ASYNC.ordinal)),
                     pubKey = config.string("pubKey"),
-                    compressMode = compressModeOf(config.int("compressMode", CompressMode.ZLIB.ordinal)),
+                    compressMode = compressModeOf(
+                        config.int("compressMode", CompressMode.ZLIB.ordinal)
+                    ),
                     compressLevel = config.int("compressLevel", DEFAULT_COMPRESS_LEVEL),
                     cacheDir = config.optionalString("cacheDir"),
                     cacheDays = config.int("cacheDays", NO_CACHE_DAYS)
                 )
             )
-        } catch (e: Exception) {
+        } catch (e: IllegalArgumentException) {
             return false
         }
-        appenders[namePrefix] = xlog
+        appenders[xlog.namePrefix] = xlog
         return true
     }
 
@@ -120,15 +113,26 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * too.
      */
     override fun log(namePrefix: String, level: Double, tag: String, message: String) {
-        val native = int32(level) ?: return
-        appender(namePrefix)?.log(LogLevel.of(native), tag, message)
+        appender(namePrefix)?.log(LogLevel.of(level.toInt()), tag, message)
     }
 
+    /** `Xlog.currentLogPath`: the directory this appender writes its files
+     * into, or `null` once it is closed. */
+    override fun currentLogPath(namePrefix: String): String? = appender(namePrefix)?.currentLogPath
+
+    /** `Xlog.logFiles`: the day's files that are there. */
+    override fun logFiles(namePrefix: String, daysAgo: Double): WritableArray? =
+        appender(namePrefix)?.logFiles(daysAgo.toLong())?.let { Arguments.fromList(it) }
+            ?: Arguments.createArray()
+
+    /** `Xlog.logFileNames`: the day's names, whether or not they are there yet. */
+    override fun logFileNames(namePrefix: String, daysAgo: Double): WritableArray? =
+        appender(namePrefix)?.logFileNames(daysAgo.toLong())?.let { Arguments.fromList(it) }
+            ?: Arguments.createArray()
+
     /** `Xlog.isLoggable`: whether a record of the level would be written. */
-    override fun isLoggable(namePrefix: String, level: Double): Boolean {
-        val native = int32(level) ?: return false
-        return appender(namePrefix)?.isLoggable(LogLevel.of(native)) ?: false
-    }
+    override fun isLoggable(namePrefix: String, level: Double): Boolean =
+        appender(namePrefix)?.isLoggable(LogLevel.of(level.toInt())) ?: false
 
     /** `Xlog.level`, read: what `marsrs-jni` answers, and not what JS holds. */
     override fun getLevel(namePrefix: String): Double =
@@ -151,20 +155,9 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * A TurboModule method that answers a promise is the one codegen calls off
      * the JS thread, which is the whole reason this one answers one: a drain
      * blocks the thread it runs on, and the JS thread is not one to block.
-     *
-     * A queue that has been shut down rejects what it is handed — [invalidate]
-     * shuts this one down — and a promise an exception out of `execute` left
-     * unsettled is an `await` in JS that never comes back. So the drain is run
-     * where it was asked for: the caller's thread pays for it, which is the
-     * price of the one thread that would have paid being gone.
      */
     override fun flush(namePrefix: String, promise: Promise) {
-        try {
-            flushQueue.execute {
-                appender(namePrefix)?.flushNow()
-                promise.resolve(null)
-            }
-        } catch (e: RejectedExecutionException) {
+        flushQueue.execute {
             appender(namePrefix)?.flushNow()
             promise.resolve(null)
         }
@@ -172,14 +165,12 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
 
     /** `Xlog.level`. */
     override fun setLevel(namePrefix: String, level: Double) {
-        val native = int32(level) ?: return
-        appender(namePrefix)?.level = LogLevel.of(native)
+        appender(namePrefix)?.level = LogLevel.of(level.toInt())
     }
 
     /** `Xlog.mode`. */
     override fun setMode(namePrefix: String, mode: Double) {
-        val native = int32(mode) ?: return
-        appender(namePrefix)?.mode = appenderModeOf(native)
+        appender(namePrefix)?.mode = appenderModeOf(mode.toInt())
     }
 
     /** `Xlog.consoleLogEnabled`. */
@@ -204,31 +195,11 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
     }
 
     /**
-     * What the module does when the bridge it belongs to goes away: the thread
-     * [flushQueue] drains on is a non-daemon one, and an executor that is
-     * never shut down keeps its thread alive for the life of the process — one
-     * more of them per reload of the bridge, because a reload builds a module
-     * of its own.
-     *
-     * `shutdown` is a request and not a wait: a drain that is already queued is
-     * still run, but this call is back before it has, and the promise that
-     * drain resolves is answered on a thread the bridge may already be gone
-     * from. What is kept by running it is the drain — the records reach the
-     * file — and what is not is the JS answer. No appender is taken out from
-     * under one: nothing here closes one, and a drain of a closed appender
-     * writes nothing.
-     */
-    override fun invalidate() {
-        flushQueue.shutdown()
-        super.invalidate()
-    }
-
-    /**
      * The appender of [namePrefix], or `null` when there is none — which is a
      * no-op and not a crash, the same answer the Swift and the Kotlin give an
-     * `Xlog` that is closed: no appender is the process-wide one to
-     * `marsrs-jni`, so a call that went on without one would write through
-     * whatever appender the rest of the process writes through.
+     * `Xlog` that is closed: a handle whose appender is gone is a no-op to
+     * `marsrs-jni`, so a call that went on without one would silently write
+     * nothing.
      */
     private fun appender(namePrefix: String): Xlog? = appenders[namePrefix]?.takeIf { it.isOpen }
 
@@ -261,27 +232,6 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
         fun compressModeOf(ordinal: Int): CompressMode = when (ordinal) {
             CompressMode.ZSTD.ordinal -> CompressMode.ZSTD
             else -> CompressMode.ZLIB
-        }
-
-        /**
-         * The number JS sent for a level or a mode, and `null` when it is not
-         * one: a `NaN`, an infinity, and anything the `Int` the C ABI takes
-         * cannot hold.
-         *
-         * `Double.toInt()` answers `0` for a `NaN`, and `LogLevel.of` answers
-         * `VERBOSE` for a `0`, so a level JS computed and came to no level
-         * with — a sum with an `undefined` in it — was one the appender was
-         * *moved* to, and the one it was moved to is the level that logs
-         * everything: an app that meant to log nothing logged all of it. The
-         * iOS half of this module reads the same number with `int32(_:)`,
-         * which answers `nil` for all three and leaves the appender alone, so
-         * one line of JS moved the appender on Android and not on iOS.
-         */
-        private fun int32(value: Double): Int? {
-            if (!value.isFinite() || value < Int.MIN_VALUE.toDouble() || value > Int.MAX_VALUE.toDouble()) {
-                return null
-            }
-            return value.toInt()
         }
     }
 }

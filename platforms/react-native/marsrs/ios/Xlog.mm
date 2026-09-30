@@ -5,7 +5,7 @@
 // and jsi types. Neither has a Swift spelling: Swift's C++ interop stops at
 // templates and at the standard library. So what is here is the three things
 // React Native asks a module for and cannot read out of `Xlog.swift`, and the
-// thirteen methods are there and not here.
+// sixteen methods are there and not here.
 //
 //   * `RCT_EXTERN_MODULE` registers the Swift class, which Swift cannot do for
 //     itself — registration is a constructor the runtime runs, and a Swift class
@@ -18,7 +18,7 @@
 //   * `methodQueue` answers `RCTJSThread`, the queue that is no queue: it is
 //     what makes a TurboModule's methods run on the JS thread, so a call is made
 //     where it is asked for and a method that answers a value answers it before
-//     it returns. Without it the thirteen would be dispatched to a queue of the
+//     it returns. Without it the sixteen would be dispatched to a queue of the
 //     module's own and every answer would arrive as `undefined`.
 //
 // Objective-C++, and not Objective-C, because of the one `#include` a Swift

@@ -10,12 +10,22 @@
 use std::path::PathBuf;
 
 use marsrs_appender::{
-    appender_close, appender_open, flush_now, get_xlogger_instance, xlogger_write, AppenderError,
-    AppenderMode, LogLevel, XLogConfig, Xlog, DEFAULT_HANDLE,
+    get_xlogger_instance, AppenderError, AppenderMode, LogLevel, XLogConfig, Xlog, DEFAULT_HANDLE,
 };
 use marsrs_crypt::magic;
 
 fn config(dir: &std::path::Path, nameprefix: &str) -> XLogConfig {
+    config_cached(dir, nameprefix, None)
+}
+
+/// [`config`] with a cache directory: the one branch of a day's names the
+/// other tests never take, and the one that used to be filtered by whether
+/// the file existed.
+fn config_cached(
+    dir: &std::path::Path,
+    nameprefix: &str,
+    cachedir: Option<std::path::PathBuf>,
+) -> XLogConfig {
     XLogConfig {
         mode: AppenderMode::Sync,
         logdir: dir.to_path_buf(),
@@ -23,7 +33,7 @@ fn config(dir: &std::path::Path, nameprefix: &str) -> XLogConfig {
         pub_key: String::new(),
         compress_mode: marsrs_buffer::CompressMode::Zlib,
         compress_level: 6,
-        cachedir: None,
+        cachedir,
         cache_days: 0,
     }
 }
@@ -66,9 +76,28 @@ fn an_object_writes_and_drains_to_the_file() {
     // The directory, which is what the C++'s `GetCurrentLogPath` answers:
     // a day's file is named for the day its records carry.
     assert_eq!(xlog.current_log_path(), Some(dir.path().to_path_buf()));
+
+    // A day of files, asked of this object and out of its own prefix and
+    // directory — and not of a directory the caller names.
+    let today = files_first(dir.path()).expect("the day's file is there");
+    assert_eq!(xlog.log_files(0), vec![today.clone()]);
+    assert_eq!(xlog.log_file_names(0), vec![today]);
+    assert!(
+        xlog.log_files(1).is_empty(),
+        "yesterday has no file: {:?}",
+        xlog.log_files(1)
+    );
+
     xlog.close();
     assert!(!xlog.is_open());
     assert!(!xlog.i("startup", "nothing after close"));
+
+    // A closed object answers neither: a handle whose appender is gone has no
+    // directory and no day, and an empty list is what a caller gets and not a
+    // panic.
+    assert_eq!(xlog.current_log_path(), None);
+    assert!(xlog.log_files(0).is_empty());
+    assert!(xlog.log_file_names(0).is_empty());
 }
 
 #[test]
@@ -127,6 +156,12 @@ fn two_objects_of_one_prefix_are_one_appender() {
     // appender, which is what every platform's `Xlog` says about itself.
     assert!(!two.i("startup", "written through a closed appender"));
     assert_eq!(get_xlogger_instance("shared"), DEFAULT_HANDLE);
+
+    // … and the other one says so, which the handle it cached cannot: `isOpen`
+    // is asked of the prefix and not of the handle, on every platform.
+    assert!(!two.is_open(), "a twin's close left the other open");
+    assert_eq!(two.level(), None);
+    assert_eq!(two.current_log_path(), None);
 }
 
 #[test]
@@ -179,61 +214,6 @@ fn a_second_open_of_one_prefix_answers_the_first_appender() {
     assert!(files_first(second_dir.path()).is_none());
 }
 
-/// `Xlog::open_unregistered`: the second writer over a prefix that already has
-/// one, which is the one shape `Xlog::open` cannot answer — it hands back the
-/// appender that is open.
-#[test]
-fn an_unregistered_open_is_a_second_writer_over_one_prefix() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut cfg = config(dir.path(), "twowriters");
-    // Async, because it is the mode that keeps records in a cache file at all,
-    // and the cache file is what the two writers must not share.
-    cfg.mode = AppenderMode::Async;
-
-    let one = Xlog::open_unregistered(cfg.clone(), LogLevel::Info).unwrap();
-    let two = Xlog::open_unregistered(cfg.clone(), LogLevel::Info).unwrap();
-    assert!(one.is_open() && two.is_open());
-    assert!(dir.path().join("twowriters.mmap3").exists());
-    assert!(
-        dir.path().join("twowriters_1.mmap3").exists(),
-        "the second writer mmapped the first one's cache file"
-    );
-
-    // The registered open of the same prefix is a third appender, and not one
-    // of these two: the prefix nothing is registered for is theirs alone.
-    let three = Xlog::open(cfg, LogLevel::Info).unwrap();
-
-    assert!(one.i("first", "through the first"));
-    assert!(two.i("second", "through the second"));
-    assert!(three.i("third", "through the third"));
-    one.flush_now();
-    two.flush_now();
-    three.flush_now();
-
-    // One log file, and every writer's records in it — the completeness of a
-    // log three writers share is `tests/cross_writer.rs`'s to prove, with the
-    // framing and the inflate it has the machinery for.
-    assert!(
-        wrote(dir.path()).is_some(),
-        "no .xlog in {}",
-        dir.path().display()
-    );
-
-    // No category, so each unregistered `Xlog` keeps a level of its own, and
-    // moving one does not move the other — which is the one thing they do not
-    // share that two `Xlog`s of a *registered* prefix do.
-    one.set_level(LogLevel::Error);
-    assert_eq!(one.level(), Some(LogLevel::Error));
-    assert_eq!(two.level(), Some(LogLevel::Info));
-    assert!(!one.i("first", "dropped: this object's level moved"));
-    assert!(two.i("second", "kept: the other one's did not"));
-
-    one.close();
-    two.close();
-    three.close();
-    assert!(!one.is_open());
-}
-
 #[test]
 fn a_config_the_appender_refuses_is_an_error() {
     let xlog = Xlog::open(
@@ -255,28 +235,47 @@ fn a_config_the_appender_refuses_is_an_error() {
     assert!(matches!(xlog, Err(AppenderError(_))));
 }
 
-/// The process-wide appender is the C ABI's and the JNI bridge's, not an app's,
-/// but it is still there for them: what it answers to is `DEFAULT_HANDLE`, and
-/// an `Xlog` of a prefix of its own is untouched by it.
+/// A day's *names* with a cache directory, which is the one branch the answer
+/// is two paths and not one: the name the day is written under in the log
+/// directory, and the twin the async cache file has in the cache directory.
 #[test]
-fn the_object_and_the_process_wide_appender_do_not_share_a_handle() {
+fn a_day_of_names_is_answered_before_the_files_are_there() {
     let dir = tempfile::tempdir().unwrap();
-    let process_wide = XLogConfig {
-        nameprefix: "process".to_owned(),
-        ..config(dir.path(), "process")
-    };
-    appender_open(process_wide).unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let xlog = Xlog::open(
+        config_cached(dir.path(), "cached", Some(cache.path().to_path_buf())),
+        LogLevel::Info,
+    )
+    .unwrap();
 
-    let xlog = Xlog::open(config(dir.path(), "object"), LogLevel::Info).unwrap();
-    assert_ne!(get_xlogger_instance("object"), DEFAULT_HANDLE);
-    assert!(xlogger_write(
-        DEFAULT_HANDLE,
-        None,
-        Some("through handle 0")
-    ));
+    // The name of the day is answered before anything is written to it, and
+    // it is the log directory's: a *name* is not a file, and which files are
+    // there is `log_files`' question.
+    let names = xlog.log_file_names(0);
+    assert_eq!(names[0].parent(), Some(dir.path()), "{names:?}");
 
-    flush_now(DEFAULT_HANDLE);
-    appender_close();
-    // The object's appender is its own and is still open.
-    assert!(xlog.i("startup", "still open"));
+    xlog.i("startup", "hello from mars");
+    xlog.flush_now();
+
+    // Now both are: the file in the log directory, and the cache-dir twin the
+    // async cache had while the record sat in it.
+    let files = xlog.log_files(0);
+    assert!(!files.is_empty(), "the record reached a file");
+    let names = xlog.log_file_names(0);
+    assert!(
+        names.contains(&files[0]),
+        "{names:?} does not name {files:?}"
+    );
+
+    // A day that has not happened yet is not one, and a negative `daysAgo`
+    // does not ask for it — it asks for the day that is here. Both answers
+    // are taken before the comparison, so a run that straddles midnight
+    // compares two names of the same day and not of two.
+    let today = xlog.log_file_names(0);
+    assert_eq!(
+        xlog.log_file_names(-1),
+        today,
+        "a negative day asked for tomorrow"
+    );
+    assert_eq!(xlog.log_files(-1), xlog.log_files(0));
 }

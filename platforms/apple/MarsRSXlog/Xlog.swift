@@ -10,25 +10,24 @@
 // C strings, `int` modes and a config struct that has to be filled field by
 // field. This file is that surface in Swift — `String`s, an `XlogConfig` with
 // defaults and a value an app writes through — and it re-exports the C module,
-// so `mars_xlog_new_instance(&config)` and friends stay reachable for whoever
-// prefers them.
+// so `mars_xlog_new_instance(&config, level)` and friends stay reachable for
+// whoever prefers them.
 //
 // The shape is the one the Android `Xlog` has, and the one the C ABI spells with
 // a handle: `Xlog.open(config)` opens an appender of its own and answers it, and
 // the app writes through what it was given. Nothing here is deprecated, because
-// there is no older Swift API to keep. Two members are not this appender's, and
-// they say which: the static `Xlog.currentLogPath` and `Xlog.currentCachePath`
-// ask the process-wide appender, which no symbol of the C ABI installs, so in an
-// Apple process they answer `nil` — what an app asks for is its own
-// `currentLogPath`.
+// there is no older Swift API to keep — an instance is the only way in, and
+// `import MarsRSFFI` reaches the symbols behind it. Every question about a file is asked of the `Xlog` it belongs to —
+// [`currentLogPath`], [`logFiles(daysAgo:)`] and [`logFileNames(daysAgo:)`] —
+// which is the shape the Kotlin Multiplatform module has: `Xlog.open` is the one
+// call that is not an appender's own.
 //
 // Every call is a straight translation of a symbol in the header; nothing here
 // adds behaviour the C ABI does not have.
 //
 // The class and every member an app reaches are `@objc`, and `Xlog` is an
-// `NSObject` — but for `setConsoleSink(_:)`, which takes a C function pointer
-// and so has no Objective-C spelling, and for the `async` `flush()`, which
-// no Objective-C caller can `await`. An app written in Objective-C takes the port
+// `NSObject` — but for the `async` `flush()`, which no Objective-C caller can
+// `await`. An app written in Objective-C takes the port
 // through `[[Xlog alloc] initWithConfig:error:]`, and the `Xlog` it writes is
 // the one the compiler writes out of this file, into `MarsRSXlog-Swift.h` —
 // there is no Objective-C source in the port, the linkage is Swift's own.
@@ -74,37 +73,34 @@ public final class Xlog: NSObject {
     /// What every file of this appender starts with, and what it is known by.
     @objc public let namePrefix: String
 
-    /// Whether this appender is still open: `false` after [close()], and
-    /// `false` once another `Xlog` of this `namePrefix` closed it.
+    /// Whether this appender is still open: `false` after [close()] — on this
+    /// `Xlog` and on every other one of this `namePrefix`, which is the same
+    /// appender and is closed with this one.
     ///
-    /// Asked of the C ABI and not answered from the handle alone, the way the
-    /// Kotlin `actual` of this API asks it: a prefix is one appender to the C
-    /// ABI, so the twin that closed it took the appender this object writes
-    /// through, and a handle this side still holds is then not one the C ABI
-    /// answers anything for. Answering `true` for that is what left an app
-    /// gating on `isOpen` logging into a closed file — and reading a [level]
-    /// out of it that says "logs everything".
+    /// The prefix and not the handle alone: a prefix is one appender to the C
+    /// ABI, so two `Xlog`s of one prefix are answered the same handle and
+    /// closing either releases it — the handle this one cached still looks
+    /// open, and a write through it would silently write nothing.
     @objc public var isOpen: Bool {
-        openHandle() != Self.noHandle
+        handle != Self.noHandle
+            && namePrefix.withCString { mars_xlog_get_instance($0) } == handle
     }
 
     /// The level of this appender: a record less severe than this is dropped.
     ///
     /// Read from the C ABI and not mirrored here, so a level another part of
     /// the app set is the one this answers with.
-    ///
-    /// `.none` after [close()], which is the level no record reaches and the
-    /// one [isEnabled(for:)] answers with: there is no level of a dropped
-    /// appender to ask for, and handle `0` is the process-wide one's to the C
-    /// ABI, so [withHandle] asks nothing at all rather than answer its level.
     @objc public var level: LogLevel {
         get {
-            // `-1` is what `mars_xlog_get_level` answers for a handle that is
-            // not one, and it is `(TLogLevel)-1`, the C++'s "log everything",
-            // which is `.verbose` — the lowest level there is.
-            var answered = LogLevel.none
-            withHandle { answered = LogLevel(rawValue: mars_xlog_get_level($0)) ?? .verbose }
-            return answered
+            // A closed `Xlog` — one whose twin closed the appender they
+            // share — writes nothing, which is `none` and not "log
+            // everything": the `-1` `mars_xlog_get_level` answers for a
+            // handle that is not one is `(TLogLevel)-1`, the C++'s own
+            // spelling of the opposite.
+            guard isOpen else {
+                return .none
+            }
+            return LogLevel(rawValue: mars_xlog_get_level(handle)) ?? .verbose
         }
         set {
             withHandle { mars_xlog_set_level_instance($0, newValue.rawValue) }
@@ -131,36 +127,6 @@ public final class Xlog: NSObject {
         }
     }
 
-    /// `mars_xlog_set_console_fun`: where the console copy of a record goes
-    /// instead of the built-in sink, which is standard error on every platform
-    /// of the port — `os_log_with_type` is a macro with no symbol to link
-    /// against, so nothing here can write to the system log.
-    ///
-    /// An Apple app that wants its records there is what this is for: the C++
-    /// has an Apple enum of three sinks of its own, `kConsoleOSLog` among them,
-    /// and the app is the only code that can call `os_log` — which Swift can.
-    ///
-    /// ```swift
-    /// Xlog.setConsoleSink { level, tag, file, function, line, log in
-    ///     os_log(.default, "%{public}@", String(cString: log))
-    /// }
-    /// ```
-    ///
-    /// `nil` takes the sink away, and the console copy is standard error's
-    /// again. What a sink is handed is the record unformatted — the level, the
-    /// tag, where the call site is and the message — and it is called on the
-    /// thread that wrote the record, the writer thread of an async appender
-    /// included.
-    ///
-    /// One sink for the process and not one for this `Xlog`: the C ABI has no
-    /// instance of it. Objective-C sets the same one through
-    /// `mars_xlog_set_console_fun`, which `import MarsRSXlog` re-exports.
-    ///
-    /// - Parameter sink: what the console copy is handed to, or `nil`.
-    public static func setConsoleSink(_ sink: MarsXLogConsoleFun?) {
-        mars_xlog_set_console_fun(sink)
-    }
-
     /// How many bytes a log file may reach before it is closed and a new one
     /// opened; `0` is "never split".
     @objc public var maxFileSizeBytes: UInt64 = 0 {
@@ -180,12 +146,10 @@ public final class Xlog: NSObject {
     /// builds a message that is expensive to build.
     @objc
     public func isEnabled(for level: LogLevel) -> Bool {
-        // The one reading [close()] was asked about: see [openHandle].
-        let opened = openHandle()
-        guard opened != Self.noHandle else {
+        guard isOpen else {
             return false
         }
-        return mars_xlog_is_enabled_for(opened, level.rawValue) != 0
+        return mars_xlog_is_enabled_for(handle, level.rawValue) != 0
     }
 
     /// Writes a record of `level`.
@@ -201,15 +165,16 @@ public final class Xlog: NSObject {
         function: String = #function,
         line: Int32 = #line
     ) {
-        // The one reading [close()] was asked about: see [openHandle].
-        let opened = openHandle()
-        guard opened != Self.noHandle else {
+        // `handle != Self.noHandle` and not `isOpen`, which asks the C ABI
+        // whether the prefix is still registered: a record is the hot path,
+        // and the write below already no-ops for a handle that is not one.
+        guard handle != Self.noHandle else {
             return
         }
         // `cTag` and friends: the same four strings as C pointers, which is
         // what the closure hands back and what the C ABI copies out of.
         withCStrings(first: tag, second: file, third: function, fourth: message) { cTag, cFile, cFunction, cMessage in
-            mars_xlog_write_instance(opened, level.rawValue, cTag, cFile, cFunction, line, cMessage)
+            mars_xlog_write_instance(handle, level.rawValue, cTag, cFile, cFunction, line, cMessage)
         }
     }
 
@@ -326,7 +291,7 @@ public final class Xlog: NSObject {
     public func flush() async {
         // The handle and not `self`: the closure runs on another thread, and
         // `Xlog` is not `Sendable`, so strict concurrency refuses the capture.
-        let opened = openHandle()
+        let opened = self.handle
         guard opened != Self.noHandle else {
             return
         }
@@ -343,111 +308,75 @@ public final class Xlog: NSObject {
     /// `namePrefix` answers `0`. Safe to call twice.
     @objc
     public func close() {
-        // The one reading [close()] was asked about: see [openHandle].
-        let opened = openHandle()
-        guard opened != Self.noHandle else {
+        guard isOpen else {
             return
         }
         // A prefix is one appender to the C ABI, so two `Xlog`s of one prefix
         // hold one handle between them — and releasing takes the prefix and
-        // not the handle, which drops whatever the prefix answers *now*.
-        // [openHandle] asked the registry, so what is released here is the
-        // appender this handle names and not one a third `Xlog` opened in
-        // the meantime.
-        namePrefix.withCString { prefix in
-            mars_xlog_release_instance(prefix)
+        // not the handle, which drops whatever the prefix answers *now*. Once
+        // this object's twin closed the appender and a third one reopened the
+        // prefix, releasing here would close an appender that is not ours.
+        let ownsPrefix = namePrefix.withCString { prefix in
+            mars_xlog_get_instance(prefix) == handle
         }
-        handleLock.lock()
-        defer { handleLock.unlock() }
+        if ownsPrefix {
+            namePrefix.withCString { prefix in
+                mars_xlog_release_instance(prefix)
+            }
+        }
         handle = Self.noHandle
     }
 
-    /// The directory this appender is writing its log files into, or `nil` when
-    /// it is writing none — before it is opened and after [close()].
+    /// `mars_xlog_current_log_path_instance`: the directory this appender writes
+    /// its files into, or `nil` once it is closed (or the buffer was too small,
+    /// which 1024 bytes never is).
     ///
-    /// `mars_xlog_current_log_path_instance`, which is the only spelling an
-    /// appender opened with [open(_:)] has an answer to: the process-wide one
-    /// is about an appender no symbol of the C ABI installs.
+    /// It is a directory and not a file, because that is what the C++ answers
+    /// (`XloggerAppender::GetCurrentLogPath` hands back `sg_logdir`); the day's
+    /// file is what [`logFiles(daysAgo:)`] names.
     @objc public var currentLogPath: String? {
-        var answered: String?
-        withHandle { opened in
-            answered = path { out, len in mars_xlog_current_log_path_instance(opened, out, len) }
+        guard isOpen else {
+            return nil
         }
-        return answered
+        return path { out, len in mars_xlog_current_log_path_instance(handle, out, len) }
     }
 
-    /// The directory the *process-wide* appender is writing into — not the one
-    /// of an `Xlog`, which is what the instance `currentLogPath` answers — or
-    /// `nil` when there is no open file (or the buffer was too small, which
-    /// 1,024 bytes never is).
+    /// `mars_xlog_getfilepath_from_timespan_instance`: the log files of `daysAgo` days ago
+    /// that are *there* — what an app that uploads yesterday's opens. `[]` when
+    /// the directory holds none of that day's. `0` is today, `1` is yesterday,
+    /// and so on.
     ///
-    /// No symbol of the C ABI installs that appender — a host of the ABI does
-    /// it from Rust, and an Apple process has none — so this answers `nil`
-    /// here until a host hands one over.
-    @objc public static var currentLogPath: String? {
-        path(of: mars_xlog_current_log_path)
-    }
-
-    /// `mars_xlog_current_log_cache_path`: the cache *directory* of the
-    /// process-wide appender, and `nil` for the same reason the static
-    /// `currentLogPath` is — no symbol of the C ABI installs that appender, so
-    /// an Apple process has none. An `Xlog` of its own keeps its cache in its
-    /// `XlogConfig`'s `cacheDirectory ?? logDirectory`, and the C ABI answers
-    /// no instance spelling of this question to read it back out of.
-    @objc public static var currentCachePath: String? {
-        path(of: mars_xlog_current_log_cache_path)
-    }
-
-    /// `mars_xlog_getfilepath_from_timespan`: the log files of `daysAgo` days
-    /// ago that are *there* — what an app that uploads yesterday's opens. `[]`
-    /// when the directory holds none of that day's.
+    /// This is a day of files and not the file being written: what
+    /// [`currentLogPath`] answers is the directory, and this names the day's
+    /// files in it — the day of *this* appender, its own prefix and directory.
     ///
-    /// This is a day of files and not the file being written: an `Xlog`'s
-    /// `currentLogPath` answers the *directory* they are in, and not one of
-    /// them, while this takes that directory and the prefix the files start
-    /// with and names the ones that are there.
-    ///
-    /// - Parameters:
-    ///   - daysAgo: `0` is today, `1` yesterday, and so on. A value `Int32`
-    ///     cannot hold is clamped, and not trapped on: the C ABI takes an
-    ///     `int`, and a day that far off is a day with no files either way.
-    ///   - prefix: what every file of that appender's starts with.
-    ///   - logDirectory: the directory those files are in.
+    /// `daysAgo` is an `Int`, and the C ABI takes an `Int32`: what crosses is
+    /// `Int32(exactly:)` and not `Int32(_:)`, which traps on a value it cannot
+    /// represent rather than answering nothing.
     @objc
-    public static func logFiles(daysAgo: Int, prefix: String, logDirectory: String) -> [String] {
-        paths { index, out, len in
-            prefix.withCString { name in
-                logDirectory.withCString { directory in
-                    mars_xlog_getfilepath_from_timespan(Int32(clamping: daysAgo), name, directory, index, out, len)
-                }
-            }
+    public func logFiles(daysAgo: Int) -> [String] {
+        guard isOpen, let timespan = Int32(exactly: daysAgo) else {
+            return []
+        }
+        return paths { index, out, len in
+            mars_xlog_getfilepath_from_timespan_instance(handle, timespan, index, out, len)
         }
     }
 
-    /// `mars_xlog_make_logfile_name`: the paths of the log files of `daysAgo`
-    /// days ago whether or not they are *there yet* — the name an app that is
-    /// about to write, or that is naming a file to someone else, asks for.
+    /// `mars_xlog_make_logfile_name_instance`: the paths of the log files of `daysAgo` days
+    /// ago whether or not they are *there yet* — the name an app that is about to
+    /// write, or that is naming a file to someone else, asks for.
     ///
-    /// One name, and always one: the log-dir file. The twin the C++ answers
-    /// beside it — the cache-dir file, when a cache dir is configured and the
-    /// file is there — is the process-wide appender's own lookup, and an Apple
-    /// process has none: `mars_xlog_open` is not in the C ABI, and the one
-    /// appender this target makes is the instance [`Xlog.open(_:)`] answers.
-    ///
-    /// - Parameters:
-    ///   - daysAgo: `0` is today, `1` yesterday, and so on. A value `Int32`
-    ///     cannot hold is clamped, and not trapped on: the C ABI takes an
-    ///     `int`, and a day that far off is a day with no file either way.
-    ///   - prefix: what every file of that appender's starts with.
-    ///   - logDirectory: the directory those files are written into.
+    /// A day's answer is the log-dir file and, when a cache dir is configured and
+    /// the file exists, its cache-dir twin, so this can answer two where
+    /// [`logFiles(daysAgo:)`] answers one.
     @objc
-    public static func logFileNames(daysAgo: Int, prefix: String, logDirectory: String) -> [String] {
-        paths { index, out, len in
-            prefix.withCString { name in
-                logDirectory.withCString { directory in
-                    mars_xlog_make_logfile_name(Int32(clamping: daysAgo), name, directory, index, out, len)
-                }
-            }
+    public func logFileNames(daysAgo: Int) -> [String] {
+        guard isOpen, let timespan = Int32(exactly: daysAgo) else {
+            return []
+        }
+        return paths { index, out, len in
+            mars_xlog_make_logfile_name_instance(handle, timespan, index, out, len)
         }
     }
 
@@ -509,11 +438,7 @@ public final class Xlog: NSObject {
             )
             return mars_xlog_new_instance(&cConfig, config.level.rawValue)
         }
-        // A refusal is a negative `MARS_XLOG_ERR_*` code and never `0`, which is
-        // the process-wide appender: an `Xlog` that read `0` as "no appender"
-        // would write through a logger it never opened and never learn that its
-        // own config was refused.
-        guard opened > 0 else {
+        guard opened != Self.noHandle else {
             throw XlogError.refused
         }
 
@@ -528,21 +453,8 @@ public final class Xlog: NSObject {
         close()
     }
 
-    /// The handle `mars_xlog_new_instance` answered with: a positive one while
-    /// this appender is open, and [noHandle] once [close()] ran. `0` is the
-    /// process-wide appender to the C ABI and never a failure of that call, so
-    /// what the two have in common is that neither is a handle to write through.
-    ///
-    /// Read and written under [handleLock]: [close()] writes it from whichever
-    /// thread the app closed on, and every member reads it from whichever
-    /// thread the app logged on. Swift gives a plain property no ordering
-    /// between the two, so a thread that never observed the write would go on
-    /// logging through an appender that has been released — which is why the
-    /// Kotlin `actual` of this API marks the same field `@Volatile`. Swift has
-    /// no volatile, so a lock is what stands in for one.
+    /// The handle `mars_xlog_new_instance` answered with; `0` once [close()] ran.
     private var handle: Int64
-
-    private let handleLock = NSLock()
 
     /// What [mode] answers while this side is the only one that knows it.
     private var currentMode: AppenderMode
@@ -551,9 +463,7 @@ public final class Xlog: NSObject {
     /// drain holds the appender's lock from the cache to the OS anyway.
     private static let flushQueue = DispatchQueue(label: "io.github.orangeboychen.marsrs.xlog.flush")
 
-    /// The handle of a closed `Xlog`, and one `mars_xlog_new_instance` never
-    /// answers: `0` is the process-wide appender, and a config the C ABI refuses
-    /// is a negative `MARS_XLOG_ERR_*` code.
+    /// The handle the C ABI answers for an appender it did not open.
     private static let noHandle: Int64 = 0
 
     /// `COMPRESS_LEVEL9`: the hardest deflate is asked to try.
@@ -570,43 +480,12 @@ public final class Xlog: NSObject {
     }
 
     /// Runs `body` with this appender's handle, and runs nothing at all once
-    /// [close()] has, and nothing at all once a twin of this [namePrefix]
-    /// closed the appender this object's handle names: handle `0` is the
-    /// process-wide appender to the C ABI, so a call through it would move a
-    /// logger this object does not own.
-    ///
-    /// Read once — see [openHandle] — because the two reads it replaces are
-    /// not one answer: a `close()` on another thread between the question and
-    /// the call answers `0` to the call, and `0` is the process-wide
-    /// appender's, the one handle no instance call may be made through.
+    /// [close()] has: handle `0` names no appender at all, so a call through
+    /// it would silently write nothing.
     private func withHandle(_ body: (Int64) -> Void) {
-        let opened = openHandle()
-        guard opened != Self.noHandle else {
+        guard isOpen else {
             return
         }
-        body(opened)
-    }
-
-    /// The handle of this appender, or [noHandle] when there is none to write
-    /// through: what [withHandle] guards with, and what [isOpen] asks.
-    ///
-    /// The registry and not the handle alone, because a prefix is one appender
-    /// to the C ABI and releasing takes the prefix: the twin that called
-    /// [close()] dropped the appender this object holds the handle of, and
-    /// [noHandle] — `0` — is the process-wide appender, so a call made through
-    /// a handle that is gone is a write into the logger every other part of
-    /// the process logs through. Read once, and the reading [body] is handed
-    /// is the one the registry answered for.
-    private func openHandle() -> Int64 {
-        handleLock.lock()
-        let opened = handle
-        handleLock.unlock()
-        guard opened != Self.noHandle else {
-            return Self.noHandle
-        }
-        let owns = namePrefix.withCString { prefix in
-            mars_xlog_get_instance(prefix) == opened
-        }
-        return owns ? opened : Self.noHandle
+        body(handle)
     }
 }

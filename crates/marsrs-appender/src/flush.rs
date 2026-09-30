@@ -32,7 +32,7 @@ struct Shared {
 ///
 /// Two things it does not do. It does nothing until it is polled — a `Future`
 /// that is dropped unpolled never drains, and a caller that wants the drain
-/// whatever happens wants `appender_flush_now`. And it is not
+/// whatever happens wants `Xlog::flush_now`. And it is not
 /// cancelled with the task that asked for it: the drain is already running on
 /// a thread that holds its own handle on the appender, so dropping this leaves
 /// it to finish.
@@ -54,9 +54,9 @@ impl Flush {
         Self::new(|| {})
     }
 
-    /// What to run on the thread, as a closure and not as an appender:
-    /// [`crate::category::flush_all`] drains a list of them, and the one thing
-    /// every caller has in common is "the drain, whenever it is polled".
+    /// What to run on the thread, as a closure and not as an appender: the
+    /// one thing every caller has in common is "the drain, whenever it is
+    /// polled".
     pub(crate) fn new(drain: impl FnOnce() + Send + 'static) -> Self {
         Self {
             drain: Some(Box::new(drain)),

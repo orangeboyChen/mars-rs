@@ -38,10 +38,8 @@ Native carry the logger in both of their packages today.
 ## Rust
 
 ```bash
-# The crates are not on crates.io yet — publication is pending — so a Rust app
-# takes them off the tag: `cargo add marsrs` on its own resolves nothing.
-cargo add marsrs      --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
-cargo add marsrs-xlog --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
+cargo add marsrs          # the whole port: xlog, stn and sdt
+cargo add marsrs-xlog     # xlog alone — the logger and nothing else
 ```
 
 `marsrs` is one module per piece of mars — `xlog`, `stn`, `sdt`, `comm` — and
@@ -50,7 +48,7 @@ logs takes `marsrs-xlog`, or `marsrs` with the rest turned off:
 
 ```toml
 [dependencies]
-marsrs = { git = "https://github.com/orangeboyChen/mars-rs", tag = "v0.1.0-alpha.3", default-features = false, features = ["xlog"] }
+marsrs = { version = "0.1", default-features = false, features = ["xlog"] }
 ```
 
 ```rust
@@ -68,13 +66,13 @@ xlog.flush_now();   // the records are on disk when this returns
 ```
 
 `Xlog::open` answers the appender, which is the `Xlog.open(config)` of Kotlin, of
-Dart and of TypeScript and the `Xlog.open(config)` of Swift: one object, held, and
+Dart and of TypeScript and the `Xlog(config)` of Swift: one object, held, and
 written through — a second logger is a second `Xlog` of a prefix of its own.
-Every option is on [the configuration page](/xlog/configuration). A record can
-carry more than a message — `xlog.log_with_info(Some(&info), message)` takes an
-`XLoggerInfo` with the level, the tag and the file, function and line of the call
-site, and `xlog.log(level, tag, message)` is the short form that writes the empty
-ones, as Kotlin's does. Rust has no `#file` to fill them in with.
+Every option is on [the configuration page](/xlog/configuration). A record is a
+level, a tag and a message — `xlog.log(level, tag, message)`, or `xlog.i(tag,
+message)` at a level of its own — and nothing of the call site: Rust has no
+`#file` to fill the file, the function and the line in with, so a record written
+here carries the empty ones, as Kotlin's does.
 
 `Xlog::open` for a prefix that is already open answers the appender that is open
 and not a second one, and the config that second call hands in is ignored —
@@ -89,7 +87,7 @@ itself when it is dropped, so one held for the life of the process needs no
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0-alpha.3")
+.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
 
 // and, in the target that takes it:
 .product(name: "MarsRSXlog", package: "mars-rs")
@@ -136,17 +134,14 @@ C symbols are there too for whoever prefers them.
 platform :ios, '12.0'
 use_frameworks!
 
-pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/v0.1.0-alpha.3/MarsRSXlog.podspec'
+pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/v0.1.0/MarsRSXlog.podspec'
 ```
 
 Three pods, under the names of the three products above: `MarsRSXlog` is the
 logger, `MarsRSNet` is the task pipeline and the diagnosis, and `MarsRS` is both.
 `:podspec` is the point of the line — the pods are not on a spec repo, and the
-podspec is what names the archive a release publishes; the tag in the URL is the
-release, and [the releases
-page](https://github.com/orangeboyChen/mars-rs/releases) is where the newest one
-is. An app that writes `pod 'MarsRSXlog'` alone is asking the trunk CDN for a pod
-that is not on it.
+podspec is what names the archive a release publishes. An app that writes `pod
+'MarsRSXlog'` alone is asking the trunk CDN for a pod that is not on it.
 
 The Swift is the one of the SwiftPM package — one `import`, the same `Xlog`,
 `XlogConfig` and `LogLevel`, because the pod and the package are the same Swift
@@ -187,8 +182,8 @@ console sink, which takes a C function pointer.
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:xlog:0.1.0-alpha.3")    // xlog alone
-implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0-alpha.3")  // + STN and SDT
+implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")    // xlog alone
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")  // + STN and SDT
 ```
 
 Both AARs carry the same `libmarsrsxlog.so`, for `arm64-v8a`, `armeabi-v7a` and
@@ -228,8 +223,8 @@ maven {
 }
 
 // build.gradle.kts of the shared module
-implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0-alpha.3")    // xlog alone
-implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0-alpha.3")  // + STN and SDT
+implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")    // xlog alone
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")  // + STN and SDT
 ```
 
 One dependency in `commonMain`, and each platform compiles its own half of it —
@@ -257,9 +252,9 @@ xlog.close()
 
 This is the `Xlog` of Android — same members, same names — so a shared module
 that moves between `xlog-kmp` and `xlog` renames nothing. What a `common`
-declaration can only be is the intersection of the two bridges: the process-wide
-calls of the C ABI are not in it, because the JNI bridge exports no equivalent,
-and a caller who wants them writes them in that platform's source set.
+declaration can only be is the intersection of the two bridges, and both of
+them are the whole API: the JNI bridge and the cinterop one export the same
+symbols, so there is nothing a platform source set has to write for itself.
 
 ## Flutter
 
@@ -293,13 +288,15 @@ await xlog.close();
 
 The plugin is a method channel and not `dart:ffi`, so what crosses to the
 platform thread is a message and not a call: a write, a setting and
-`requestFlush()` hand the message over and return, and only the four that have
+`requestFlush()` hand the message over and return, and only the seven that have
 something an app can act on answer a `Future` — the appender `Xlog.open` opens,
-the drain `await flush()` waits for, `close()`, and the answer `isLoggable`
-gives. What Dart has no face for is the blocking drain: a channel cannot block
-this side of it, so what Dart gets is the other two — `requestFlush()`, which
-asks for the drain and returns at once with nothing to say about when it is
-over, and `await xlog.flush()`, which answers when it is. Neither
+the drain `await flush()` waits for, `close()`, the answer `isLoggable` gives,
+and the three that name files: `currentLogPath()`, `logFiles(daysAgo)` and
+`logFileNames(daysAgo)`. What Dart has no face for is the blocking drain: a
+channel cannot block this side of it, so what Dart gets is the other two:
+`requestFlush()`, which asks for the drain and returns at once with nothing to
+say about when it is over, and `await xlog.flush()`, which answers when it is.
+Neither
 [the task pipeline](/stn/getting-started) nor
 [the network diagnosis](/sdt/getting-started) is in the Dart yet: the plugin is
 the logger, in both of its packages.
@@ -368,7 +365,7 @@ MarsXLogConfig config = {
     .compress_mode = MarsCompressZlib,
 };
 long long xlog = mars_xlog_new_instance(&config, MarsLevelVerbose);
-if (xlog <= 0) { /* the config was refused: `xlog` names the MARS_XLOG_ERR_* */ }
+if (xlog == 0) { /* the config was refused */ }
 
 mars_xlog_write_instance(xlog, MarsLevelInfo, "startup", __FILE__, __func__, __LINE__,
                          "hello from mars");
@@ -379,9 +376,8 @@ mars_xlog_release_instance("marsrs");
 Every pointer in `MarsXLogConfig` has to be NUL-terminated UTF-8 or `NULL`;
 `NULL` is "empty", except for `log_dir`, which is mandatory. What an app holds
 is an **instance**: `mars_xlog_new_instance(&config, level)` answers its handle,
-or a negative `MARS_XLOG_ERR_*` code when it refuses the config, and every
-`*_instance` call takes that handle. `0` is not one of those codes — it is the
-process-wide appender, and there is none to open from C, so an app that wants a
+or `0` when it refuses the config, and every `*_instance` call takes that
+handle. There is no process-wide appender to open from C — an app that wants a
 second logger gives it a second prefix.
 
 ```bash
@@ -389,8 +385,12 @@ cc -I include -o app app.c libmars_ffi.a -lpthread -ldl     # static
 cc -I include -o app app.c -L. -lmars_ffi                  # shared
 ```
 
-Every call that returns an `int` answers `MARS_XLOG_OK` (0) or a negative
-`MARS_XLOG_ERR_*`, and nothing in the C ABI unwinds into C.
+Every call that answers an `int` answers `MARS_XLOG_OK` (0) or a negative
+`MARS_XLOG_ERR_*`, and nothing in the C ABI unwinds into C. Three calls answer
+an `int` that is not a status: the three that name a path answer the number of
+bytes they wrote, `mars_xlog_is_enabled_for` answers 1 or 0, and
+`mars_xlog_get_level` answers the level itself — or `-1` for a handle that
+names no appender, which is not an error code.
 
 ## C++
 
@@ -431,8 +431,8 @@ has no `#file` to fill one in with, so `__FILE__`, `__PRETTY_FUNCTION__` and
 `__LINE__` of the call site go to
 `log(level, tag, message, file, function, line)`.
 
-The header is C++17: `std::string_view` is what the console sink of
-`Xlog::setConsoleSink` is handed, and `std::future` is what `flush()` answers.
+The header is C++17: it refuses to compile below that, and `std::future` is what
+`flush()` answers.
 
 ```bash
 c++ -std=c++17 -I include -o app app.cpp libmars_ffi.a -lpthread -ldl

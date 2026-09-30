@@ -1,4 +1,4 @@
-// The iOS half of `marsrs-react-native-xlog`: the thirteen methods of the `Xlog`
+// The iOS half of `marsrs-react-native-xlog`: the sixteen methods of the `Xlog`
 // native module, each of them a straight call of a `mars_xlog_*` symbol — the
 // C ABI of `crates/marsrs-ffi`, in the `marsrs-xlog.xcframework` the pod carries.
 //
@@ -50,8 +50,8 @@ internal final class Xlog: NSObject {
     ///
     /// `false` is a configuration it refused — an empty `logDir` or
     /// `namePrefix`, or a directory it cannot write to — and it is what the JS
-    /// caller turns into a throw rather than a handle it would write through
-    /// the process-wide appender with.
+    /// caller turns into a throw rather than a handle nothing was opened
+    /// for.
     @objc(open:)
     internal func openAppender(_ config: [AnyHashable: Any]) -> Bool {
         let logDir = string(config, "logDir")
@@ -91,10 +91,7 @@ internal final class Xlog: NSObject {
             )
             handle = mars_xlog_new_instance(&native, level)
         }
-        // A refusal is a negative `MARS_XLOG_ERR_*` code and never `0`, which is
-        // the process-wide appender: a handle of `0` in the table below would
-        // send every write through a logger this module never opened.
-        guard handle > 0 else {
+        guard handle != 0 else {
             return false
         }
         handles[namePrefix] = handle
@@ -105,13 +102,48 @@ internal final class Xlog: NSObject {
     /// empty: there is no JS frame to name, and the C++ writes an empty one too.
     @objc(log:level:tag:message:)
     internal func log(_ namePrefix: String, level: Double, tag: String, message: String) {
-        guard let handle = handles[namePrefix], let level = int32(level) else {
+        guard let handle = handles[namePrefix] else {
             return
         }
         tag.withCString { cTag in
             message.withCString { cMessage in
-                mars_xlog_write_instance(handle, level, cTag, nil, nil, 0, cMessage)
+                mars_xlog_write_instance(handle, Int32(level), cTag, nil, nil, 0, cMessage)
             }
+        }
+    }
+
+    /// `mars_xlog_current_log_path_instance`: the directory this appender
+    /// writes its files into, or `nil` once it is closed.
+    ///
+    /// A directory and not a file, because that is what the C++'s
+    /// `GetCurrentLogPath` answers; there is no "before the day's first record"
+    /// state, and the day's file is the question `logFiles` asks.
+    @objc(currentLogPath:)
+    internal func currentLogPath(of namePrefix: String) -> String? {
+        guard let handle = handles[namePrefix] else {
+            return nil
+        }
+        return path { out, len in
+            mars_xlog_current_log_path_instance(handle, out, len)
+        }
+    }
+
+    /// `mars_xlog_getfilepath_from_timespan_instance`: the log files of
+    /// `daysAgo` days ago that are *there* — what an app that uploads
+    /// yesterday's opens. `0` is today, `1` is yesterday, and so on.
+    @objc(logFiles:daysAgo:)
+    internal func logFiles(of namePrefix: String, daysAgo: Double) -> [String] {
+        dayPaths(of: namePrefix, daysAgo: daysAgo) { handle, timespan, index, out, len in
+            mars_xlog_getfilepath_from_timespan_instance(handle, timespan, index, out, len)
+        }
+    }
+
+    /// `mars_xlog_make_logfile_name_instance`: the paths of the log files of
+    /// `daysAgo` days ago, whether or not they are there yet.
+    @objc(logFileNames:daysAgo:)
+    internal func logFileNames(of namePrefix: String, daysAgo: Double) -> [String] {
+        dayPaths(of: namePrefix, daysAgo: daysAgo) { handle, timespan, index, out, len in
+            mars_xlog_make_logfile_name_instance(handle, timespan, index, out, len)
         }
     }
 
@@ -120,10 +152,10 @@ internal final class Xlog: NSObject {
     /// to build.
     @objc(isLoggable:level:)
     internal func isLoggable(_ namePrefix: String, level: Double) -> Bool {
-        guard let handle = handles[namePrefix], let level = int32(level) else {
+        guard let handle = handles[namePrefix] else {
             return false
         }
-        return mars_xlog_is_enabled_for(handle, level) != 0
+        return mars_xlog_is_enabled_for(handle, Int32(level)) != 0
     }
 
     /// `mars_xlog_get_level`: what the appender answers, and not what JS holds.
@@ -132,12 +164,7 @@ internal final class Xlog: NSObject {
         guard let handle = handles[namePrefix] else {
             return Double(MARS_LEVEL_NONE)
         }
-        // A handle the C ABI has dropped — one a twin of this prefix has
-        // closed — is answered with `-1`, and `-1` is a level no filter
-        // admits and none of the six `src/index.ts` names: `MARS_LEVEL_NONE`
-        // is the answer this one already gives a prefix it has no handle for.
-        let level = mars_xlog_get_level(handle)
-        return Double(level < 0 ? MARS_LEVEL_NONE : level)
+        return Double(mars_xlog_get_level(handle))
     }
 
     /// `mars_xlog_request_flush_instance`: tells the writer thread it may take what is
@@ -195,19 +222,19 @@ internal final class Xlog: NSObject {
     /// `mars_xlog_set_level_instance`.
     @objc(setLevel:level:)
     internal func setLevel(_ namePrefix: String, level: Double) {
-        guard let handle = handles[namePrefix], let level = int32(level) else {
+        guard let handle = handles[namePrefix] else {
             return
         }
-        mars_xlog_set_level_instance(handle, level)
+        mars_xlog_set_level_instance(handle, Int32(level))
     }
 
     /// `mars_xlog_set_mode_instance`.
     @objc(setMode:mode:)
     internal func setMode(_ namePrefix: String, mode: Double) {
-        guard let handle = handles[namePrefix], let mode = int32(mode) else {
+        guard let handle = handles[namePrefix] else {
             return
         }
-        mars_xlog_set_mode_instance(handle, mode)
+        mars_xlog_set_mode_instance(handle, Int32(mode))
     }
 
     /// `mars_xlog_set_console_log_instance`.
@@ -222,34 +249,21 @@ internal final class Xlog: NSObject {
     /// `mars_xlog_set_max_file_size_instance`. A `Double` and not a `UInt64`:
     /// the module carries every JS number as one, and a file size is below
     /// 2^53.
-    ///
-    /// Narrowed with `exactly` and not with `UInt64(_:)`, which traps: a
-    /// negative, a NaN — what a `number` a sum with `undefined` in it answered
-    /// — and anything above `UInt64.max` are three traps, and a trap in a
-    /// method the JS thread called into is the app going down and not a setting
-    /// that was not taken. What does not fit is `0`, the one `mars_xlog.h`
-    /// reads as "do not split". The Kotlin half casts the same number instead
-    /// of narrowing it, so a size that does not fit is a saturated `Long`
-    /// there and `0` here — two answers to a number a JS caller has no use
-    /// for, and neither of them a crash.
     @objc(setMaxFileSize:bytes:)
     internal func setMaxFileSize(_ namePrefix: String, bytes: Double) {
         guard let handle = handles[namePrefix] else {
             return
         }
-        mars_xlog_set_max_file_size_instance(handle, UInt64(exactly: bytes.rounded(.down)) ?? 0)
+        mars_xlog_set_max_file_size_instance(handle, UInt64(bytes))
     }
 
-    /// `mars_xlog_set_max_alive_duration_instance`. Narrowed the way the size
-    /// above is, and for the same reason: `Int64(_:)` traps on a NaN too, and
-    /// the C ABI's own clamp is downstream of a conversion that would never
-    /// reach it.
+    /// `mars_xlog_set_max_alive_duration_instance`.
     @objc(setMaxAliveTime:seconds:)
     internal func setMaxAliveTime(_ namePrefix: String, seconds: Double) {
         guard let handle = handles[namePrefix] else {
             return
         }
-        mars_xlog_set_max_alive_duration_instance(handle, Int64(exactly: seconds.rounded(.down)) ?? 0)
+        mars_xlog_set_max_alive_duration_instance(handle, Int64(seconds))
     }
 
     /// `mars_xlog_release_instance`: closes the appender `open` made.
@@ -319,19 +333,49 @@ internal final class Xlog: NSObject {
     private func int(_ config: [AnyHashable: Any], _ key: String, _ fallback: Int32) -> Int32 {
         (config[key] as? NSNumber)?.int32Value ?? fallback
     }
-
-    /// What a level or a mode the caller sent is read as an `Int32` with: `nil`
-    /// when it is not one — a `NaN`, an infinity, anything past 2^31.
-    /// `Int32(_:)` traps on all three, and a trap in a method the JS thread
-    /// called into is the app going down for a number the C ABI answers "no
-    /// such level" for; the size and the time above are narrowed with `exactly`
-    /// for the same reason. What is left out is what the appender was set to:
-    /// a level that does not exist is not one the appender is moved to, and a
-    /// record of one is not one it writes.
-    private func int32(_ value: Double) -> Int32? {
-        guard value.isFinite, value >= Double(Int32.min), value <= Double(Int32.max) else {
+    /// What `read` writes into the buffer it is handed, as a string; `nil` when
+    /// it wrote nothing — a negative code, or a path of no length.
+    ///
+    /// A negative code is `nil` whatever it is, `MARS_XLOG_ERR_NO_SPACE` among
+    /// them: a path that does not fit 1024 bytes ends the walk the way the end
+    /// of the list does. A symbol that answers a length rather than a pointer
+    /// is the C ABI's way of saying the caller decides how much it can hold.
+    private func path(of read: (UnsafeMutablePointer<CChar>, UInt32) -> Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: 1024)
+        let written = read(&buffer, UInt32(buffer.count))
+        guard written > 0 else {
             return nil
         }
-        return Int32(value)
+        return String(cString: buffer)
     }
+
+    /// The paths of one day, walked index by index until the symbol answers that
+    /// there is nothing at that index: the list the C++ fills a `std::vector`
+    /// with, asked one at a time.
+    ///
+    /// `daysAgo` is a `Double` because JS has one number type, and it is
+    /// converted with `Int32(exactly:)` and not `Int32(_:)`: the latter traps
+    /// on a value it cannot represent — `NaN`, `Infinity`, a number out of
+    /// `Int32`'s range — and a trap on the JS thread is the app dying, where
+    /// a day nobody asked for is an empty list.
+    private func dayPaths(
+        of namePrefix: String,
+        daysAgo: Double,
+        at symbol: (Int64, Int32, UInt32, UnsafeMutablePointer<CChar>, UInt32) -> Int32
+    ) -> [String] {
+        guard let handle = handles[namePrefix], let timespan = Int32(exactly: daysAgo) else {
+            return []
+        }
+        var walked: [String] = []
+        var index: UInt32 = 0
+        while let found = path(of: { out, len in
+            symbol(handle, timespan, index, out, len)
+        }) {
+            walked.append(found)
+            index += 1
+        }
+        return walked
+    }
+
+
 }

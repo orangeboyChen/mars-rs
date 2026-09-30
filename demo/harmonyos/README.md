@@ -62,6 +62,10 @@ names its own in the build log, and the fix is to put that number in both files.
 - `closeLogStore()` in `onDestroy` — the last moment an app is told anything at
   all, and with an async appender the last moment its writer thread is
   guaranteed to be running.
+- `flushLogStore()` in `EntryAbility.onBackground` — the app leaves the screen,
+  which is the last moment before the process can be ended without a word, so
+  the records still in the cache are taken to the file there and not only at
+  `onDestroy`.
 
 The icon in `AppScope/resources/base/media/` and the one in `entry/src/main/resources/base/media/`
 are single-colour placeholders, so that the project builds as it stands; an app

@@ -23,13 +23,6 @@ import { XlogConfig } from './XlogConfig';
 // off its own thread gives `flushNow()` a thread of its own, and one that wants
 // it off the writer's and off no thread of the app's calls `requestFlush()`.
 //
-// Where the file being written is, and where a whole day's files are, are asked
-// here too — `currentLogPath`, `logFiles` and `logFileNames`. They are members of
-// the `Xlog` and not statics of the class, because they are questions about *this*
-// appender: the port has no process-wide appender to ask about, so a `Xlog.` of
-// one would be a call with nothing behind it. `open` is the only static here, as
-// it is in the Kotlin Multiplatform module every platform is shaped after.
-//
 // Five settings are properties and not `setLevel` / `getLevel` pairs, because a
 // property is the Kotlin and the Swift spelling. `xlog.level` reads the
 // appender's own — `mars_xlog_get_level`, the one of the five the C ABI has a
@@ -38,11 +31,7 @@ import { XlogConfig } from './XlogConfig';
 // the C ABI, nor the Kotlin, nor the Swift answers one.
 
 /** `XlogConfig.namePrefix` of the Kotlin and of the Swift: what an appender is
- * opened with when a caller gives none — and when it gives an empty one, which
- * is what the native side makes of it anyway: the NAPI module answers its own
- * default for a blank prefix, the Kotlin answers the same, and the Swift
- * refuses one outright, so an empty prefix is not a name this `Xlog` could ask
- * the appender about afterwards. */
+ * opened with when a caller gives none. */
 const DEFAULT_NAME_PREFIX: string = 'xlog';
 
 /** The appender of every `namePrefix` `Xlog.open` has opened and `close` has not
@@ -64,10 +53,6 @@ export class Xlog {
    * with: the `namePrefix` of the Kotlin and of the Swift. */
   readonly namePrefix: string;
 
-  /** The directory those files are in: what a day of them is asked about by, and
-   * the one field of the config with no default. */
-  private readonly logDir: string;
-
   private currentLevel: LogLevel = LogLevel.Info;
 
   private currentMode: AppenderMode = AppenderMode.Async;
@@ -82,8 +67,13 @@ export class Xlog {
   private opened: boolean = true;
 
   private constructor(config: XlogConfig) {
-    this.namePrefix = config.namePrefix || DEFAULT_NAME_PREFIX;
-    this.logDir = config.logDir;
+    // A blank prefix is an absent one, which is what the native side takes it
+    // for: it opens the appender under `DEFAULT_NAME_PREFIX`, so an `Xlog` that
+    // kept `''` would hold a name no call of its finds and write through
+    // nothing — and `open` above it would have answered success.
+    this.namePrefix = config.namePrefix === undefined || config.namePrefix === ''
+      ? DEFAULT_NAME_PREFIX
+      : config.namePrefix;
     this.currentLevel = config.level ?? LogLevel.Info;
     this.currentMode = config.mode ?? AppenderMode.Async;
   }
@@ -99,7 +89,8 @@ export class Xlog {
    * Throws when the appender would not take the configuration — an empty
    * `logDir`, or a directory the app cannot write to. */
   static open(config: XlogConfig): Xlog {
-    let namePrefix: string = config.namePrefix || DEFAULT_NAME_PREFIX;
+    let namePrefix: string =
+      config.namePrefix === undefined || config.namePrefix === '' ? DEFAULT_NAME_PREFIX : config.namePrefix;
     let alreadyOpen: Xlog | undefined = openAppenders.get(namePrefix);
     if (alreadyOpen !== undefined) {
       return alreadyOpen;
@@ -194,14 +185,13 @@ export class Xlog {
     this.currentMaxAliveTime = seconds;
   }
 
-  /** `mars_xlog_current_log_path_instance`: the file this appender is writing
-   * to, or `undefined` when it has none open — the first record of a day is what
-   * opens one.
+  /** `mars_xlog_current_log_path_instance`: the *directory* this appender
+   * writes its files into, or `undefined` once it is closed.
    *
-   * A day is one file, so this is the path an app hands to something that reads
-   * the log while it is being written. What an app that uploads a whole day asks
-   * for is `Xlog.logFiles`, which names that day's files whether or not this one
-   * is among them. */
+   * A directory and not a file, because that is what the C++ answers
+   * (`GetCurrentLogPath` hands back `sg_logdir`); the day's file is what
+   * [`logFiles`] names. There is no "before the first record" state — `open`
+   * answers a directory from the moment it succeeds. */
   get currentLogPath(): string | undefined {
     if (!this.opened) {
       return undefined;
@@ -295,6 +285,40 @@ export class Xlog {
     xlogNapi.flushNow(this.namePrefix);
   }
 
+  /**
+   * `mars_xlog_getfilepath_from_timespan_instance`: the log files of `daysAgo`
+   * days ago that are *there* — what an app that uploads yesterday's opens.
+   * `[]` when the directory holds none of that day's. `0` is today, `1` is
+   * yesterday, and so on.
+   *
+   * This is a day of files and not the file being written: what
+   * `currentLogPath` answers is one, and this is *this* appender's own prefix
+   * and directory.
+   */
+  logFiles(daysAgo: number): string[] {
+    if (!this.opened) {
+      return [];
+    }
+    // What the native side answers for a question it could not read is a throw
+    // and not `[]`: an empty list is a true answer to "that day has no files",
+    // and an uploader that took it for one would lose a day.
+    return xlogNapi.logFiles(this.namePrefix, daysAgo);
+  }
+
+  /**
+   * `mars_xlog_make_logfile_name_instance`: the paths of the log files of
+   * `daysAgo` days ago whether or not they are *there yet* — the name an app
+   * that is about to write, or that is naming a file to someone else, asks
+   * for. A day's answer can be two where `logFiles` answers one, when a cache
+   * dir is given and the file is there.
+   */
+  logFileNames(daysAgo: number): string[] {
+    if (!this.opened) {
+      return [];
+    }
+    return xlogNapi.logFileNames(this.namePrefix, daysAgo);
+  }
+
   /** `mars_xlog_release_instance`: closes the appender `Xlog.open` made.
    * Nothing is closed twice: an `Xlog` that is already closed answers `false`
    * from `isOpen` and drops what it is asked to write — and an appender two
@@ -306,26 +330,5 @@ export class Xlog {
     this.opened = false;
     openAppenders.delete(this.namePrefix);
     xlogNapi.close(this.namePrefix);
-  }
-
-  /** `mars_xlog_getfilepath_from_timespan`: the files of `daysAgo` days ago that
-   * are *there*, in this appender's directory and under this appender's prefix —
-   * `[]` when the day has none. `0` is today, `1` is yesterday, and so on.
-   *
-   * This is a day of files and not the file being written: what
-   * `currentLogPath` answers is one, and it is the one open now. */
-  logFiles(daysAgo: number): string[] {
-    return xlogNapi.logFiles(daysAgo, this.namePrefix, this.logDir);
-  }
-
-  /** `mars_xlog_make_logfile_name`: the paths of the log files of `daysAgo` days
-   * ago whether or not they are *there yet* — the name an app that is about to
-   * write, or that is naming a file to someone else, asks for.
-   *
-   * A day's answer is two where `logFiles` answers one, when a cache dir is
-   * given and the file is there: the log-dir file and its twin in the cache
-   * dir. */
-  logFileNames(daysAgo: number): string[] {
-    return xlogNapi.logFileNames(daysAgo, this.namePrefix, this.logDir);
   }
 }

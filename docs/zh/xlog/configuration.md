@@ -7,12 +7,12 @@
 |---|---|---|---|---|---|---|---|---|---|
 | `.xlog` 文件写到哪；目录不存在会创建 | `logdir` | `logDirectory` | `logDir` | `logDir` | `logDir` | `log_dir` | `logDir` | `logDir` | **必填**（Rust 里是 `./log`） |
 | 每个文件名的开头，也是这个 appender 的名字 | `nameprefix` | `namePrefix` | `namePrefix` | `namePrefix` | `namePrefix` | `name_prefix` | `namePrefix` | `namePrefix` | `xlog` |
-| 记录要达到的级别 | 见[级别](#级别) | `level` | `level` | `level` | `level` | `mars_xlog_set_level_instance(0, level)` | `level` | `level` | `info` |
+| 记录要达到的级别 | 见[级别](#级别) | `level` | `level` | `level` | `level` | `mars_xlog_new_instance(&config, level)` | `level` | `level` | `info` |
 | 写入是否等落盘 | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | 异步 |
 | 异步缓存文件放哪 | `cachedir` | `cacheDirectory` | `cacheDir` | `cacheDir` | `cacheDir` | `cache_dir` | `cacheDir` | `cacheDir` | 和日志文件同一个目录 |
-| 缓存文件保留几天 | `cache_days` | `cacheDays` | `cacheDays` | `cacheDays` | `cacheDays` | `cache_days` | `cacheDays` | `cacheDays` | `0` —— 完全不写缓存文件 |
+| 缓存文件保留几天 | `cache_days` | `cacheDays` | `cacheDays` | `cacheDays` | `cacheDays` | `cache_days` | `cacheDays` | `cacheDays` | `0` —— 都留着 |
 | 关闭的文件用什么压缩 | `compress_mode` | `compression` | `compressMode` | `compressMode` | `compressMode` | `compress_mode` | `compressMode` | `compressMode` | zlib |
-| 压缩到什么程度 | `compress_level` | `compressionLevel` | `compressLevel` | `compressLevel` | `compressLevel` | `compress_level` | `compressLevel` | `compressLevel` | `0` —— 用 appender 自己的，也就是 `6`；Rust 直接写成 `6` |
+| 压缩到什么程度 | `compress_level` | `compressionLevel` | `compressLevel` | `compressLevel` | `compressLevel` | `compress_level` | `compressLevel` | `compressLevel` | `0` —— 用压缩器自己的（zlib 是 6） |
 | 加密用的公钥 | `pub_key` | `publicKey` | `pubKey` | `pubKey` | `pubKey` | `pub_key` | `pubKey` | `pubKey` | 空 —— 不加密 |
 
 appender 接受不了的配置，在构造它的地方就被拒绝，而不是被库悄悄吞掉：
@@ -44,23 +44,10 @@ HarmonyOS 那一列也是 Kotlin 的拼法，只是大小写不同：`LogLevel.V
 
 `none` 什么都不写，连 `fatal` 也不写 —— 想让 appender 安静下来又不关掉它，用这个。
 
-assert 是唯一不受级别管的一条记录：不管 appender 开在哪一级，它都按 `fatal` 写进去
-—— assert 说的是一件不该发生的事。
-
-两个调用都不结束进程。想让进程停在 assert 上的 App 得自己停 ——
-`std::process::abort()`，或者平台自己的陷阱 —— 写完再停。
-
-::: code-group
-
-```rust [Rust]
-marsrs::xlog::xlogger_assert(None, "fd >= 0", "socket 已经关掉了");
-```
-
-```c [C]
-mars_xlog_assert("net", __FILE__, __func__, __LINE__, "fd >= 0", "socket 已经关掉了");
-```
-
-:::
+移植里没有 assert：`mars_xlog_assert` 是进程级 appender 的，跟着它一起没了。想要的
+App 自己写那条记录 —— `xlog.f(tag, message)` —— 写完再停进程，
+`std::process::abort()` 或者平台自己的陷阱；上游写完这条记录之后会在 Android 上
+`raise(SIGTRAP)`、在 Apple 上调 `__assert_rtn`，这里两个都不做。
 
 构造起来很贵的消息值得先问一句：被级别挡掉的记录也是一样 —— 那串字符串你已经拼好了。
 
@@ -116,10 +103,8 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 
 ## 压缩与加密
 
-默认 `zlib`，`zstd` 压得更紧；两者都是按文件、在文件关闭时生效。级别只是 `zstd` 的旋钮：
-zlib 不管级别是多少，都用 C++ 的那一个设置；`0` 是要 appender 自己的，也就是 `6` ——
-Rust 的配置写的就是这个值，所以不写级别的应用在每个平台上拿到的文件都一样。上限是
-压缩器自己的：zlib 是 `9`，zstd 是 `22`。
+默认 `zlib`，`zstd` 压得更紧；两者都是按文件、在文件关闭时生效。级别是压缩器自己的旋钮：
+`0` 用默认值（zlib 是 6），zlib 的上限是 `9`，zstd 是 `22`。
 
 给了 `pubKey`，每条记录的正文会用 ECDH + TEA 加密 —— 也就是 C++ 实现用的那个算法，
 密钥由写方和读方协商出来。这里填的是**公**钥，
@@ -131,16 +116,17 @@ Rust 的配置写的就是这个值，所以不写级别的应用在每个平台
 
 | 作用 | Rust | Swift | Android | Kotlin Multiplatform | Flutter | React Native | C | C++ | HarmonyOS |
 |---|---|---|---|---|---|---|---|---|---|
-| 改级别 | `xlog.set_level` | `log.level` | `xlog.level` | `xlog.level` | `xlog.level` | `xlog.level` | `mars_xlog_set_level_instance(0, level)` | `log.setLevel` | `xlog.level` |
-| 切异步 / 同步 | `xlog.set_mode` | `log.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `mars_xlog_set_mode_instance(0, mode)` | `log.setMode` | `xlog.mode` |
-| 同时打到控制台 | `xlog.set_console_log_enabled` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log_instance(0, on)` | `log.setConsoleLogEnabled` | `xlog.consoleLogEnabled` |
-| 到 N 字节就换文件 | `xlog.set_max_file_size_bytes` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size_instance(0, bytes)` | `log.setMaxFileSizeBytes` | `xlog.maxFileSizeBytes` |
-| 超过 N 秒就删文件 | `xlog.set_max_alive_time_seconds` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration_instance(0, secs)` | `log.setMaxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` |
-| 当前文件在哪 | `xlog.current_log_path` | `Xlog.currentLogPath` | — | — | — | — | `mars_xlog_current_log_path` | — | — |
-| 一天的文件在哪 | `appender_getfilepath_from_timespan` | `Xlog.logFiles(…)` | — | — | — | — | `mars_xlog_getfilepath_from_timespan` | — | — |
+| 改级别 | `xlog.set_level` | `log.level` | `xlog.level` | `xlog.level` | `xlog.level` | `xlog.level` | `mars_xlog_set_level_instance(handle, level)` | `log.setLevel` | `xlog.level` |
+| 切异步 / 同步 | `xlog.set_mode` | `log.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `mars_xlog_set_mode_instance(handle, mode)` | `log.setMode` | `xlog.mode` |
+| 同时打到控制台 | `xlog.set_console_log_enabled` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log_instance(handle, on)` | `log.setConsoleLogEnabled` | `xlog.consoleLogEnabled` |
+| 到 N 字节就换文件 | `xlog.set_max_file_size_bytes` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size_instance(handle, bytes)` | `log.setMaxFileSizeBytes` | `xlog.maxFileSizeBytes` |
+| 超过 N 秒就删文件 | `xlog.set_max_alive_time_seconds` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration_instance(handle, secs)` | `log.setMaxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` |
+| 写到哪 | `xlog.current_log_path()` | `log.currentLogPath` | `xlog.currentLogPath` | `xlog.currentLogPath` | `await xlog.currentLogPath()` | `xlog.currentLogPath` | `mars_xlog_current_log_path_instance` | `log.currentLogPath()` | `xlog.currentLogPath` |
+| 一天的文件在哪 | `xlog.log_files(1)` | `log.logFiles(daysAgo: 1)` | `xlog.logFiles(1L)` | `xlog.logFiles(1L)` | `await xlog.logFiles(1)` | `xlog.logFiles(1)` | `mars_xlog_getfilepath_from_timespan_instance` | `log.logFiles(1)` | `xlog.logFiles(1)` |
 
-大小上的 `0` 表示“不限制”：文件永不切分。时间上的 `0` 则是十天 —— 不足一天的一律抬到
-十天，也就是 C++ 那边保留的那十天。
+它给出的是**目录**而不是文件，也就是 C++ 的 `GetCurrentLogPath` 交回来的那个；当天的文件在下面一行。
+
+大小和时间的 `0` 都表示“不限制”：文件永不切分、永不删除 —— C++ 那边自己保留十天。
 
 ## 控制台那一副本去哪
 
@@ -150,39 +136,8 @@ Rust 的配置写的就是这个值，所以不写级别的应用在每个平台
 整条记录，而不只是那句话。
 
 内置的出口是标准错误，每个平台、每个包都是 —— 这里没有任何一处写进 `os_log` 或
-logcat。在 Apple 上系统日志只隔着一次 `Xlog.setConsoleSink`，而 `os_log` 只有 App 自己
-的代码调得到，也就只能由它来调。
+logcat，也没有 sink 可设了：原来那个坐在进程级 appender 上，而那个 appender 已经没了。
+在 Apple 上系统日志是 App 自己调的那一次调用 —— `os_log` 是个宏，库碰不到它。
 
-想让它去别处的 App 可以给 logger 一个自己的出口，原本要进控制台的那一份就改去那里：
-
-::: code-group
-
-```rust [Rust]
-use marsrs::xlog::set_console_fun;
-
-set_console_fun(Some(|info, log| println!("{:?}: {log}", info.level)));
-set_console_fun(None);   // 又回到控制台
-```
-
-```swift [Swift]
-Xlog.setConsoleSink { level, tag, file, function, line, log in
-    os_log(.default, "%{public}@", String(cString: log))
-}
-Xlog.setConsoleSink(nil)   // 又回到控制台
-```
-
-```c [C]
-static void to_my_console(int level, const char* tag, const char* filename,
-                          const char* func_name, int line, const char* log) {
-    my_console_write(level, log);
-}
-
-mars_xlog_set_console_fun(to_my_console);
-mars_xlog_set_console_fun(NULL);   /* 又回到控制台 */
-```
-
-:::
-
-出口只有一个，挂在 appender 上而不是写在配置里：再设一次就是换掉。交给它的是没排过版
-的那条记录 —— 级别、tag、调用点在哪、还有消息本身 —— 这正是要它的原因：在 Apple 上
-`os_log` 就在那里，而只有 App 自己的代码调得到它。
+想把记录送到别处的 App 要么写两遍，要么从文件里读回来：控制台那份归标准错误，移植不把
+它交到别处去。

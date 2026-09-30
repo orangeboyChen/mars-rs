@@ -46,6 +46,10 @@ The file that comes out is `<prefix>_<YYYYMMDD>.xlog`, and
 xlog decode log/marsrs_20260929.xlog
 ```
 
+`xlog` is the binary `cargo install marsrs-xlog` puts on the `$PATH`; a release
+carries the same command inside an archive, and there it is
+`./marsrs-xlog-cli-<host>/xlog`.
+
 ## Which of them are complete projects
 
 The four whose whole toolchain is a command line — `rust`, `c`, `android` and

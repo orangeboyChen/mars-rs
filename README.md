@@ -53,7 +53,8 @@ a shell and makes the key pair that decides who can — as
 — and then `xlog keygen`.
 
 Every one of those platforms has a demo in [`demo/`](demo/README.md) — one
-directory each, and the same six records written in all eight, so that what
+directory each, and the same seven records written in all eight — one at each
+level, and one behind a level check — so that what
 differs between them is what the platform makes of it and not what the app
 does.
 
@@ -140,7 +141,9 @@ The file is `<logDir>/<namePrefix>_YYYYMMDD.xlog` — `marsrs_20260927.xlog` abo
 The default mode is async, so a record can sit in the cache for a moment: flush
 before the file is read or uploaded.
 
-There are three drains, and every platform spells them the same way:
+There are three drains, and two of them on every platform: what Dart has no
+face for is the blocking one, and what HarmonyOS has no face for is the awaited
+one.
 
 | Rust | Kotlin, Swift, TypeScript | what the caller gets back |
 |---|---|---|

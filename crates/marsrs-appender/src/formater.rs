@@ -156,7 +156,7 @@ impl<'a> Snprintf<'a> {
     /// `%0*u` — `value` in decimal, padded on the left with `0` to `width`
     /// digits. A value wider than `width` is written in full, like `printf`.
     ///
-    /// No `%`: [`clippy::modulo_arithmetic`] is `deny` in this workspace, and
+    /// No `%`: the modulo lints are `deny` in this workspace, and
     /// `value - (value / 10) * 10` is the same digit anyway.
     fn push_decimal(&mut self, value: u64, width: usize) {
         // The digits come out backwards; 20 is what `u64::MAX` needs.

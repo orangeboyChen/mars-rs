@@ -31,10 +31,8 @@ Apple 那边有三种而不是两种 —— `MarsRSXlog` 是日志，`MarsRSNet`
 ## Rust
 
 ```bash
-# 这两个 crate 还没上 crates.io —— 发布还在进行中 —— 所以 Rust 应用现在从
-# tag 上取：只写 `cargo add marsrs` 是解析不到东西的。
-cargo add marsrs      --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
-cargo add marsrs-xlog --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
+cargo add marsrs          # 整个移植：xlog、stn、sdt
+cargo add marsrs-xlog     # 只有 xlog —— 日志，别的都没有
 ```
 
 `marsrs` 给 mars 的每一块一个模块 —— `xlog`、`stn`、`sdt`、`comm` —— 每块有自己
@@ -43,7 +41,7 @@ cargo add marsrs-xlog --git https://github.com/orangeboyChen/mars-rs --tag v0.1.
 
 ```toml
 [dependencies]
-marsrs = { git = "https://github.com/orangeboyChen/mars-rs", tag = "v0.1.0-alpha.3", default-features = false, features = ["xlog"] }
+marsrs = { version = "0.1", default-features = false, features = ["xlog"] }
 ```
 
 ```rust
@@ -61,12 +59,12 @@ xlog.flush_now();   // 返回时记录已经在磁盘上
 ```
 
 `Xlog::open` 回答的那个 appender，就是 Kotlin、Dart 和 TypeScript 的
-`Xlog.open(config)`，也是 Swift 的 `Xlog.open(config)` —— 一个对象，拿着它，对着它写；
+`Xlog.open(config)`，也是 Swift 的 `Xlog(config)` —— 一个对象，拿着它，对着它写；
 第二个 logger 就是第二个 `Xlog`，给它自己的 prefix。每个选项都在
-[配置项](/zh/xlog/configuration)那页。一条记录可以不止带一句话 ——
-`xlog.log_with_info(Some(&info), message)` 收一个 `XLoggerInfo`，里面有级别、tag
-和调用处的文件、函数、行号，而 `xlog.log(level, tag, message)` 是写空的那三个的
-短写法，Kotlin 写的也是这样 —— Rust 没有 `#file` 可以填进去。
+[配置项](/zh/xlog/configuration)那页。一条记录就是级别、tag 和消息 ——
+`xlog.log(level, tag, message)`，或者某个级别自己的 `xlog.i(tag, message)` ——
+不带调用点的任何东西：Rust 没有 `#file` 可以填进文件、函数和行号，所以这里写的记录
+带着的是三个空值，Kotlin 的也是这样。
 
 已经开着的 prefix 再 `Xlog::open` 一次，回答的是那个已经开着的 appender 而不是第
 二个，而且第二次传进去的 config 会被忽略 —— 级别、目录都在内 —— 因为那个 appender
@@ -79,7 +77,7 @@ xlog.flush_now();   // 返回时记录已经在磁盘上
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0-alpha.3")
+.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
 
 // 在要用的 target 里：
 .product(name: "MarsRSXlog", package: "mars-rs")
@@ -124,14 +122,13 @@ log.flushNow()    // 返回时记录已经在磁盘上
 platform :ios, '12.0'
 use_frameworks!
 
-pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/v0.1.0-alpha.3/MarsRSXlog.podspec'
+pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/v0.1.0/MarsRSXlog.podspec'
 ```
 
 三个 pod，名字就是上面三个 product：`MarsRSXlog` 是日志，`MarsRSNet` 是任务链路和
 网络诊断，`MarsRS` 是两者。这一行的重点是 `:podspec` —— 这些 pod 不在 spec repo
-上，podspec 才是给 release 发布的那个压缩包命名的东西；URL 里那个 tag 就是那个
-release，最新的是[ releases 页](https://github.com/orangeboyChen/mars-rs/releases)。
-只写 `pod 'MarsRSXlog'` 的 App 是在向 trunk CDN 要一个并不在上面的 pod。
+上，podspec 才是给 release 发布的那个压缩包命名的东西。只写 `pod 'MarsRSXlog'` 的
+App 是在向 trunk CDN 要一个并不在上面的 pod。
 
 Swift 这边就是 SwiftPM 包里的那一套 —— 一次 `import`，同样的 `Xlog`、
 `XlogConfig`、`LogLevel`，因为 pod 和 package 是同一个 framework 上的同一份
@@ -169,8 +166,8 @@ Objective-C 没有 `#file` 可填，所以这里写的记录带的是空文件�
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:xlog:0.1.0-alpha.3")    // 只有 xlog
-implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0-alpha.3")  // + STN 和 SDT
+implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")    // 只有 xlog
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")  // + STN 和 SDT
 ```
 
 两个 AAR 带的是同一个 `libmarsrsxlog.so`，覆盖 `arm64-v8a`、`armeabi-v7a` 和
@@ -208,8 +205,8 @@ maven {
 }
 
 // 共享模块的 build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0-alpha.3")    // 只有 xlog
-implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0-alpha.3")  // + STN 和 SDT
+implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")    // 只有 xlog
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")  // + STN 和 SDT
 ```
 
 `commonMain` 里一个依赖，每个平台各自编译自己的一半 —— `androidMain` 走 JNI
@@ -235,9 +232,9 @@ xlog.close()
 ```
 
 这就是 Android 的那个 `Xlog` —— 成员一样、名字一样 —— 所以在 `xlog-kmp` 和 `xlog`
-之间换的共享模块什么都不用改名。`common` 声明只能是两座桥的交集：C ABI 那些进程级
-调用不在里面，因为 JNI bridge 没有导出对应的东西，要它们的调用方，写在那个平台的
-source set 里。
+之间换的共享模块什么都不用改名。`common` 声明只能是两座桥的交集，而两座桥就是整个
+API：JNI bridge 和 cinterop 导出的是同一批符号，所以没有哪个平台的 source set 需要
+自己补什么。
 
 ## Flutter
 
@@ -269,9 +266,11 @@ await xlog.close();
 ```
 
 这个插件是 method channel 而不是 `dart:ffi`，所以过到平台线程上的是一条消息而不是
-一次调用：写、一个设置和 `requestFlush()` 都是把消息递过去就返回，只有四个回答
+一次调用：写、一个设置和 `requestFlush()` 都是把消息递过去就返回，只有七个回答
 `Future`，也只有它们有 App 要等的东西 —— `Xlog.open` 打开的那个
-appender，`await flush()` 和 `close()` 等的那个 drain，以及 `isLoggable` 给的答案。
+appender，`await flush()` 和 `close()` 等的那个 drain，`isLoggable` 给的答案，
+以及那三个说文件的：`currentLogPath()`、`logFiles(daysAgo)` 和
+`logFileNames(daysAgo)`。
 Dart 这边没有阻塞式排空的那个面：channel 阻塞不了 Dart 这一侧，所以不等的那一下是
 `requestFlush()`，要等的那一下是 `await xlog.flush()`。
 [任务链路](/zh/stn/getting-started)和
@@ -337,7 +336,7 @@ MarsXLogConfig config = {
     .compress_mode = MarsCompressZlib,
 };
 long long xlog = mars_xlog_new_instance(&config, MarsLevelVerbose);
-if (xlog <= 0) { /* config 被拒绝，xlog 就是那个 MARS_XLOG_ERR_* */ }
+if (xlog == 0) { /* config 被拒绝 */ }
 
 mars_xlog_write_instance(xlog, MarsLevelInfo, "startup", __FILE__, __func__, __LINE__,
                          "hello from mars");
@@ -347,18 +346,19 @@ mars_xlog_release_instance("marsrs");
 
 `MarsXLogConfig` 里每个指针都得以 NUL 结尾的 UTF-8，或者是 `NULL`；`NULL` 就是
 “空”，只有 `log_dir` 例外，它是必填的。应用持有的是一个 **instance**：
-`mars_xlog_new_instance(&config, level)` 回答它的 handle，不接受 config 时回答一个负
-的 `MARS_XLOG_ERR_*`，`*_instance` 那一族都收下这个 handle。`0` 不是这些错误码之
-一 —— 它是进程级 appender，而 C 这边没有它可以打开，想要第二个 logger 就给它第二个
-prefix。
+`mars_xlog_new_instance(&config, level)` 回答它的 handle，不接受 config 时回答
+`0`，`*_instance` 那一族都收下这个 handle。C 这边没有进程级 appender 可以打开 ——
+想要第二个 logger 就给它第二个 prefix。
 
 ```bash
 cc -I include -o app app.c libmars_ffi.a -lpthread -ldl     # 静态
 cc -I include -o app app.c -L. -lmars_ffi                  # 动态
 ```
 
-每个返回 `int` 的调用回答 `MARS_XLOG_OK`（0）或一个负的 `MARS_XLOG_ERR_*`，C ABI
-里没有任何东西会把栈展开到 C 里。
+每个回答 `int` 的调用回答 `MARS_XLOG_OK`（0）或一个负的 `MARS_XLOG_ERR_*`，C ABI
+里没有任何东西会把栈展开到 C 里。有三个回答的 `int` 不是状态：那三个回答路径的回答是
+写进去的字节数，`mars_xlog_is_enabled_for` 回答 1 或 0，`mars_xlog_get_level`
+回答级别本身 —— 句柄没指向任何 appender 时回答 `-1`，那不是错误码。
 
 ## C++
 
@@ -396,8 +396,7 @@ appender，所以一个自动存储期的 `Xlog` 在作用域末尾不需要 `cl
 `__PRETTY_FUNCTION__` 和 `__LINE__` 交给
 `log(level, tag, message, file, function, line)`。
 
-这个头文件要 C++17：`Xlog::setConsoleSink` 的控制台 sink 收到的是
-`std::string_view`，`flush()` 回答的是 `std::future`。
+这个头文件要 C++17：低于那个标准它拒绝编译，而 `flush()` 回答的是 `std::future`。
 
 ```bash
 c++ -std=c++17 -I include -o app app.cpp libmars_ffi.a -lpthread -ldl

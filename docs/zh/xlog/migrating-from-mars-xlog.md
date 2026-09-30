@@ -35,15 +35,15 @@ appender 在 `mars/xlog/appender.h` 里是一组选项构成的一个 struct 加
 |---|---|---|
 | `appender_open(const XLogConfig&)` | `Xlog::open(config, level)` | `mars_xlog_new_instance(&config, level)` |
 | `xlogger_Write(info, log)`，或 `xinfo2` 那一族 | `xlog.log(level, tag, message)` | `mars_xlog_write_instance(handle, ...)` |
-| `appender_flush()` | `xlog.request_flush()` | `mars_xlog_request_flush_instance(0)` |
-| `appender_flush_sync()` | `xlog.flush_now()` | `mars_xlog_flush_now_instance(0)` |
+| `appender_flush()` | `xlog.request_flush()` | `mars_xlog_request_flush_instance(handle)` |
+| `appender_flush_sync()` | `xlog.flush_now()` | `mars_xlog_flush_now_instance(handle)` |
 | `appender_close()` | `xlog.close()` | `mars_xlog_release_instance(prefix)` |
-| `xlogger_SetLevel(level)` | `xlog.set_level(level)` | `mars_xlog_set_level_instance(0, level)` |
-| `appender_setmode(mode)` | `xlog.set_mode(mode)` | `mars_xlog_set_mode_instance(0, mode)` |
-| `appender_set_console_log(bool)` | `xlog.set_console_log_enabled(on)` | `mars_xlog_set_console_log_instance(0, on)` |
-| `appender_set_max_file_size(bytes)` | `xlog.set_max_file_size_bytes(bytes)` | `mars_xlog_set_max_file_size_instance(0, bytes)` |
-| `appender_set_max_alive_duration(secs)` | `xlog.set_max_alive_time_seconds(secs)` | `mars_xlog_set_max_alive_duration_instance(0, secs)` |
-| `appender_get_current_log_path(out, len)` | `xlog.current_log_path()` | `mars_xlog_current_log_path(out, len)` |
+| `xlogger_SetLevel(level)` | `xlog.set_level(level)` | `mars_xlog_set_level_instance(handle, level)` |
+| `appender_setmode(mode)` | `xlog.set_mode(mode)` | `mars_xlog_set_mode_instance(handle, mode)` |
+| `appender_set_console_log(bool)` | `xlog.set_console_log_enabled(on)` | `mars_xlog_set_console_log_instance(handle, on)` |
+| `appender_set_max_file_size(bytes)` | `xlog.set_max_file_size_bytes(bytes)` | `mars_xlog_set_max_file_size_instance(handle, bytes)` |
+| `appender_set_max_alive_duration(secs)` | `xlog.set_max_alive_time_seconds(secs)` | `mars_xlog_set_max_alive_duration_instance(handle, secs)` |
+| `appender_get_current_log_path(out, len)` | `xlog.current_log_path()` | `mars_xlog_current_log_path_instance(instance, out, len)` |
 
 Rust 那一列是 App 拿着的那个对象 —— Kotlin、Dart 和 TypeScript 的
 `Xlog.open(config)` —— 而不是 C++ 的那个自由函数：第二个 appender 是另一个前缀的
@@ -56,7 +56,7 @@ Rust 那一列是 App 拿着的那个对象 —— Kotlin、Dart 和 TypeScript 
 结束；`flush` 这个名字留给会把“排完了”交回调用方的那两次：`flushNow()` 排完才返回，
 `await flush()` 排完时才完成 —— 见[日志文件](/zh/xlog/log-files)。C ABI 那一列是
 同一件事，而且整条缝都不收 `sync`：C++ 的 `appender_flush` 是
-`mars_xlog_request_flush_instance(0)`，`appender_flush_sync` 是 `mars_xlog_flush_now_instance(0)`；instance
+`mars_xlog_request_flush_instance(handle)`，`appender_flush_sync` 是 `mars_xlog_flush_now_instance(handle)`；instance
 那一对也拆成了两个 —— 以前写 `mars_xlog_flush_instance(handle, 0)` 或 `(handle, 1)`
 的地方，现在是 `mars_xlog_request_flush_instance(handle)` 或
 `mars_xlog_flush_now_instance(handle)`。进程级那一对原来的两个名字直接删掉了，
@@ -88,41 +88,22 @@ Rust 的 `xlog.log(LogLevel::Info, tag, message)`。
 知道自己是哪儿写的。
 Kotlin 的 write 只接 handle、级别、tag 和消息，没有别的，所以从 `xlog.i(tag, message)`
 写出的记录里文件是空的、行号是 0 —— 也就是 C++ 项目自己的 `Log` 一直传的那两个值。要
-把调用点写进记录的应用有两条路：旧的 `logWrite` 接的那个 `XLoggerInfo`，或者在 Rust
-里给 `Xlog::log_with_info` 传一个：
-
-```rust
-xlog.log_with_info(
-    Some(&XLoggerInfo {
-        level: LogLevel::Info,
-        tag: Some("startup".into()),
-        filename: Some(file!().into()),
-        func_name: Some("main".into()),
-        line: line!() as i32,
-        ..Default::default()
-    }),
-    "cold start in 412 ms",
-);
-```
+把调用点写进记录的应用只能自己把它写进消息，或者把记录从文件里读回来：移植的每个平台都
+不替它填，Rust 也没有 `#file` 可以填进去。
 
 第二个 appender 是形状差别最大的地方。C++ 项目的 Java 是用
 `Log.openLogInstance(level, mode, cacheDir, logDir, nameprefix, cacheDays)` 开第二个，
 然后把它返回的 handle 一路传下去；这里你拿着一个 appender 就*是*拿到一个实例，所以第
 二个就是自己的另一个前缀的第二个 `Xlog` —— 再 `Xlog::open(config, level)` 一次，用
-第二个的前缀；而对象表达不了的那一种形状 —— 一个进程里同一个前缀的两个 appender，也就
-是两份库并排链进来时那样 —— 用 `Xlog::open_unregistered(config, level)`。它不登记在那个
-前缀名下，所以在 `Xlog::open` 会还给你第一个的地方，它是第二个 writer；它自己拿着一份级
-别，因为没有 category 可以跟别人共用。
+第二个的前缀。一个进程里同一个前缀的两个 appender，也就是两份库并排链进来时那样，是第二
+个前缀表达不了的那一种形状，移植里也没有它的写法：一个前缀就是一个 appender，已经开着的
+前缀再 `Xlog::open` 一次，回答的是那个已经开着的。
 
 ### 从 C++ 项目的 Java 来
 
-Android 包是唯一还留着旧写法的地方：七个参数的 `Xlog.open`、`XLogConfig`、
-`XLoggerInfo`、`logWrite` 和 `LEVEL_*` 常量都还能用。带着 `@Deprecated` 和取代它的写法
-的是七个参数的 `Xlog.open`、`logWrite`、无参的 `Xlog()` 以及围着它们的 `Log` 门面；
-`XLogConfig`、`XLoggerInfo` 和 `LEVEL_*` 常量没有这个标记，所以用到它们的调用点照样
-编译，没有任何东西把它们指向新写法 —— 找出来得靠应用自己 grep。`Log.setLogImp(Xlog())`
-和 `Log.d(tag, message)` 仍然写进 `Xlog.open` 装上的那个 appender，所以其余部分可以
-一个调用点一个调用点地走：
+旧写法一个都不剩了。Android 包就是 Kotlin Multiplatform 模块里那个 `Xlog`，成员对
+成员，所以调过 `Log.d(tag, message)`、`Log.setLogImp(Xlog())` 或七个参数 `Xlog.open`
+的应用，现在写的是这个移植每个平台打开 appender 用的那一个调用：
 
 ```kotlin
 // 之前

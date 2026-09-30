@@ -295,57 +295,8 @@ pub fn unlock(file: &File) -> bool {
     }
 }
 
-/// A file a test can hold whose `ftruncate` succeeds and whose every `write`
-/// fails — the pair a cache file on a full disk presents, which is the one
-/// `open_region` has to survive.
-///
-/// No ordinary file gives that pair: a filesystem that refuses the `write`
-/// refuses the `ftruncate` in front of it as well, and one that takes the
-/// `ftruncate` takes the write. A `memfd_create` file sealed with
-/// `F_SEAL_WRITE` does: the seal denies writes to the buffer (`EPERM`) and
-/// leaves `ftruncate` alone, which is exactly what a disk with no space left
-/// looks like from the appender — a length recorded with no blocks behind it,
-/// and the write that would reserve them failing.
-///
-/// `None` where the file cannot be made: not Linux, no `memfd_create`, or a
-/// kernel that will not take the seal. A test that gets `None` passes rather
-/// than fails — what it asserts is what the appender does with such a file,
-/// and there is no way to ask without one.
-#[cfg(all(test, target_os = "linux"))]
-pub(crate) fn unwritable_file() -> Option<File> {
-    use std::os::unix::io::FromRawFd;
-
-    /// `MFD_ALLOW_SEALING`, which `libc` exports for android and not for the
-    /// gnu and musl targets this crate is built for.
-    const MFD_ALLOW_SEALING: libc::c_uint = 0x0002;
-    /// `MFD_CLOEXEC`, for the same reason: the tests re-execute this binary to
-    /// get a second process, and a descriptor that outlives the one that made
-    /// it would be one the child cannot account for.
-    const MFD_CLOEXEC: libc::c_uint = 0x0001;
-
-    let name = b"marsrs-unwritable\0";
-    // SAFETY: `memfd_create` returns a descriptor of its own or -1, and the
-    // name is a live NUL-terminated buffer.
-    let fd = unsafe {
-        libc::memfd_create(
-            name.as_ptr().cast::<libc::c_char>(),
-            MFD_ALLOW_SEALING | MFD_CLOEXEC,
-        )
-    };
-    if fd < 0 {
-        return None;
-    }
-    // SAFETY: `fd` is the descriptor created above and nothing else owns it,
-    // so the `File` — which closes it — is its only owner from here.
-    let file = unsafe { File::from_raw_fd(fd) };
-    // SAFETY: `fcntl` over a descriptor this function owns; the third argument
-    // is a flag and not a pointer, so there is nothing for it to outlive.
-    let sealed = unsafe { libc::fcntl(fd, libc::F_ADD_SEALS, libc::F_SEAL_WRITE) };
-    (sealed == 0).then_some(file)
-}
-
-/// Whether two handles of a file in `dir`, opened independently, really
-/// exclude each other there.
+/// Whether two handles of `path` opened independently really exclude each
+/// other here.
 ///
 /// `flock` and `LockFileEx` are advisory and per open file description, so the
 /// same process can own the same file twice through two `open()`s — that is
@@ -355,60 +306,76 @@ pub(crate) fn unwritable_file() -> Option<File> {
 /// would be worse than knowing: the caller falls back to the unprotected
 /// behaviour the C++ has.
 ///
-/// The answer is probed rather than assumed, by locking a file twice — and the
-/// file is one of *this call's* and not one of the locks this crate takes and
-/// gives up again. A probe of one of those asks who is holding it at this
-/// instant, and the answer it gives a writer that opens while another is inside
-/// a section is "locking excludes nobody here": the answer that turns the
-/// per-writer cache slots off and hands both writers the same cache file, which
-/// is the very thing the slots exist to prevent. A name no other call and no
-/// other process asks for is what leaves a lock that cannot be taken to mean
-/// one thing only — that locking really does exclude.
+/// The answer is probed rather than assumed, by locking the path twice —
+/// but **not** `path` itself, and that is the whole trick.
 ///
-/// `dir` is the directory the caller wants to know about, and not a file in it.
-pub fn lock_excludes(dir: &Path) -> bool {
-    // The pid and a counter of this process's own: two probes in two processes,
-    // or two threads of one, are then two files and not one file two callers
-    // fight over.
-    let probe = dir.join(format!(
-        ".marsrs_lockprobe_{}_{}",
-        std::process::id(),
-        PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
+/// `path` is the lock every writer of this directory takes and releases
+/// around the sections that move files — the log directory's when the appender
+/// has no cache directory of its own, and the cache directory's when it has. Probing it directly reads "another
+/// writer is in a locked section right now" as "locking excludes nobody on
+/// this filesystem": the first `try_lock` is denied, the probe answers
+/// `false`, and the caller falls back to the unprotected behaviour — which,
+/// for the cache file, is the C++'s single fixed name that every writer then
+/// shares and corrupts. Two processes opening one prefix at the same moment
+/// hit it roughly one run in three.
+///
+/// So the probe is run on a sibling nobody else can have open: created with
+/// `create_new`, so an existing file can only mean this is not the first
+/// probe of that name, and removed again on the way out.
+pub fn lock_excludes(path: &Path) -> bool {
+    let probe = probe_path(path);
     let Ok(first) = File::options()
         .read(true)
         .write(true)
-        .create(true)
-        .truncate(false)
+        .create_new(true)
         .open(&probe)
     else {
         return false;
     };
-    if !try_lock_exclusive(&first) {
+    // The guard owns the handle as well as the name, so the file is closed
+    // before it is unlinked: on Windows a `remove_file` of a file another
+    // handle holds open is denied unless that handle asked for delete
+    // sharing, which `File::options` does not — and a probe left behind in
+    // the log directory is a file an app did not write.
+    let remove = RemoveOnDrop {
+        file: Some(first),
+        path: &probe,
+    };
+    if !try_lock_exclusive(remove.file.as_ref().expect("the handle is there")) {
         return false;
     }
-    let Ok(second) = File::options()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&probe)
-    else {
+    let Ok(second) = File::options().read(true).write(true).open(&probe) else {
         return false;
     };
     // A second, independent handle must not be able to take the same lock.
-    let excludes = !try_lock_exclusive(&second);
-    drop(first);
-    drop(second);
-    // Taken away again: it is nothing but a probe, and a directory an app
-    // lists, backs up or uploads is not better for holding one per `open`.
-    let _ = std::fs::remove_file(&probe);
-    excludes
+    !try_lock_exclusive(&second)
 }
 
-/// How many probes [`lock_excludes`] has made in this process: what keeps two
-/// of them from naming one file.
-static PROBE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// A sibling of `path` no other writer of it will ever have open: same
+/// directory and therefore same filesystem, because whether locking excludes
+/// anybody is a property of the filesystem and not of the name.
+fn probe_path(path: &Path) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("lock");
+    let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    path.with_file_name(format!("{name}.{}.{unique}.probe", std::process::id()))
+}
+
+/// Closes `file` and unlinks `path`, on the way out whatever the answer was.
+struct RemoveOnDrop<'a> {
+    file: Option<File>,
+    path: &'a Path,
+}
+
+impl Drop for RemoveOnDrop<'_> {
+    fn drop(&mut self) {
+        drop(self.file.take());
+        let _ = std::fs::remove_file(self.path);
+    }
+}
 
 /// `flock(fd, LOCK_EX[ | LOCK_NB])` / `LockFileEx(..., LOCKFILE_EXCLUSIVE_LOCK
 /// [, LOCKFILE_FAIL_IMMEDIATELY])`.
@@ -616,56 +583,90 @@ mod tests {
     }
 
     #[test]
-    fn lock_excludes_answers_about_the_directory_it_is_given() {
+    fn lock_excludes_answers_about_the_file_it_is_given() {
         let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Mars.lock");
         assert!(
-            lock_excludes(dir.path()),
+            lock_excludes(&path),
             "advisory locking is what the cache slots are built on"
         );
+        // The probe must not leave the file behind in a locked state.
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        assert!(try_lock_exclusive(&file));
     }
 
-    /// A probe leaves nothing behind: it is a file of its own, in the app's log
-    /// directory, and an app that lists or uploads that directory is not better
-    /// for one file per `open`.
     #[test]
-    fn the_probe_leaves_no_file_behind() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(lock_excludes(dir.path()));
-        let left: Vec<_> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .flatten()
-            .map(|entry| entry.file_name())
-            .collect();
-        assert_eq!(left, Vec::<std::ffi::OsString>::new(), "{left:?}");
+    fn a_lock_on_a_missing_directory_cannot_be_taken() {
+        assert!(!lock_excludes(Path::new(
+            "/definitely/not/here/xlog/Mars.lock"
+        )));
     }
 
-    /// A lock *another* writer is holding in this directory does not change
-    /// what the probe answers: `<prefix>.lock` is taken and given up again
-    /// around every section a writer protects, so a probe that asked about it
-    /// would answer "locking excludes nobody here" for whoever opens while a
-    /// writer is inside one — and that answer is the one that turns the
-    /// per-writer cache slots off and hands two writers the same cache file.
+    /// The one thing the probe is for, and the one it used to get backwards:
+    /// `path` is the lock every writer of this log directory takes, so another
+    /// writer holding it *right now* has to read as "locking works here" and
+    /// not as "locking excludes nobody". Answering the second is what hands
+    /// every writer the same cache file.
     #[test]
-    fn a_lock_another_writer_holds_does_not_change_the_answer() {
-        let dir = tempfile::tempdir().unwrap();
+    fn a_probe_under_contention_still_answers_that_locking_excludes() {
+        let dir = std::env::temp_dir().join(format!(
+            "marsrs-sys-contended-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Mars.lock");
+
         let held = File::options()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
-            .open(dir.path().join("Mars.lock"))
+            .open(&path)
             .unwrap();
-        assert!(try_lock_exclusive(&held), "the writer holds the log's lock");
+        assert!(lock_exclusive(&held), "the lock could not be taken at all");
 
         assert!(
-            lock_excludes(dir.path()),
-            "the probe is not made of a file the writers lock"
+            lock_excludes(&path),
+            "a peer holding the log lock was read as a filesystem that cannot lock"
         );
-        assert!(unlock(&held));
+
+        drop(held);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The probe's own file must not outlive the question: a directory an app
+    /// reads to find its logs has no `<prefix>.lock.*.probe` in it.
     #[test]
-    fn a_lock_on_a_missing_directory_cannot_be_taken() {
-        assert!(!lock_excludes(Path::new("/definitely/not/here/xlog")));
+    fn a_probe_leaves_nothing_behind() {
+        let dir = std::env::temp_dir().join(format!(
+            "marsrs-sys-probe-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Mars.lock");
+        assert!(lock_excludes(&path));
+
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, Vec::<String>::new(), "the probe left {left:?} behind");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

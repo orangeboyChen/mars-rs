@@ -9,9 +9,11 @@
 // A call that answers nothing waits for nothing: a write and a setting hand the
 // call to the platform side and return, `xlog.i('net', '…')` the way it does in
 // Kotlin and in Swift, and the channel keeps the order the calls were handed
-// over in. Four of them answer a `Future`, because four of them have something
-// an app can act on: the appender [Xlog.open] opens, the drain [Xlog.flush]
-// and [Xlog.close] wait for, and the answer [Xlog.isLoggable] gives.
+// over in. Seven of them answer a `Future`, because seven of them have
+// something an app can act on: the appender [Xlog.open] opens, the drain
+// [Xlog.flush] and [Xlog.close] wait for, the answer [Xlog.isLoggable] gives,
+// and the three that name files — the directory [Xlog.currentLogPath] writes
+// into and the day [Xlog.logFiles] and [Xlog.logFileNames] answer.
 //
 // The five settings are properties and not a `setLevel` / `getLevel` pair, which
 // is the spelling the Kotlin, the Swift and the TypeScript of the port give
@@ -186,8 +188,7 @@ class Xlog {
   /// Opens an appender of its own with [config].
   ///
   /// The platform side answers `marsrs_xlog` / `the appender refused the
-  /// configuration (<code>)` when the appender would not take it, the code
-  /// being the negative `MARS_XLOG_marsrs_xlog_*` it was refused with, and
+  /// configuration` when the appender would not take it, and
   /// `logDir is empty` when [XlogConfig.logDir] is.
   ///
   /// A prefix that is open already is answered with the [Xlog] it was opened
@@ -351,6 +352,44 @@ class Xlog {
       return;
     }
     await _invoke<void>('flush');
+  }
+
+  /// The directory this appender writes its files into, or `null` once it is
+  /// closed.
+  ///
+  /// A directory and not a file, because that is what the C++
+  /// `GetCurrentLogPath` answers; the day's file is the question under it.
+  Future<String?> currentLogPath() async {
+    if (_closing != null) {
+      return null;
+    }
+    return _invoke<String?>('currentLogPath');
+  }
+
+  /// The log files of the day `daysAgo` days ago that are *there* — `0` is
+  /// today, `1` is yesterday.
+  Future<List<String>> logFiles(int daysAgo) async {
+    if (_closing != null) {
+      return const [];
+    }
+    final found = await _invoke<List<dynamic>>(
+      'logFiles',
+      {'daysAgo': daysAgo},
+    );
+    return found?.cast<String>() ?? const [];
+  }
+
+  /// The names of the log files of the day `daysAgo` days ago, whether or not
+  /// they are there yet.
+  Future<List<String>> logFileNames(int daysAgo) async {
+    if (_closing != null) {
+      return const [];
+    }
+    final found = await _invoke<List<dynamic>>(
+      'logFileNames',
+      {'daysAgo': daysAgo},
+    );
+    return found?.cast<String>() ?? const [];
   }
 
   /// Drains what is left and closes this appender. Writing through it afterwards

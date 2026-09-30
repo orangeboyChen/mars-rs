@@ -52,6 +52,11 @@
 // unspelled lands on the same appender either way.
 static const char* const kDefaultNamePrefix = "xlog";
 
+// How many files a day's answer may hold: a day of records is a handful — a file
+// is split for size only — and a bound is what keeps the walk from running away
+// if the C ABI's list grows while it is being read.
+static const unsigned int kMaxDayFiles = 64;
+
 // The buffer the path symbols write into, and the one the two that answer a list
 // write into for one index at a time. A path never fills it: what a symbol
 // answers is how many bytes it wrote, so a path longer than this is an error
@@ -159,36 +164,6 @@ static char* ArgString(napi_env env, napi_callback_info info, size_t index) {
     return CopyString(env, argv[index]);
 }
 
-// The number argument at `index` as an `int32_t`, or false when it is not one
-// the C ABI's `int` can hold.
-//
-// `napi_get_value_int32` on its own is an ECMAScript `ToInt32`, and a `ToInt32`
-// wraps: a `NaN` into `0`, and 3 000 000 000 into a negative. `0` is the level
-// that logs everything, so a level ArkTS computed and came to no level with
-// was being given the widest one there is — and the appender was *moved* to
-// it, because that is what `SetLevel` does with a level it was handed. What is
-// read here is the double a `number` is, and what is refused is one that is
-// not finite, or that the 32 bits cannot hold: a level that does not exist is
-// not one the appender is set to, the way `Log` does not write a record of
-// one.
-static bool Int32Arg(napi_env env, napi_callback_info info, size_t index, int32_t* out) {
-    size_t argc = index + 1;
-    napi_value argv[4] = {NULL, NULL, NULL, NULL};
-    napi_value self = NULL;
-    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || argc <= index) {
-        return false;
-    }
-    double number = 0;
-    // Both comparisons are false for a NaN, so a NaN is refused as one would
-    // want and without a call of `isnan`.
-    if (napi_get_value_double(env, argv[index], &number) != napi_ok ||
-        !(number >= -2147483648.0 && number <= 2147483647.0)) {
-        return false;
-    }
-    *out = (int32_t)number;
-    return true;
-}
-
 // --- the table ------------------------------------------------------------
 
 // The handle of a prefix, or 0 when this module has no appender of that name —
@@ -283,30 +258,6 @@ static napi_value Undefined(napi_env env) {
 
 // --- open(config): boolean -------------------------------------------------
 
-// The `MarsXLogConfig` of an ArkTS configuration object: the eight fields of the
-// C struct, each of them read the way the C++'s own `XLogConfig` defaults it,
-// and `logDir` NULL when there is none — which is how `Open` knows the appender
-// would refuse the config.
-static void FillConfig(napi_env env, napi_value object, MarsXLogConfig* config) {
-    config->mode = NamedInt(env, object, "mode", MarsAppenderAsync);
-    config->log_dir = NamedString(env, object, "logDir", NULL);
-    config->name_prefix = NamedString(env, object, "namePrefix", kDefaultNamePrefix);
-    config->pub_key = NamedString(env, object, "pubKey", NULL);
-    config->compress_mode = NamedInt(env, object, "compressMode", MarsCompressZlib);
-    config->compress_level = NamedInt(env, object, "compressLevel", 0);
-    config->cache_dir = NamedString(env, object, "cacheDir", NULL);
-    config->cache_days = NamedInt(env, object, "cacheDays", 0);
-}
-
-// The four strings `FillConfig` malloc'd, which are the config's and nobody
-// else's: the C ABI copied out of them whatever it needed before it answered.
-static void FreeConfig(MarsXLogConfig* config) {
-    free((void*)config->log_dir);
-    free((void*)config->name_prefix);
-    free((void*)config->pub_key);
-    free((void*)config->cache_dir);
-}
-
 static napi_value Open(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value argv[1] = {NULL};
@@ -316,44 +267,51 @@ static napi_value Open(napi_env env, napi_callback_info info) {
         return Boolean(env, false);
     }
 
-    MarsXLogConfig config;
-    FillConfig(env, argv[0], &config);
-    int level = NamedInt(env, argv[0], "level", MarsLevelInfo);
-
     // `logDir` is the one field with no default, and the C ABI answers
     // MARS_XLOG_ERR_EMPTY_LOG_DIR without it: an appender with nowhere to write
     // is refused here rather than opened and found empty.
-    long long handle = 0;
-    int opened = 0;
-    if (config.log_dir != NULL && config.name_prefix != NULL) {
-        handle = mars_xlog_get_instance(config.name_prefix);
-        if (handle == 0) {
-            // A config the C ABI refuses is a negative `MARS_XLOG_ERR_*` code
-            // and never `0`, which is the process-wide appender: an `open` that
-            // read `0` as "opened" would register a logger this module never
-            // opened, and every call after this one would write through it.
-            handle = mars_xlog_new_instance(&config, level);
-            opened = handle > 0;
-        }
-        if (handle > 0 && !Remember(config.name_prefix, handle)) {
-            // The table is what every call after this one goes through, so an
-            // appender it cannot remember is an appender it cannot reach: closed
-            // again, rather than opened and left for the process to leak.
-            //
-            // Only the instance this call opened is the one closed here. A
-            // handle `get_instance` answered with is an appender someone else
-            // registered under this prefix — a release by name is the release
-            // of theirs, and it would close a live logger, and flush its cache,
-            // out from under whoever opened it.
-            if (opened) {
-                mars_xlog_release_instance(config.name_prefix);
-            }
-            handle = 0;
-        }
+    char* logDir = NamedString(env, argv[0], "logDir", NULL);
+    if (logDir == NULL) {
+        return Boolean(env, false);
+    }
+    char* namePrefix = NamedString(env, argv[0], "namePrefix", kDefaultNamePrefix);
+    char* pubKey = NamedString(env, argv[0], "pubKey", NULL);
+    char* cacheDir = NamedString(env, argv[0], "cacheDir", NULL);
+    if (namePrefix == NULL) {
+        free(logDir);
+        free(pubKey);
+        free(cacheDir);
+        return Boolean(env, false);
     }
 
-    FreeConfig(&config);
-    return Boolean(env, handle > 0);
+    MarsXLogConfig config;
+    config.mode = NamedInt(env, argv[0], "mode", MarsAppenderAsync);
+    config.log_dir = logDir;
+    config.name_prefix = namePrefix;
+    config.pub_key = pubKey;
+    config.compress_mode = NamedInt(env, argv[0], "compressMode", MarsCompressZlib);
+    config.compress_level = NamedInt(env, argv[0], "compressLevel", 0);
+    config.cache_dir = cacheDir;
+    config.cache_days = NamedInt(env, argv[0], "cacheDays", 0);
+    int level = NamedInt(env, argv[0], "level", MarsLevelInfo);
+
+    long long handle = mars_xlog_get_instance(namePrefix);
+    if (handle == 0) {
+        handle = mars_xlog_new_instance(&config, level);
+    }
+    if (handle != 0 && !Remember(namePrefix, handle)) {
+        // The table is what every call after this one goes through, so an
+        // appender it cannot remember is an appender it cannot reach: closed
+        // again, rather than opened and left for the process to leak.
+        mars_xlog_release_instance(namePrefix);
+        handle = 0;
+    }
+
+    free(logDir);
+    free(namePrefix);
+    free(pubKey);
+    free(cacheDir);
+    return Boolean(env, handle != 0);
 }
 
 // --- level ----------------------------------------------------------------
@@ -362,12 +320,9 @@ static napi_value GetLevel(napi_env env, napi_callback_info info) {
     char* namePrefix = ArgString(env, info, 0);
     long long handle = HandleOf(namePrefix);
     free(namePrefix);
-    // Two ways of having no level to answer: a prefix this table never opened,
-    // which is what `close` leaves behind and what a call after it is, and a
-    // handle the C ABI does not know — it answers -1, and -1 is not a
-    // `LogLevel`. Both are answered with `MarsLevelInfo`, the level an
-    // appender is opened at when the caller asked for none, which is the one
-    // the ArkTS holds beside it.
+    // -1 is what the C ABI answers for a handle it does not know, and it is not
+    // a `LogLevel`; what this answers instead is the level the ArkTS is already
+    // holding, which `Xlog.level` reads when the appender is closed.
     int level = handle == 0 ? MarsLevelInfo : mars_xlog_get_level(handle);
     return Int32(env, level < 0 ? MarsLevelInfo : level);
 }
@@ -384,7 +339,7 @@ static napi_value SetLevel(napi_env env, napi_callback_info info) {
     napi_value self = NULL;
     if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) == napi_ok && argc >= 2) {
         int32_t level = MarsLevelInfo;
-        if (Int32Arg(env, info, 1, &level)) {
+        if (napi_get_value_int32(env, argv[1], &level) == napi_ok) {
             mars_xlog_set_level_instance(handle, level);
         }
     }
@@ -405,7 +360,7 @@ static napi_value SetMode(napi_env env, napi_callback_info info) {
     napi_value self = NULL;
     if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) == napi_ok && argc >= 2) {
         int32_t mode = MarsAppenderAsync;
-        if (Int32Arg(env, info, 1, &mode)) {
+        if (napi_get_value_int32(env, argv[1], &mode) == napi_ok) {
             mars_xlog_set_mode_instance(handle, mode);
         }
     }
@@ -446,15 +401,11 @@ static napi_value SetMaxFileSize(napi_env env, napi_callback_info info) {
     napi_value self = NULL;
     if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) == napi_ok && argc >= 2) {
         double bytes = 0;
-        // `0` is a size and not a missing one: `mars_xlog.h` reads it as "do
-        // not split", so what is refused here is a negative — and a NaN, which
-        // is a `number` ArkTS computed and gave no size with. So is every
-        // value the 64-bit integer cannot hold — an infinity, and any `number`
-        // from 2^64 up: the cast of one is undefined behaviour, and what it
-        // would have left the appender with is a limit nobody asked for.
-        // The bound is exact, 2^64 being a `double` there is one of.
-        if (napi_get_value_double(env, argv[1], &bytes) == napi_ok && bytes >= 0 &&
-            bytes < 18446744073709551616.0) {
+        // Clamped and not dropped: `0` is the appender's own "never split",
+        // so a caller that takes the split away again has to reach it — a
+        // setter that only ever moves the size up is a size an app cannot
+        // turn off.
+        if (napi_get_value_double(env, argv[1], &bytes) == napi_ok && bytes >= 0) {
             mars_xlog_set_max_file_size_instance(handle, (unsigned long long)bytes);
         }
     }
@@ -472,18 +423,8 @@ static napi_value SetMaxAliveTime(napi_env env, napi_callback_info info) {
     napi_value argv[2] = {NULL, NULL};
     napi_value self = NULL;
     if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) == napi_ok && argc >= 2) {
-        double seconds = 0;
-        // Read as a `double` and narrowed, the way SetMaxFileSize reads a
-        // size, and not with `napi_get_value_int32`: that one is an ECMAScript
-        // `ToInt32`, so a number past 2^31 wraps into a negative — 3 000 000 000
-        // into -1 294 967 296 — and the C ABI clamps a negative to `0`, which
-        // is what every platform of the port reads as the C++'s own ten days.
-        // An app asking for ninety-five years was being given ten days, and
-        // nothing said so. A NaN and an infinity fail both comparisons, so
-        // neither is a limit the appender is handed, the way neither is a size
-        // it is handed in SetMaxFileSize.
-        if (napi_get_value_double(env, argv[1], &seconds) == napi_ok && seconds >= 0 &&
-            seconds < 9223372036854775808.0) {
+        int32_t seconds = 0;
+        if (napi_get_value_int32(env, argv[1], &seconds) == napi_ok) {
             mars_xlog_set_max_alive_duration_instance(handle, (long long)seconds);
         }
     }
@@ -496,8 +437,15 @@ static napi_value IsLoggable(napi_env env, napi_callback_info info) {
     char* namePrefix = ArgString(env, info, 0);
     long long handle = HandleOf(namePrefix);
     free(namePrefix);
+    size_t argc = 2;
+    napi_value argv[2] = {NULL, NULL};
+    napi_value self = NULL;
+    if (handle == 0 ||
+        napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || argc < 2) {
+        return Boolean(env, false);
+    }
     int32_t level = MarsLevelInfo;
-    if (handle == 0 || !Int32Arg(env, info, 1, &level)) {
+    if (napi_get_value_int32(env, argv[1], &level) != napi_ok) {
         return Boolean(env, false);
     }
     return Boolean(env, mars_xlog_is_enabled_for(handle, level) != 0);
@@ -518,29 +466,11 @@ static napi_value Log(napi_env env, napi_callback_info info) {
         return Undefined(env);
     }
     int32_t level = MarsLevelInfo;
-    // A level this module cannot read is a record it does not write: the C ABI
-    // drops a level that is not one of the six, so writing the default would be
-    // a record at a level the caller did not ask for — the same answer
-    // `IsLoggable` gives a level it cannot read, and the one every other
-    // method here gives an argument it cannot read. A `NaN` is one it cannot
-    // read either, and not the `0` a `ToInt32` would have made of it: `0` is
-    // the level that logs everything.
-    if (!Int32Arg(env, info, 1, &level)) {
-        return Undefined(env);
-    }
+    napi_get_value_int32(env, argv[1], &level);
     char* tag = CopyString(env, argv[2]);
     char* message = CopyString(env, argv[3]);
-    // An argument this module cannot read is a record it does not write, which
-    // is the answer the level above gives and the one `IsLoggable` gives a
-    // level it cannot read: substituting an empty tag or an empty message
-    // would write a record at a body — and under a tag — the caller did not
-    // ask for, which is a line in the log no caller can account for.
-    if (tag == NULL || message == NULL) {
-        free(tag);
-        free(message);
-        return Undefined(env);
-    }
-    mars_xlog_write_instance(handle, level, tag, "", "", 0, message);
+    mars_xlog_write_instance(handle, level, tag == NULL ? "" : tag, "", "", 0,
+                             message == NULL ? "" : message);
     free(tag);
     free(message);
     return Undefined(env);
@@ -574,69 +504,90 @@ static napi_value FlushNow(napi_env env, napi_callback_info info) {
     return Undefined(env);
 }
 
-// --- the files the appender writes ----------------------------------------
+// --- the files this appender writes ----------------------------------------
 
 // One of the two symbols that answer a list of paths one index at a time —
-// `mars_xlog_getfilepath_from_timespan` and `mars_xlog_make_logfile_name`, which
-// the C++ fills a `std::vector` with and a C caller walks. The two take the same
-// six arguments, so one walk is the walk of both.
-typedef int (*PathAt)(int, const char*, const char*, unsigned int, char*, unsigned int);
+// `mars_xlog_getfilepath_from_timespan_instance` and
+// `mars_xlog_make_logfile_name_instance`, which the C++ fills a `std::vector`
+// with and a C caller walks. The two take the same five arguments, so one walk
+// is the walk of both.
+typedef int (*PathAt)(long long, int, unsigned int, char*, unsigned int);
 
 // What `pathAt` answers for index after index, as an ArkTS array of strings,
-// starting at `0` and stopping at the first index it answers nothing for — a
-// negative code, or a path of no length. The walk is this module's and not the
-// app's, because an index is not a thing an ArkTS caller can ask for: what it
-// wants is the day's files, and what the C ABI answers is one of them.
+// starting at `0` and stopping at the first index it answers nothing for. The
+// walk is this module's and not the app's: what an app wants is the day's
+// files, and what the C ABI answers is one of them.
 static napi_value Paths(napi_env env, napi_callback_info info, PathAt pathAt) {
-    size_t argc = 3;
-    napi_value argv[3] = {NULL, NULL, NULL};
-    napi_value self = NULL;
+    // The array is made first, so that every path out of this function answers
+    // one and not `undefined`: the declarations say `string[]`, and a caller
+    // that walks the answer is not prepared for a value that is not there. The
+    // one case that cannot answer one is an array the engine will not give us,
+    // and what that is answered with is a throw and not a short list — an
+    // uploader that takes a half of a day for the whole of it is worse than an
+    // app that hears that the question could not be answered.
     napi_value list = NULL;
-    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || argc < 3 ||
-        napi_create_array(env, &list) != napi_ok) {
+    if (napi_create_array(env, &list) != napi_ok) {
+        napi_throw_error(env, NULL, "marsrs-harmonyos-xlog: no array for a day of paths");
         return Undefined(env);
     }
+    size_t argc = 2;
+    napi_value argv[2] = {NULL, NULL};
+    napi_value self = NULL;
+    // A question this module was not asked properly is a throw and not an
+    // empty list: `[]` says "that day has no files", which is a true answer to
+    // a different question, and an uploader that takes it for one loses a day.
+    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || argc < 2) {
+        napi_throw_error(env, NULL, "marsrs-harmonyos-xlog: a day of paths needs a prefix and a day");
+        return Undefined(env);
+    }
+    char* namePrefix = CopyString(env, argv[0]);
+    long long handle = HandleOf(namePrefix);
+    free(namePrefix);
+    if (handle == 0) {
+        return list;
+    }
     int32_t daysAgo = 0;
-    napi_get_value_int32(env, argv[0], &daysAgo);
-    char* prefix = CopyString(env, argv[1]);
-    char* logDir = CopyString(env, argv[2]);
+    if (napi_get_value_int32(env, argv[1], &daysAgo) != napi_ok) {
+        napi_throw_error(env, NULL, "marsrs-harmonyos-xlog: the day is not a number");
+        return Undefined(env);
+    }
     char buffer[kPathBufferSize] = {0};
-    for (unsigned int index = 0;; ++index) {
-        int written = pathAt(daysAgo, prefix == NULL ? "" : prefix, logDir == NULL ? "" : logDir,
-                             index, buffer, kPathBufferSize);
+    unsigned int walked = 0;
+    for (unsigned int index = 0; index < kMaxDayFiles; ++index) {
+        int written = pathAt(handle, daysAgo, index, buffer, kPathBufferSize);
         if (written <= 0) {
             break;
         }
         napi_value path = NULL;
-        if (napi_create_string_utf8(env, buffer, (size_t)written, &path) == napi_ok) {
-            napi_set_element(env, list, index, path);
+        if (napi_create_string_utf8(env, buffer, (size_t)written, &path) != napi_ok ||
+            napi_set_element(env, list, walked, path) != napi_ok) {
+            napi_throw_error(env, NULL, "marsrs-harmonyos-xlog: a path of the day was lost");
+            return Undefined(env);
         }
+        walked++;
     }
-    free(prefix);
-    free(logDir);
     return list;
 }
 
-// `mars_xlog_getfilepath_from_timespan`: the log files of `daysAgo` days ago
-// that are *there* — what an app that uploads yesterday's opens.
+// `mars_xlog_getfilepath_from_timespan_instance`: the log files of `daysAgo`
+// days ago that are *there* — what an app that uploads yesterday's opens.
 static napi_value LogFiles(napi_env env, napi_callback_info info) {
-    return Paths(env, info, mars_xlog_getfilepath_from_timespan);
+    return Paths(env, info, mars_xlog_getfilepath_from_timespan_instance);
 }
 
-// `mars_xlog_make_logfile_name`: the paths of `daysAgo` days ago whether or not
-// they are there yet — the name an app that is about to write, or that is naming
-// a file to someone else, asks for. It answers two where `LogFiles` answers one
-// when a cache dir is given and the file is there: the log-dir file and its twin
-// in the cache dir.
+// `mars_xlog_make_logfile_name_instance`: the paths of the log files of
+// `daysAgo` days ago whether or not they are there yet.
 static napi_value LogFileNames(napi_env env, napi_callback_info info) {
-    return Paths(env, info, mars_xlog_make_logfile_name);
+    return Paths(env, info, mars_xlog_make_logfile_name_instance);
 }
 
-// `mars_xlog_current_log_path_instance`: the file this appender is writing to, or
-// `undefined` when it has none open — the first record of the day is what opens
-// one. This is the per-instance spelling and not the process-wide
-// `mars_xlog_current_log_path`, because no symbol of the C ABI installs a
-// process-wide appender: every `Xlog` of this module is an instance.
+// `mars_xlog_current_log_path_instance`: the *directory* this appender is
+// writing its files into, or `undefined` once the appender is closed. It is a
+// directory and not a file, because that is what the C++ answers
+// (`XloggerAppender::GetCurrentLogPath` hands back `sg_logdir`); the day's file
+// is what `mars_xlog_getfilepath_from_timespan_instance` names. There is no
+// "before the first record" state: `open` answers a directory from the moment
+// it succeeds, so this is a string until `close`.
 static napi_value CurrentLogPath(napi_env env, napi_callback_info info) {
     char* namePrefix = ArgString(env, info, 0);
     long long handle = HandleOf(namePrefix);
@@ -659,16 +610,6 @@ static napi_value CurrentLogPath(napi_env env, napi_callback_info info) {
 static napi_value Close(napi_env env, napi_callback_info info) {
     char* namePrefix = ArgString(env, info, 0);
     if (namePrefix == NULL) {
-        return Undefined(env);
-    }
-    // A prefix this table never opened is not one this module releases: a
-    // release by name is the release of whatever appender the C ABI holds under
-    // that name — an appender another caller opened, or the process-wide one an
-    // empty prefix names — and `close` of one is a close of theirs. Every other
-    // method answers an unknown prefix by dropping the call, and so does this
-    // one.
-    if (HandleOf(namePrefix) == 0) {
-        free(namePrefix);
         return Undefined(env);
     }
     Forget(namePrefix);

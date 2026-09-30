@@ -137,6 +137,18 @@ export class LogStore {
     xlog.flushNow();
   }
 
+  /** Drains what is in the cache into the log file, and leaves it open.
+   *
+   * The ability calls it from `onBackground`, which is HarmonyOS's answer to
+   * Android's `TRIM_MEMORY_UI_HIDDEN` and to Apple's `didEnterBackground` —
+   * the last moment an app is told anything before the process can be taken
+   * away, and with an async appender the one an app has to answer with a
+   * drain. On Android and on Apple the port registers the hook itself; here
+   * the ability is the app's own, so the app makes the call. */
+  flushNow(): void {
+    this.xlog?.flushNow();
+  }
+
   /** Closes the appender: drains what is left and drops it.
    *
    * Called from the ability's `onDestroy`, which is the point at which the
@@ -165,6 +177,17 @@ export function openLogStore(context: common.UIAbilityContext): LogStore {
 /** The appender the pages write through, or `undefined` before `onCreate`. */
 export function logStore(): LogStore | undefined {
   return current;
+}
+
+/** Drains the appender the ability opened, and leaves it open.
+ *
+ * Called from the ability's `onBackground`, the last moment HarmonyOS says
+ * anything before it can take the process away — the answer to Android's
+ * `ComponentCallbacks2` and to Apple's `didEnterBackground`, both of which the
+ * port registers for an app on those two platforms. Here the ability is the
+ * app's own, so the app makes the call. */
+export function flushLogStore(): void {
+  current?.flushNow();
 }
 
 /** Closes the appender the ability opened. */

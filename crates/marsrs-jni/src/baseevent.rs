@@ -239,18 +239,16 @@ pub fn on_network_change_impl() {
 
 /// `BaseEvent.onSingalCrash` — `mars::baseevent::OnSingalCrash(_sig)`.
 ///
-/// What the signal reached is the appender: `mars::xlog::appender_close()`, so
-/// what is buffered is flushed before the process goes. The signal number is
-/// not the port's to handle, so it is not read.
-pub fn on_signal_crash_impl(_sig: i32) {
-    crate::close_impl()
-}
+/// What the signal reached used to be `mars::xlog::appender_close()`, so what
+/// was buffered was flushed before the process went. There is no process-wide
+/// appender to close any more — the appender an app holds is its own — so
+/// there is nothing here to do, and the signal number is not the port's to
+/// handle either.
+pub fn on_signal_crash_impl(_sig: i32) {}
 
 /// `BaseEvent.onExceptionCrash` — `mars::baseevent::OnExceptionCrash()`, the
-/// same close without a signal to name.
-pub fn on_exception_crash_impl() {
-    crate::close_impl()
-}
+/// same thing without a signal to name.
+pub fn on_exception_crash_impl() {}
 
 /// `ActiveLogic::IsActive()` — whether the app is still doing something.
 pub fn is_active_impl() -> bool {

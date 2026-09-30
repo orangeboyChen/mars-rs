@@ -27,15 +27,13 @@ marsrs-xlog = { git = "https://github.com/orangeboyChen/mars-rs", tag = "v0.1.0-
 
 - `XLogConfig` — every option has the default the C++ gives it, so the demo
   names four and leaves the rest.
-- `Xlog::log_with_info` with an `XLoggerInfo` — the file, the function and
-  the line of a record are given by the caller here, where Swift fills them in
-  at the call site.
 - `Xlog::is_loggable` — the check that goes before a message that is
   expensive to build.
+- `Xlog::log_files` — the day's files, asked of this appender and out of its
+  own prefix and directory.
 - `decode_log_file` — the appender's own file read back, which is what the CLI
   does.
 
 `Xlog::current_log_path` is printed as "writing into", and it answers a
 directory and not a file: it is the C++'s `GetCurrentLogPath`, whose answer is
-`sg_logdir`. The file of a day is
-`appender_getfilepath_from_timespan(0, PREFIX, &logdir)`.
+`sg_logdir`. A day's files inside it are `Xlog::log_files(0)`.
