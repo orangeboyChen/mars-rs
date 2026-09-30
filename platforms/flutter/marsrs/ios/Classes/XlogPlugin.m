@@ -3,7 +3,7 @@
 #import "mars_xlog.h"
 
 // The iOS half of the `marsrs` plugin: the C ABI of `mars_xlog.h`
-// (crate `marsrs-ffi`) behind the twelve methods of the plugin's channel.
+// (crate `marsrs-ffi`) behind the fifteen methods of the plugin's channel.
 //
 // Objective-C, and not Swift: what the plugin carries is a static library with
 // a C header, and `MarsRSFFI` — the module SwiftPM makes of the two — is not
@@ -28,8 +28,36 @@ static NSString *const kXlogError = @"marsrs";
 /// appender is opened with when the caller gave none.
 static NSString *const kXlogDefaultNamePrefix = @"xlog";
 
-/// The number sent for `key`, or `fallback` when none was sent. A Dart `null`
-/// arrives as `NSNull`, which answers no `intValue`.
+/// Answers `result` with `value`. `FlutterResult` is a block and not a message
+/// send, so a nil one is a null function pointer and not a no-op: every answer
+/// on this side goes through here.
+static void XlogAnswer(FlutterResult result, id value) {
+  if (result != nil) {
+    result(value);
+  }
+}
+
+/// What `read` writes into the buffer it is handed, as a string; `nil` when it
+/// wrote nothing — a negative code, or a path of no length.
+///
+/// A negative code is `nil` whatever it is, `MARS_XLOG_ERR_NO_SPACE` among
+/// them: a path that does not fit 1024 bytes ends the walk the way the end of
+/// the list does. A symbol that answers a length rather than a pointer is the
+/// C ABI's way of saying the caller decides how much it can hold.
+static NSString *XlogPath(int (^read)(char *, uint32_t)) {
+  char buffer[1024];
+  int written = read(buffer, (uint32_t)sizeof(buffer));
+  if (written <= 0) {
+    return nil;
+  }
+  return [[NSString alloc] initWithBytes:buffer
+                                  length:(NSUInteger)written
+                                encoding:NSUTF8StringEncoding];
+}
+
+/// The number sent for `key`, or `fallback` when none was sent — what a level,
+/// a mode and a cache day are. A Dart `null` arrives as `NSNull`, which
+/// answers no `intValue`.
 static int XlogInt(NSDictionary *arguments, NSString *key, int fallback) {
   NSNumber *value = arguments[key];
   return [value isKindOfClass:NSNumber.class] ? value.intValue : fallback;
@@ -104,8 +132,6 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
     [self requestFlush:call result:result];
   } else if ([call.method isEqualToString:@"setLevel"]) {
     [self setLevel:call result:result];
-  } else if ([call.method isEqualToString:@"getLevel"]) {
-    [self getLevel:call result:result];
   } else if ([call.method isEqualToString:@"setMode"]) {
     [self setMode:call result:result];
   } else if ([call.method isEqualToString:@"setConsoleLogEnabled"]) {
@@ -114,23 +140,29 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
     [self setMaxFileSize:call result:result];
   } else if ([call.method isEqualToString:@"setMaxAliveTime"]) {
     [self setMaxAliveTime:call result:result];
+  } else if ([call.method isEqualToString:@"currentLogPath"]) {
+    [self currentLogPath:call result:result];
+  } else if ([call.method isEqualToString:@"logFiles"]) {
+    [self logFiles:call result:result];
+  } else if ([call.method isEqualToString:@"logFileNames"]) {
+    [self logFileNames:call result:result];
   } else if ([call.method isEqualToString:@"close"]) {
     [self close:call result:result];
   } else {
-    result(FlutterMethodNotImplemented);
+    XlogAnswer(result, FlutterMethodNotImplemented);
   }
 }
 
 #pragma mark - The channel's methods
 
 /// `mars_xlog_new_instance`. `0` is the answer for a configuration the appender
-/// refused, and an instance the caller has no handle to is one every write
-/// would go to the process-wide appender instead of.
+/// refused, and a handle nothing was opened for is one every write through it
+/// would silently drop.
 - (void)open:(FlutterMethodCall *)call result:(FlutterResult)result {
   NSDictionary *arguments = call.arguments;
   NSString *logDir = XlogString(arguments, @"logDir");
   if (logDir.length == 0) {
-    result([FlutterError errorWithCode:kXlogError message:@"logDir is empty" details:nil]);
+    XlogAnswer(result, [FlutterError errorWithCode:kXlogError message:@"logDir is empty" details:nil]);
     return;
   }
   NSString *namePrefix = XlogString(arguments, @"namePrefix");
@@ -151,13 +183,74 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   long long handle =
       mars_xlog_new_instance(&config, XlogInt(arguments, @"level", MarsLevelInfo));
   if (handle == 0) {
-    result([FlutterError errorWithCode:kXlogError
+    XlogAnswer(result, [FlutterError errorWithCode:kXlogError
                                message:@"the appender refused the configuration"
                                details:nil]);
     return;
   }
   self.instances[namePrefix] = @(handle);
-  result(nil);
+  XlogAnswer(result, nil);
+}
+
+/// `mars_xlog_current_log_path_instance` — the directory this appender writes
+/// its files into.
+- (void)currentLogPath:(FlutterMethodCall *)call result:(FlutterResult)result {
+  long long instance = [self instanceForCall:call result:result];
+  if (instance == 0) {
+    return;
+  }
+  XlogAnswer(result, XlogPath(^(char *out, uint32_t len) {
+    return mars_xlog_current_log_path_instance(instance, out, len);
+  }));
+}
+
+/// `mars_xlog_getfilepath_from_timespan_instance` — the day's files that are
+/// there.
+- (void)logFiles:(FlutterMethodCall *)call result:(FlutterResult)result {
+  long long instance = [self instanceForCall:call result:result];
+  if (instance == 0) {
+    return;
+  }
+  XlogAnswer(result, [self dayPathsOfInstance:instance
+                         daysAgo:XlogInt(call.arguments, @"daysAgo", 0)
+                            with:^int(long long instance, int timespan, unsigned int index, char *out,
+                                      unsigned int len) {
+                              return mars_xlog_getfilepath_from_timespan_instance(instance, timespan, index, out, len);
+                            }]);
+}
+
+/// `mars_xlog_make_logfile_name_instance` — the day's names, whether or not the
+/// files are there yet.
+- (void)logFileNames:(FlutterMethodCall *)call result:(FlutterResult)result {
+  long long instance = [self instanceForCall:call result:result];
+  if (instance == 0) {
+    return;
+  }
+  XlogAnswer(result, [self dayPathsOfInstance:instance
+                         daysAgo:XlogInt(call.arguments, @"daysAgo", 0)
+                            with:^int(long long instance, int timespan, unsigned int index, char *out,
+                                      unsigned int len) {
+                              return mars_xlog_make_logfile_name_instance(instance, timespan, index, out, len);
+                            }]);
+}
+
+/// A day of paths, walked index by index until the symbol answers that there is
+/// nothing at that index — the list the C++ fills a `std::vector` with, asked
+/// one at a time.
+- (NSArray<NSString *> *)dayPathsOfInstance:(long long)instance
+                                    daysAgo:(int)timespan
+                                       with:(int (^)(long long, int, unsigned int, char *, unsigned int))pathAt {
+  NSMutableArray<NSString *> *walked = [NSMutableArray array];
+  for (unsigned int index = 0;; index++) {
+    NSString *found = XlogPath(^(char *out, uint32_t len) {
+      return pathAt(instance, timespan, index, out, len);
+    });
+    if (found == nil) {
+      break;
+    }
+    [walked addObject:found];
+  }
+  return walked;
 }
 
 /// `mars_xlog_write_instance`. The file, the function and the line are left
@@ -175,7 +268,7 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
                            "",
                            0,
                            XlogString(arguments, @"message").UTF8String);
-  result(nil);
+  XlogAnswer(result, nil);
 }
 
 /// `mars_xlog_is_enabled_for`: whether a record of the level would be written,
@@ -186,7 +279,7 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
     return;
   }
   int level = XlogInt(call.arguments, @"level", MarsLevelInfo);
-  result(@(mars_xlog_is_enabled_for(instance, level) != 0));
+  XlogAnswer(result, @(mars_xlog_is_enabled_for(instance, level) != 0));
 }
 
 /// `mars_xlog_flush_now_instance`: the drain is on the thread this is called
@@ -203,7 +296,7 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
     mars_xlog_flush_now_instance(instance);
     dispatch_async(dispatch_get_main_queue(), ^{
-      result(nil);
+      XlogAnswer(result, nil);
     });
   });
 }
@@ -215,7 +308,7 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
     return;
   }
   mars_xlog_request_flush_instance(instance);
-  result(nil);
+  XlogAnswer(result, nil);
 }
 
 /// `mars_xlog_set_level_instance`.
@@ -225,17 +318,9 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
     return;
   }
   mars_xlog_set_level_instance(instance, XlogInt(call.arguments, @"level", MarsLevelInfo));
-  result(nil);
+  XlogAnswer(result, nil);
 }
 
-/// `mars_xlog_get_level`: what the appender answers, and not what Dart holds.
-- (void)getLevel:(FlutterMethodCall *)call result:(FlutterResult)result {
-  long long instance = [self instanceForCall:call result:result];
-  if (instance == 0) {
-    return;
-  }
-  result(@(mars_xlog_get_level(instance)));
-}
 
 /// `mars_xlog_set_mode_instance`.
 - (void)setMode:(FlutterMethodCall *)call result:(FlutterResult)result {
@@ -244,7 +329,7 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
     return;
   }
   mars_xlog_set_mode_instance(instance, XlogInt(call.arguments, @"mode", MarsAppenderAsync));
-  result(nil);
+  XlogAnswer(result, nil);
 }
 
 /// `mars_xlog_set_console_log_instance`.
@@ -256,7 +341,7 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   NSNumber *enabled = call.arguments[@"enabled"];
   BOOL on = [enabled isKindOfClass:NSNumber.class] ? enabled.boolValue : NO;
   mars_xlog_set_console_log_instance(instance, on ? 1 : 0);
-  result(nil);
+  XlogAnswer(result, nil);
 }
 
 /// `mars_xlog_set_max_file_size_instance`.
@@ -267,7 +352,7 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   }
   unsigned long long bytes = XlogUnsignedLong(call.arguments, @"bytes", 0);
   mars_xlog_set_max_file_size_instance(instance, bytes);
-  result(nil);
+  XlogAnswer(result, nil);
 }
 
 /// `mars_xlog_set_max_alive_duration_instance`.
@@ -277,35 +362,35 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
     return;
   }
   mars_xlog_set_max_alive_duration_instance(instance, XlogLong(call.arguments, @"seconds", 0));
-  result(nil);
+  XlogAnswer(result, nil);
 }
 
 /// `mars_xlog_release_instance`: closes the appender `open` made.
 - (void)close:(FlutterMethodCall *)call result:(FlutterResult)result {
   NSString *namePrefix = XlogString(call.arguments, @"namePrefix");
   if (self.instances[namePrefix] == nil) {
-    result(nil);
+    XlogAnswer(result, nil);
     return;
   }
   mars_xlog_release_instance(namePrefix.UTF8String);
   [self.instances removeObjectForKey:namePrefix];
-  result(nil);
+  XlogAnswer(result, nil);
 }
 
 #pragma mark - The appender of a call
 
 /// The handle of the appender the prefix of `call` names, or `0` with `result`
-/// answered: no handle is the process-wide appender to the C ABI, so a call that
-/// went on with one would write through whatever appender the rest of the
-/// process writes through.
+/// answered: a handle whose appender is gone is a no-op to the C ABI, so a call
+/// that went on with one would silently write nothing.
 - (long long)instanceForCall:(FlutterMethodCall *)call result:(FlutterResult)result {
   NSString *namePrefix = XlogString(call.arguments, @"namePrefix");
   NSNumber *handle = self.instances[namePrefix];
   if (handle == nil) {
-    result([FlutterError errorWithCode:kXlogError
-                               message:[NSString stringWithFormat:
-                                                     @"no appender of '%@' is open", namePrefix]
-                               details:nil]);
+    XlogAnswer(result,
+               [FlutterError errorWithCode:kXlogError
+                                   message:[NSString stringWithFormat:
+                                                         @"no appender of '%@' is open", namePrefix]
+                                   details:nil]);
     return 0;
   }
   return handle.longLongValue;

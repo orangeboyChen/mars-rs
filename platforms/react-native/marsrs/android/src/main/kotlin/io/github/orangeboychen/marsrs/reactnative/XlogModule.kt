@@ -1,4 +1,4 @@
-// The Android half of `marsrs-react-native`: the thirteen methods of the
+// The Android half of `marsrs-react-native`: the sixteen methods of the
 // `Xlog` native module, each of them a straight call of a member of `Xlog` —
 // the Kotlin face of `libmarsrsxlog.so` in the `marsrs` AAR, the AAR of the
 // whole port, and the same class `platforms/kmp/marsrs-xlog` publishes to a
@@ -31,9 +31,11 @@
 
 package io.github.orangeboychen.marsrs.reactnative
 
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReadableMap
+import com.facebook.react.bridge.WritableArray
 import io.github.orangeboychen.marsrs.xlog.AppenderMode
 import io.github.orangeboychen.marsrs.xlog.CompressMode
 import io.github.orangeboychen.marsrs.xlog.LogLevel
@@ -79,23 +81,30 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
         if (appenders.containsKey(namePrefix)) {
             return true
         }
-        val xlogConfig = XlogConfig(
-            logDir = config.string("logDir"),
-            namePrefix = namePrefix,
-            level = LogLevel.of(config.int("level", LogLevel.INFO.ordinal)),
-            mode = appenderModeOf(config.int("mode", AppenderMode.ASYNC.ordinal)),
-            pubKey = config.string("pubKey"),
-            compressMode = compressModeOf(config.int("compressMode", CompressMode.ZLIB.ordinal)),
-            compressLevel = config.int("compressLevel", DEFAULT_COMPRESS_LEVEL),
-            cacheDir = config.optionalString("cacheDir"),
-            cacheDays = config.int("cacheDays", NO_CACHE_DAYS)
-        )
+        // Both calls and not the open only: `XlogConfig` is where a blank
+        // `logDir`, a negative `cacheDays` and a compression level out of
+        // range are refused, and it throws before `Xlog.open` is ever reached
+        // — so a `try` around the open alone is a `try` around nothing.
         val xlog = try {
-            Xlog.open(xlogConfig)
+            Xlog.open(
+                XlogConfig(
+                    logDir = config.string("logDir"),
+                    namePrefix = namePrefix,
+                    level = LogLevel.of(config.int("level", LogLevel.INFO.ordinal)),
+                    mode = appenderModeOf(config.int("mode", AppenderMode.ASYNC.ordinal)),
+                    pubKey = config.string("pubKey"),
+                    compressMode = compressModeOf(
+                        config.int("compressMode", CompressMode.ZLIB.ordinal)
+                    ),
+                    compressLevel = config.int("compressLevel", DEFAULT_COMPRESS_LEVEL),
+                    cacheDir = config.optionalString("cacheDir"),
+                    cacheDays = config.int("cacheDays", NO_CACHE_DAYS)
+                )
+            )
         } catch (e: IllegalArgumentException) {
             return false
         }
-        appenders[xlogConfig.namePrefix] = xlog
+        appenders[xlog.namePrefix] = xlog
         return true
     }
 
@@ -107,6 +116,20 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
     override fun log(namePrefix: String, level: Double, tag: String, message: String) {
         appender(namePrefix)?.log(LogLevel.of(level.toInt()), tag, message)
     }
+
+    /** `Xlog.currentLogPath`: the directory this appender writes its files
+     * into, or `null` once it is closed. */
+    override fun currentLogPath(namePrefix: String): String? = appender(namePrefix)?.currentLogPath
+
+    /** `Xlog.logFiles`: the day's files that are there. */
+    override fun logFiles(namePrefix: String, daysAgo: Double): WritableArray? =
+        appender(namePrefix)?.logFiles(daysAgo.toLong())?.let { Arguments.fromList(it) }
+            ?: Arguments.createArray()
+
+    /** `Xlog.logFileNames`: the day's names, whether or not they are there yet. */
+    override fun logFileNames(namePrefix: String, daysAgo: Double): WritableArray? =
+        appender(namePrefix)?.logFileNames(daysAgo.toLong())?.let { Arguments.fromList(it) }
+            ?: Arguments.createArray()
 
     /** `Xlog.isLoggable`: whether a record of the level would be written. */
     override fun isLoggable(namePrefix: String, level: Double): Boolean =
@@ -175,9 +198,9 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
     /**
      * The appender of [namePrefix], or `null` when there is none — which is a
      * no-op and not a crash, the same answer the Swift and the Kotlin give an
-     * `Xlog` that is closed: no appender is the process-wide one to
-     * `marsrs-jni`, so a call that went on without one would write through
-     * whatever appender the rest of the process writes through.
+     * `Xlog` that is closed: a handle whose appender is gone is a no-op to
+     * `marsrs-jni`, so a call that went on without one would silently write
+     * nothing.
      */
     private fun appender(namePrefix: String): Xlog? = appenders[namePrefix]?.takeIf { it.isOpen }
 

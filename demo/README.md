@@ -40,11 +40,15 @@ whether the call is a future.
 4. **Close.** Which drains what is left.
 
 The file that comes out is `<prefix>_<YYYYMMDD>.xlog`, and
-[the CLI](../docs/cli.md) reads it:
+[the CLI](../docs/xlog/cli.md) reads it:
 
 ```bash
-marsrs-xlog-cli decode log/marsrs_20260929.xlog
+xlog decode log/marsrs_20260929.xlog
 ```
+
+`xlog` is the binary `cargo install marsrs-xlog` puts on the `$PATH`; a release
+carries the same command inside an archive, and there it is
+`./marsrs-xlog-cli-<host>/xlog`.
 
 ## Which of them are complete projects
 

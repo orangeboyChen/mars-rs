@@ -13,34 +13,48 @@
 appender 用了同一个前缀就写同一个文件，关掉其中一个，另一个也就写不了了。
 哪一块日志要单独读，就给它一个自己的前缀。
 
-当前正在写的那个文件在哪：
+appender 写到哪：
 
 ::: code-group
 
 ```rust [Rust]
-xlog.current_log_path()                  // Option<PathBuf>
-appender_get_current_log_path()          // 进程级那个 appender 的
+xlog.current_log_path()                  // Option<PathBuf>，是目录
 ```
 
 ```swift [Swift]
-Xlog.currentLogPath
-```
-
-```typescript [HarmonyOS]
-xlog.currentLogPath             // 当天第一条记录写出之前是 undefined
+log.currentLogPath
 ```
 
 ```c [C]
 char path[512];
-mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK，或负的错误码
+mars_xlog_current_log_path_instance(handle, path, sizeof path);   // 字节数，或负的错误码
+```
+
+```kotlin [Android]
+xlog.currentLogPath
+```
+
+```kotlin [Kotlin Multiplatform]
+xlog.currentLogPath
+```
+
+```typescript [HarmonyOS]
+xlog.currentLogPath
+```
+
+```dart [Flutter]
+await xlog.currentLogPath()
+```
+
+```ts [React Native]
+xlog.currentLogPath
 ```
 
 :::
 
-能给出这个路径的就是这四个包。其余平台要 App 自己拼出文件名，拼的时候用的还是交给
-配置的那两样：目录和前缀，中间夹着当天日期。Swift 和 C 给的是进程级那个 appender 的，
-也就是 `mars_xlog_open` 打开的那个；鸿蒙没有进程级的 appender，所以
-`xlog.currentLogPath` 是问的那个 `Xlog` 自己的。
+这里的每个包都能给出这个路径，给出的都是这个 `Xlog` 写进的那个 **目录** —— 是目录而
+不是文件，C++ 的 `GetCurrentLogPath` 交回来的就是它。当天的**文件**是下面那个问题；两
+个问题合起来，App 就不需要自己拼一天的名字了。
 
 一整**天**的文件是另一件事，要上传昨天日志的 App 问的就是它。这里有两个调用：一个是
 确实存在的那些文件，一个是这一天会写进哪几个名字 —— 不管文件在不在：
@@ -48,13 +62,30 @@ mars_xlog_current_log_path(path, sizeof path);   // MARS_XLOG_OK，或负的错�
 ::: code-group
 
 ```rust [Rust]
-appender_getfilepath_from_timespan(1, "marsrs", Path::new(log_dir))  // 昨天的、确实存在的
-appender_make_logfile_name(1, "marsrs", Path::new(log_dir))          // 名字，不管在不在
+xlog.log_files(1)      // 昨天的、确实存在的
+xlog.log_file_names(1) // 名字，不管在不在
 ```
 
 ```swift [Swift]
-Xlog.logFiles(daysAgo: 1, prefix: "marsrs", logDirectory: logDir)
-Xlog.logFileNames(daysAgo: 1, prefix: "marsrs", logDirectory: logDir)
+log.logFiles(daysAgo: 1)
+log.logFileNames(daysAgo: 1)
+```
+
+```c [C]
+char path[512];
+// 下标 0、1、2 ……；负的错误码 —— MARS_XLOG_ERR_NO_PATH —— 表示后面没有了
+mars_xlog_getfilepath_from_timespan_instance(handle, 1, 0, path, sizeof path);
+mars_xlog_make_logfile_name_instance(handle, 1, 0, path, sizeof path);
+```
+
+```kotlin [Android]
+xlog.logFiles(1L)
+xlog.logFileNames(1L)
+```
+
+```kotlin [Kotlin Multiplatform]
+xlog.logFiles(1L)
+xlog.logFileNames(1L)
 ```
 
 ```typescript [HarmonyOS]
@@ -62,17 +93,20 @@ xlog.logFiles(1)
 xlog.logFileNames(1)
 ```
 
-```c [C]
-char path[512];
-// 下标 0、1、2 ……；负的错误码 —— MARS_XLOG_ERR_NO_PATH —— 表示后面没有了
-mars_xlog_getfilepath_from_timespan(1, "marsrs", log_dir, 0, path, sizeof path);
-mars_xlog_make_logfile_name(1, "marsrs", log_dir, 0, path, sizeof path);
+```dart [Flutter]
+await xlog.logFiles(1)
+await xlog.logFileNames(1)
+```
+
+```ts [React Native]
+xlog.logFiles(1)
+xlog.logFileNames(1)
 ```
 
 :::
 
-`0` 是今天，`1` 是昨天。Rust、Swift 和鸿蒙一次给出这一天的全部；C ABI 一次只给一个下标，
-另外三个包的那两个调用做的就是一趟走完它的事。配了缓存目录、而且文件确实存在时，“名字”
+`0` 是今天，`1` 是昨天。Rust 和 Swift 一次给出这一天的全部，而且给出的是**这个
+`Xlog` 所属的那一天**；C ABI 一次只给一个下标，C 那两个调用做的就是一趟走完它的事。配了缓存目录、而且文件确实存在时，“名字”
 会比“文件”多出一个：日志目录里那个，和它在缓存目录里的孪生文件。
 
 ## 异步：记录可能还在缓存里
@@ -113,7 +147,7 @@ xlog.flushNow()
 ```
 
 ```c [C]
-mars_xlog_flush_now_instance(0);
+mars_xlog_flush_now_instance(handle);
 ```
 
 :::
@@ -122,9 +156,9 @@ mars_xlog_flush_now_instance(0);
 
 | 调用 | 做什么 |
 |---|---|
-| `requestFlush()` —— `xlog.request_flush()`、`mars_xlog_request_flush_instance(0)` | 提出一次排空，然后立刻返回：它返回了，不代表记录已经在文件里，它也不说排空什么时候结束 |
-| `flushNow()` —— `xlog.flush_now()`、`mars_xlog_flush_now_instance(0)` | 占着调用方线程排空：它返回时记录已经在磁盘上 |
-| `await flush()` —— `xlog.flush().await`、`flush(handle)` | 同一次排空，交给别的线程：await 到它完成时，记录已经在磁盘上 |
+| `requestFlush()` —— `xlog.request_flush()`、`mars_xlog_request_flush_instance(handle)` | 提出一次排空，然后立刻返回：它返回了，不代表记录已经在文件里，它也不说排空什么时候结束 |
+| `flushNow()` —— `xlog.flush_now()`、`mars_xlog_flush_now_instance(handle)` | 占着调用方线程排空：它返回时记录已经在磁盘上 |
+| `await flush()` —— `xlog.flush().await` | 同一次排空，交给别的线程：await 到它完成时，记录已经在磁盘上 |
 
 三个调用的分别只在**谁等**，以及谁拿得到“排完了”这句话。`requestFlush()` 谁也不等
 —— 它是定时器该调的那个 —— 提出一次排空就走，剩下的是写线程的事；没排完也不丢东西：
@@ -134,9 +168,6 @@ mars_xlog_flush_now_instance(0);
 —— method channel 阻塞不了 Dart 这一侧；HarmonyOS 没有 `await flush()` —— 它的
 NAPI 每个方法都是同步的。Rust 三个都有，它的 `await flush()` 是一个用
 `std::thread::spawn` 写出来的 `Future`：不需要 runtime，任何执行器都能等它。
-
-这三个都只是**一个** appender 的。一个前缀开一个 `Xlog` 的 App 手里就有那么多个
-appender，每个都用它自己的 `flushNow()` 排空。
 
 ## App 退出的时候
 

@@ -1,9 +1,13 @@
 package io.github.orangeboychen.marsrs.xlog
 
 import io.github.orangeboychen.marsrs.xlog.ffi.MarsXLogConfig
+import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_current_log_path_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_flush_now_instance
+import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_get_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_get_level
+import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_getfilepath_from_timespan_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_is_enabled_for
+import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_make_logfile_name_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_new_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_release_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_request_flush_instance
@@ -13,11 +17,16 @@ import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_max_alive_duration_
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_max_file_size_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_mode_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_write_instance
+import kotlin.concurrent.Volatile
+import kotlinx.cinterop.ByteVar
+import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.alloc
+import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.cstr
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
+import kotlinx.cinterop.toKString
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -62,12 +71,29 @@ public actual class Xlog actual constructor(config: XlogConfig) {
             field = seconds
         }
 
+    /**
+     * The handle [close] takes away, and the one every member is forwarded
+     * through. Volatile because [close] may run on another thread than the
+     * writes it stops: nothing writes through a handle that is half of the old
+     * one and half of the new.
+     */
+    @Volatile
     private var handle: Long = newInstance(config)
 
     private var currentMode: AppenderMode = config.mode
 
+    /**
+     * Whether this appender is still open: `false` after [close] — on this
+     * `Xlog` and on every other one of this `namePrefix`, which is the same
+     * appender and is closed with this one.
+     *
+     * Both halves are needed. A prefix is one appender to the C ABI, so two
+     * `Xlog`s of one prefix are answered the same handle and closing either
+     * releases it: the handle alone still looks open, and asking the C ABI
+     * alone answers a handle the prefix was re-opened under in the meantime.
+     */
     public actual val isOpen: Boolean
-        get() = handle != NO_HANDLE
+        get() = handle != NO_HANDLE && handle == mars_xlog_get_instance(namePrefix)
 
     public actual var level: LogLevel
         get() = LogLevel.of(mars_xlog_get_level(requireOpen()))
@@ -79,6 +105,60 @@ public actual class Xlog actual constructor(config: XlogConfig) {
             mars_xlog_set_mode_instance(requireOpen(), value.ordinal)
             currentMode = value
         }
+
+    /**
+     * What `read` writes into the buffer it is handed; `null` when it wrote
+     * nothing, which is a negative code or a path of no length.
+     *
+     * A negative code is `null` whatever it is, `MARS_XLOG_ERR_NO_SPACE` among
+     * them: a path that does not fit [PATH_BUFFER_SIZE] ends the walk the way
+     * the end of the list does.
+     */
+    private fun pathAt(read: (CPointer<ByteVar>, UInt) -> Int): String? = memScoped {
+        val buffer = allocArray<ByteVar>(PATH_BUFFER_SIZE)
+        if (read(buffer, PATH_BUFFER_SIZE.toUInt()) > 0) buffer.toKString() else null
+    }
+
+    /**
+     * The paths of one day, walked index by index until the symbol answers that
+     * there is nothing at that index: the list the C++ fills a `std::vector`
+     * with, asked one at a time.
+     */
+    private fun dayPaths(read: (UInt, CPointer<ByteVar>, UInt) -> Int): List<String> {
+        val walked = mutableListOf<String>()
+        var index = 0u
+        while (true) {
+            val found = pathAt { out, len -> read(index, out, len) } ?: break
+            walked.add(found)
+            index++
+        }
+        return walked
+    }
+
+    public actual val currentLogPath: String?
+        get() = if (isOpen) {
+            pathAt { out, len ->
+                mars_xlog_current_log_path_instance(handle, out, len)
+            }
+        } else {
+            null
+        }
+
+    public actual fun logFiles(daysAgo: Long): List<String> = if (isOpen) {
+        dayPaths { index, out, len ->
+            mars_xlog_getfilepath_from_timespan_instance(handle, daysAgoOf(daysAgo), index, out, len)
+        }
+    } else {
+        emptyList()
+    }
+
+    public actual fun logFileNames(daysAgo: Long): List<String> = if (isOpen) {
+        dayPaths { index, out, len ->
+            mars_xlog_make_logfile_name_instance(handle, daysAgoOf(daysAgo), index, out, len)
+        }
+    } else {
+        emptyList()
+    }
 
     public actual fun isLoggable(level: LogLevel): Boolean =
         isOpen && mars_xlog_is_enabled_for(handle, level.ordinal) != DISABLED
@@ -117,6 +197,13 @@ public actual class Xlog actual constructor(config: XlogConfig) {
         flushNow()
     }
 
+    /**
+     * `daysAgo` as the `Int` the C ABI takes. A `Long` outside `Int`'s range
+     * wraps rather than fails — `Long.MAX_VALUE` would ask the appender for a
+     * day in the future — so what crosses is the day clamped into it.
+     */
+    private fun daysAgoOf(daysAgo: Long): Int = daysAgo.coerceIn(NO_DAYS_AGO, Int.MAX_VALUE.toLong()).toInt()
+
     public actual fun close() {
         if (!isOpen) {
             return
@@ -127,9 +214,10 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
     /**
      * The handle of this appender, or [IllegalStateException] when there is none
-     * left to forward: no handle is the process-wide appender of `mars_xlog_open`
-     * to the C ABI, so a closed [Xlog] that handed it on would read and move the
-     * appender every other part of the process writes through.
+     * left to forward: a handle whose appender is gone is a no-op to the C ABI,
+     * so a closed [Xlog] that handed it on would silently write nothing — and
+     * one whose prefix has since been re-opened would move an appender that is
+     * not this one's.
      */
     private fun requireOpen(): Long {
         check(isOpen) {
@@ -139,6 +227,11 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     }
 
     public actual companion object {
+        /** What a path symbol writes into: a path never fills it, and a symbol
+         * that answers a length rather than a pointer is the C ABI's way of
+         * saying the caller decides how much it can hold. */
+        const val PATH_BUFFER_SIZE = 1024
+
         /**
          * Opens an appender of its own: the constructor of this actual, under the
          * one name every platform of the port opens one with.
@@ -147,6 +240,9 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
         /** What `mars_xlog_new_instance` answers for a config it opened nothing for. */
         const val NO_HANDLE = 0L
+
+        /** `0` is today, and no day is before it. */
+        const val NO_DAYS_AGO = 0L
 
         /** `mars_xlog_set_console_log_instance` reads a non-zero `open` as on. */
         const val CONSOLE_LOG_OPEN = 1

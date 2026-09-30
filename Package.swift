@@ -42,7 +42,7 @@
 //  file name asks for nothing of a compiler.
 //
 //  Three products over two prebuilt libraries, and the first library is xlog's:
-//  the C ABI is 28 `mars_xlog_*` symbols and nothing else, which is why its
+//  the C ABI is 16 `mars_xlog_*` symbols and nothing else, which is why its
 //  artifact is named after xlog and not after the port — orangeboyChen/mars publishes
 //  `MarsXlog.xcframework` for the same reason, and taking xlog alone is the only
 //  thing its package offers. `MarsRSXlog` is the Swift over it.

@@ -102,4 +102,8 @@ JSON
 # `--pretty false`: a red box of colour escapes is not what a run log wants.
 "$tsc" --pretty false -p "$work/tsconfig.json"
 
-echo "type-checked $(find "$work" -name '*.ts' -not -name 'napi_shim.ts' | wc -l | tr -d ' ') ArkTS file(s) of $types as TypeScript"
+# What the run above actually read, and not what the directory holds:
+# `hvigorfile.ts` is excluded above, so counting it would claim a file the
+# compiler was told to leave alone.
+echo "type-checked $(find "$work" -name '*.ts' -not -name 'napi_shim.ts' -not -name 'hvigorfile.ts' |
+    wc -l | tr -d ' ') ArkTS file(s) of $types as TypeScript"

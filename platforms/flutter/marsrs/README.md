@@ -30,7 +30,9 @@ Kotlin and in Swift: the channel is crossed without the caller waiting for it. `
 of that kind too — it tells the writer thread to drain and returns at once —
 and `flush()` is the drain an app waits for. What answers a `Future` is
 what an app can act on — the appender `open` opens, the drain `flush()`
-and `close()` wait for, and the answer `isLoggable` gives.
+and `close()` wait for, the answer `isLoggable` gives, and the three that
+name files: `currentLogPath()`, `logFiles(daysAgo)` and
+`logFileNames(daysAgo)`.
 
 ## Installing it
 
@@ -67,7 +69,7 @@ package out of it.
 `marsrs_xlog` is this plugin with the logging half only, and the two
 are the pair the AARs of `platforms/android/` are — `mars-rs` and `marsrs-xlog`
 — and the pair `MarsRS` and `MarsRSXlog` of `Package.swift` are. Today they are
-the same package under two names: the C ABI is 28 `mars_xlog_*` symbols and
+the same package under two names: the C ABI is 16 `mars_xlog_*` symbols and
 nothing else, and `scripts/build_xcframework.sh` fails the day it is not, so
 taking this one costs exactly what `marsrs_xlog` costs and the
 difference between the two is the promise, not the bytes. STN and SDT land here

@@ -2,10 +2,10 @@
 //! friends, so that a record written through the FFI names the process and the
 //! thread it came from the way the C++ would have.
 //!
-//! The **level filter** is not here: it lives in `marsrs-appender`'s default
-//! logger (handle `0`, [`marsrs_appender::set_level`]), which is also what
-//! answers `get_level` / `is_enabled_for` for every instance. Two stores would
-//! answer two different levels for the same logger.
+//! The **level filter** is not here: it lives in the instance the handle
+//! names ([`marsrs_appender::set_level`]), which is also what answers
+//! `get_level` / `is_enabled_for` for it. Two stores would answer two
+//! different levels for the same logger.
 //!
 //! Everything is lock-free and `Send + Sync`; there is no `unsafe` here.
 

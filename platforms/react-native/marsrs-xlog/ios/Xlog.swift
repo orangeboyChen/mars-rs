@@ -1,4 +1,4 @@
-// The iOS half of `marsrs-react-native-xlog`: the eleven methods of the `Xlog`
+// The iOS half of `marsrs-react-native-xlog`: the sixteen methods of the `Xlog`
 // native module, each of them a straight call of a `mars_xlog_*` symbol — the
 // C ABI of `crates/marsrs-ffi`, in the `marsrs-xlog.xcframework` the pod carries.
 //
@@ -50,8 +50,8 @@ internal final class Xlog: NSObject {
     ///
     /// `false` is a configuration it refused — an empty `logDir` or
     /// `namePrefix`, or a directory it cannot write to — and it is what the JS
-    /// caller turns into a throw rather than a handle it would write through
-    /// the process-wide appender with.
+    /// caller turns into a throw rather than a handle nothing was opened
+    /// for.
     @objc(open:)
     internal func openAppender(_ config: [AnyHashable: Any]) -> Bool {
         let logDir = string(config, "logDir")
@@ -109,6 +109,41 @@ internal final class Xlog: NSObject {
             message.withCString { cMessage in
                 mars_xlog_write_instance(handle, Int32(level), cTag, nil, nil, 0, cMessage)
             }
+        }
+    }
+
+    /// `mars_xlog_current_log_path_instance`: the directory this appender
+    /// writes its files into, or `nil` once it is closed.
+    ///
+    /// A directory and not a file, because that is what the C++'s
+    /// `GetCurrentLogPath` answers; there is no "before the day's first record"
+    /// state, and the day's file is the question `logFiles` asks.
+    @objc(currentLogPath:)
+    internal func currentLogPath(of namePrefix: String) -> String? {
+        guard let handle = handles[namePrefix] else {
+            return nil
+        }
+        return path { out, len in
+            mars_xlog_current_log_path_instance(handle, out, len)
+        }
+    }
+
+    /// `mars_xlog_getfilepath_from_timespan_instance`: the log files of
+    /// `daysAgo` days ago that are *there* — what an app that uploads
+    /// yesterday's opens. `0` is today, `1` is yesterday, and so on.
+    @objc(logFiles:daysAgo:)
+    internal func logFiles(of namePrefix: String, daysAgo: Double) -> [String] {
+        dayPaths(of: namePrefix, daysAgo: daysAgo) { handle, timespan, index, out, len in
+            mars_xlog_getfilepath_from_timespan_instance(handle, timespan, index, out, len)
+        }
+    }
+
+    /// `mars_xlog_make_logfile_name_instance`: the paths of the log files of
+    /// `daysAgo` days ago, whether or not they are there yet.
+    @objc(logFileNames:daysAgo:)
+    internal func logFileNames(of namePrefix: String, daysAgo: Double) -> [String] {
+        dayPaths(of: namePrefix, daysAgo: daysAgo) { handle, timespan, index, out, len in
+            mars_xlog_make_logfile_name_instance(handle, timespan, index, out, len)
         }
     }
 
@@ -298,4 +333,49 @@ internal final class Xlog: NSObject {
     private func int(_ config: [AnyHashable: Any], _ key: String, _ fallback: Int32) -> Int32 {
         (config[key] as? NSNumber)?.int32Value ?? fallback
     }
+    /// What `read` writes into the buffer it is handed, as a string; `nil` when
+    /// it wrote nothing — a negative code, or a path of no length.
+    ///
+    /// A negative code is `nil` whatever it is, `MARS_XLOG_ERR_NO_SPACE` among
+    /// them: a path that does not fit 1024 bytes ends the walk the way the end
+    /// of the list does. A symbol that answers a length rather than a pointer
+    /// is the C ABI's way of saying the caller decides how much it can hold.
+    private func path(of read: (UnsafeMutablePointer<CChar>, UInt32) -> Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: 1024)
+        let written = read(&buffer, UInt32(buffer.count))
+        guard written > 0 else {
+            return nil
+        }
+        return String(cString: buffer)
+    }
+
+    /// The paths of one day, walked index by index until the symbol answers that
+    /// there is nothing at that index: the list the C++ fills a `std::vector`
+    /// with, asked one at a time.
+    ///
+    /// `daysAgo` is a `Double` because JS has one number type, and it is
+    /// converted with `Int32(exactly:)` and not `Int32(_:)`: the latter traps
+    /// on a value it cannot represent — `NaN`, `Infinity`, a number out of
+    /// `Int32`'s range — and a trap on the JS thread is the app dying, where
+    /// a day nobody asked for is an empty list.
+    private func dayPaths(
+        of namePrefix: String,
+        daysAgo: Double,
+        at symbol: (Int64, Int32, UInt32, UnsafeMutablePointer<CChar>, UInt32) -> Int32
+    ) -> [String] {
+        guard let handle = handles[namePrefix], let timespan = Int32(exactly: daysAgo) else {
+            return []
+        }
+        var walked: [String] = []
+        var index: UInt32 = 0
+        while let found = path(of: { out, len in
+            symbol(handle, timespan, index, out, len)
+        }) {
+            walked.append(found)
+            index += 1
+        }
+        return walked
+    }
+
+
 }

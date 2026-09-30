@@ -66,17 +66,18 @@ export const requestFlush: (namePrefix: string) => void;
  * no promise — the wait is the call. */
 export const flushNow: (namePrefix: string) => void;
 
-/** `mars_xlog_current_log_path_instance`: the file the appender of `namePrefix`
- * is writing to, or `undefined` when it has none open yet. */
+/** `mars_xlog_current_log_path_instance`: the *directory* the appender of
+ * `namePrefix` is writing its files into — the C++ hands back `sg_logdir`, not a
+ * file. `undefined` once the appender is closed; a string from `open` on. */
 export const currentLogPath: (namePrefix: string) => string | undefined;
 
-/** `mars_xlog_getfilepath_from_timespan`: the log files of `daysAgo` days ago
- * that are *there* — `0` is today, `1` is yesterday. */
-export const logFiles: (daysAgo: number, prefix: string, logDirectory: string) => string[];
+/** `mars_xlog_getfilepath_from_timespan_instance`: the log files of `daysAgo`
+ * days ago that are *there* — `0` is today, `1` is yesterday. */
+export const logFiles: (namePrefix: string, daysAgo: number) => string[];
 
-/** `mars_xlog_make_logfile_name`: the paths of the log files of `daysAgo` days
- * ago, whether or not they are there yet. */
-export const logFileNames: (daysAgo: number, prefix: string, logDirectory: string) => string[];
+/** `mars_xlog_make_logfile_name_instance`: the paths of the log files of
+ * `daysAgo` days ago, whether or not they are there yet. */
+export const logFileNames: (namePrefix: string, daysAgo: number) => string[];
 
 /** `mars_xlog_release_instance`: closes the appender `open` made. */
 export const close: (namePrefix: string) => void;

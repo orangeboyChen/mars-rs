@@ -1,4 +1,4 @@
-// The Android half of the `marsrs_xlog` plugin: the twelve methods of
+// The Android half of the `marsrs_xlog` plugin: the fifteen methods of
 // the plugin's channel, each of them a straight call of a member of `Xlog` —
 // the Kotlin face of `libmarsrsxlog.so` in the `marsrs-xlog` AAR, and the same
 // class `platforms/kmp/marsrs-xlog` publishes to a Kotlin Multiplatform app
@@ -72,11 +72,13 @@ class XlogPlugin :
                 "flush" -> flush(call, result)
                 "requestFlush" -> requestFlush(call, result)
                 "setLevel" -> setLevel(call, result)
-                "getLevel" -> getLevel(call, result)
                 "setMode" -> setMode(call, result)
                 "setConsoleLogEnabled" -> setConsoleLogEnabled(call, result)
                 "setMaxFileSize" -> setMaxFileSize(call, result)
                 "setMaxAliveTime" -> setMaxAliveTime(call, result)
+                "currentLogPath" -> currentLogPath(call, result)
+                "logFiles" -> logFiles(call, result)
+                "logFileNames" -> logFileNames(call, result)
                 "close" -> close(call, result)
                 else -> result.notImplemented()
             }
@@ -92,8 +94,7 @@ class XlogPlugin :
      * The constructor [Xlog.open] calls is what refuses a configuration the
      * appender cannot honour — a blank `logDir` or `namePrefix`, a compression
      * level out of range — and its `IllegalArgumentException` is what the caller
-     * is answered with, rather than a handle it would write through the
-     * process-wide appender with.
+     * is answered with, rather than a handle nothing was opened for.
      */
     private fun open(call: MethodCall, result: Result) {
         val config = XlogConfig(
@@ -109,6 +110,24 @@ class XlogPlugin :
         )
         appenders[config.namePrefix] = Xlog.open(config)
         result.success(null)
+    }
+
+    /**
+     * The directory the appender of `namePrefix` writes its files into, or
+     * `null` once it is closed.
+     */
+    private fun currentLogPath(call: MethodCall, result: Result) {
+        result.success(call.appender().currentLogPath)
+    }
+
+    /** The day's files that are there — `0` is today, `1` is yesterday. */
+    private fun logFiles(call: MethodCall, result: Result) {
+        result.success(call.appender().logFiles(call.long("daysAgo", 0)))
+    }
+
+    /** The day's names, whether or not the files are there yet. */
+    private fun logFileNames(call: MethodCall, result: Result) {
+        result.success(call.appender().logFileNames(call.long("daysAgo", 0)))
     }
 
     /**
@@ -154,11 +173,6 @@ class XlogPlugin :
         result.success(null)
     }
 
-    /** `Xlog.level`, read: what `marsrs-jni` answers, and not what Kotlin holds. */
-    private fun getLevel(call: MethodCall, result: Result) {
-        result.success(call.appender().level.ordinal)
-    }
-
     /** `Xlog.mode`. */
     private fun setMode(call: MethodCall, result: Result) {
         call.appender().mode = appenderMode(call.int("mode", AppenderMode.ASYNC.ordinal))
@@ -192,9 +206,9 @@ class XlogPlugin :
 
     /**
      * The appender of the prefix this call carries, or [IllegalStateException]
-     * when there is none: no appender is the process-wide one to `marsrs-jni`,
-     * so a call that went on without one would write through whatever appender
-     * the rest of the process writes through.
+     * when there is none: a handle whose appender is gone is a no-op to
+     * `marsrs-jni`, so a call that went on without one would silently write
+     * nothing.
      */
     private fun MethodCall.appender(): Xlog {
         val namePrefix = string("namePrefix")

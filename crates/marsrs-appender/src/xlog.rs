@@ -2,13 +2,11 @@
 //! and of `include/mars_xlog.hpp`, over the handle [`crate::category`] answers.
 //!
 //! Every platform of the port opens one of these and writes through it, and
-//! Rust was the one that did not: what it had instead was three layers of free
-//! functions — the process-wide `appender_write`, the `appender_*_instance`
-//! family over an id of its own, and [`crate::category`] over a handle — and an
-//! app that wanted a second logger had to know which of the three to reach for.
-//! This is the one an app takes, and it covers all three: [`Xlog::open`] is the
-//! category's, registered under a prefix, and [`Xlog::open_unregistered`] is the
-//! appender layer's, which is what a second writer over one prefix needs.
+//! Rust was the one that did not: what it had instead was two layers of free
+//! functions — an `appender_*_instance` family over an id of its own, and
+//! [`crate::category`] over a handle — and an app that wanted a logger had to
+//! know which of the two to reach for. This is the one an app takes, and
+//! [`Xlog::open`] is the category's: one appender, registered under a prefix.
 //!
 //! ```no_run
 //! use marsrs_appender::{LogLevel, XLogConfig, Xlog};
@@ -27,9 +25,8 @@
 //!
 //! What is underneath is the plumbing and not the API: [`crate::category`] is
 //! the seam the C ABI and the JNI bridge are written over — a handle, because
-//! neither of the two has an object to hold — and the process-wide
-//! [`crate::appender_open`] is the one call that installs the appender handle
-//! `0` means. An app takes [`Xlog`] and has no reason to name either.
+//! neither of the two has an object to hold. An app takes [`Xlog`] and has no
+//! reason to name it.
 //!
 //! Two things are the object's own. Every member is safe to call from any
 //! thread, and [`Xlog`] is `Send` and `Sync` — the four the appender has no
@@ -53,31 +50,21 @@ use crate::category::{
 use crate::config::{AppenderError, AppenderMode, LogLevel, XLogConfig, XLoggerInfo};
 use crate::file_util::now_timeval;
 use crate::flush::Flush;
-use crate::{
-    appender_close_instance, appender_flush_instance, appender_flush_now_instance,
-    appender_get_current_log_path_instance, appender_open_instance,
-    appender_request_flush_instance, appender_set_console_log_instance,
-    appender_set_max_alive_duration_instance, appender_set_max_file_size_instance,
-    appender_set_mode_instance, appender_write_instance, AppenderId,
-};
+use crate::{current_log_file_names, current_log_files};
 
 /// An appender of an app's own: build one when the app starts, then write
 /// through it from wherever there is something to say.
 ///
 /// A write is a tag and a message, the pair every platform of the port spells;
-/// the file, the function and the line of the record are empty unless
-/// [`Xlog::log_with_info`] names them, which is what Kotlin writes too — Rust
-/// has no `#file` to fill one in with. A record is dropped before anything is
-/// formatted when its level is below [`Xlog::level`], so a message that is
-/// expensive to build is worth an `if xlog.is_loggable(LogLevel::Debug)` first.
+/// the file, the function and the line of the record are empty, which is what
+/// Kotlin writes too — Rust has no `#file` to fill one in with. A record is
+/// dropped before anything is formatted when its level is below
+/// [`Xlog::level`], so a message that is expensive to build is worth an
+/// `if xlog.is_loggable(LogLevel::Debug)` first.
 ///
-/// What this `Xlog` writes through: a category — registered under a prefix,
-/// handle [`DEFAULT_HANDLE`] included — or an appender no prefix is registered
-/// for.
-enum Target {
-    Category(XloggerHandle),
-    Appender(AppenderId),
-}
+/// What this `Xlog` writes through is a category: one appender, registered
+/// under a prefix the [`crate::category`] table holds.
+struct Target(XloggerHandle);
 
 /// One thing two `Xlog`s of one prefix do *not* share: the four the appender has
 /// no getter for are a per-object answer, so `set_mode` on one moves the
@@ -88,17 +75,9 @@ enum Target {
 pub struct Xlog {
     /// The handle [`crate::category`] answered; `DEFAULT_HANDLE` once
     /// [`Xlog::close`] ran, which is the appender of every other `Xlog` of
-    /// this prefix as well — and for an unregistered one from the start.
+    /// this prefix as well.
     handle: AtomicU64,
-    /// The appender of an [`Xlog::open_unregistered`]: an id no prefix is
-    /// registered for, which is what makes it a *second* writer over a prefix
-    /// that already has one. `0` for every other `Xlog`.
-    appender: AtomicU64,
     name_prefix: String,
-    /// The level of an unregistered `Xlog`, which has no category to keep one:
-    /// a category is what a prefix is registered under, and this one has no
-    /// prefix. Every other `Xlog` reads its level from the category instead.
-    level: AtomicU8,
     /// The four below are answers of this object's own and not of the
     /// appender's: the appender has no getter for them, so what they answer is
     /// the last value written through this `Xlog` — as on every platform.
@@ -152,51 +131,7 @@ impl Xlog {
 
         Ok(Self {
             handle: AtomicU64::new(handle),
-            appender: AtomicU64::new(0),
-            name_prefix: config.nameprefix,
-            level: AtomicU8::new(level as u8),
-            mode: AtomicU8::new(config.mode as u8),
-            console_log_enabled: AtomicBool::new(false),
-            max_file_size_bytes: AtomicU64::new(0),
-            max_alive_time_seconds: AtomicU64::new(0),
-        })
-    }
-
-    /// Opens an appender that is *not* registered under `config.nameprefix`:
-    /// what [`Xlog::open`] cannot answer, because a prefix is one appender to
-    /// the registry and that call hands back the one that is already open.
-    ///
-    /// This is the second writer over one prefix — two copies of this library
-    /// linked into one process, a React Native module beside the Kotlin one, or
-    /// the JNI and the Kotlin side both opening. Each gets a cache file of its
-    /// own and both reach the same log file, which is what
-    /// `tests/cross_writer.rs` holds the line on.
-    ///
-    /// What it does not have is a category, and so no shared level: the level is
-    /// this object's own, the way a mode or a size is, and two writers of one
-    /// prefix answer [`Xlog::level`] differently.
-    ///
-    /// # Errors
-    ///
-    /// The same two as [`Xlog::open`], plus whatever the appender refuses.
-    pub fn open_unregistered(config: XLogConfig, level: LogLevel) -> Result<Self, AppenderError> {
-        if config.logdir.as_os_str().is_empty() {
-            return Err(AppenderError(
-                "Xlog::open_unregistered: logdir is empty".to_owned(),
-            ));
-        }
-        if config.nameprefix.is_empty() {
-            return Err(AppenderError(
-                "Xlog::open_unregistered: nameprefix is empty".to_owned(),
-            ));
-        }
-
-        let id = appender_open_instance(config.clone())?;
-        Ok(Self {
-            handle: AtomicU64::new(DEFAULT_HANDLE),
-            appender: AtomicU64::new(id),
-            name_prefix: config.nameprefix,
-            level: AtomicU8::new(level as u8),
+            name_prefix: config.nameprefix.clone(),
             mode: AtomicU8::new(config.mode as u8),
             console_log_enabled: AtomicBool::new(false),
             max_file_size_bytes: AtomicU64::new(0),
@@ -218,25 +153,19 @@ impl Xlog {
 
     /// The level of this appender: a record less severe than this is dropped.
     ///
-    /// For an [`Xlog::open`] this is read from the category and not mirrored
-    /// here, so a level another part of the app set is the one this answers
-    /// with. For an [`Xlog::open_unregistered`] there is no category to read,
-    /// so it is this object's own. `None` once this `Xlog` is closed.
+    /// Read from the category and not mirrored here, so a level another part
+    /// of the app set is the one this answers with. `None` once this `Xlog` is
+    /// closed.
     pub fn level(&self) -> Option<LogLevel> {
-        match self.target()? {
-            Target::Category(handle) => get_level(handle),
-            Target::Appender(_) => Some(self.mirrored_level()),
-        }
+        get_level(self.target()?.0)
     }
 
-    /// Moves the level; a no-op once this `Xlog` is closed.
-    ///
-    /// A category's level is shared by every `Xlog` of the prefix; an
-    /// unregistered `Xlog` moves only its own.
+    /// Moves the level; a no-op once this `Xlog` is closed. A category's level
+    /// is shared by every `Xlog` of the prefix, so this moves the level of
+    /// every one of them.
     pub fn set_level(&self, level: LogLevel) {
-        self.level.store(level as u8, Ordering::Relaxed);
-        if let Some(Target::Category(handle)) = self.target() {
-            set_level(handle, level);
+        if let Some(target) = self.target() {
+            set_level(target.0, level);
         }
     }
 
@@ -253,12 +182,11 @@ impl Xlog {
 
     /// Switches async / sync; a no-op once this `Xlog` is closed.
     pub fn set_mode(&self, mode: AppenderMode) {
+        let Some(target) = self.target() else {
+            return;
+        };
         self.mode.store(mode as u8, Ordering::Relaxed);
-        match self.target() {
-            Some(Target::Category(handle)) => set_appender_mode(handle, mode),
-            Some(Target::Appender(id)) => appender_set_mode_instance(id, mode),
-            None => {}
-        }
+        set_appender_mode(target.0, mode);
     }
 
     /// Whether the console prints the log too — off until an app turns it on.
@@ -269,12 +197,11 @@ impl Xlog {
     /// Mirrors every record to the console as well as to the file; a no-op once
     /// this `Xlog` is closed.
     pub fn set_console_log_enabled(&self, enabled: bool) {
+        let Some(target) = self.target() else {
+            return;
+        };
         self.console_log_enabled.store(enabled, Ordering::Relaxed);
-        match self.target() {
-            Some(Target::Category(handle)) => set_console_log_open(handle, enabled),
-            Some(Target::Appender(id)) => appender_set_console_log_instance(id, enabled),
-            None => {}
-        }
+        set_console_log_open(target.0, enabled);
     }
 
     /// How many bytes a log file may reach before it is closed and a new one
@@ -285,12 +212,11 @@ impl Xlog {
 
     /// Sets the split size; a no-op once this `Xlog` is closed.
     pub fn set_max_file_size_bytes(&self, bytes: u64) {
+        let Some(target) = self.target() else {
+            return;
+        };
         self.max_file_size_bytes.store(bytes, Ordering::Relaxed);
-        match self.target() {
-            Some(Target::Category(handle)) => category_set_max_file_size(handle, bytes),
-            Some(Target::Appender(id)) => appender_set_max_file_size_instance(id, bytes),
-            None => {}
-        }
+        category_set_max_file_size(target.0, bytes);
     }
 
     /// How many seconds a log file is kept; `0` is the C++'s own ten days.
@@ -300,21 +226,19 @@ impl Xlog {
 
     /// Sets how long a log file is kept; a no-op once this `Xlog` is closed.
     pub fn set_max_alive_time_seconds(&self, seconds: u64) {
+        let Some(target) = self.target() else {
+            return;
+        };
         self.max_alive_time_seconds
             .store(seconds, Ordering::Relaxed);
-        match self.target() {
-            Some(Target::Category(handle)) => category_set_max_alive_duration(handle, seconds),
-            Some(Target::Appender(id)) => appender_set_max_alive_duration_instance(id, seconds),
-            None => {}
-        }
+        category_set_max_alive_duration(target.0, seconds);
     }
 
     /// Whether a record of `level` would be written: what an app asks before it
     /// builds a message that is expensive to build.
     pub fn is_loggable(&self, level: LogLevel) -> bool {
         match self.target() {
-            Some(Target::Category(handle)) => is_enabled_for(handle, level),
-            Some(Target::Appender(_)) => (self.mirrored_level() as i32) <= (level as i32),
+            Some(target) => is_enabled_for(target.0, level),
             None => false,
         }
     }
@@ -322,54 +246,23 @@ impl Xlog {
     /// Writes a record of `level`; `false` when this `Xlog` is closed or the
     /// level is below [`Xlog::level`].
     pub fn log(&self, level: LogLevel, tag: &str, message: &str) -> bool {
-        self.log_with_info(
-            Some(&XLoggerInfo {
-                level,
-                tag: Some(Cow::Borrowed(tag)),
-                ..XLoggerInfo::default()
-            }),
-            message,
-        )
-    }
-
-    /// [`Xlog::log`] with the record spelled out: the file, the function and
-    /// the line of the call site go in the `XLoggerInfo`, which is what a
-    /// caller that wants them in the record — and not only in the message —
-    /// hands in. `None` is the default record, and it is the one
-    /// [`Xlog::log`] hands in with a level and a tag on it.
-    pub fn log_with_info(&self, info: Option<&XLoggerInfo<'_>>, message: &str) -> bool {
         let Some(target) = self.target() else {
             return false;
         };
-        let mut info = match info {
-            Some(info) => info.clone(),
-            None => XLoggerInfo::default(),
+        // `-1` in the three is what asks the appender to fill the pid, the tid
+        // and the main tid in from the OS, which is a truer tid than anything
+        // this crate could gather and needs no `Looper`.
+        let info = XLoggerInfo {
+            level,
+            tag: Some(Cow::Borrowed(tag)),
+            pid: -1,
+            tid: -1,
+            maintid: -1,
+            timeval: now_timeval(),
+            ..XLoggerInfo::default()
         };
-        // `-1` in all three is what asks the appender to fill the pid, the tid
-        // and the main tid in from the OS, and `-1` is what a caller that set
-        // them itself does not get overwritten with. `Default` answers `0` for
-        // them, which is a record that then carries three wrong fields.
-        if info.pid == 0 && info.tid == 0 && info.maintid == 0 {
-            info.pid = -1;
-            info.tid = -1;
-            info.maintid = -1;
-        }
-        if info.timeval == (0, 0) {
-            info.timeval = now_timeval();
-        }
-        match target {
-            Target::Category(handle) => xlogger_write(handle, Some(&info), Some(message)),
-            Target::Appender(id) => {
-                // The gate a category would have run: an unregistered appender
-                // has no level of its own, so this object keeps one.
-                if (self.mirrored_level() as i32) > (info.level as i32) {
-                    return false;
-                }
-                appender_write_instance(id, Some(&info), message)
-            }
-        }
+        xlogger_write(target.0, Some(&info), Some(message))
     }
-
     /// [`Xlog::log`] at [`LogLevel::Verbose`].
     pub fn v(&self, tag: &str, message: &str) -> bool {
         self.log(LogLevel::Verbose, tag, message)
@@ -406,10 +299,8 @@ impl Xlog {
     /// record still in the cache sits in a file the kernel holds, so a drain
     /// that has not happened yet loses nothing.
     pub fn request_flush(&self) {
-        match self.target() {
-            Some(Target::Category(handle)) => category_request_flush(handle),
-            Some(Target::Appender(id)) => appender_request_flush_instance(id),
-            None => {}
+        if let Some(target) = self.target() {
+            category_request_flush(target.0);
         }
     }
 
@@ -417,10 +308,8 @@ impl Xlog {
     /// hands the file's own buffer to the OS: the records are on the disk when
     /// this returns, and what it costs is the time the drain takes.
     pub fn flush_now(&self) {
-        match self.target() {
-            Some(Target::Category(handle)) => category_flush_now(handle),
-            Some(Target::Appender(id)) => appender_flush_now_instance(id),
-            None => {}
+        if let Some(target) = self.target() {
+            category_flush_now(target.0);
         }
     }
 
@@ -434,8 +323,7 @@ impl Xlog {
     #[must_use = "a flush that is not awaited does not drain"]
     pub fn flush(&self) -> Flush {
         match self.target() {
-            Some(Target::Category(handle)) => category_flush(handle),
-            Some(Target::Appender(id)) => appender_flush_instance(id),
+            Some(target) => category_flush(target.0),
             None => Flush::noop(),
         }
     }
@@ -445,50 +333,31 @@ impl Xlog {
     /// answers no handle at all. Safe to call twice, and safe to leave to the
     /// destructor of an `Xlog` that goes out of scope.
     pub fn close(&self) {
-        match self.target() {
-            Some(Target::Category(handle)) => {
-                // A prefix is one appender, so two `Xlog`s of one prefix hold
-                // one handle between them — and releasing takes the prefix and
-                // not the handle, which drops whatever the prefix answers
-                // *now*. Once this object's twin closed the appender and a
-                // third one reopened the prefix, releasing here would close an
-                // appender that is not ours.
-                if get_xlogger_instance(&self.name_prefix) == handle {
-                    release_xlogger_instance(&self.name_prefix);
-                }
-                self.handle.store(DEFAULT_HANDLE, Ordering::Relaxed);
-            }
-            // No prefix to release: an unregistered appender is this object's
-            // alone, which is the whole point of it.
-            Some(Target::Appender(id)) => {
-                appender_close_instance(id);
-                self.appender.store(0, Ordering::Relaxed);
-            }
-            None => {}
+        let Some(target) = self.target() else {
+            return;
+        };
+        // A prefix is one appender, so two `Xlog`s of one prefix hold one
+        // handle between them — and releasing takes the prefix and not the
+        // handle, which drops whatever the prefix answers *now*. Once this
+        // object's twin closed the appender and a third one reopened the
+        // prefix, releasing here would close an appender that is not ours.
+        if get_xlogger_instance(&self.name_prefix) == target.0 {
+            release_xlogger_instance(&self.name_prefix);
         }
+        self.handle.store(DEFAULT_HANDLE, Ordering::Relaxed);
     }
 
     /// What this `Xlog` writes through, or `None` once [`Xlog::close`] ran.
     fn target(&self) -> Option<Target> {
         let handle = self.handle.load(Ordering::Relaxed);
-        if handle != DEFAULT_HANDLE {
-            return Some(Target::Category(handle));
-        }
-        let appender = self.appender.load(Ordering::Relaxed);
-        (appender != 0).then_some(Target::Appender(appender))
-    }
-
-    /// The level an unregistered `Xlog` keeps for itself.
-    fn mirrored_level(&self) -> LogLevel {
-        match self.level.load(Ordering::Relaxed) {
-            1 => LogLevel::Debug,
-            2 => LogLevel::Info,
-            3 => LogLevel::Warn,
-            4 => LogLevel::Error,
-            5 => LogLevel::Fatal,
-            6 => LogLevel::None,
-            _ => LogLevel::Verbose,
-        }
+        // The table and not the handle this object cached: a prefix is one
+        // appender, so another `Xlog` of this prefix — or a `close` on it —
+        // takes the appender out from under this handle, and a stale handle is
+        // a no-op to every call it is forwarded through. Asking the table is
+        // what makes `is_open` true for the one that is open and not for the
+        // one whose twin closed the appender they share.
+        (handle != DEFAULT_HANDLE && handle == get_xlogger_instance(&self.name_prefix))
+            .then_some(Target(handle))
     }
 
     /// The directory this appender writes its files to — `XLogConfig::logdir`,
@@ -499,16 +368,38 @@ impl Xlog {
     /// named for the day its records carry, so there is no one file to answer
     /// before the first record of the day is written.
     ///
-    /// The one member no other platform carries: Kotlin, Swift, Dart and
-    /// TypeScript answer no path at all, and the C++ only has the process-wide
-    /// one. What wants it here is an upload path that reads the files back —
+    /// What wants it here is an upload path that reads the files back —
     /// `decode_log_file` and `marsrs-xlog`'s `xlog decode` both start from a
-    /// path, and `appender_getfilepath_from_timespan` is the one that names a
-    /// day's.
+    /// path — and [`Xlog::log_files`] is the one that names a day's.
     pub fn current_log_path(&self) -> Option<std::path::PathBuf> {
-        match self.target()? {
-            Target::Category(handle) => category_current_log_path(handle),
-            Target::Appender(id) => appender_get_current_log_path_instance(id),
+        category_current_log_path(self.target()?.0)
+    }
+
+    /// The log files of the day `days_ago` days ago that are *there* — what an
+    /// app that uploads yesterday's opens. `[]` when the directory holds none
+    /// of that day's. `0` is today, `1` is yesterday, and so on.
+    ///
+    /// This is a day of files and not the file being written: what
+    /// [`Xlog::current_log_path`] answers is one, and this is this appender's
+    /// own prefix and its own directory.
+    pub fn log_files(&self, days_ago: i64) -> Vec<std::path::PathBuf> {
+        match self.target() {
+            Some(target) => current_log_files(target.0, days_ago),
+            None => Vec::new(),
+        }
+    }
+
+    /// The names of the log files of the day `days_ago` days ago, whether or
+    /// not they are *there yet* — the name an app that is about to write, or
+    /// that is naming a file to someone else, asks for.
+    ///
+    /// A day's answer is the log-dir file and, when a cache dir is configured
+    /// and the file exists, its cache-dir twin, so this can answer two where
+    /// [`Xlog::log_files`] answers one.
+    pub fn log_file_names(&self, days_ago: i64) -> Vec<std::path::PathBuf> {
+        match self.target() {
+            Some(target) => current_log_file_names(target.0, days_ago),
+            None => Vec::new(),
         }
     }
 }

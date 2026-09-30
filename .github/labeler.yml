@@ -43,37 +43,38 @@
     - crates/marsrs-appender/**
     - crates/marsrs-buffer/**
     - crates/marsrs-crypt/**
-    - Sources/MarsRSXlog/**
-    - android/marsrs-xlog/**
-    - android/marsrs/src/main/kotlin/**/xlog/**
-    - kmp/marsrs-xlog/**
-    - kmp/marsrs/src/**/xlog/**
-    - flutter/marsrs-xlog/**
-    - react-native/marsrs-xlog/**
+    - platforms/apple/MarsRSXlog/**
+    - platforms/android/marsrs-xlog/**
+    - platforms/android/marsrs/src/main/kotlin/**/xlog/**
+    - platforms/kmp/marsrs-xlog/**
+    - platforms/kmp/marsrs/src/**/xlog/**
+    - platforms/flutter/marsrs-xlog/**
+    - platforms/react-native/marsrs-xlog/**
     - platforms/harmonyos/marsrs-xlog/**
 
-# The STN half. `Sources/MarsRSNet/` is one module for both halves of the net,
+# The STN half. `platforms/apple/MarsRSNet/` is one module for both halves of the
 # so its files are named apart: `Stn*.swift` is the task model and `Sdt*.swift`
 # is the diagnosis. The Android and Kotlin Multiplatform packages are split the
 # same way — and the Kotlin ones are named before the packages exist, because a
 # glob that matches nothing today matches the day the directory under it lands.
-# `kmp/marsrs/src/**/xlog/**`, up under `area: xlog`, is in the same state.
+# `platforms/kmp/marsrs/src/**/xlog/**`, up under `area: xlog`, is in the same
+# state.
 'area: stn':
 - changed-files:
   - any-glob-to-any-file:
     - crates/marsrs-stn/**
-    - Sources/MarsRSNet/Stn*.swift
-    - android/marsrs/src/main/kotlin/**/stn/**
-    - kmp/marsrs/src/**/stn/**
+    - platforms/apple/MarsRSNet/Stn*.swift
+    - platforms/android/marsrs/src/main/kotlin/**/stn/**
+    - platforms/kmp/marsrs/src/**/stn/**
 
 # The SDT half, and the same two Swift files' worth of care.
 'area: sdt':
 - changed-files:
   - any-glob-to-any-file:
     - crates/marsrs-sdt/**
-    - Sources/MarsRSNet/Sdt*.swift
-    - android/marsrs/src/main/kotlin/**/sdt/**
-    - kmp/marsrs/src/**/sdt/**
+    - platforms/apple/MarsRSNet/Sdt*.swift
+    - platforms/android/marsrs/src/main/kotlin/**/sdt/**
+    - platforms/kmp/marsrs/src/**/sdt/**
 
 # The two boundaries out of Rust. `marsrs-ffi` is the C ABI every platform
 # that is not Rust is built on; `marsrs-jni` is the JNI the Android module
@@ -108,7 +109,7 @@
 'platform: swift':
 - changed-files:
   - any-glob-to-any-file:
-    - Sources/**
+    - platforms/apple/**
     - Package.swift
     - '*.podspec'
     - scripts/build_xcframework.sh
@@ -118,7 +119,7 @@
 'platform: kotlin-kmp':
 - changed-files:
   - any-glob-to-any-file:
-    - kmp/**
+    - platforms/kmp/**
     - scripts/build_kmp_native.sh
 
 # The Android modules and the JNI crate behind them. `marsrs-jni` is Rust, but
@@ -126,7 +127,7 @@
 'platform: android':
 - changed-files:
   - any-glob-to-any-file:
-    - android/**
+    - platforms/android/**
     - crates/marsrs-jni/**
     - scripts/build_android.sh
 
@@ -153,13 +154,13 @@
 'platform: flutter':
 - changed-files:
   - any-glob-to-any-file:
-    - flutter/**
+    - platforms/flutter/**
     - scripts/package_flutter.sh
 
 'platform: react-native':
 - changed-files:
   - any-glob-to-any-file:
-    - react-native/**
+    - platforms/react-native/**
     - scripts/package_react_native.sh
 
 # The workflows, their helper scripts, Dependabot's configuration and this

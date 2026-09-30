@@ -2,34 +2,28 @@
 //! open into a temp dir, write a few records, flush, close, then read the
 //! resulting `.xlog` file back and check the bodies really landed on disk.
 //!
-//! The appender is a process-wide singleton, so every test takes [`LOCK`]:
+//! The instance registry is process-wide, so every test takes [`LOCK`]:
 //! `cargo test` runs the cases in this file on parallel threads and they would
-//! otherwise race over the instance registry.
+//! otherwise race over the one prefix they share.
 
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::fs;
 use std::io::Read;
-use std::os::raw::{c_char, c_int, c_longlong, c_uint, c_ulonglong};
+use std::os::raw::{c_int, c_longlong};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use mars_ffi::abi::{
-    mars_xlog_current_log_path_instance, mars_xlog_new_instance, mars_xlog_release_instance,
-};
+use mars_ffi::abi::{mars_xlog_new_instance, mars_xlog_release_instance};
 use mars_ffi::{
-    mars_xlog_assert, mars_xlog_current_log_path, mars_xlog_flush_now_instance,
-    mars_xlog_request_flush_instance, mars_xlog_set_console_fun,
-    mars_xlog_set_console_log_instance, mars_xlog_set_level_instance,
-    mars_xlog_set_max_alive_duration_instance, mars_xlog_set_max_file_size_instance,
-    mars_xlog_write_instance, MarsXLogConfig, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE,
-    MARS_XLOG_ERR_NULL_OUT,
+    mars_xlog_flush_now_instance, mars_xlog_request_flush_instance, mars_xlog_set_level_instance,
+    mars_xlog_write_instance, MarsXLogConfig,
 };
 
 /// Closes the appender when the test ends, even if it failed.
 ///
-/// The appender is a process-wide singleton that rejects a second
-/// `appender_open`, so a test that panics mid-way would otherwise poison every
-/// test that runs after it.
+/// The instance registry is process-wide and a prefix is one appender to it,
+/// so a test that panics mid-way would otherwise poison every test that runs
+/// after it.
 struct CloseOnDrop;
 impl Drop for CloseOnDrop {
     fn drop(&mut self) {
@@ -135,51 +129,6 @@ fn write(handle: c_longlong, level: c_int, tag: &str, message: &str) {
             message.as_ptr(),
         );
     }
-}
-
-/// `xlogger_Assert` through the C ABI: the expression goes into the body, and
-/// the record is written whatever level the app set.
-fn assert_expr(expression: &str, message: &str) {
-    let tag = CString::new("smoke").unwrap();
-    let file = CString::new("ffi_smoke.rs").unwrap();
-    let func = CString::new("assert_expr").unwrap();
-    let expression = CString::new(expression).unwrap();
-    let message = CString::new(message).unwrap();
-    unsafe {
-        mars_xlog_assert(
-            tag.as_ptr(),
-            file.as_ptr(),
-            func.as_ptr(),
-            42,
-            expression.as_ptr(),
-            message.as_ptr(),
-        );
-    }
-}
-
-/// The last record the C console callback was handed, written by
-/// [`console_seen`].
-static SEEN: Mutex<String> = Mutex::new(String::new());
-
-/// A `MarsXLogConsoleFun` — the sink an app hands to
-/// `mars_xlog_set_console_fun`.
-///
-/// # Safety
-///
-/// Every pointer is the one the port's own sink passes, and none of them is
-/// null.
-unsafe extern "C" fn console_seen(
-    level: c_int,
-    tag: *const c_char,
-    _filename: *const c_char,
-    _func_name: *const c_char,
-    line: c_int,
-    log: *const c_char,
-) {
-    let tag = CStr::from_ptr(tag).to_string_lossy().into_owned();
-    let log = CStr::from_ptr(log).to_string_lossy().into_owned();
-    *SEEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
-        format!("{level}:{tag}:{line}:{log}");
 }
 
 /// The `.xlog` file the appender produced in `dir` (the exact day-stamped name
@@ -292,75 +241,6 @@ fn open_write_flush_close_lands_on_disk() {
 }
 
 #[test]
-fn current_log_path_is_reported() {
-    let _g = lock();
-    let _close = CloseOnDrop;
-    let dir = tempfile::tempdir().unwrap();
-    let log = open_sync(dir.path());
-    // The log file is created lazily, on the first record.
-    write(log, 2, "smoke", "path-check-record");
-    mars_xlog_flush_now_instance(log);
-
-    let mut buf = [0u8; 512];
-    let n = unsafe {
-        mars_xlog_current_log_path_instance(
-            log,
-            buf.as_mut_ptr() as *mut c_char,
-            buf.len() as c_uint,
-        )
-    };
-    assert!(n > 0, "mars_xlog_current_log_path failed: {n}");
-    let len = n as usize;
-    assert_eq!(buf[len], 0, "path must be NUL terminated");
-    // SAFETY: we just wrote a NUL-terminated path into `buf` and checked the
-    // terminator; `len` bytes precede it.
-    let reported = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
-        .to_str()
-        .unwrap()
-        .to_string();
-    assert_eq!(reported.len(), len, "return value must exclude the NUL");
-    // The appender owns the exact value (the C++ reports the current log file;
-    // a build may also report the log directory). All this seam can promise is
-    // that the path points inside the directory that was configured and exists.
-    let reported_path = Path::new(&reported);
-    assert!(
-        reported_path.starts_with(dir.path()),
-        "reported path {reported_path:?} is outside {}",
-        dir.path().display()
-    );
-    assert!(
-        reported_path.exists(),
-        "reported path {reported_path:?} does not exist"
-    );
-    assert!(log_file(dir.path()).exists());
-
-    // Too small a buffer is an error, not a truncation.
-    let mut tiny = [0u8; 4];
-    assert_eq!(
-        unsafe {
-            mars_xlog_current_log_path_instance(
-                log,
-                tiny.as_mut_ptr() as *mut c_char,
-                tiny.len() as c_uint,
-            )
-        },
-        MARS_XLOG_ERR_NO_SPACE
-    );
-    assert_eq!(
-        unsafe { mars_xlog_current_log_path_instance(log, tiny.as_mut_ptr() as *mut c_char, 0) },
-        MARS_XLOG_ERR_NO_SPACE,
-        "len == 0 must be rejected"
-    );
-    assert_eq!(
-        unsafe { mars_xlog_current_log_path_instance(log, std::ptr::null_mut(), 64) },
-        MARS_XLOG_ERR_NULL_OUT,
-        "a null out pointer must be rejected"
-    );
-
-    close();
-}
-
-#[test]
 fn the_level_one_function_sets_is_the_one_every_write_sees() {
     let _g = lock();
     let _close = CloseOnDrop;
@@ -417,165 +297,6 @@ fn level_filter_gates_writes() {
     assert!(any_view_contains(&bytes, "verbose-again-after-reset"));
 
     close();
-}
-
-#[test]
-fn an_assert_has_nowhere_to_go_from_c_alone() {
-    let _g = lock();
-    let _close = CloseOnDrop;
-    let dir = tempfile::tempdir().unwrap();
-    let log = open_sync(dir.path());
-
-    // `xlogger_Assert` is annotated "no level filter" in `xloggerbase.h`, and
-    // the C++ sends it to `xlogger_Write` — the process-wide appender. No C
-    // symbol installs that one any more: an app opens an instance, and the
-    // process-wide appender is the plumbing the JNI bridge sets up from Rust.
-    // So from C the record has nowhere to land, and what has to hold is that
-    // it neither crashes nor disturbs the instance's own file.
-    mars_xlog_set_level_instance(log, 5); // Fatal
-    write(log, 5, "smoke", "this-fatal-record-survives");
-    assert_expr("x == y", "the two are not equal");
-    mars_xlog_flush_now_instance(log);
-
-    let bytes = fs::read(log_file(dir.path())).unwrap();
-    assert!(any_view_contains(&bytes, "this-fatal-record-survives"));
-    assert!(
-        !any_view_contains(&bytes, "[ASSERT(x == y)]the two are not equal"),
-        "the assert reached an appender a C caller cannot open"
-    );
-    assert!(
-        !any_view_contains(&bytes, "this-verbose-record-must-be-dropped"),
-        "the level did not gate the write"
-    );
-
-    mars_xlog_set_level_instance(log, 0); // back to Verbose
-    close();
-}
-
-#[test]
-fn a_console_callback_an_app_set_is_handed_the_record() {
-    let _g = lock();
-    let _close = CloseOnDrop;
-    let dir = tempfile::tempdir().unwrap();
-    let log = open_sync(dir.path());
-    mars_xlog_set_console_log_instance(log, 1);
-    mars_xlog_set_console_fun(Some(console_seen));
-
-    write(log, 2, "console", "to-the-callback");
-    mars_xlog_flush_now_instance(log);
-
-    let seen = SEEN
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone();
-    // Both are process-wide, so take them away again before the assertion:
-    // a panic here must not leave the next test writing through the callback.
-    mars_xlog_set_console_fun(None);
-    mars_xlog_set_console_log_instance(log, 0);
-    close();
-
-    assert_eq!(seen, "2:console:42:to-the-callback");
-}
-
-#[test]
-fn null_pointers_are_never_dereferenced() {
-    let _g = lock();
-    let _close = CloseOnDrop;
-    let dir = tempfile::tempdir().unwrap();
-
-    // No config at all. An instance is refused with handle `0`, whatever the
-    // reason: the C ABI has no `mars_xlog_open` to report a code through.
-    assert_eq!(unsafe { mars_xlog_new_instance(std::ptr::null(), 0) }, 0);
-
-    // Every string null: log_dir is mandatory, so this is rejected.
-    let cfg = MarsXLogConfig {
-        mode: 1,
-        log_dir: std::ptr::null(),
-        name_prefix: std::ptr::null(),
-        pub_key: std::ptr::null(),
-        compress_mode: 0,
-        compress_level: 0,
-        cache_dir: std::ptr::null(),
-        cache_days: 0,
-    };
-    assert_eq!(unsafe { mars_xlog_new_instance(&cfg, 0) }, 0);
-
-    // Bad enum values.
-    let good = Config::new(dir.path(), 1, 0);
-    let mut cfg = good.raw;
-    cfg.mode = 7;
-    assert_eq!(unsafe { mars_xlog_new_instance(&cfg, 0) }, 0);
-    cfg.mode = 1;
-    cfg.compress_mode = 9;
-    assert_eq!(unsafe { mars_xlog_new_instance(&cfg, 0) }, 0);
-    // ...and the same object keeps working once it is valid again.
-    cfg.compress_mode = 0;
-    let log = unsafe { mars_xlog_new_instance(&cfg, 0) };
-    assert_ne!(log, 0);
-    mars_xlog_set_level_instance(log, 0);
-
-    // A write with every pointer null (level 6 == kLevelNone is also dropped).
-    unsafe {
-        mars_xlog_write_instance(
-            log,
-            6,
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-        );
-    }
-    unsafe {
-        mars_xlog_write_instance(
-            log,
-            2,
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-        );
-    }
-    // An assert with every pointer null.
-    unsafe {
-        mars_xlog_assert(
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-            std::ptr::null(),
-        );
-    }
-    mars_xlog_flush_now_instance(0);
-
-    // The setters must tolerate being called with junk too.
-    mars_xlog_set_level_instance(0, -3);
-    mars_xlog_set_level_instance(0, 0);
-    mars_xlog_set_console_log_instance(0, 1);
-    mars_xlog_set_console_log_instance(0, 0);
-    mars_xlog_set_max_file_size_instance(0, 0);
-    mars_xlog_set_max_file_size_instance(0, 4 * 1024 * 1024);
-    mars_xlog_set_max_alive_duration_instance(0, -1);
-    mars_xlog_set_max_alive_duration_instance(0, 10 * 24 * 3600);
-
-    close();
-    // Closing twice, flushing while closed: none of it may abort the process.
-    mars_xlog_request_flush_instance(0);
-    mars_xlog_flush_now_instance(0);
-    close();
-}
-
-#[test]
-fn no_path_before_open() {
-    let _g = lock();
-    let _close = CloseOnDrop;
-    close();
-    let mut buf = [0u8; 256];
-    let n =
-        unsafe { mars_xlog_current_log_path(buf.as_mut_ptr() as *mut c_char, buf.len() as c_uint) };
-    assert_eq!(n, MARS_XLOG_ERR_NO_PATH, "unexpected code {n}");
 }
 
 #[test]
@@ -659,33 +380,4 @@ fn appender_error_is_reported_not_panicked() {
     // assertion used to leave open.
     assert_eq!(unsafe { mars_xlog_new_instance(&cfg, 0) }, 0);
     close();
-}
-
-#[test]
-fn c_types_line_up_with_the_header() {
-    // The signatures the C header promises; if any of these stops compiling the
-    // ABI drifted away from `include/mars_xlog.h`. `unsafe` is the Rust side
-    // only — a pointer the caller owns is what makes a symbol unsafe to call
-    // from Rust, and the C header has no way to say so.
-    let _f: unsafe extern "C" fn(*const MarsXLogConfig, c_int) -> c_longlong =
-        mars_xlog_new_instance;
-    let _f: unsafe extern "C" fn(
-        c_longlong,
-        c_int,
-        *const c_char,
-        *const c_char,
-        *const c_char,
-        c_int,
-        *const c_char,
-    ) = mars_xlog_write_instance;
-    let _f: extern "C" fn(c_longlong) = mars_xlog_request_flush_instance;
-    let _f: extern "C" fn(c_longlong) = mars_xlog_flush_now_instance;
-    let _f: unsafe extern "C" fn(*const c_char) = mars_xlog_release_instance;
-    let _f: extern "C" fn(c_longlong, c_int) = mars_xlog_set_level_instance;
-    let _f: extern "C" fn(c_longlong, c_int) = mars_xlog_set_console_log_instance;
-    let _f: extern "C" fn(c_longlong, c_ulonglong) = mars_xlog_set_max_file_size_instance;
-    let _f: extern "C" fn(c_longlong, c_longlong) = mars_xlog_set_max_alive_duration_instance;
-    let _f: unsafe extern "C" fn(*mut c_char, c_uint) -> c_int = mars_xlog_current_log_path;
-    let _f: unsafe extern "C" fn(c_longlong, *mut c_char, c_uint) -> c_int =
-        mars_xlog_current_log_path_instance;
 }

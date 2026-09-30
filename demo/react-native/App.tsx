@@ -22,7 +22,7 @@
 // answer is not there yet when this file is evaluated.
 
 import React, {useEffect, useState} from 'react';
-import {Button, SafeAreaView, StyleSheet, Text, View} from 'react-native';
+import {AppState, Button, SafeAreaView, StyleSheet, Text, View} from 'react-native';
 import RNFS from 'react-native-fs';
 import {
   AppenderMode,
@@ -121,6 +121,20 @@ export default function App(): React.JSX.Element {
     // thread still held.
     return () => opened.xlog?.close();
   }, []);
+
+  // Leaving the screen is the last moment the app is told anything before the
+  // OS can take the process away, and with an async appender it is the one an
+  // app has to answer with a drain. Android's AAR does that on its own, from a
+  // `Context` an app handed it; JavaScript gets no `Context`, so `AppState` is
+  // the app's half of it.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'background' || state === 'inactive') {
+        xlog?.flushNow();
+      }
+    });
+    return () => subscription.remove();
+  }, [xlog]);
 
   /** Writes one record at every level, and waits for all of them to land. */
   const writeDemoRecords = (): void => {

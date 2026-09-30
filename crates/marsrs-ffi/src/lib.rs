@@ -18,15 +18,14 @@
 //! | [`mars_xlog_set_console_log_instance`]  | `mars::xlog::appender_set_console_log(bool)`        |
 //! | [`mars_xlog_set_max_file_size_instance`]| `mars::xlog::appender_set_max_file_size(uint64_t)`  |
 //! | [`mars_xlog_set_max_alive_duration_instance`] | `mars::xlog::appender_set_max_alive_duration(long)` |
-//! | [`mars_xlog_current_log_path`]          | `mars::xlog::appender_get_current_log_path(char*,unsigned)` |
+//! | `mars_xlog_current_log_path_instance`  | the log directory of the appender of `instance`             |
 //!
-//! Every one of the instance symbols takes a handle, and `0` is the process-wide
-//! appender: the C++ it mirrors has a free function for that logger and a
-//! handle-taking one for the rest, and this seam has one spelling instead — the
-//! same thing the platforms do, where the handle is a field of the object an
-//! app holds. What a C caller has no way to do is *install* that appender:
-//! `mars_xlog_new_instance` is how an app gets a logger, and the process-wide
-//! one is the plumbing the JNI bridge sets up from Rust.
+//! Every one of the instance symbols takes a handle, and the C++ it mirrors
+//! has a free function for its process-wide appender beside each of them: this
+//! seam has one spelling instead, the same thing the platforms do, where the
+//! handle is a field of the object an app holds. No symbol here installs a
+//! process-wide appender, so handle `0` names no logger at all — it is what a
+//! failed open answers, and every symbol asked of it is a no-op.
 //!
 //! The matching C header lives next to this crate at
 //! `crates/marsrs-ffi/include/mars_xlog.h` (`include/mars_sdt.h` for the `sdt`
@@ -83,22 +82,17 @@ pub mod state;
 pub mod stn;
 
 // The Rust-side mirror of the C surface: the symbols an instance is addressed
-// through, plus the handful that are the process-wide appender's own
-// (`assert`, the two paths and the recovery helpers) — those have no instance
-// spelling, there being nothing to pick between.
-//
-// What is *not* here is the process-wide lifecycle: `mars_xlog_open`,
-// `mars_xlog_write` and `mars_xlog_close` went when the C ABI took them out.
-// An app holds an instance now, the way it does in Rust and in Kotlin, and
-// the process-wide appender is the plumbing the JNI bridge installs from
-// Rust — not a thing a C caller is offered a handle for.
+// through. There is no process-wide spelling beside them any more —
+// `mars_xlog_open`, `mars_xlog_write` and `mars_xlog_close` went when the C
+// ABI took them out, and the process-wide appender they were written over is
+// gone too. An app holds an instance, the way it does in Rust and in Kotlin.
+
 #[cfg(feature = "xlog")]
 pub use abi::{
-    mars_xlog_assert, mars_xlog_current_log_path, mars_xlog_flush_now_all,
-    mars_xlog_flush_now_instance, mars_xlog_request_flush_all, mars_xlog_request_flush_instance,
-    mars_xlog_set_console_fun, mars_xlog_set_console_log_instance, mars_xlog_set_level_instance,
+    mars_xlog_flush_now_instance, mars_xlog_request_flush_instance,
+    mars_xlog_set_console_log_instance, mars_xlog_set_level_instance,
     mars_xlog_set_max_alive_duration_instance, mars_xlog_set_max_file_size_instance,
-    mars_xlog_set_mode_instance, mars_xlog_write_instance, MarsXLogConfig, MarsXLogConsoleFun,
+    mars_xlog_set_mode_instance, mars_xlog_write_instance, MarsXLogConfig,
 };
 #[cfg(feature = "xlog")]
 pub use error::{

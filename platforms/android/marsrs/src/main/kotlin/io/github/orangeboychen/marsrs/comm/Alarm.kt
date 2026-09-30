@@ -9,7 +9,8 @@ import android.content.IntentFilter
 import android.os.Build
 import android.os.Process
 import android.os.SystemClock
-import io.github.orangeboychen.marsrs.xlog.Log
+import android.util.Log
+import java.util.Locale
 import java.util.TreeSet
 
 /**
@@ -46,7 +47,7 @@ class Alarm : BroadcastReceiver() {
         // its pid next, which is this one, and an alarm that process set is
         // not one of this one's.
         if (pid != Process.myPid()) {
-            Log.w(TAG, "onReceive id:%d, pid:%d, mypid:%d", id, pid, Process.myPid())
+            Log.w(TAG, String.format(Locale.US, "onReceive id:%d, pid:%d, mypid:%d", id, pid, Process.myPid()))
             return
         }
 
@@ -55,14 +56,17 @@ class Alarm : BroadcastReceiver() {
             var hit = false
             while (iterator.hasNext()) {
                 val next = iterator.next()
-                Log.i(TAG, "onReceive id=%d, curId=%d", id, next.id)
+                Log.i(TAG, String.format(Locale.US, "onReceive id=%d, curId=%d", id, next.id))
                 if (next.id == id) {
                     Log.i(
                         TAG,
-                        "onReceive find alarm id:%d, pid:%d, delta miss time:%d",
-                        id,
-                        pid,
-                        SystemClock.elapsedRealtime() - next.waittime
+                        String.format(
+                            Locale.US,
+                            "onReceive find alarm id:%d, pid:%d, delta miss time:%d",
+                            id,
+                            pid,
+                            SystemClock.elapsedRealtime() - next.waittime
+                        )
                     )
                     iterator.remove()
                     hit = true
@@ -72,10 +76,13 @@ class Alarm : BroadcastReceiver() {
             if (!hit) {
                 Log.e(
                     TAG,
-                    "onReceive not found id:%d, pid:%d, alarm_waiting_set.size:%d",
-                    id,
-                    pid,
-                    alarmWaitingSet.size
+                    String.format(
+                        Locale.US,
+                        "onReceive not found id:%d, pid:%d, alarm_waiting_set.size:%d",
+                        id,
+                        pid,
+                        alarmWaitingSet.size
+                    )
                 )
             }
             hit
@@ -114,12 +121,12 @@ class Alarm : BroadcastReceiver() {
             val curtime = SystemClock.elapsedRealtime()
 
             if (0 > after) {
-                Log.e(TAG, "id:%d, after:%d", id, after)
+                Log.e(TAG, String.format(Locale.US, "id:%d, after:%d", id, after))
                 return false
             }
 
             if (context == null) {
-                Log.e(TAG, "null==context, id:%d, after:%d", id, after)
+                Log.e(TAG, String.format(Locale.US, "null==context, id:%d, after:%d", id, after))
                 return false
             }
 
@@ -133,7 +140,7 @@ class Alarm : BroadcastReceiver() {
                 val iterator = alarmWaitingSet.iterator()
                 while (iterator.hasNext()) {
                     if (iterator.next().id == id) {
-                        Log.e(TAG, "id exist=%d", id)
+                        Log.e(TAG, String.format(Locale.US, "id exist=%d", id))
                         return false
                     }
                 }

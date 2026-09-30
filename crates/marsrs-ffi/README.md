@@ -15,22 +15,17 @@ layers of Mars talk to `marsrs-appender` **without** a big-bang rewrite.
 | `mars_xlog_set_console_log_instance` | `mars::xlog::appender_set_console_log(bool)`                |
 | `mars_xlog_set_max_file_size_instance` | `mars::xlog::appender_set_max_file_size(uint64_t)`        |
 | `mars_xlog_set_max_alive_duration_instance` | `mars::xlog::appender_set_max_alive_duration(long)`  |
-| `mars_xlog_current_log_path`     | `mars::xlog::appender_get_current_log_path(char*, unsigned)`   |
+| `mars_xlog_current_log_path_instance` | the log directory of the appender of `instance`             |
+| `mars_xlog_getfilepath_from_timespan_instance` | `mars::xlog::appender_getfilepath_from_timespan()`  |
+| `mars_xlog_make_logfile_name_instance` | `mars::xlog::appender_make_logfile_name()`              |
 
-Handle `0` names the process-wide appender, which the JNI bridge installs from
-Rust and which no symbol of this ABI opens, so every instance symbol is also how
-that one is asked: `mars_xlog_request_flush_instance(0)`
-asks for a drain and returns at once, answering nothing about when it is over,
-and `mars_xlog_flush_now_instance(0)` drains on the calling thread, so the records
-are on the disk when it returns. There is one spelling per operation and not
-two — the C++ has a free function for the process-wide appender beside each
-handle-taking one, and a second spelling here would be two ways to say one
-thing, which is a thing the platforms avoid by keeping the handle in the object
-an app holds.
-
-Every drain is two calls and not one carrying a flag, and no symbol of the seam
-takes a `sync`: `mars_xlog_request_flush_all()` / `mars_xlog_flush_now_all()` are
-the two that reach every appender of the process.
+There is one spelling per operation and not two: the C++ has a free function
+for its process-wide appender beside each handle-taking one, and a second
+spelling here would be two ways to say one thing — which is a thing the
+platforms avoid by keeping the handle in the object an app holds. No symbol of
+this ABI installs a process-wide appender, so handle `0` names no logger at
+all: it is what an open that failed answers, and every symbol asked of it is a
+no-op.
 
 The header is checked in at **`include/mars_xlog.h`** (hand written, no cbindgen
 step); `tests/header_sync.rs` fails if it drifts from `src/abi.rs`.
@@ -76,9 +71,8 @@ MarsXLogConfig cfg = {
 };
 
 /* The level is the second argument and not a field of the config: it belongs
-   to the logger and not to the file. `0` is both the handle of the
-   process-wide appender and what an instance that could not be opened
-   answers, so it is the one failure to handle. */
+   to the logger and not to the file. `0` is what an instance that could not
+   be opened answers, so it is the one failure to handle. */
 long long xlog = mars_xlog_new_instance(&cfg, MarsLevelInfo);
 if (xlog == 0) { /* handle */ }
 mars_xlog_write_instance(xlog, MarsLevelInfo, "tag", __FILE__, __func__, __LINE__, "hello");
@@ -134,17 +128,17 @@ log.flushNow();                                // on disk when it returns
 log.flush().get();                             // the same drain, off this thread
 ```
 
-C++17: `std::string_view` is what the console sink of `Xlog::setConsoleSink` is
-handed, and `std::future<void>` is what `flush()` answers. `Xlog` is move-only —
-a prefix is one appender, and two copies of one handle are two owners of one
-close.
+C++17: `std::optional<std::string>` is what `currentLogPath()` answers and
+`std::vector<std::string>` what `logFiles()` / `logFileNames()` answer, and
+`std::future<void>` is what `flush()` answers. `Xlog` is move-only — a prefix is
+one appender, and two copies of one handle are two owners of one close.
 
 ## Replacing a JNI call site
 
 `mars/xlog/jni/Java2C_Xlog.cc` reads an `Xlog` config object out of Java and
-calls `appender_open` + `xlogger_SetLevel`. The equivalent through this shim is
-a single `mars_xlog_new_instance(&cfg, level)` — the level is its second
-argument, and not a second call — and `logWrite` becomes one
+calls the process-wide `appender_open` + `xlogger_SetLevel`. The equivalent
+through this shim is a single `mars_xlog_new_instance(&cfg, level)` — the level
+is its second argument, and not a second call — and `logWrite` becomes one
 `mars_xlog_write_instance` (the level gate the JNI code performs with
 `xlogger_IsEnabledFor` is built in).
 
@@ -152,27 +146,23 @@ argument, and not a second call — and `logWrite` becomes one
 
 * **No panic ever unwinds into C.** Every entry point wraps its body in
   `catch_unwind`; a panic is reported as `MARS_XLOG_ERR_PANIC` (or swallowed for
-  the `void` symbols) and the message still reaches stderr. The one thing that
-  is the caller's and not an entry point is a callback it handed in — the
-  console sink of `mars_xlog_set_console_fun`: a panic inside one written in
-  Rust aborts at the `extern "C"` boundary, before any `catch_unwind` here can
-  see it.
+  the `void` symbols) and the message still reaches stderr. No symbol takes a
+  callback, so there is no `extern "C"` frame here that is not one of these
+  entry points — which is the whole of the unwind surface.
 * **No null dereference.** Every incoming pointer is null-checked; null and
-  invalid UTF-8 degrade to an empty string. `mars_xlog_oneshot_flush` returns
-  `MARS_XLOG_ERR_NULL_CONFIG` / `MARS_XLOG_ERR_EMPTY_LOG_DIR` instead of failing
-  later; `mars_xlog_new_instance` has no code to answer with, so it gives back
-  handle `0`.
-* **No truncation surprises.** `mars_xlog_current_log_path` and
-  `mars_xlog_current_log_path_instance` either write a
-  NUL-terminated path and returns its byte count (excluding the NUL) or returns
-  `MARS_XLOG_ERR_NO_SPACE` — it never writes a partial path.
+  invalid UTF-8 degrade to an empty string. `mars_xlog_new_instance` has no
+  code to answer with, so it gives back handle `0` — which no symbol asks an
+  appender through.
+* **No truncation surprises.** `mars_xlog_current_log_path_instance` either
+  writes a NUL-terminated path and returns its byte count (excluding the NUL)
+  or returns `MARS_XLOG_ERR_NO_SPACE` — it never writes a partial path.
 * **Threading.** All symbols may be called from any thread;
   `mars_xlog_new_instance` / `mars_xlog_release_instance` and the setters touch
-  process-wide state and belong in start-up / shut-down.
+  state every thread reads, and belong in start-up / shut-down.
 
 ## Where `unsafe` lives
 
 This is the only crate in the workspace allowed `unsafe`, and it is confined to
-[`src/cstr.rs`](src/cstr.rs) (three `CStr` / raw-pointer reads) and the single
-`slice::from_raw_parts_mut` in `mars_xlog_current_log_path`. Every block carries
-a `// SAFETY:` note, and `#![deny(unsafe_op_in_unsafe_fn)]` is on.
+[`src/cstr.rs`](src/cstr.rs) (three `CStr` / raw-pointer reads) and the
+`slice::from_raw_parts_mut` of the three path-answering symbols. Every block
+carries a `// SAFETY:` note, and `#![deny(unsafe_op_in_unsafe_fn)]` is on.

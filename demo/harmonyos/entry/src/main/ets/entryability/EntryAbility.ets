@@ -10,7 +10,7 @@
 import { UIAbility } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
-import { closeLogStore, openLogStore } from '../model/LogStore';
+import { closeLogStore, flushLogStore, openLogStore } from '../model/LogStore';
 
 /** The tag and the domain DevEco's own HiLog calls carry. */
 const DOMAIN: number = 0x0000;
@@ -50,5 +50,12 @@ export default class EntryAbility extends UIAbility {
 
   onBackground(): void {
     hilog.info(DOMAIN, TAG, 'the app went to the background');
+    // Leaving the screen is the last moment this app is told anything before
+    // the system can take the process away, and with an async appender it is
+    // the one an app has to answer with a drain. Android and Apple get that
+    // hook from the port itself — the AAR from a `Context`, the Swift from
+    // `didEnterBackground`; on HarmonyOS the ability is the app's own, so the
+    // app makes the call.
+    flushLogStore();
   }
 }

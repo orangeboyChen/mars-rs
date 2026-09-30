@@ -1,9 +1,11 @@
 //! Keeps `include/mars_xlog.h` and `src/abi.rs` in sync.
 //!
 //! The header is hand-maintained (there is no cbindgen step), so this test is
-//! the guard rail: every exported symbol and both enums must appear in the
+//! the guard rail: the two must export and declare the same set of
+//! `mars_xlog_*` symbols, the types and the config fields must appear in the
 //! header, and the `MARS_XLOG_ERR_*` values must match `src/error.rs`.
 
+use std::collections::BTreeSet;
 use std::fs;
 
 use mars_ffi::{
@@ -17,33 +19,84 @@ fn header() -> String {
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
 }
 
-#[test]
-fn header_declares_every_exported_symbol() {
-    let header = header();
-    for symbol in [
-        "mars_xlog_assert",
-        "mars_xlog_request_flush_all",
-        "mars_xlog_flush_now_all",
-        "mars_xlog_request_flush_instance",
-        "mars_xlog_flush_now_instance",
-        "mars_xlog_set_level_instance",
-        "mars_xlog_set_console_fun",
-        "mars_xlog_set_console_log_instance",
-        "mars_xlog_set_max_file_size_instance",
-        "mars_xlog_set_max_alive_duration_instance",
-        "mars_xlog_set_mode_instance",
-        "mars_xlog_current_log_path",
-        "mars_xlog_current_log_path_instance",
-        "mars_xlog_current_log_cache_path",
-        "mars_xlog_oneshot_flush",
-        "mars_xlog_make_logfile_name",
-        "mars_xlog_getfilepath_from_timespan",
-    ] {
-        assert!(
-            header.contains(symbol),
-            "include/mars_xlog.h is missing `{symbol}`"
-        );
+fn abi() -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/abi.rs");
+    fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+}
+
+/// Every `mars_xlog_*` name in `text`: the identifier a `mars_xlog_` starts,
+/// whether a return type, a `(` or a `;` sits in front of it.
+fn names_in(text: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let bytes = text.as_bytes();
+    for (at, _) in text.match_indices("mars_xlog_") {
+        let rest = &bytes[at..];
+        let end = rest
+            .iter()
+            .position(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_')
+            .unwrap_or(rest.len());
+        names.insert(text[at..at + end].to_owned());
     }
+    names
+}
+
+/// Every name a `#[no_mangle] pub extern "C" fn mars_xlog_*` in `src/abi.rs`
+/// exports. An empty parse is a failure and not a pass: a rename of the
+/// pattern, or a file that moved, must not read as "nothing to check".
+fn exported() -> BTreeSet<String> {
+    let names: BTreeSet<String> = abi()
+        .lines()
+        .filter(|line| line.contains("extern \"C\" fn "))
+        .flat_map(names_in)
+        .collect();
+    assert!(
+        !names.is_empty(),
+        "no `mars_xlog_*` export found in src/abi.rs"
+    );
+    names
+}
+
+/// Every `mars_xlog_*` name the header declares, wherever the declaration
+/// begins — a return type on the line in front of it, and a multi-line
+/// parameter list behind it.
+fn declared() -> BTreeSet<String> {
+    let names = names_in(&header());
+    assert!(
+        !names.is_empty(),
+        "no `mars_xlog_*` declaration found in include/mars_xlog.h"
+    );
+    names
+}
+
+/// The one direction that used to be checked and the one that was not: an
+/// export no declaration matches is a symbol a C caller cannot see, and a
+/// declaration no export matches is a link error waiting for the first app
+/// that calls it.
+#[test]
+fn the_header_and_the_abi_name_the_same_symbols() {
+    let exported = exported();
+    let declared = declared();
+
+    let missing: Vec<&String> = exported.difference(&declared).collect();
+    let orphaned: Vec<&String> = declared.difference(&exported).collect();
+    assert!(
+        missing.is_empty(),
+        "include/mars_xlog.h does not declare {}",
+        missing
+            .iter()
+            .map(|name| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    assert!(
+        orphaned.is_empty(),
+        "include/mars_xlog.h declares {} which src/abi.rs does not export",
+        orphaned
+            .iter()
+            .map(|name| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 }
 
 #[test]
@@ -77,32 +130,6 @@ fn header_declares_the_types_and_config_fields() {
         header.contains("typedef struct"),
         "MarsXLogConfig must be a C struct"
     );
-}
-
-/// `mars_xlog_oneshot_flush` answers a `TFileIOAction`, so the header's
-/// `MARS_XLOG_ACTION_*` values are part of the contract too.
-#[test]
-fn action_codes_match_the_header_defines() {
-    use marsrs_appender::FileIoAction;
-
-    let header = header();
-    for (name, value) in [
-        ("MARS_XLOG_ACTION_NONE", FileIoAction::None),
-        ("MARS_XLOG_ACTION_SUCCESS", FileIoAction::Success),
-        ("MARS_XLOG_ACTION_UNNECESSARY", FileIoAction::Unnecessary),
-        ("MARS_XLOG_ACTION_OPEN_FAILED", FileIoAction::OpenFailed),
-        ("MARS_XLOG_ACTION_READ_FAILED", FileIoAction::ReadFailed),
-        ("MARS_XLOG_ACTION_WRITE_FAILED", FileIoAction::WriteFailed),
-        ("MARS_XLOG_ACTION_CLOSE_FAILED", FileIoAction::CloseFailed),
-        ("MARS_XLOG_ACTION_REMOVE_FAILED", FileIoAction::RemoveFailed),
-    ] {
-        let needle = format!("{name} {value}", value = value as i32);
-        assert!(
-            header.contains(&needle),
-            "include/mars_xlog.h out of sync: expected `{name}` = {}",
-            value as i32
-        );
-    }
 }
 
 #[test]

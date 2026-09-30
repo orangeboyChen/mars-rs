@@ -66,13 +66,13 @@ xlog.flush_now();   // the records are on disk when this returns
 ```
 
 `Xlog::open` answers the appender, which is the `Xlog.open(config)` of Kotlin, of
-Dart and of TypeScript and the `Xlog(config:)` of Swift: one object, held, and
+Dart and of TypeScript and the `Xlog(config)` of Swift: one object, held, and
 written through — a second logger is a second `Xlog` of a prefix of its own.
-Every option is on [the configuration page](/xlog/configuration). A record can
-carry more than a message — `xlog.log_with_info(Some(&info), message)` takes an
-`XLoggerInfo` with the level, the tag and the file, function and line of the call
-site, and `xlog.log(level, tag, message)` is the short form that writes the empty
-ones, as Kotlin's does. Rust has no `#file` to fill them in with.
+Every option is on [the configuration page](/xlog/configuration). A record is a
+level, a tag and a message — `xlog.log(level, tag, message)`, or `xlog.i(tag,
+message)` at a level of its own — and nothing of the call site: Rust has no
+`#file` to fill the file, the function and the line in with, so a record written
+here carries the empty ones, as Kotlin's does.
 
 `Xlog::open` for a prefix that is already open answers the appender that is open
 and not a second one, and the config that second call hands in is ignored —
@@ -252,9 +252,9 @@ xlog.close()
 
 This is the `Xlog` of Android — same members, same names — so a shared module
 that moves between `xlog-kmp` and `xlog` renames nothing. What a `common`
-declaration can only be is the intersection of the two bridges: the process-wide
-calls of the C ABI are not in it, because the JNI bridge exports no equivalent,
-and a caller who wants them writes them in that platform's source set.
+declaration can only be is the intersection of the two bridges, and both of
+them are the whole API: the JNI bridge and the cinterop one export the same
+symbols, so there is nothing a platform source set has to write for itself.
 
 ## Flutter
 
@@ -288,13 +288,15 @@ await xlog.close();
 
 The plugin is a method channel and not `dart:ffi`, so what crosses to the
 platform thread is a message and not a call: a write, a setting and
-`requestFlush()` hand the message over and return, and only the four that have
+`requestFlush()` hand the message over and return, and only the seven that have
 something an app can act on answer a `Future` — the appender `Xlog.open` opens,
-the drain `await flush()` waits for, `close()`, and the answer `isLoggable`
-gives. What Dart has no face for is the blocking drain: a channel cannot block
-this side of it, so what Dart gets is the other two — `requestFlush()`, which
-asks for the drain and returns at once with nothing to say about when it is
-over, and `await xlog.flush()`, which answers when it is. Neither
+the drain `await flush()` waits for, `close()`, the answer `isLoggable` gives,
+and the three that name files: `currentLogPath()`, `logFiles(daysAgo)` and
+`logFileNames(daysAgo)`. What Dart has no face for is the blocking drain: a
+channel cannot block this side of it, so what Dart gets is the other two:
+`requestFlush()`, which asks for the drain and returns at once with nothing to
+say about when it is over, and `await xlog.flush()`, which answers when it is.
+Neither
 [the task pipeline](/stn/getting-started) nor
 [the network diagnosis](/sdt/getting-started) is in the Dart yet: the plugin is
 the logger, in both of its packages.
@@ -383,8 +385,12 @@ cc -I include -o app app.c libmars_ffi.a -lpthread -ldl     # static
 cc -I include -o app app.c -L. -lmars_ffi                  # shared
 ```
 
-Every call that returns an `int` answers `MARS_XLOG_OK` (0) or a negative
-`MARS_XLOG_ERR_*`, and nothing in the C ABI unwinds into C.
+Every call that answers an `int` answers `MARS_XLOG_OK` (0) or a negative
+`MARS_XLOG_ERR_*`, and nothing in the C ABI unwinds into C. Three calls answer
+an `int` that is not a status: the three that name a path answer the number of
+bytes they wrote, `mars_xlog_is_enabled_for` answers 1 or 0, and
+`mars_xlog_get_level` answers the level itself — or `-1` for a handle that
+names no appender, which is not an error code.
 
 ## C++
 
@@ -425,8 +431,8 @@ has no `#file` to fill one in with, so `__FILE__`, `__PRETTY_FUNCTION__` and
 `__LINE__` of the call site go to
 `log(level, tag, message, file, function, line)`.
 
-The header is C++17: `std::string_view` is what the console sink of
-`Xlog::setConsoleSink` is handed, and `std::future` is what `flush()` answers.
+The header is C++17: it refuses to compile below that, and `std::future` is what
+`flush()` answers.
 
 ```bash
 c++ -std=c++17 -I include -o app app.cpp libmars_ffi.a -lpthread -ldl

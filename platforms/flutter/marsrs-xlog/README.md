@@ -29,7 +29,9 @@ Kotlin and in Swift: the channel is crossed without the caller waiting for it. `
 of that kind too — it tells the writer thread to drain and returns at once —
 and `flush()` is the drain an app waits for. What answers a `Future` is
 what an app can act on — the appender `open` opens, the drain `flush()`
-and `close()` wait for, and the answer `isLoggable` gives.
+and `close()` wait for, the answer `isLoggable` gives, and the three that
+name files: `currentLogPath()`, `logFiles(daysAgo)` and
+`logFileNames(daysAgo)`.
 
 ## Installing it
 
@@ -63,7 +65,7 @@ package out of it.
 
 ## Why it is called xlog's
 
-The C ABI is 28 `mars_xlog_*` symbols and nothing else, and
+The C ABI is 16 `mars_xlog_*` symbols and nothing else, and
 `scripts/build_xcframework.sh` fails the day it is not — the same reason the
 framework and the AAR are called xlog's. The pair's other half is `marsrs`, the
 whole-port plugin, and STN and SDT land in that one and in nothing here. Take

@@ -15,7 +15,7 @@ use jni::sys::{jboolean, jint, jlong, jobject, JNI_VERSION_1_6};
 use jni::{jni_sig, jni_str};
 use jni::{Env, EnvUnowned, JavaVM};
 
-use marsrs_appender::{AppenderMode, CompressMode, LogLevel, XLogConfig, XLoggerInfo};
+use marsrs_appender::{AppenderMode, CompressMode, LogLevel, XLogConfig};
 use marsrs_sdt::checkimpl::{Answer as ProbeAnswer, PingStatus, Query as ProbeQuery};
 use marsrs_sdt::{CheckIPPort, CheckIPPorts};
 use marsrs_stn::{CgiProfile, LonglinkConfig, Task};
@@ -55,10 +55,10 @@ use crate::stn::{
 };
 
 use crate::{
-    close_impl, flush_impl, flush_now_impl, get_instance_impl, get_level_impl, guard,
-    level_from_java, log_write_impl, new_instance_impl, now_timeval, open_appender,
-    release_instance_impl, request_flush_impl, set_appender_mode_impl, set_console_log_open_impl,
-    set_level_impl, set_max_alive_time_impl, set_max_file_size_impl, write_impl,
+    current_log_path_impl, flush_now_impl, get_level_impl, guard, level_from_java,
+    log_file_names_impl, log_files_impl, new_instance_impl, release_instance_impl,
+    request_flush_impl, set_appender_mode_impl, set_console_log_open_impl, set_level_impl,
+    set_max_alive_time_impl, set_max_file_size_impl, write_impl,
 };
 
 /// Runs `f` with an [`Env`], which is what an entry point has to go through
@@ -181,23 +181,6 @@ fn borrowed_str<'a>(java_str: Option<&'a MUTF8Chars<'a, &JString<'a>>>) -> Cow<'
     java_str.map_or(Cow::Borrowed(""), |java_str| java_str.to_str())
 }
 
-/// [`java_string_handle`] for a `java.lang.String` *field* of `obj`.
-fn string_field_handle<'local>(
-    env: &mut Env<'local>,
-    obj: &JObject<'_>,
-    name: &JNIStr,
-) -> Option<JString<'local>> {
-    guard(|| {
-        let Ok(field) = env.get_field(obj, name, jni_sig!("Ljava/lang/String;")) else {
-            return None;
-        };
-        let Ok(object) = field.l() else {
-            return None;
-        };
-        java_string_handle(env, &object)
-    })
-}
-
 fn string_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> String {
     guard(|| {
         let Ok(field) = env.get_field(obj, name, jni_sig!("Ljava/lang/String;")) else {
@@ -273,29 +256,6 @@ fn java_string(env: &mut Env<'_>, value: &JObject<'_>) -> String {
     })
 }
 
-#[no_mangle]
-pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderOpen<'local>(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    config: JObject<'local>,
-) {
-    guard_env(&mut env, |env| {
-        let Some((config, level)) = config_from_java(env, &config) else {
-            return;
-        };
-        open_appender(config, level);
-    })
-}
-
-/// `Xlog.appenderClose`.
-#[no_mangle]
-pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderClose<'local>(
-    _env: EnvUnowned<'local>,
-    _this: JObject<'local>,
-) {
-    guard(close_impl)
-}
-
 /// `Xlog.appenderRequestFlush` — tells the writer thread it may drain and
 /// returns at once, answering nothing about when the drain is over.
 #[no_mangle]
@@ -320,20 +280,6 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderFlu
     guard(|| flush_now_impl(instance as u64))
 }
 
-/// `Xlog.appenderFlush` — upstream's name, and the one call of the Java seam
-/// that still asks for a `sync`: what the C++'s Java declared, and what the
-/// deprecated `Log` facade calls. `Xlog.requestFlush()` and `Xlog.flushNow()`
-/// name the drain instead.
-#[no_mangle]
-pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_appenderFlush<'local>(
-    _env: EnvUnowned<'local>,
-    _this: JObject<'local>,
-    instance: jlong,
-    is_sync: jboolean,
-) {
-    guard(|| flush_impl(instance as u64, is_sync))
-}
-
 /// `Xlog.newXlogInstance` — returns the handle, or `0` on a bad config.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_newXlogInstance<'local>(
@@ -344,22 +290,6 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_newXlogInst
     guard_env(&mut env, |env| match config_from_java(env, &config) {
         Some((config, level)) => new_instance_impl(config, level),
         None => 0,
-    })
-}
-
-/// `Xlog.getXlogInstance` — the handle for `nameprefix`, or `0`.
-#[no_mangle]
-pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_getXlogInstance<'local>(
-    mut env: EnvUnowned<'local>,
-    _this: JObject<'local>,
-    nameprefix: JString<'local>,
-) -> jlong {
-    guard_env(&mut env, |env| {
-        let prefix = nameprefix
-            .mutf8_chars(env)
-            .map(|value| value.to_str().into_owned())
-            .unwrap_or_default();
-        get_instance_impl(&prefix)
     })
 }
 
@@ -376,61 +306,6 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_releaseXlog
             .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
         release_instance_impl(&prefix);
-    })
-}
-
-/// `Xlog.logWrite` — writes through the process-wide appender.
-#[no_mangle]
-pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logWrite<'local>(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    info: JObject<'local>,
-    log: JString<'local>,
-) {
-    guard_env(&mut env, |env| {
-        let log = log
-            .mutf8_chars(env)
-            .map(|value| value.to_str().into_owned())
-            .unwrap_or_default();
-        if info.is_null() {
-            log_write_impl(None, &log);
-            return;
-        }
-        let level = level_from_java(int_field(env, &info, jni_str!("level")));
-        let line = int_field(env, &info, jni_str!("line"));
-        // -1 makes the category fill these in from the OS; Java passes real
-        // values, which the port keeps.
-        let pid = long_field(env, &info, jni_str!("pid"));
-        let tid = long_field(env, &info, jni_str!("tid"));
-        let maintid = long_field(env, &info, jni_str!("maintid"));
-
-        // The three strings are borrowed from the JVM instead of copied into
-        // `String`s: an `MUTF8Chars` keeps the characters alive for as long as
-        // the record needs them, which is this call.
-        let tag = string_field_handle(env, &info, jni_str!("tag"));
-        let filename = string_field_handle(env, &info, jni_str!("filename"));
-        let funcname = string_field_handle(env, &info, jni_str!("funcname"));
-        let tag = tag.as_ref().and_then(|value| value.mutf8_chars(env).ok());
-        let filename = filename
-            .as_ref()
-            .and_then(|value| value.mutf8_chars(env).ok());
-        let funcname = funcname
-            .as_ref()
-            .and_then(|value| value.mutf8_chars(env).ok());
-
-        let info = XLoggerInfo {
-            level,
-            tag: Some(borrowed_str(tag.as_ref())),
-            filename: Some(borrowed_str(filename.as_ref())),
-            func_name: Some(borrowed_str(funcname.as_ref())),
-            line,
-            pid,
-            tid,
-            maintid,
-            timeval: now_timeval(),
-            trace_log: 0,
-        };
-        log_write_impl(Some(info), &log);
     })
 }
 
@@ -455,8 +330,8 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_write<'loca
             .mutf8_chars(env)
             .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
-        // Borrowed from the JVM, like `logWrite` does: a `String` per record is
-        // an allocation `Java2C_Xlog.cc` never makes.
+        // Borrowed from the JVM: a `String` per record is an allocation
+        // `Java2C_Xlog.cc` never makes.
         let tag = java_string_handle(env, tag.as_ref());
         let tag = tag.as_ref().and_then(|value| value.mutf8_chars(env).ok());
         let _ = write_impl(
@@ -476,6 +351,87 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_getLogLevel
     instance: jlong,
 ) -> jint {
     guard(|| get_level_impl(instance as u64))
+}
+
+/// `Xlog.getCurrentLogPath` — the file the appender of `instance` is writing
+/// to, or `null` when it has none open yet.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_getCurrentLogPath<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    instance: jlong,
+) -> JObject<'local> {
+    guard_env(&mut env, |env| {
+        match current_log_path_impl(instance as u64) {
+            Some(path) => JObject::from(
+                env.new_string(path.to_string_lossy().as_ref())
+                    .unwrap_or_else(|_| JString::default()),
+            ),
+            None => JObject::null(),
+        }
+    })
+}
+
+/// `Xlog.logFiles` — the log files of the day `timespan` days ago that are
+/// *there*, as a `String[]`.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logFiles<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    instance: jlong,
+    timespan: jlong,
+) -> JObject<'local> {
+    guard_env(&mut env, |env| {
+        paths_to_array(env, log_files_impl(instance as u64, timespan))
+    })
+}
+
+/// `Xlog.logFileNames` — the names of the day `timespan` days ago, whether or
+/// not they are there yet, as a `String[]`.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_logFileNames<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    instance: jlong,
+    timespan: jlong,
+) -> JObject<'local> {
+    guard_env(&mut env, |env| {
+        paths_to_array(env, log_file_names_impl(instance as u64, timespan))
+    })
+}
+
+/// A day of paths, as a Java `String[]`.
+fn paths_to_array<'local>(
+    env: &mut Env<'local>,
+    paths: Vec<std::path::PathBuf>,
+) -> JObject<'local> {
+    let Ok(class) = env.find_class(jni_str!("java/lang/String")) else {
+        return JObject::null();
+    };
+    let Ok(array) = env.new_object_array(paths.len() as i32, class, JObject::null()) else {
+        return JObject::null();
+    };
+    for (index, path) in paths.iter().enumerate() {
+        // A day of paths is one answer and not a list with a hole in it: a
+        // `null` element would be a `null` in a Kotlin `List<String>`, which
+        // is what an app walks to upload the files. So a path the JVM will not
+        // make a string of fails the whole question, and the caller takes the
+        // empty list `null` becomes.
+        let Ok(value) = env.new_string(path.to_string_lossy().as_ref()) else {
+            return JObject::null();
+        };
+        // `JObjectArray::set_element` is the call that replaces this one, and
+        // it wants a `JObjectArray` borrowed from the `Env` — which is what
+        // this entry point does not have: the JVM handed it an `EnvUnowned`
+        // and [`guard_env`] lends the `Env` for the length of the call. The
+        // deprecated method writes into an array this call owns, which is the
+        // same thing.
+        #[allow(deprecated)]
+        let Ok(()) = env.set_object_array_element(&array, index, &value) else {
+            return JObject::null();
+        };
+    }
+    JObject::from(array)
 }
 
 /// `Xlog.setLogLevel`.

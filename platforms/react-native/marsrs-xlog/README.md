@@ -59,7 +59,7 @@ compiles — there is no build step, and `npm run typecheck` is the only script.
 `src/NativeXlog.ts` is the spec React Native's codegen reads, and
 `codegenConfig` in `package.json` is what points it at `src`: `NativeXlogSpec`
 is generated into the app's `React-Codegen` pod and into the Android build, and
-neither half of the module has to be told the thirteen signatures twice.
+neither half of the module has to be told the sixteen signatures twice.
 
 ## What each platform resolves
 
@@ -81,7 +81,7 @@ package out of it.
 
 ## Why it is called xlog's
 
-The C ABI is 28 `mars_xlog_*` symbols and nothing else, and
+The C ABI is 16 `mars_xlog_*` symbols and nothing else, and
 `scripts/build_xcframework.sh` fails the day it is not — the same reason the
 framework and the AAR are called xlog's. `marsrs-react-native` is the umbrella
 the whole port joins under: STN and SDT land there and not here, so an app that

@@ -49,7 +49,10 @@ nothing when it returns.
 ## The API
 
 The same one the Kotlin, the Swift, the Kotlin Multiplatform and the React
-Native packages carry, member for member:
+Native packages carry. One member they have and this one does not: `flush()`,
+an awaited drain — an async work item and a promise, and every method of the
+NAPI module behind this package is synchronous, so a caller that wants the
+drain off its own thread gives `flushNow()` a thread of its own.
 
 | | |
 |---|---|
@@ -62,6 +65,13 @@ Native packages carry, member for member:
 | `xlog.flushNow()` | takes the cache to the file on the calling thread; the records are on disk when it returns |
 | `xlog.close()` | closes the appender |
 | `xlog.isOpen` | whether it is still open |
+| `xlog.currentLogPath` | the directory this appender writes into; `undefined` once it is closed |
+| `xlog.logFiles(daysAgo)` | that day's files that are *there* — `0` is today, `1` is yesterday |
+| `xlog.logFileNames(daysAgo)` | that day's names, whether or not the files are there yet |
+
+A day is asked about out of this appender's own prefix and directory, so an app
+never has to name one itself: `currentLogPath` answers the directory the C++
+`GetCurrentLogPath` hands back, and `logFiles` names the files inside it.
 
 What the file being written is, and what a whole day of them are:
 

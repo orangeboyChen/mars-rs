@@ -1,6 +1,7 @@
 package io.github.orangeboychen.marsrs.xlog
 
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.concurrent.Volatile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -44,6 +45,14 @@ public actual class Xlog actual constructor(config: XlogConfig) {
             field = seconds
         }
 
+    /**
+     * The handle [close] takes away, and the one every member is forwarded
+     * through. Volatile because [close] may run on another thread than the
+     * writes it stops: a non-volatile `Long` is two 32-bit stores to the
+     * memory model, so a writer thread can read a handle that is half of the
+     * old one and half of the new.
+     */
+    @Volatile
     private var handle: Long = NO_HANDLE
 
     private var currentMode: AppenderMode = config.mode
@@ -73,6 +82,15 @@ public actual class Xlog actual constructor(config: XlogConfig) {
             setAppenderMode(requireOpen(), value.ordinal)
             currentMode = value
         }
+
+    public actual val currentLogPath: String?
+        get() = if (isOpen) getCurrentLogPath(handle) else null
+
+    public actual fun logFiles(daysAgo: Long): List<String> =
+        if (isOpen) logFiles(handle, daysAgo)?.toList().orEmpty() else emptyList()
+
+    public actual fun logFileNames(daysAgo: Long): List<String> =
+        if (isOpen) logFileNames(handle, daysAgo)?.toList().orEmpty() else emptyList()
 
     public actual fun isLoggable(level: LogLevel): Boolean =
         isOpen && LogLevel.of(getLogLevel(handle)).isEnabledFor(level)
@@ -111,23 +129,26 @@ public actual class Xlog actual constructor(config: XlogConfig) {
         flushNow()
     }
 
+    @Synchronized
     public actual fun close() {
-        if (!isOpen) {
+        // The claim and not a question: `marsrs-jni` releases by prefix, so
+        // only one of the `Xlog`s of a prefix may release it, and the one that
+        // may is whichever takes the entry out of the table first. A `close`
+        // that finds no entry is a second one, and releasing again would close
+        // an appender a re-open of the prefix has since put there.
+        if (!openHandles.remove(namePrefix, handle)) {
+            handle = NO_HANDLE
             return
         }
         releaseXlogInstance(namePrefix)
-        // The appender is the prefix's and not this wrapper's: `marsrs-jni`
-        // answers an [Xlog] of the same prefix with the same handle, so every one
-        // of them is closed with this one.
-        openHandles.remove(namePrefix, handle)
         handle = NO_HANDLE
     }
 
     /**
-     * The handle of this appender, or [IllegalStateException] when there is none
-     * left to forward: no handle is the process-wide appender to `marsrs-jni`, so
-     * a closed [Xlog] that handed it on would read and move the appender every
-     * other part of the app writes through, and read a level that is not its own.
+     * The handle of this appender, or [IllegalStateException] when there is
+     * none left to forward: a handle whose appender is gone is a no-op to
+     * `marsrs-jni`, so a closed [Xlog] that handed it on would silently write
+     * nothing, and read a level that is not its own.
      */
     private fun requireOpen(): Long {
         check(isOpen) {
@@ -153,6 +174,12 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     private external fun appenderFlushNow(handle: Long)
 
     private external fun getLogLevel(handle: Long): Int
+
+    private external fun getCurrentLogPath(handle: Long): String?
+
+    private external fun logFiles(handle: Long, timespan: Long): Array<String>?
+
+    private external fun logFileNames(handle: Long, timespan: Long): Array<String>?
 
     private external fun setLogLevel(handle: Long, level: Int)
 

@@ -112,9 +112,34 @@ class LogPage extends StatefulWidget {
   State<LogPage> createState() => _LogPageState();
 }
 
-class _LogPageState extends State<LogPage> {
+class _LogPageState extends State<LogPage> with WidgetsBindingObserver {
   /// What the screen says: what the last write did.
   String status = 'open';
+
+  @override
+  void initState() {
+    super.initState();
+    // The last moment the app is told anything before the OS can take the
+    // process away is the lifecycle change below, and with an async appender
+    // it is the one an app has to answer with a drain. On Android the AAR does
+    // this on its own, from a `Context` an app handed it; Dart gets no
+    // `Context`, so the observer is the app's.
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.paused && state != AppLifecycleState.hidden) {
+      return;
+    }
+    widget.xlog?.flush();
+  }
 
   /// Writes one record at every level, and waits for all of them to land.
   ///

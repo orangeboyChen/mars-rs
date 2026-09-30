@@ -9,12 +9,13 @@
  * `mars_xlog_*` call, so nothing here is a behaviour the C ABI does not have.
  *
  * A caller that would rather name the C symbols takes `mars_xlog.h`, which this
- * includes; handle `0` in them names the process-wide appender, which the JNI
- * bridge installs from Rust and no symbol of this ABI opens — an app that
- * wants one of its own calls `mars_xlog_new_instance`.
+ * includes. No symbol there installs a process-wide appender, so handle `0`
+ * names no logger at all — an app that wants one of its own calls
+ * `mars_xlog_new_instance` and holds the handle it answers.
  *
- * The header is header-only and needs C++17: `std::string_view` is what the
- * console sink is handed, and `std::future<void>` is what `flush()` answers.
+ * The header is header-only and needs C++17: `std::optional<std::string>` and
+ * `std::vector<std::string>` are what the three file questions answer, and
+ * `std::future<void>` is what `flush()` answers.
  * It throws, because that is what the platforms do — Swift throws an
  * `XlogError`, Kotlin's `XlogConfig` throws on a config it cannot honour — and
  * `Xlog` is move-only, because a prefix is one appender to the C ABI and two
@@ -36,10 +37,12 @@
 #include <cstdint>
 #include <functional>
 #include <future>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "mars_xlog.h"
 
@@ -159,15 +162,6 @@ private:
  * through. */
 class Xlog {
 public:
-    /** Where the console copy of a record goes, in the shape a C++ caller
-     * writes: the record unformatted, and never a null string. */
-    using ConsoleSink = std::function<void(LogLevel level,
-                                           std::string_view tag,
-                                           std::string_view file,
-                                           std::string_view function,
-                                           int line,
-                                           std::string_view message)>;
-
     /** Opens an appender of its own: its own log directory, prefix, key, mode
      * and cache file, all of them `config`'s.
      *
@@ -253,9 +247,13 @@ public:
         return namePrefix_;
     }
 
-    /** Whether this appender is still open: `false` after `close()`. */
+    /** Whether this appender is still open: `false` after `close()` — on this
+     * `Xlog` and on every other one of this `namePrefix`, which is the same
+     * appender and is closed with this one. The prefix and not the handle
+     * alone: a prefix is one appender, so a twin that closed it leaves this
+     * handle looking open while every write through it is dropped. */
     bool isOpen() const noexcept {
-        return handle_ != 0;
+        return handle_ != 0 && handle_ == mars_xlog_get_instance(namePrefix_.c_str());
     }
 
     /** The level of this appender: a record less severe than this is dropped.
@@ -263,9 +261,15 @@ public:
      * Read from the C ABI and not mirrored here, so a level another part of
      * the app set is the one this answers with. */
     LogLevel level() const {
+        // A closed `Xlog` answers "nothing is written", which is what the Rust
+        // `Xlog::level` answers as `None` and what `isLoggable` already says
+        // here: a handle no appender is open for has no level of its own, and
+        // the `-1` it is answered with is `(TLogLevel)-1`, the C++'s "log
+        // everything" — the opposite of the truth for one.
+        if (!isOpen()) {
+            return LogLevel::None;
+        }
         const int level = mars_xlog_get_level(handle_);
-        // `-1` is what the C ABI answers for a handle that is not one, and it
-        // is `(TLogLevel)-1`, the C++'s "log everything".
         return level < 0 ? LogLevel::Verbose : static_cast<LogLevel>(level);
     }
 
@@ -418,9 +422,9 @@ public:
      *
      * Setting through a closed `Xlog` sets nothing either, which is what
      * Swift's does and not what Kotlin's does: Kotlin throws, and what it is
-     * protecting is the process-wide appender a closed handle would reach. A
-     * closed `Xlog` here reaches nothing at all — every member is a no-op — so
-     * there is no exception to catch, and a destructor closes without one. */
+     * protecting is an appender a closed handle would reach. A closed `Xlog`
+     * here reaches nothing at all — every member is a no-op — so there is no
+     * exception to catch, and a destructor closes without one. */
     void close() {
         if (!isOpen()) {
             return;
@@ -436,41 +440,41 @@ public:
         handle_ = 0;
     }
 
-    /** `mars_xlog_set_console_fun`: where the console copy of a record goes
-     * instead of the built-in sink, which is standard error on every platform
-     * of the port.
-     *
-     * ```cpp
-     * Xlog::setConsoleSink([](LogLevel level, std::string_view tag,
-     *                         std::string_view file, std::string_view function,
-     *                         int line, std::string_view message) {
-     *     std::cerr << message << '\n';
-     * });
-     * ```
-     *
-     * `nullptr` takes the sink away, and the console copy is standard error's
-     * again. One sink for the process and not one for an `Xlog`: the C ABI has
-     * no instance of it, and a sink is called on the thread that wrote the
-     * record — the writer thread of an async appender included. Replacing one
-     * while records are being written is a race this seam has no answer to, so
-     * it belongs in start-up. */
-    static void setConsoleSink(ConsoleSink sink) {
-        // One sink for the process, and one the trampoline below reaches
-        // without a capture of its own: a function pointer carries no state.
-        static ConsoleSink installed;
-        installed = std::move(sink);
-        if (!installed) {
-            mars_xlog_set_console_fun(nullptr);
-            return;
+    /// The directory this appender writes its files into, or `std::nullopt`
+    /// once it is closed.
+    ///
+    /// A directory and not a file, which is what the C++'s
+    /// `GetCurrentLogPath` answers, and there is no "not yet" state: an open
+    /// appender has a directory from the moment it is opened. [`logFiles`] is
+    /// the day's file inside it.
+    std::optional<std::string> currentLogPath() const {
+        // A closed `Xlog` answers nothing, as every member of it does: handle
+        // `0` names no appender at all, and that is not this appender's
+        // question to answer.
+        if (!isOpen()) {
+            return std::nullopt;
         }
-        mars_xlog_set_console_fun(+[](int level,
-                                      const char* tag,
-                                      const char* file,
-                                      const char* function,
-                                      int line,
-                                      const char* message) {
-            installed(static_cast<LogLevel>(level), tag, file, function, line, message);
+        return path([this](char* out, std::uint32_t len) {
+            return mars_xlog_current_log_path_instance(handle_, out, len);
         });
+    }
+
+    /// The log files of the day `daysAgo` days ago that are *there* — `0` is
+    /// today, `1` is yesterday. `{}` when the directory holds none of that
+    /// day's.
+    ///
+    /// This is a day of files and not the file being written: what
+    /// [`currentLogPath`] answers is one, and this is this appender's own
+    /// prefix and directory.
+    std::vector<std::string> logFiles(int daysAgo) const {
+        return dayPaths(daysAgo, mars_xlog_getfilepath_from_timespan_instance);
+    }
+
+    /// The paths of the log files of the day `daysAgo` days ago, whether or
+    /// not they are *there yet* — the name an app that is about to write, or
+    /// that is naming a file to someone else, asks for.
+    std::vector<std::string> logFileNames(int daysAgo) const {
+        return dayPaths(daysAgo, mars_xlog_make_logfile_name_instance);
     }
 
 private:
@@ -483,12 +487,62 @@ private:
           maxAliveTimeSeconds_(0) {
     }
 
+    /// What `body` writes into the buffer it is handed, as a string; `nullopt`
+    /// when it wrote nothing.
+    ///
+    /// `MARS_XLOG_ERR_NO_SPACE` is a buffer that was too small and not an
+    /// answer of "no path", so the buffer grows and the question is asked
+    /// again: a path of a deep directory is a path an app still wants, and a
+    /// walk that took a short buffer for the end of the list would answer a
+    /// day with no files in it. Past 64 KiB the question is left unanswered.
+    std::optional<std::string> path(
+        const std::function<int(char*, std::uint32_t)>& body) const {
+        for (std::size_t size = 1024; size <= 65536; size *= 2) {
+            std::vector<char> buffer(size);
+            int written = body(buffer.data(), static_cast<std::uint32_t>(buffer.size()));
+            if (written > 0) {
+                return std::string(buffer.data(), static_cast<std::size_t>(written));
+            }
+            if (written != MARS_XLOG_ERR_NO_SPACE) {
+                return std::nullopt;
+            }
+        }
+        return std::nullopt;
+    }
+
+    /// The paths of one day, walked index by index until the symbol answers
+    /// that there is nothing at that index: the list the C++ fills a
+    /// `std::vector` with, asked one at a time.
+    std::vector<std::string> dayPaths(
+        int daysAgo,
+        int (*symbol)(long long, int, unsigned int, char*, unsigned int)) const {
+        std::vector<std::string> walked;
+        if (!isOpen()) {
+            return walked;
+        }
+        for (unsigned int index = 0;; ++index) {
+            auto found = path([&](char* out, std::uint32_t len) {
+                return symbol(handle_, daysAgo, index, out, len);
+            });
+            if (!found) {
+                break;
+            }
+            walked.push_back(*found);
+        }
+        return walked;
+    }
+
     /** Runs `body` with this appender's handle, and runs nothing at all once
-     * `close()` has: handle `0` is the process-wide appender to the C ABI, so
-     * a call through it would move a logger this object does not own. */
+     * `close()` has: handle `0` names no appender at all, so a call through it
+     * would silently write nothing.
+     *
+     * `handle_ != 0` and not [`isOpen()`], which asks the C ABI whether the
+     * prefix is still registered: a record is the one thing on the hot path,
+     * and the write it guards already no-ops for a handle that is not one —
+     * so paying a lock and a string hash per record buys nothing. */
     template <typename Body>
     void withHandle(Body body) const {
-        if (isOpen()) {
+        if (handle_ != 0) {
             body(handle_);
         }
     }

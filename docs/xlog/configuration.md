@@ -8,7 +8,7 @@ one with no default — the appender is not opened without somewhere to write.
 |---|---|---|---|---|---|---|---|---|---|
 | where the `.xlog` files go; created when it is not there | `logdir` | `logDirectory` | `logDir` | `logDir` | `logDir` | `log_dir` | `logDir` | `logDir` | **required** (`./log` in Rust) |
 | what every file starts with, and the name the appender is known by | `nameprefix` | `namePrefix` | `namePrefix` | `namePrefix` | `namePrefix` | `name_prefix` | `namePrefix` | `namePrefix` | `xlog` |
-| the level a record has to reach | see [levels](#levels) | `level` | `level` | `level` | `level` | `mars_xlog_set_level_instance(0, level)` | `level` | `level` | `info` |
+| the level a record has to reach | see [levels](#levels) | `level` | `level` | `level` | `level` | `mars_xlog_new_instance(&config, level)` | `level` | `level` | `info` |
 | whether a write waits for the file | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | async |
 | where the async cache file goes | `cachedir` | `cacheDirectory` | `cacheDir` | `cacheDir` | `cacheDir` | `cache_dir` | `cacheDir` | `cacheDir` | next to the log files |
 | how many days a cache file is kept | `cache_days` | `cacheDays` | `cacheDays` | `cacheDays` | `cacheDays` | `cache_days` | `cacheDays` | `cacheDays` | `0` — every file is kept |
@@ -49,27 +49,12 @@ HarmonyOS is the Kotlin spelling in a different case: `LogLevel.Verbose` and not
 `none` writes nothing, not even `fatal` — it is how an appender is quieted
 without being closed.
 
-An assert is the one record the level does not gate: it is written at `fatal`
-whatever the appender's level is, because what an assert names is a condition
-that is not supposed to be possible.
-
-Neither call ends the process, and that is the one thing the C++ does here that
-this port does not: upstream raises `SIGTRAP` on Android and calls
-`__assert_rtn` on Apple once the record is written. An app that wants its
-process stopped on an assert stops it itself — `std::process::abort()`, or a
-platform trap — after the write.
-
-::: code-group
-
-```rust [Rust]
-marsrs::xlog::xlogger_assert(None, "fd >= 0", "the socket was already closed");
-```
-
-```c [C]
-mars_xlog_assert("net", __FILE__, __func__, __LINE__, "fd >= 0", "the socket was already closed");
-```
-
-:::
+There is no assert in the port: `mars_xlog_assert` was the process-wide
+appender's, and it went with it. What an app that wants one writes is the
+record itself — `xlog.f(tag, message)` — and stops the process after it,
+`std::process::abort()` or a platform trap; upstream raises `SIGTRAP` on Android
+and calls `__assert_rtn` on Apple once the record is written, and nothing here
+does either.
 
 A message that is expensive to build is worth asking about first, because a
 record the level drops still costs the caller the string:
@@ -145,13 +130,16 @@ every one of them takes effect from the next record:
 
 | what it does | Rust | Swift | Android | Kotlin Multiplatform | Flutter | React Native | C | C++ | HarmonyOS |
 |---|---|---|---|---|---|---|---|---|---|
-| move the level | `xlog.set_level` | `log.level` | `xlog.level` | `xlog.level` | `xlog.level` | `xlog.level` | `mars_xlog_set_level_instance(0, level)` | `log.setLevel` | `xlog.level` |
-| switch async / sync | `xlog.set_mode` | `log.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `mars_xlog_set_mode_instance(0, mode)` | `log.setMode` | `xlog.mode` |
-| mirror records to the console | `xlog.set_console_log_enabled` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log_instance(0, on)` | `log.setConsoleLogEnabled` | `xlog.consoleLogEnabled` |
-| close a file after N bytes | `xlog.set_max_file_size_bytes` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size_instance(0, bytes)` | `log.setMaxFileSizeBytes` | `xlog.maxFileSizeBytes` |
-| drop a file older than N seconds | `xlog.set_max_alive_time_seconds` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration_instance(0, secs)` | `log.setMaxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` |
-| where the current file is | `xlog.current_log_path` | `Xlog.currentLogPath` | — | — | — | — | `mars_xlog_current_log_path` | — | — |
-| a day of files | `appender_getfilepath_from_timespan` | `Xlog.logFiles(…)` | — | — | — | — | `mars_xlog_getfilepath_from_timespan` | — | — |
+| move the level | `xlog.set_level` | `log.level` | `xlog.level` | `xlog.level` | `xlog.level` | `xlog.level` | `mars_xlog_set_level_instance(handle, level)` | `log.setLevel` | `xlog.level` |
+| switch async / sync | `xlog.set_mode` | `log.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `xlog.mode` | `mars_xlog_set_mode_instance(handle, mode)` | `log.setMode` | `xlog.mode` |
+| mirror records to the console | `xlog.set_console_log_enabled` | `log.isConsoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `xlog.consoleLogEnabled` | `mars_xlog_set_console_log_instance(handle, on)` | `log.setConsoleLogEnabled` | `xlog.consoleLogEnabled` |
+| close a file after N bytes | `xlog.set_max_file_size_bytes` | `log.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `xlog.maxFileSizeBytes` | `mars_xlog_set_max_file_size_instance(handle, bytes)` | `log.setMaxFileSizeBytes` | `xlog.maxFileSizeBytes` |
+| drop a file older than N seconds | `xlog.set_max_alive_time_seconds` | `log.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` | `mars_xlog_set_max_alive_duration_instance(handle, secs)` | `log.setMaxAliveTimeSeconds` | `xlog.maxAliveTimeSeconds` |
+| where it writes | `xlog.current_log_path()` | `log.currentLogPath` | `xlog.currentLogPath` | `xlog.currentLogPath` | `await xlog.currentLogPath()` | `xlog.currentLogPath` | `mars_xlog_current_log_path_instance` | `log.currentLogPath()` | `xlog.currentLogPath` |
+| a day of files | `xlog.log_files(1)` | `log.logFiles(daysAgo: 1)` | `xlog.logFiles(1L)` | `xlog.logFiles(1L)` | `await xlog.logFiles(1)` | `xlog.logFiles(1)` | `mars_xlog_getfilepath_from_timespan_instance` | `log.logFiles(1)` | `xlog.logFiles(1)` |
+
+It answers a **directory** and not a file, which is what the C++'s
+`GetCurrentLogPath` hands back; the day's file is the row under it.
 
 `0` is "no limit" for both sizes and ages: a file is never split and never
 dropped — the C++ keeps its own ten days.
@@ -165,42 +153,11 @@ the level and the tag the call named — so what the console gets is the whole
 record and not only the message.
 
 The built-in sink is standard error, on every platform and in every package —
-nothing here writes to `os_log` or to logcat. On Apple the system log is one
-`Xlog.setConsoleSink` away, and it is the app's own code that calls `os_log` in
-it.
+nothing here writes to `os_log` or to logcat, and there is no sink to set: the
+one the port had sat on the process-wide appender, and that appender is gone. On
+Apple the system log is a call the app makes for itself — `os_log` is a macro a
+library cannot reach.
 
-An app that wants it somewhere else hands the logger a sink of its own, and
-what was going to the console goes to that instead:
-
-::: code-group
-
-```rust [Rust]
-use marsrs::xlog::set_console_fun;
-
-set_console_fun(Some(|info, log| println!("{:?}: {log}", info.level)));
-set_console_fun(None);   // the console has it again
-```
-
-```swift [Swift]
-Xlog.setConsoleSink { level, tag, file, function, line, log in
-    os_log(.default, "%{public}@", String(cString: log))
-}
-Xlog.setConsoleSink(nil)   // the console has it again
-```
-
-```c [C]
-static void to_my_console(int level, const char* tag, const char* filename,
-                          const char* func_name, int line, const char* log) {
-    my_console_write(level, log);
-}
-
-mars_xlog_set_console_fun(to_my_console);
-mars_xlog_set_console_fun(NULL);   /* the console has it again */
-```
-
-:::
-
-There is one sink and it is the appender's, not a config: setting it again
-replaces it. What it is handed is the record unformatted — the level, the tag,
-where the call site is, and the message — which is the whole point: on Apple
-that is where `os_log` goes, and only the app's own code can call it.
+An app that wants its records there writes them twice, or reads them back out
+of the file: the console copy is standard error's, and it is not the port's to
+hand anywhere else.

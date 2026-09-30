@@ -132,7 +132,7 @@ jobs:
           ask android   'demo/android/**' 'platforms/android/**' 'scripts/**'
           ask kmp       'demo/kmp/**' 'platforms/kmp/**' 'scripts/**'
           ask apple     'demo/apple/**' 'platforms/apple/**' 'Package.swift'
-          ask flutter   'demo/flutter/**' 'platforms/flutter/**'
+          ask flutter   'demo/flutter/**' 'platforms/flutter/**' 'scripts/check_flutter.sh'
           ask rn        'demo/react-native/**' 'platforms/react-native/**'
           ask harmonyos 'demo/harmonyos/**' 'platforms/harmonyos/**' 'scripts/**'
 
@@ -239,13 +239,20 @@ jobs:
         working-directory: demo/android
         run: ./gradlew assembleDebug
 
-  # No token on this job, and no fork gate, which is what the composite build
-  # buys: `demo/kmp/settings.gradle.kts` substitutes `platforms/kmp` for the
-  # published package, so GitHub Packages is never asked and a pull request
-  # from a fork reads this repository's packages no more than a push does.
+  # No token on this job and no fork gate, which is what the composite build
+  # buys: `demo/android/settings.gradle.kts` substitutes `platforms/android`
+  # for the published package, so GitHub Packages is never asked and a pull
+  # request from a fork reads this repository's packages no more than a push
+  # does. Which is also why `assembleDebug` above builds the port out of this
+  # tree and not out of a tag.
+
   # The one demo that takes the port from the registry and not from the tree,
-  # and why: `platforms/kmp` does not build on a Linux runner. Under its own
-  # Gradle and its own Kotlin it fails to compile its own source —
+  # and the one job here a fork cannot answer: it needs the token below, and
+  # GitHub Packages answers nothing without one, not even a 404.
+  #
+  # Why this one and not a composite build: `platforms/kmp` does not build on
+  # a Linux runner. Under its own Gradle and its own Kotlin it fails to
+  # compile its own source —
   # `Cannot access 'val IO: CoroutineDispatcher': it is internal in
   # 'kotlinx.coroutines.Dispatchers'` — and `release.yml` publishes it from
   # `macos-15` for that reason. Building the module here would cost a macOS
@@ -255,9 +262,6 @@ jobs:
   # Which means it is also the one demo whose drain is spelled the way the
   # newest tag spells it, and not `flushNow()`: a tag is a release behind the
   # tree, and the demo is written against the tag.
-  #
-  # It needs the token, and it is the one job here a fork cannot answer:
-  # GitHub Packages answers nothing without one, not even a 404.
   kmp:
     name: demo (kmp)
     needs: changes
@@ -319,6 +323,13 @@ jobs:
       - name: flutter analyze
         working-directory: demo/flutter
         run: flutter analyze
+      # What `flutter analyze` cannot see: the demo is written against the
+      # package pub.dev carries, so the `lib/`, the Kotlin and the Objective-C
+      # of this tree's plugin are never read together. The three have to name
+      # the same channel methods, and a method one of them never heard of is a
+      # `MissingPluginException` in an app and not a red build.
+      - name: the plugin's three halves
+        run: bash scripts/check_flutter.sh
 
   react-native:
     name: demo (react-native)

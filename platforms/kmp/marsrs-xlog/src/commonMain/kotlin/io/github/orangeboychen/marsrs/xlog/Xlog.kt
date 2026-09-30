@@ -65,6 +65,39 @@ public expect class Xlog(config: XlogConfig) {
     /** Writes one record of [level]. */
     public fun log(level: LogLevel, tag: String, message: String)
 
+    /**
+     * The directory this appender writes its files into, or `null` once it is
+     * closed.
+     *
+     * A directory and not a file, because that is what the C++
+     * `GetCurrentLogPath` answers, and there is no "not yet" state: an open
+     * appender has a directory from the moment it is opened, and the day's file
+     * is what [logFiles] names inside it.
+     */
+    public val currentLogPath: String?
+
+    /**
+     * The log files of the day [daysAgo] days ago that are *there* — what an app
+     * that uploads yesterday's asks for. Empty when the directory holds none of
+     * that day's. `0` is today, `1` is yesterday, and so on.
+     *
+     * This is a day of files and not the directory they are in: what
+     * [currentLogPath] answers is that, and this is this appender's own prefix
+     * and directory.
+     */
+    public fun logFiles(daysAgo: Long): List<String>
+
+    /**
+     * The names of the log files of the day [daysAgo] days ago, whether or not
+     * they are *there yet* — the name an app that is about to write, or that is
+     * naming a file to someone else, asks for.
+     *
+     * A day's answer is the log-dir file and, when a cache dir is configured and
+     * the file exists, its cache-dir twin, so this can answer two where
+     * [logFiles] answers one.
+     */
+    public fun logFileNames(daysAgo: Long): List<String>
+
     /** Writes one record of [LogLevel.VERBOSE]. */
     public fun v(tag: String, message: String)
 
