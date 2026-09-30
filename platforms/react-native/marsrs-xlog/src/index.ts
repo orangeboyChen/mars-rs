@@ -71,7 +71,8 @@ export interface XlogConfig {
   logDir: string;
   /** What every log file starts with (`marsrs_20260927.xlog`), and the name the
    * appender is known by — an app that writes through two of them gives them
-   * two. `xlog` when left out, and when handed over empty. */
+   * two. `xlog` when left out, when handed over empty, and when what was
+   * handed over is nothing but whitespace. */
   namePrefix?: string;
   /** The level the appender is opened at; `info` when left out. */
   level?: LogLevel;
@@ -90,11 +91,22 @@ export interface XlogConfig {
 }
 
 /** `XlogConfig.namePrefix` of the Kotlin and of the Swift: what an appender is
- * opened with when a caller gives none — and when it gives an empty one, which
- * is what the two of them make of it anyway: the Kotlin answers its own default
- * for a blank prefix and the Swift refuses one outright, so an empty prefix is
- * not a name this `Xlog` could ask the appender about afterwards. */
+ * opened with when a caller gives none — and when it gives a blank one, which
+ * the two halves do not agree about: the Kotlin answers its own default for a
+ * prefix of nothing but whitespace, and the Swift opens that prefix as it is.
+ * Naming the default here is what keeps the `Xlog` an app holds and the
+ * appender the halves hold the same one, whichever half it is — a prefix of
+ * spaces that one half substituted and the other did not is an appender this
+ * `Xlog` cannot ask about afterwards. */
 const DEFAULT_NAME_PREFIX = 'xlog';
+
+/** The prefix an appender opened with `config` is known by: `namePrefix`, or
+ * [DEFAULT_NAME_PREFIX] when it is missing or blank. What is handed to the two
+ * halves is this and not the string the caller gave, so the two of them agree
+ * on one name for one appender. */
+function namePrefixOf(config: XlogConfig): string {
+  return config.namePrefix?.trim() || DEFAULT_NAME_PREFIX;
+}
 
 /** The appender of every `namePrefix` `Xlog.open` has opened and `close` has
  * not closed, by the prefix: what makes two `Xlog.open`s of one prefix one
@@ -129,7 +141,7 @@ export class Xlog {
   private open = true;
 
   private constructor(config: XlogConfig) {
-    this.namePrefix = config.namePrefix || DEFAULT_NAME_PREFIX;
+    this.namePrefix = namePrefixOf(config);
     this.currentLevel = config.level ?? LogLevel.info;
     this.currentMode = config.mode ?? AppenderMode.async;
   }
@@ -145,13 +157,13 @@ export class Xlog {
    * Throws when the appender would not take the configuration — an empty
    * `logDir`, or a directory it cannot write to. */
   static open(config: XlogConfig): Xlog {
-    const namePrefix = config.namePrefix || DEFAULT_NAME_PREFIX;
+    const namePrefix = namePrefixOf(config);
     const alreadyOpen = openAppenders.get(namePrefix);
     if (alreadyOpen) {
       return alreadyOpen;
     }
     const xlog = new Xlog(config);
-    if (!NativeXlog.open(config)) {
+    if (!NativeXlog.open({ ...config, namePrefix })) {
       throw new Error(
         `marsrs-react-native-xlog: the appender of '${xlog.namePrefix}' refused ${config.logDir}`
       );
