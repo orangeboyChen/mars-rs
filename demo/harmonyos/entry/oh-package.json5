@@ -12,15 +12,17 @@
 //   gh release download v0.1.0-alpha.3 --pattern 'marsrs-harmonyos-xlog-*.har' \
 //       --dir demo/harmonyos/libs
 //   mv demo/harmonyos/libs/marsrs-harmonyos-xlog-*.har \
-//       demo/harmonyos/libs/marsrs-harmonyos-xlog.har
+//       demo/harmonyos/libs/marsrs-harmonyos-xlog-1.0.0.har
 //   ohpm install
 //
-// The rename is the point of the second line: a release asset carries the
-// version of the release — the download above is a
+// The rename is the point of the second line, and the `1.0.0` it renames to is
+// not the version of the release: a release asset carries the version of its
+// release — the download above is a
 // `marsrs-harmonyos-xlog-0.1.0-alpha.3.har` today — and a `file:` dependency
-// that named one version is a dependency that names no file at all after the
-// next release. `libs/` is one HAR that is whatever version was downloaded, so
-// the name here has no version in it.
+// names one file, so the download is the half that is renamed. `1.0.0` is what
+// the package will carry once it is on ohpm, and it is the name
+// `.github/workflows/demo.yml` builds the HAR of this checkout under, so a
+// release and a checkout are the same file to ohpm.
 //
 // The line an app writes once the package *is* on ohpm is
 // `"marsrs-harmonyos-xlog": "^1.0.0"`, and nothing else in the module changes.
@@ -32,6 +34,6 @@
   "author": "orangeboyChen",
   "license": "MIT",
   "dependencies": {
-    "marsrs-harmonyos-xlog": "file:../libs/marsrs-harmonyos-xlog.har"
+    "marsrs-harmonyos-xlog": "file:../libs/marsrs-harmonyos-xlog-1.0.0.har"
   }
 }
