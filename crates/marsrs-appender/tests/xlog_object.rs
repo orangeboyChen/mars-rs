@@ -65,9 +65,28 @@ fn an_object_writes_and_drains_to_the_file() {
     // The directory, which is what the C++'s `GetCurrentLogPath` answers:
     // a day's file is named for the day its records carry.
     assert_eq!(xlog.current_log_path(), Some(dir.path().to_path_buf()));
+
+    // A day of files, asked of this object and out of its own prefix and
+    // directory — and not of a directory the caller names.
+    let today = files_first(dir.path()).expect("the day's file is there");
+    assert_eq!(xlog.log_files(0), vec![today.clone()]);
+    assert_eq!(xlog.log_file_names(0), vec![today]);
+    assert!(
+        xlog.log_files(1).is_empty(),
+        "yesterday has no file: {:?}",
+        xlog.log_files(1)
+    );
+
     xlog.close();
     assert!(!xlog.is_open());
     assert!(!xlog.i("startup", "nothing after close"));
+
+    // A closed object answers neither: a handle whose appender is gone has no
+    // directory and no day, and an empty list is what a caller gets and not a
+    // panic.
+    assert_eq!(xlog.current_log_path(), None);
+    assert!(xlog.log_files(0).is_empty());
+    assert!(xlog.log_file_names(0).is_empty());
 }
 
 #[test]

@@ -15,7 +15,7 @@ use std::process::Command;
 
 /// Every `mars_xlog_*` the C++ header is written over: the one member of
 /// [`marsrs::xlog::Xlog`](../../include/mars_xlog.hpp) each of them is.
-const SYMBOLS: [&str; 13] = [
+const SYMBOLS: [&str; 16] = [
     "mars_xlog_new_instance",
     "mars_xlog_get_instance",
     "mars_xlog_release_instance",
@@ -29,6 +29,9 @@ const SYMBOLS: [&str; 13] = [
     "mars_xlog_write_instance",
     "mars_xlog_request_flush_instance",
     "mars_xlog_flush_now_instance",
+    "mars_xlog_current_log_path_instance",
+    "mars_xlog_getfilepath_from_timespan_instance",
+    "mars_xlog_make_logfile_name_instance",
 ];
 
 fn include_dir() -> PathBuf {

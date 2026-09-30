@@ -63,6 +63,13 @@ void surface(const std::string& logDirectory) {
     log.flushNow();
     log.flush().get();
 
+    // The directory the appender writes into, and the day's files inside it:
+    // one call each in Rust, and a walk of the C ABI here.
+    std::optional<std::string> directory = log.currentLogPath();
+    std::vector<std::string> today = log.logFiles(0);
+    std::vector<std::string> yesterday = log.logFileNames(1);
+    std::cout << directory.value_or("closed") << today.size() << yesterday.size() << "\n";
+
     std::cout << log.namePrefix() << log.isOpen() << static_cast<int>(log.level())
               << static_cast<int>(log.mode()) << log.consoleLogEnabled() << log.maxFileSizeBytes()
               << log.maxAliveTimeSeconds() << "\n";

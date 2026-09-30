@@ -89,27 +89,41 @@ fn a_new_instance_refuses_a_bad_config_before_touching_the_disk() {
 #[test]
 fn the_level_is_one_store_whatever_the_question_is() {
     let _guard = serial();
+    let dir = tempdir("level");
+    let config = make_config(&dir, 0, 0);
+    let handle = unsafe { mars_xlog_new_instance(&config.raw, 0) };
+    assert!(handle > 0, "an instance is a handle");
 
-    // Handle `0` is the process-wide appender, whose level is the one the
-    // store `get_level` / `is_enabled_for` / `write_instance` read. It used to
-    // be kept beside them, in the seam, and the two answered differently.
-    mars_xlog_set_level_instance(0, 3);
-    assert_eq!(mars_xlog_get_level(0), 3, "one level, two answers");
-    assert_eq!(mars_xlog_is_enabled_for(0, 2), 0);
-    assert_eq!(mars_xlog_is_enabled_for(0, 3), 1);
+    // One level, three readers: `get_level`, `is_enabled_for` and the write
+    // all read the store the setter wrote, and not a copy beside it — which
+    // is what the seam used to keep, and what made the two answer differently.
+    mars_xlog_set_level_instance(handle, 3);
+    assert_eq!(mars_xlog_get_level(handle), 3, "one level, two answers");
+    assert_eq!(mars_xlog_is_enabled_for(handle, 2), 0);
+    assert_eq!(mars_xlog_is_enabled_for(handle, 3), 1);
 
     // `MARS_LEVEL_NONE` through the instance path, which used to be dropped
     // for want of a `LogLevel` to turn it into.
-    mars_xlog_set_level_instance(0, 6);
-    assert_eq!(mars_xlog_get_level(0), 6);
-    assert_eq!(mars_xlog_is_enabled_for(0, 5), 0);
+    mars_xlog_set_level_instance(handle, 6);
+    assert_eq!(mars_xlog_get_level(handle), 6);
+    assert_eq!(mars_xlog_is_enabled_for(handle, 5), 0);
 
     // `(TLogLevel)-1` is "everything", not "nothing at all".
-    mars_xlog_set_level_instance(0, -1);
-    assert_eq!(mars_xlog_get_level(0), 0);
-    assert_eq!(mars_xlog_is_enabled_for(0, 0), 1);
+    mars_xlog_set_level_instance(handle, -1);
+    assert_eq!(mars_xlog_get_level(handle), 0);
+    assert_eq!(mars_xlog_is_enabled_for(handle, 0), 1);
 
-    mars_xlog_set_level_instance(0, 0);
+    // Handle `0` is no logger at all, so neither question has a level to
+    // answer from: it answers what a released instance answers.
+    mars_xlog_set_level_instance(0, 3);
+    assert_eq!(mars_xlog_get_level(0), -1);
+    assert_eq!(mars_xlog_is_enabled_for(0, 6), 0);
+
+    let prefix = CString::new("Mars").unwrap();
+    unsafe {
+        mars_xlog_release_instance(prefix.as_ptr());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -167,17 +181,30 @@ fn instances_are_created_addressed_and_released() {
 #[test]
 fn is_enabled_for_compares_the_raw_level() {
     let _guard = serial();
-    mars_xlog_set_level_instance(0, 0); // Verbose: everything passes, 6 included
-    assert_eq!(mars_xlog_is_enabled_for(0, 6), 1);
-    assert_eq!(mars_xlog_is_enabled_for(0, 5), 1);
-    // A negative level is below Verbose, so nothing passes it.
-    assert_eq!(mars_xlog_is_enabled_for(0, -1), 0);
+    let dir = tempdir("enabled");
+    let config = make_config(&dir, 0, 0);
+    let handle = unsafe { mars_xlog_new_instance(&config.raw, 0) };
+    assert!(handle > 0, "an instance is a handle");
 
-    mars_xlog_set_level_instance(0, 3); // Warn
-    assert_eq!(mars_xlog_is_enabled_for(0, 2), 0);
-    assert_eq!(mars_xlog_is_enabled_for(0, 3), 1);
+    mars_xlog_set_level_instance(handle, 0); // Verbose: everything passes, 6 included
+    assert_eq!(mars_xlog_is_enabled_for(handle, 6), 1);
+    assert_eq!(mars_xlog_is_enabled_for(handle, 5), 1);
+    // A negative level is below Verbose, so nothing passes it.
+    assert_eq!(mars_xlog_is_enabled_for(handle, -1), 0);
+
+    mars_xlog_set_level_instance(handle, 3); // Warn
+    assert_eq!(mars_xlog_is_enabled_for(handle, 2), 0);
+    assert_eq!(mars_xlog_is_enabled_for(handle, 3), 1);
     // A handle that is not one has no level to compare against.
     assert_eq!(mars_xlog_is_enabled_for(0xdead_beef, 6), 0);
+    // … and neither has handle `0`, which is no instance at all.
+    assert_eq!(mars_xlog_is_enabled_for(0, 6), 0);
+
+    let prefix = CString::new("Mars").unwrap();
+    unsafe {
+        mars_xlog_release_instance(prefix.as_ptr());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 
     mars_xlog_set_level_instance(0, 0);
 }

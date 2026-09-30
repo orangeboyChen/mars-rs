@@ -1911,12 +1911,6 @@ impl Appender {
         self.lock().cache_path()
     }
 
-    /// `Some(self)` when this appender writes to `_logdir` — used by the free
-    /// discovery helpers in [`crate`].
-    pub(crate) fn for_logdir(&self, logdir: &Path) -> Option<&Appender> {
-        (self.lock().config.logdir == logdir).then_some(self)
-    }
-
     /// `XloggerAppender::MakeLogfileName`.
     pub(crate) fn make_logfile_name(&self, timespan: i64, prefix: &str) -> Vec<PathBuf> {
         let guard = self.lock();

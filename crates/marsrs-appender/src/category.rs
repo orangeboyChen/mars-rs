@@ -14,37 +14,36 @@
 //! The C++ hands out `XloggerCategory*` as a `uintptr_t` and casts it back on
 //! every call — any stale pointer is undefined behaviour. The port hands out an
 //! opaque [`XloggerHandle`] that is looked up in the instance table, so a stale
-//! handle is a no-op instead of a wild write. Handle `0` keeps its C++ meaning:
-//! "the default logger", i.e. the process-wide appender.
+//! handle is a no-op instead of a wild write.
 //!
 //! # Instances
 //!
 //! Like the C++, every instance gets its own appender
 //! (`appender_open_instance`), so two prefixes can write to two directories
-//! with their own key, mode and cache file. Handle `0` keeps writing through
-//! the process-wide appender opened by the open of an appender.
+//! with their own key, mode and cache file. There is no process-wide appender
+//! beside them: the C++'s `sg_default_appender` is what its free functions
+//! write through, and nothing here installs one, so [`DEFAULT_HANDLE`] — the
+//! `0` an open that failed answers — names no appender and every call asked of
+//! it does nothing.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Condvar, Mutex, OnceLock, RwLock};
-use std::time::Instant;
 
 use crate::{
-    appender_close_instance, appender_flush, appender_flush_instance, appender_flush_now,
-    appender_flush_now_instance, appender_get_current_log_path_instance, appender_open_instance,
-    appender_request_flush, appender_request_flush_instance, appender_set_console_log,
-    appender_set_console_log_instance, appender_set_max_alive_duration,
-    appender_set_max_alive_duration_instance, appender_set_max_file_size,
-    appender_set_max_file_size_instance, appender_set_mode, appender_set_mode_instance,
-    appender_write, appender_write_instance, AppenderId, AppenderMode, Flush, LogLevel, XLogConfig,
-    XLoggerInfo,
+    appender_close_instance, appender_flush_instance, appender_flush_now_instance,
+    appender_get_current_log_path_instance, appender_open_instance,
+    appender_request_flush_instance, appender_set_console_log_instance,
+    appender_set_max_alive_duration_instance, appender_set_max_file_size_instance,
+    appender_set_mode_instance, appender_write_instance, AppenderId, AppenderMode, Flush, LogLevel,
+    XLogConfig, XLoggerInfo,
 };
 
-/// Opaque id of a [`XloggerCategory`]; `0` is the default logger.
+/// Opaque id of a [`XloggerCategory`]; `0` is no logger at all.
 pub type XloggerHandle = u64;
 
-/// The default logger, i.e. "no instance" — calls go straight to the
-/// process-wide appender.
+/// The handle that names no logger: what an open that failed answers, and
+/// the one every call asked of it is a no-op for.
 pub const DEFAULT_HANDLE: XloggerHandle = 0;
 
 /// `xlogger_filter_t` of `mars/comm/xlogger/xloggerbase.h` — what an app
@@ -99,8 +98,9 @@ fn filtered_out(info: &mut XLoggerInfo, log: &str) -> bool {
 #[derive(Debug, Clone, Copy)]
 pub struct XloggerCategory {
     level: LogLevel,
-    /// The C++ gives every instance its own `XloggerAppender`; `None` means
-    /// "write through the process-wide default", which is what handle `0` does.
+    /// The C++ gives every instance its own `XloggerAppender`. `None` is what
+    /// [`XloggerCategory::default`] builds and what nothing ever registers: a
+    /// handle in the table always carries one.
     appender: Option<AppenderId>,
 }
 
@@ -136,9 +136,9 @@ impl XloggerCategory {
     /// `XloggerCategory::Write` — the level filter and the pid/tid fix-up of
     /// `XloggerCategory::__WriteImpl`.
     ///
-    /// This is the path of a handle that names an **instance**. `XloggerWrite(0,
-    /// …)` does not come here: the C++ sends it to `xlogger_Write`, which has no
-    /// level filter at all (see `write_default`).
+    /// The C++ has a second path beside this one — `xlogger_Write`, which its
+    /// handle `0` reaches and which has no level filter at all. The port has
+    /// no appender for handle `0` to write through, so this is the only path.
     ///
     /// `log` of `None` mirrors the C++ `NULL == _log`: the record is written
     /// anyway, promoted to `Fatal` with a fixed message.
@@ -175,48 +175,18 @@ impl XloggerCategory {
     }
 }
 
-/// `__xlogger_Write_impl` — what `XloggerWrite(0, …)` reaches, i.e. the
-/// `xlogger_Write` of `mars/comm/xlogger/xloggerbase.c`.
+/// What a write ends with: the `NULL == _log` promotion and the write itself.
 ///
-/// `xloggerbase.h` writes "no level filter" over the declaration, and the
-/// implementation keeps the promise: `gs_level` is what `xlogger_IsEnabledFor`
-/// answers *from*, and the write never looks at it. A record of any level goes
-/// out through handle `0` whatever `SetLevel(0, …)` was given — the only thing
-/// the level does there is answer [`is_enabled_for`].
-///
-/// `gs_level` also starts at `kLevelNone` and not at `kLevelVerbose`, so a
-/// process that only ever called the open of an appender answers `false` for
-/// [`LogLevel::Fatal`] and writes every record it is handed.
-fn write_default(info: Option<&XLoggerInfo>, log: Option<&str>) -> bool {
-    let mut info = info.cloned();
-
-    // … while `xlogger_Write` fills each of the three in on its own.
-    if let (Some(info), Some(log)) = (info.as_mut(), log) {
-        if filtered_out(info, log) {
-            return false;
-        }
-    }
-    if let Some(info) = info.as_mut() {
-        if info.pid == -1 {
-            info.pid = std::process::id() as i64;
-        }
-        if info.tid == -1 {
-            info.tid = crate::sys::thread_id();
-        }
-        if info.maintid == -1 {
-            info.maintid = crate::sys::main_thread_id();
-        }
-    }
-
-    write_log(None, &mut info, log)
-}
-
-/// What both paths end with: the `NULL == _log` promotion and the write itself.
+/// `false` for a category that carries no appender, which the table never
+/// holds one of — see [`XloggerCategory::appender`].
 fn write_log(
     appender: Option<AppenderId>,
     info: &mut Option<XLoggerInfo>,
     log: Option<&str>,
 ) -> bool {
+    let Some(appender) = appender else {
+        return false;
+    };
     match log {
         Some(log) => write_through(appender, info.as_ref(), log),
         None => {
@@ -238,9 +208,6 @@ struct Registry {
     mmap_paths: HashMap<XloggerHandle, PathBuf>,
     /// The prefixes whose appender is being opened right now.
     opening: HashSet<String>,
-    /// The logger handle `0` selects: `SetLevel(0, ..)` in the C++ configures
-    /// the process-wide level, so it has to be reachable.
-    default: XloggerCategory,
 }
 
 /// Signalled whenever a prefix leaves [`Registry::opening`], so a thread that
@@ -260,7 +227,6 @@ fn registry() -> &'static Mutex<Registry> {
             by_prefix: HashMap::new(),
             mmap_paths: HashMap::new(),
             opening: HashSet::new(),
-            default: XloggerCategory::default(),
         })
     })
 }
@@ -287,45 +253,22 @@ impl Drop for Opening {
 pub(crate) enum Target {
     /// The instance's own appender.
     Instance(AppenderId),
-    /// The process-wide default — what handle `0` means in the C++.
-    Default,
-    /// Nothing at all: a handle whose instance was released, or one that was
-    /// never handed out. Calls through it are a no-op; they must not reach the
-    /// process-wide appender, which belongs to handle `0`.
+    /// Nothing at all: [`DEFAULT_HANDLE`], a handle whose instance was
+    /// released, or one that was never handed out. Calls through it are a
+    /// no-op — there is no process-wide appender to fall back to.
     Gone,
 }
 
 pub(crate) fn target(handle: XloggerHandle) -> Target {
-    if handle == DEFAULT_HANDLE {
-        return Target::Default;
-    }
     match lookup(handle).and_then(|category| category.appender) {
         Some(id) => Target::Instance(id),
         None => Target::Gone,
     }
 }
 
-/// Whether a live instance owns the cache file at `path`.
-///
-/// the dead-cache recovery path asks this before it reads and unlinks
-/// `<prefix>.mmap3`: doing that to an instance that is mid-write loses
-/// everything the instance buffers afterwards.
-pub fn instance_owns_mmap_path(path: &std::path::Path) -> bool {
-    registry()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .mmap_paths
-        .values()
-        .any(|owned| owned == path)
-}
-
-/// Writes through the instance's own appender, or the process-wide default
-/// when the category has none.
-fn write_through(id: Option<AppenderId>, info: Option<&XLoggerInfo>, log: &str) -> bool {
-    match id {
-        Some(id) => appender_write_instance(id, info, log),
-        None => appender_write(info, log),
-    }
+/// Writes through the instance's own appender.
+fn write_through(id: AppenderId, info: Option<&XLoggerInfo>, log: &str) -> bool {
+    appender_write_instance(id, info, log)
 }
 
 /// `mars::xlog::NewXloggerInstance`.
@@ -433,11 +376,6 @@ fn lookup(handle: XloggerHandle) -> Option<XloggerCategory> {
         .copied()
 }
 
-/// A copy of the default logger (handle `0`).
-fn default_category() -> XloggerCategory {
-    registry().lock().unwrap_or_else(|e| e.into_inner()).default
-}
-
 fn with_category_mut(handle: XloggerHandle, f: impl FnOnce(&mut XloggerCategory)) {
     if let Some(category) = registry()
         .lock()
@@ -451,182 +389,45 @@ fn with_category_mut(handle: XloggerHandle, f: impl FnOnce(&mut XloggerCategory)
 
 /// `mars::xlog::XloggerWrite`.
 ///
-/// Handle `0` uses the default logger, i.e. the C++'s `xlogger_Write` — which
-/// has no level filter (see `write_default`). An unknown non-zero handle (one
-/// whose instance was released) writes nothing: the module promises that a
-/// stale handle is a no-op, not a fall back to the default logger.
+/// An unknown handle writes nothing: [`DEFAULT_HANDLE`] names no appender, and
+/// neither does one whose instance was released. The module promises that a
+/// stale handle is a no-op, and there is no default logger to fall back to.
 pub fn xlogger_write(handle: XloggerHandle, info: Option<&XLoggerInfo>, log: Option<&str>) -> bool {
-    if handle == DEFAULT_HANDLE {
-        return write_default(info, log);
-    }
     match lookup(handle) {
         Some(category) => category.write(info, log),
         None => false,
     }
 }
 
-/// `XScopeTracer` of `mars/comm/xlogger/xlogger.h` — the guard behind the
-/// `xverbose_scope` / `xverbose_function` macros, and the port's answer to
-/// them: one record when the scope is entered, one when it is dropped, and
-/// the milliseconds between the two in the second. The span is measured on the
-/// monotonic clock, so a wall clock stepped while the scope is open does not
-/// move it; the two records themselves are stamped with the wall clock, which
-/// is what a record says the moment was.
-///
-/// ```no_run
-/// use marsrs_appender::{LogLevel, XLoggerInfo, XloggerScopeTracer};
-///
-/// let info = XLoggerInfo {
-///     level: LogLevel::Info,
-///     ..XLoggerInfo::default()
-/// };
-/// let mut scope = XloggerScopeTracer::new(info, "connect", Some("to the long link"));
-/// scope.exit("timed out");
-/// // dropped here, and `<- connect +12, timed out` goes out
-/// ```
-///
-/// The C++ keeps the scope's name in a `char[128]`, so a longer one is cut
-/// at 127 bytes; the port keeps the whole name, which is the difference
-/// between a truncated record and none at all only for a name that long.
-#[must_use = "the exit record is written when the tracer is dropped"]
-pub struct XloggerScopeTracer<'a> {
-    /// Whether the level let the scope in, asked once — where the C++ asks it,
-    /// in the constructor: a level raised while the scope is open does not let
-    /// the exit record in after all.
-    enabled: bool,
-    info: XLoggerInfo<'a>,
-    name: String,
-    /// What the span of the exit record is measured against, and not the wall
-    /// clock the two records are stamped with: the C++ subtracts two
-    /// `gettimeofday` readings, so a clock stepped while the scope is open —
-    /// an NTP correction, a machine put back from a snapshot — reads as a span
-    /// that is negative or far too long.
-    started: Instant,
-    /// What [`XloggerScopeTracer::exit`] has been given, in the order it was
-    /// given: the C++ appends, so two calls read as one message.
-    exitmsg: String,
-}
-
-impl<'a> XloggerScopeTracer<'a> {
-    /// Enters the scope and writes its entry record.
-    ///
-    /// `log` is the message the scope was entered with; both records are
-    /// asked of [`is_enabled_for`] for the default logger, which is the
-    /// `xlogger_IsEnabledFor` the C++ asks.
-    pub fn new(mut info: XLoggerInfo<'a>, name: &str, log: Option<&str>) -> Self {
-        let started = Instant::now();
-        info.timeval = crate::file_util::now_timeval();
-        // The C++ sets the three to -1 before it writes either record, and
-        // that is what has `xlogger_Write` fill in the process, the thread and
-        // the main thread: an info of [`XLoggerInfo::default()`] carries 0, and
-        // a record that says "pid 0" names no process at all.
-        info.pid = -1;
-        info.tid = -1;
-        info.maintid = -1;
-
-        let enabled = is_enabled_for(DEFAULT_HANDLE, info.level);
-        let scope = Self {
-            enabled,
-            info,
-            // Owned only when the level let the scope in: a scope in a hot
-            // function that the level turns away is the ordinary case, and it
-            // is a name no record of it can carry, so it is not worth an
-            // allocation either.
-            name: if enabled {
-                name.to_owned()
-            } else {
-                String::new()
-            },
-            started,
-            exitmsg: String::new(),
-        };
-        // `-> %s %s` — the C++ prints the message it was given, or an empty
-        // one, so the space between the name and it is there either way and
-        // the shape of the record does not depend on whether a message was
-        // handed in.
-        if scope.enabled {
-            let entry = format!("-> {} {}", scope.name, log.unwrap_or(""));
-            write_default(Some(&scope.info), Some(&entry));
-        }
-        scope
-    }
-
-    /// `XScopeTracer::Exit` — the message the exit record carries. Appended
-    /// to, the way the C++ appends, so a scope that exits twice reads as one
-    /// message and not as the last one only.
-    pub fn exit(&mut self, msg: &str) {
-        // A scope no record will come of keeps nothing: `exit` is called in
-        // the ordinary case too, and an append that is never read is a copy
-        // of a message for nothing.
-        if !self.enabled {
-            return;
-        }
-        self.exitmsg.push_str(msg);
-    }
-}
-
-impl Drop for XloggerScopeTracer<'_> {
-    /// `<- %s +%ld, %s` — the C++ writes the comma and the message whether or
-    /// not there is one, and so does the port: a reader that splits the two
-    /// halves of a scope reads the same shape either way.
-    fn drop(&mut self) {
-        if !self.enabled {
-            return;
-        }
-        let now = crate::file_util::now_timeval();
-        self.info.timeval = now;
-        let span = self.started.elapsed().as_millis();
-        let exit = format!("<- {} +{}, {}", self.name, span, self.exitmsg);
-        write_default(Some(&self.info), Some(&exit));
-    }
-}
-
 /// `mars::xlog::IsEnabledFor`.
 ///
-/// `false` for an unknown non-zero handle, so nothing is written through it.
+/// `false` for an unknown handle — [`DEFAULT_HANDLE`] among them — so nothing
+/// is written through it.
 pub fn is_enabled_for(handle: XloggerHandle, level: LogLevel) -> bool {
-    let category = if handle == DEFAULT_HANDLE {
-        default_category()
-    } else {
-        match lookup(handle) {
-            Some(category) => category,
-            None => return false,
-        }
-    };
-    category.is_enabled_for(level)
+    match lookup(handle) {
+        Some(category) => category.is_enabled_for(level),
+        None => false,
+    }
 }
 
 /// `mars::xlog::GetLevel`.
 ///
-/// `None` for an unknown non-zero handle.
+/// `None` for an unknown handle.
 pub fn get_level(handle: XloggerHandle) -> Option<LogLevel> {
-    if handle == DEFAULT_HANDLE {
-        return Some(default_category().level());
-    }
     lookup(handle).map(|category| category.level())
 }
 
-/// `mars::xlog::SetLevel`.
+/// `mars::xlog::SetLevel` — a no-op for an unknown handle.
 pub fn set_level(handle: XloggerHandle, level: LogLevel) {
-    if handle == DEFAULT_HANDLE {
-        registry()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .default
-            .set_level(level);
-        return;
-    }
     with_category_mut(handle, |category| category.set_level(level));
 }
 
 /// `mars::xlog::SetAppenderMode` — applies to the instance's own appender.
 ///
-/// A handle whose instance is gone changes nothing: only [`DEFAULT_HANDLE`]
-/// reaches the process-wide appender.
+/// A handle whose instance is gone changes nothing.
 pub fn set_appender_mode(handle: XloggerHandle, mode: AppenderMode) {
     match target(handle) {
         Target::Instance(id) => appender_set_mode_instance(id, mode),
-        Target::Default => appender_set_mode(mode),
         Target::Gone => {}
     }
 }
@@ -636,7 +437,6 @@ pub fn set_appender_mode(handle: XloggerHandle, mode: AppenderMode) {
 pub fn set_max_file_size(handle: XloggerHandle, bytes: u64) {
     match target(handle) {
         Target::Instance(id) => appender_set_max_file_size_instance(id, bytes),
-        Target::Default => appender_set_max_file_size(bytes),
         Target::Gone => {}
     }
 }
@@ -645,7 +445,6 @@ pub fn set_max_file_size(handle: XloggerHandle, bytes: u64) {
 pub fn set_max_alive_duration(handle: XloggerHandle, secs: u64) {
     match target(handle) {
         Target::Instance(id) => appender_set_max_alive_duration_instance(id, secs),
-        Target::Default => appender_set_max_alive_duration(secs),
         Target::Gone => {}
     }
 }
@@ -659,7 +458,6 @@ pub fn set_max_alive_duration(handle: XloggerHandle, secs: u64) {
 pub fn request_flush(handle: XloggerHandle) {
     match target(handle) {
         Target::Instance(id) => appender_request_flush_instance(id),
-        Target::Default => appender_request_flush(),
         Target::Gone => {}
     }
 }
@@ -671,7 +469,6 @@ pub fn request_flush(handle: XloggerHandle) {
 pub fn flush_now(handle: XloggerHandle) {
     match target(handle) {
         Target::Instance(id) => appender_flush_now_instance(id),
-        Target::Default => appender_flush_now(),
         Target::Gone => {}
     }
 }
@@ -686,7 +483,6 @@ pub fn flush_now(handle: XloggerHandle) {
 pub fn flush(handle: XloggerHandle) -> Flush {
     match target(handle) {
         Target::Instance(id) => appender_flush_instance(id),
-        Target::Default => appender_flush(),
         Target::Gone => Flush::noop(),
     }
 }
@@ -695,7 +491,6 @@ pub fn flush(handle: XloggerHandle) -> Flush {
 pub fn set_console_log_open(handle: XloggerHandle, open: bool) {
     match target(handle) {
         Target::Instance(id) => appender_set_console_log_instance(id, open),
-        Target::Default => appender_set_console_log(open),
         Target::Gone => {}
     }
 }
@@ -709,7 +504,6 @@ pub fn set_console_log_open(handle: XloggerHandle, open: bool) {
 pub fn current_log_path(handle: XloggerHandle) -> Option<PathBuf> {
     match target(handle) {
         Target::Instance(id) => appender_get_current_log_path_instance(id),
-        Target::Default => None,
         Target::Gone => None,
     }
 }
@@ -909,27 +703,6 @@ mod tests {
         set_filter(None);
     }
 
-    /// A scope the level refused owns nothing — neither the name nor what
-    /// [`XloggerScopeTracer::exit`] is handed — so a scope a level turns away
-    /// costs the level check and no more, and stays cheap enough to stand in
-    /// a function that is called on every pass of a hot loop.
-    #[test]
-    fn a_scope_the_level_refused_owns_nothing() {
-        let _guard = serial();
-        set_level(DEFAULT_HANDLE, LogLevel::Error);
-
-        let info = XLoggerInfo {
-            level: LogLevel::Info,
-            ..XLoggerInfo::default()
-        };
-        let mut scope = XloggerScopeTracer::new(info, "hot", None);
-        scope.exit("a message no record carries");
-        assert!(scope.name.is_empty(), "{:?}", scope.name);
-        assert!(scope.exitmsg.is_empty(), "{:?}", scope.exitmsg);
-
-        set_level(DEFAULT_HANDLE, LogLevel::None);
-    }
-
     #[test]
     fn a_stale_handle_writes_nothing() {
         let _guard = serial();
@@ -941,17 +714,16 @@ mod tests {
         assert_eq!(get_level(STALE), None);
     }
 
+    /// Handle `0` is not a logger: it names no appender and no category, so
+    /// the level it is given is dropped and every question about it answers
+    /// "nothing there" — the same answers a released handle gives.
     #[test]
-    fn the_default_handle_has_its_own_level() {
+    fn the_default_handle_is_no_logger() {
         let _guard = serial();
         set_level(DEFAULT_HANDLE, LogLevel::Error);
-        assert_eq!(get_level(DEFAULT_HANDLE), Some(LogLevel::Error));
-        assert!(!is_enabled_for(DEFAULT_HANDLE, LogLevel::Warn));
-        assert!(is_enabled_for(DEFAULT_HANDLE, LogLevel::Error));
-        set_level(DEFAULT_HANDLE, LogLevel::Verbose);
-        assert!(is_enabled_for(DEFAULT_HANDLE, LogLevel::Verbose));
-        // back to the level a fresh process starts with
-        set_level(DEFAULT_HANDLE, LogLevel::None);
+        assert_eq!(get_level(DEFAULT_HANDLE), None);
+        assert!(!is_enabled_for(DEFAULT_HANDLE, LogLevel::Fatal));
+        assert!(!xlogger_write(DEFAULT_HANDLE, None, Some("dropped")));
     }
 
     #[test]
