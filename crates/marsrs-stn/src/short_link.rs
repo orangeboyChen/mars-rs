@@ -978,6 +978,13 @@ impl ShortLink {
         // the C++ writes on the profile and says nothing about to anyone
         if self.is_broken() {
             self.profile.disconn_errtype = ErrCmdType::Canceld;
+            // no answer was read out of the socket, so it is not one the pool
+            // can hand out again — the reason [`ShortLink::run_at`] says the
+            // same thing for a break just after the write, and what
+            // [`ShortLink::end_run`] reads to close it. Keeping it would leave
+            // a socket open with an answer still in it, which is the next
+            // run's answer and not this one's.
+            self.keep_alive = false;
             return Read::Done(Err(RunFail::Canceld));
         }
 
@@ -2579,6 +2586,28 @@ mod tests {
             Read::Done(Err(RunFail::Socket {
                 err_code: ECT_SOCKET_READ_ONCE
             }))
+        );
+    }
+
+    #[test]
+    fn a_run_the_app_broke_off_during_the_reads_is_not_kept() {
+        let seen = Seen::default();
+        let mut link = link_for(&seen, kept_task(), false);
+        let socket = link.connect_at(1000).unwrap();
+        link.write_at(1100, socket, b"hello").unwrap();
+        let mut host = Host::new(seen.clone());
+        host.breaker.broken = true;
+        link.set_socket_operator(host);
+        assert!(link.is_keep_alive());
+
+        assert_eq!(
+            link.read_at(1200, socket, Ok(b"HTTP/1.1 200 OK\r\n")),
+            Read::Done(Err(RunFail::Canceld))
+        );
+        assert_eq!(link.profile().disconn_errtype, ErrCmdType::Canceld);
+        assert!(
+            !link.is_keep_alive(),
+            "a socket with an answer still in it is not one the pool may hand out"
         );
     }
 
