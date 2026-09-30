@@ -76,9 +76,9 @@ fn a_link_that_was_fine_and_then_broke_starts_a_check() {
     // ... and it takes seven failures for fewer than `kCheckifBelowCount` of
     // the eight most recent tasks to be successes
     broken_longlink(&mut logic, MIN_CHECK_TIME_SPAN, 7);
-    let started = started.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    assert_eq!(started.len(), 1);
-    let (longlink, shortlink, mode) = &started[0];
+    let first = started.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    assert_eq!(first.len(), 1);
+    let (longlink, shortlink, mode) = &first[0];
     assert_eq!(*mode, NET_CHECK_MODE);
     assert_eq!(
         *longlink,
@@ -89,37 +89,69 @@ fn a_link_that_was_fine_and_then_broke_starts_a_check() {
     assert_eq!(*shortlink, vec![("5.6.7.8".to_string(), 8080)]);
     assert_eq!(logic.longlink_last_failed_time(), MIN_CHECK_TIME_SPAN);
 
-    // the eighth failure is inside the wait the last check started
+    // the eighth failure is inside the wait the last check started, and what
+    // says so is the record and not a copy of it taken before it happened
     logic.update_long_link_info_at(MIN_CHECK_TIME_SPAN, 0, false);
-    assert_eq!(started.len(), 1);
+    assert_eq!(started.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
     assert_eq!(logic.increment_steps(), 1);
 }
 
 #[test]
-fn the_wait_grows_and_the_frequency_limit_refuses_the_rest() {
-    // nothing to resolve against, so only the decision is observable
-    let mut logic = NetCheckLogic::new_at(0);
+fn a_check_that_went_out_lengthens_the_wait_of_the_next() {
+    let (mut logic, started) = a_logic();
+    broken_longlink(&mut logic, MIN_CHECK_TIME_SPAN, 7);
+    assert_eq!(started.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
 
-    // five minutes is what the first check needs, and the process is younger
-    broken_longlink(&mut logic, MIN_CHECK_TIME_SPAN - 1, 7);
-    assert_eq!(logic.increment_steps(), 0);
-
-    // five minutes old, it goes through and the wait grows to a quarter of an
-    // hour
-    logic.update_long_link_info_at(MIN_CHECK_TIME_SPAN, 0, false);
-    assert_eq!(logic.increment_steps(), 1);
-    // ... and the same reading does not get through twice
-    logic.update_long_link_info_at(MIN_CHECK_TIME_SPAN, 0, false);
-    assert_eq!(logic.increment_steps(), 1);
-
-    logic.update_long_link_info_at(
-        MIN_CHECK_TIME_SPAN + CHECK_TIME_SPAN_INCREMENT_STEP,
-        0,
-        false,
+    // `last_netcheck_time_` is a field the C++ never writes, so what the wait
+    // is measured from is the age of the process: a quarter of an hour is what
+    // the check that went out asks for, and this reading is a millisecond short
+    let quarter = MIN_CHECK_TIME_SPAN + CHECK_TIME_SPAN_INCREMENT_STEP;
+    logic.update_long_link_info_at(quarter - 1, 0, false);
+    assert_eq!(
+        started.lock().unwrap_or_else(|e| e.into_inner()).len(),
+        1,
+        "a millisecond short of the wait"
     );
+    // ... and the next millisecond is not
+    logic.update_long_link_info_at(quarter, 0, false);
+    assert_eq!(started.lock().unwrap_or_else(|e| e.into_inner()).len(), 2);
     assert_eq!(logic.increment_steps(), 2);
-    assert_eq!(LIMIT_COUNT, 1, "one check an hour");
-    assert_eq!(LIMIT_TIME_SPAN, 60 * 60 * 1000);
+}
+
+#[test]
+fn the_frequency_limit_is_what_refuses_the_third_check_of_the_hour() {
+    let (mut logic, started) = a_logic();
+    // `LIMIT_COUNT` is one, and `CommFrequencyLimit::Check` passes while the
+    // touches it holds are no more than the count, so an hour holds two
+    // checks and not one
+    assert_eq!(LIMIT_COUNT, 1);
+
+    // five minutes in, and a quarter of an hour in
+    broken_longlink(&mut logic, MIN_CHECK_TIME_SPAN, 7);
+    let quarter = MIN_CHECK_TIME_SPAN + CHECK_TIME_SPAN_INCREMENT_STEP;
+    logic.update_long_link_info_at(quarter, 0, false);
+    assert_eq!(started.lock().unwrap_or_else(|e| e.into_inner()).len(), 2);
+
+    // the third, twenty-five minutes in. The wait is met — it is the age of
+    // the process it is measured against and not the last check, since
+    // `last_netcheck_time_` is a field the C++ never writes — and the hour of
+    // the first has not run out, so what says no is the limit
+    let third = MIN_CHECK_TIME_SPAN + 2 * CHECK_TIME_SPAN_INCREMENT_STEP;
+    logic.update_long_link_info_at(third, 0, false);
+    assert_eq!(
+        started.lock().unwrap_or_else(|e| e.into_inner()).len(),
+        2,
+        "the third of the hour"
+    );
+    assert!(
+        third - MIN_CHECK_TIME_SPAN < LIMIT_TIME_SPAN,
+        "the hour of the first has not run out"
+    );
+
+    // the same reading once it has goes through, which is what makes the
+    // refusal above the limit's and not the wait's
+    logic.update_long_link_info_at(third + LIMIT_TIME_SPAN, 0, false);
+    assert_eq!(started.lock().unwrap_or_else(|e| e.into_inner()).len(), 3);
 }
 
 #[test]
