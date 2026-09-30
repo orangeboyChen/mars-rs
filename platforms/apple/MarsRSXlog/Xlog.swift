@@ -171,10 +171,12 @@ public final class Xlog: NSObject {
     /// builds a message that is expensive to build.
     @objc
     public func isEnabled(for level: LogLevel) -> Bool {
-        guard isOpen else {
+        // The one reading [close()] was asked about: see [withHandle].
+        let opened = handle
+        guard opened != Self.noHandle else {
             return false
         }
-        return mars_xlog_is_enabled_for(handle, level.rawValue) != 0
+        return mars_xlog_is_enabled_for(opened, level.rawValue) != 0
     }
 
     /// Writes a record of `level`.
@@ -190,13 +192,15 @@ public final class Xlog: NSObject {
         function: String = #function,
         line: Int32 = #line
     ) {
-        guard isOpen else {
+        // The one reading [close()] was asked about: see [withHandle].
+        let opened = handle
+        guard opened != Self.noHandle else {
             return
         }
         // `cTag` and friends: the same four strings as C pointers, which is
         // what the closure hands back and what the C ABI copies out of.
         withCStrings(first: tag, second: file, third: function, fourth: message) { cTag, cFile, cFunction, cMessage in
-            mars_xlog_write_instance(handle, level.rawValue, cTag, cFile, cFunction, line, cMessage)
+            mars_xlog_write_instance(opened, level.rawValue, cTag, cFile, cFunction, line, cMessage)
         }
     }
 
@@ -330,7 +334,9 @@ public final class Xlog: NSObject {
     /// `namePrefix` answers `0`. Safe to call twice.
     @objc
     public func close() {
-        guard isOpen else {
+        // The one reading [close()] was asked about: see [withHandle].
+        let opened = handle
+        guard opened != Self.noHandle else {
             return
         }
         // A prefix is one appender to the C ABI, so two `Xlog`s of one prefix
@@ -339,7 +345,7 @@ public final class Xlog: NSObject {
         // this object's twin closed the appender and a third one reopened the
         // prefix, releasing here would close an appender that is not ours.
         let ownsPrefix = namePrefix.withCString { prefix in
-            mars_xlog_get_instance(prefix) == handle
+            mars_xlog_get_instance(prefix) == opened
         }
         if ownsPrefix {
             namePrefix.withCString { prefix in
@@ -549,10 +555,18 @@ public final class Xlog: NSObject {
     /// Runs `body` with this appender's handle, and runs nothing at all once
     /// [close()] has: handle `0` is the process-wide appender to the C ABI,
     /// so a call through it would move a logger this object does not own.
+    ///
+    /// Read once, and the reading `body` is handed is the one [close()] was
+    /// asked about: a `close()` on another thread between the question and the
+    /// call answers `0` to the call, and `0` is the process-wide appender's —
+    /// the one handle no instance call may be made through. Every member that
+    /// asks [isOpen] and then reads the handle again for the call it is
+    /// guarding is the same bug, and all of them read once now.
     private func withHandle(_ body: (Int64) -> Void) {
-        guard isOpen else {
+        let opened = handle
+        guard opened != Self.noHandle else {
             return
         }
-        body(handle)
+        body(opened)
     }
 }
