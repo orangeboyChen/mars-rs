@@ -9,7 +9,7 @@ import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_getfilepath_from_timesp
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_is_enabled_for
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_make_logfile_name_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_new_instance
-import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_release_instance
+import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_release_instance_of
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_request_flush_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_console_log_instance
 import io.github.orangeboychen.marsrs.xlog.ffi.mars_xlog_set_level_instance
@@ -219,10 +219,17 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     private fun daysAgoOf(daysAgo: Long): Int = daysAgo.coerceIn(NO_DAYS_AGO, Int.MAX_VALUE.toLong()).toInt()
 
     public actual fun close() {
-        if (openHandle() == NO_HANDLE) {
+        val opened = openHandle()
+        if (opened == NO_HANDLE) {
             return
         }
-        mars_xlog_release_instance(namePrefix)
+        // `mars_xlog_release_instance_of` and not `mars_xlog_release_instance`:
+        // what a release is given is a prefix, so what it closes is whichever
+        // appender the prefix answers *at that moment* — the one a `close` on
+        // another thread has just closed, or the one another `Xlog` of this
+        // prefix opened since. Naming the handle makes the question and the
+        // release one call, which is also what makes a second `close` a no-op.
+        mars_xlog_release_instance_of(namePrefix, opened)
         handle = NO_HANDLE
     }
 
