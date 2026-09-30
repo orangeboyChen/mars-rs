@@ -76,6 +76,18 @@ extern "C" {
 #define MARS_SDT_ERR_NO_CHECK (-6)   /* nothing is in flight, so nothing ran  */
 #define MARS_SDT_ERR_BAD_ARG (-7)    /* the arguments cannot start a check    */
 
+/* --- the bits a mode is made of ------------------------------------------ */
+
+/* `NET_CHECK_BASIC` / `NET_CHECK_LONG` / `NET_CHECK_SHORT` of
+ * mars/sdt/constants.h, which the `mode` of `mars_sdt_start_active_check` is
+ * made of: they OR together, and a mode with none of them in it is no checks
+ * at all — an empty plan, and MARS_SDT_ERR_BAD_ARG. It is not "run
+ * everything", which is `NET_CHECK_BASIC | NET_CHECK_LONG | NET_CHECK_SHORT`.
+ */
+#define NET_CHECK_BASIC 1 /* ping and dns                                    */
+#define NET_CHECK_LONG 2  /* tcp: a noop out to the long link's hosts        */
+#define NET_CHECK_SHORT 4 /* http: the net-check CGI, the short link's hosts */
+
 /* --- what a probe is asked, and what it answers -------------------------- */
 
 /**

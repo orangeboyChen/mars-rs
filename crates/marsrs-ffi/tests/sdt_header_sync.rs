@@ -8,6 +8,8 @@
 
 use std::fs;
 
+use marsrs_sdt::{NET_CHECK_BASIC, NET_CHECK_LONG, NET_CHECK_SHORT};
+
 use mars_ffi::sdt::{
     MARS_SDT_ERR_BAD_ARG, MARS_SDT_ERR_BUSY, MARS_SDT_ERR_NO_CHECK, MARS_SDT_ERR_NO_PROBE,
     MARS_SDT_ERR_NO_SPACE, MARS_SDT_ERR_NULL_OUT, MARS_SDT_ERR_PANIC, MARS_SDT_OK,
@@ -137,6 +139,24 @@ fn header_declares_the_types_and_their_fields() {
         4,
         "MarsSdtQuery, MarsSdtAnswer, MarsSdtIpPort and MarsSdtHosts must be C structs"
     );
+}
+
+/// The three bits a mode is made of are in the header as well as in the crate,
+/// because the header's own prose names them: a caller that includes it has to
+/// be able to spell a mode with them, and not with `1 | 2` and a hope.
+#[test]
+fn mode_bits_match_the_header_defines() {
+    let header = header();
+    for (name, value) in [
+        ("NET_CHECK_BASIC", NET_CHECK_BASIC),
+        ("NET_CHECK_LONG", NET_CHECK_LONG),
+        ("NET_CHECK_SHORT", NET_CHECK_SHORT),
+    ] {
+        assert!(
+            header.contains(&format!("#define {name} {value} ")),
+            "include/mars_sdt.h out of sync: expected `{name}` = {value}"
+        );
+    }
 }
 
 #[test]
