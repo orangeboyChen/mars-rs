@@ -4271,32 +4271,98 @@ mod tests {
         }
     }
 
+    /// The setters that are a line of forwarding: what they have to reach is
+    /// the piece the C++'s own is a method of — the short link, the long link,
+    /// the net source — and not a field of the core's own that nothing reads.
+    /// A call with nothing asserted after it is a call that passes whether the
+    /// setter forwards or does nothing at all.
     #[test]
     fn the_setters_reach_the_pieces_they_are_for() {
-        let (mut core, _rec) = wired();
+        let (mut core, rec) = wired();
         core.set_debug_host(SHORT_HOST);
-        core.forbid_longlink_tls_host(&[SHORT_HOST.to_string()]);
-        core.add_server_ban("1.2.3.4");
-        core.init_history_to_banned_list();
+        assert_eq!(
+            core.shortlink().debug_host(),
+            SHORT_HOST,
+            "the short link's own, and not a host of the core's"
+        );
+
+        // a host the C++'s `__ForbidUseTls` takes a long-link one for, which
+        // is what the name it is given has to have in it
+        core.forbid_longlink_tls_host(&[MAIN.to_string()]);
+        assert!(core.longlink().forbid_tls(&[MAIN.to_string()]));
+
         core.set_ip_connect_timeout(1000, 2000);
+        assert_eq!(core.net_source().ip_connect_timeout(), (1000, 2000));
+
         core.set_packer_encoder(3, "encoder");
         assert_eq!(core.packer_encoder_version(), 3);
         assert_eq!(core.packer_encoder_name(), "encoder");
 
+        // `MakeSureLongLinkConnected` is the link's own question and not one
+        // the core answers: what the core has to do is reach the link the
+        // name is for, and what reaching it does is start a run on it. A
+        // second run is not started while one is in flight, so the default
+        // link's turn is told apart by the scene a disconnect left on it,
+        // which is one a new run clears.
+        let link = Arc::clone(core.long_link(MAIN).expect("the default link"));
+        assert!(!link.lock().unwrap_or_else(poisoned).is_running());
+        core.make_sure_long_link_connected(MAIN);
+        assert!(link.lock().unwrap_or_else(poisoned).is_running());
+
+        // the default link's turn, which a run still in flight would make
+        // the same answer as the first: what tells them apart is the scene
+        // a disconnect left on it, which a new run clears
+        {
+            let mut link = link.lock().unwrap_or_else(poisoned);
+            link.disconnect(DisconnectInternalCode::Reset);
+            link.end_run();
+            assert!(link.disconnect_code().is_set());
+        }
+        core.make_sure_default_long_link_connected();
+        assert_eq!(
+            link.lock().unwrap_or_else(poisoned).disconnect_code(),
+            DisconnectInternalCode::None,
+            "the default link was not asked"
+        );
+
         up(&core, LongLinkStatus::Connected);
         assert!(core.start_task_at(NOW, task(7)));
         assert!(core.disconnect_long_link_by_taskid(7, DisconnectInternalCode::Reset));
-        core.make_sure_long_link_connected(MAIN);
-        core.make_sure_default_long_link_connected();
-        core.keep_signal_at(NOW);
-        core.stop_signal();
-        core.keep_signal();
-        core.touch_tasks_at(NOW + 100);
-        // the reading a zombie was saved at is the clock's own, which
-        // `call_back` reads for itself, so the reading the redo is handed has
-        // to be one that is past the deadline and not one of the test's
+
+        assert!(core.start_task_at(NOW, task(8)));
+
+        // `RedoTasks` cancels every task that is out, which is a task that
+        // went out a second time only if the app asks for it again — what
+        // the core does on its own is end it. The reading is one that is
+        // past the deadline, because the reading a zombie was saved at is
+        // the clock's own and not one of the test's.
         let later = gettickcount().saturating_add(1_000);
         core.redo_tasks_at(later);
+        assert!(
+            rec.ended()
+                .iter()
+                .any(|(taskid, _, err_type, _, _)| *taskid == 8 && *err_type == ErrCmdType::Local),
+            "a redo cancelled nothing: {:?}",
+            rec.ended()
+        );
+
+        // `TouchTasks` is the look that ends a task whose time is up.
+        let mut brief = task(9);
+        brief.total_timeout = 50;
+        assert!(core.start_task_at(NOW, brief));
+        core.touch_tasks_at(NOW + 100);
+        assert!(
+            rec.ended().iter().any(|(taskid, ..)| *taskid == 9),
+            "a touch ended nothing: {:?}",
+            rec.ended()
+        );
+
+        // The two that are the net source's are the net source's own, and
+        // what they do to a list is `tests/net_source.rs`'s and
+        // `tests/simple_ipport_sort.rs`'s to say: here they are the calls
+        // `NetCore` forwards rather than keeps to itself.
+        core.add_server_ban("1.2.3.4");
+        core.init_history_to_banned_list();
     }
 
     #[test]

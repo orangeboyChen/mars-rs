@@ -828,21 +828,93 @@ fn the_setters_reach_the_pieces_they_are_for() {
         .core
         .disconnect_long_link_by_taskid(7, DisconnectInternalCode::Reset));
 
+    // a task that is still out on the long link, which is what a redo below
+    // has to have something to cancel
+    app.start(8);
+
+    // the short link's own host, and not one the core keeps for itself
     app.core.set_debug_host(SHORT_HOST);
-    app.core.forbid_longlink_tls_host(&[SHORT_HOST.to_string()]);
+    assert_eq!(app.core.shortlink().debug_host(), SHORT_HOST);
+
+    // a host the C++'s `__ForbidUseTls` takes a long-link one for, which is
+    // what the name it is given has to have in it
+    app.core.forbid_longlink_tls_host(&[MAIN.to_string()]);
+    assert!(app.core.longlink().forbid_tls(&[MAIN.to_string()]));
+
+    // the net source's, and not a pair the core keeps: the net source keeps
+    // no reading of them a host can ask for, so what they do to a list is
+    // `tests/simple_ipport_sort.rs`'s to say, and here they are the calls
+    // the core forwards
     app.core.add_server_ban("1.2.3.4");
     app.core.init_history_to_banned_list();
+
     app.core.set_ip_connect_timeout(1000, 2000);
+    assert_eq!(app.core.net_source().ip_connect_timeout(), (1000, 2000));
+
     app.core.set_packer_encoder(3, "encoder");
     assert_eq!(app.core.packer_encoder_version(), 3);
     assert_eq!(app.core.packer_encoder_name(), "encoder");
 
+    // `ActiveLogic::SignalActive` is a flag the two gates read and not one
+    // the core keeps to itself: the speed the funnel drains at is the one
+    // thing that says which way the app went
+    let inactive = app.core.anti_avalanche().flow_limit().funnel_speed();
     app.core.set_active(true);
+    assert_ne!(
+        app.core.anti_avalanche().flow_limit().funnel_speed(),
+        inactive,
+        "the funnel drains at the speed of an app that never went active"
+    );
+
+    // `MakeSureLongLinkConnected` is the link's own question and not one the
+    // core answers: what the core has to do is reach the link the name is
+    // for, and what reaching it does is start a run on it. A link that is
+    // up answers "connected" and starts nothing, so the question is put to
+    // one that is not. A second run is not started while one is in flight,
+    // so the default link's turn is told apart by the scene a disconnect
+    // left on it, which a new run clears.
+    let link = Arc::clone(app.core.long_link(MAIN).expect("the default link"));
+    link.lock()
+        .unwrap()
+        .set_status(LongLinkStatus::DisConnected);
+    assert!(!link.lock().unwrap().is_running());
     app.core.make_sure_long_link_connected(MAIN);
+    assert!(link.lock().unwrap().is_running());
+    {
+        let mut link = link.lock().unwrap();
+        link.disconnect(DisconnectInternalCode::Reset);
+        link.end_run();
+        assert!(link.disconnect_code().is_set());
+    }
     app.core.make_sure_default_long_link_connected();
+    assert_eq!(
+        link.lock().unwrap().disconnect_code(),
+        DisconnectInternalCode::None,
+        "the default link was not asked"
+    );
+
+    // `KeepSignal()` — the first buffer goes out at once, which is the one
+    // thing a keeper nobody touched does not do
     app.core.keep_signal_at(START);
+    assert_eq!(app.keeper().sent(), 1);
+
+    // `StopSignal()` ends a keeper that has a post waiting, which is what the
+    // link's own data gave it, and not one that was only ever touched
+    app.keeper().on_network_data_changed_at(START);
     app.core.stop_signal();
+    assert!(!app.keeper().is_keeping(), "the app is waiting for nothing");
+
+    // `RedoTasks` cancels every run that is out and the queue starts it
+    // again, so what the app sees of one is a second send of the same task
+    let before = app.sent();
+    assert_eq!(before.iter().filter(|sent| sent.taskid == 8).count(), 1);
     app.core.redo_tasks_at(START + 100);
+    let after = app.sent();
+    assert_eq!(
+        after.iter().filter(|sent| sent.taskid == 8).count(),
+        2,
+        "a redo sent nothing again: {after:?}"
+    );
 
     // a core that is told not to use the long link puts everything on the
     // short one, and makes no more links
@@ -852,7 +924,7 @@ fn the_setters_reach_the_pieces_they_are_for() {
         .core
         .create_long_link(LonglinkConfig::new("second"))
         .is_none());
-    app.start(8);
+    app.start(9);
     assert_eq!(
         app.sent().last().map(|sent| sent.channel.as_str()),
         Some("short")
