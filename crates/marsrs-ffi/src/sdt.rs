@@ -264,9 +264,15 @@ struct Sink(Arc<Mutex<Vec<CheckResultProfile>>>);
 
 impl Callback for Sink {
     fn report_net_check_result(&self, check_results: &[CheckResultProfile]) {
-        if let Ok(mut reported) = self.0.lock() {
-            reported.extend_from_slice(check_results);
-        }
+        // The poisoned lock is taken anyway: a panic that got out of a run
+        // leaves the flag set, and a report that is dropped for it is one no
+        // later take can hand over either — the results of a diagnosis lost
+        // because something else in the process panicked.
+        let mut reported = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reported.extend_from_slice(check_results);
     }
 }
 
@@ -559,11 +565,12 @@ pub unsafe extern "C" fn mars_sdt_run_checks(
 pub unsafe extern "C" fn mars_sdt_take_report(out: *mut c_char, len: c_uint) -> c_int {
     guard(MARS_SDT_ERR_PANIC, || {
         let results = with_state(|state| {
-            state
-                .reported
-                .lock()
-                .map(|mut reported| std::mem::take(&mut *reported))
-                .unwrap_or_default()
+            std::mem::take(
+                &mut *state
+                    .reported
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            )
         });
         let json = report_json(&results);
         // SAFETY: forwarded to `write_str_into`, whose contract the caller
@@ -577,11 +584,13 @@ pub unsafe extern "C" fn mars_sdt_take_report(out: *mut c_char, len: c_uint) -> 
         // 4 KB is one no retry can get back.
         if written < 0 && !results.is_empty() {
             with_state(|state| {
-                if let Ok(mut reported) = state.reported.lock() {
-                    let later = std::mem::take(&mut *reported);
-                    *reported = results;
-                    reported.extend(later);
-                }
+                let mut reported = state
+                    .reported
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let later = std::mem::take(&mut *reported);
+                *reported = results;
+                reported.extend(later);
             });
         }
         written

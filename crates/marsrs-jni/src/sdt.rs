@@ -61,9 +61,15 @@ struct Sink(Arc<Mutex<Vec<CheckResultProfile>>>);
 
 impl Callback for Sink {
     fn report_net_check_result(&self, check_results: &[CheckResultProfile]) {
-        if let Ok(mut reported) = self.0.lock() {
-            reported.extend_from_slice(check_results);
-        }
+        // The poisoned lock is taken anyway: a panic that got out of a run
+        // leaves the flag set, and a report that is dropped for it is one no
+        // later take can hand over either — the results of a diagnosis lost
+        // because something else in the process panicked.
+        let mut reported = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reported.extend_from_slice(check_results);
     }
 }
 
@@ -265,11 +271,12 @@ pub fn run_checks_java_impl(network_type: i32) -> bool {
 /// Takes everything the checks have reported since the last call.
 pub fn take_reported_impl() -> Vec<CheckResultProfile> {
     with_state(|state| {
-        state
-            .reported
-            .lock()
-            .map(|mut reported| std::mem::take(&mut *reported))
-            .unwrap_or_default()
+        std::mem::take(
+            &mut *state
+                .reported
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
     })
 }
 
