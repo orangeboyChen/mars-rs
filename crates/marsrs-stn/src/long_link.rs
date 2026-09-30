@@ -1630,7 +1630,11 @@ impl LongLink {
         if !sent {
             return false;
         }
-        self.noop_timeout.cancel();
+        // no [`NoopAlarm::cancel`] first: the C++'s `Alarm::Start` refuses to
+        // start an alarm that is already waiting, so it has to cancel, while
+        // [`NoopAlarm::start_at`] writes the reading over whatever was there.
+        // Cancelling here would also take the watchdog off a heartbeat that is
+        // out and put it back only if this send happens.
         self.noop_timeout.start_at(now, wait);
         true
     }
