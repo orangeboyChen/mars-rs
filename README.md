@@ -37,6 +37,7 @@ package carries the last two — [use it](#use-it) says which do.
 | React Native 0.74+ | `marsrs-react-native-xlog` / `marsrs-react-native` | [npm](https://www.npmjs.com), or the release's `marsrs-react-native-xlog-<version>.tgz` |
 | anything with a C or C++ FFI | the `marsrs-<version>-<host>` archive | the release: Linux, macOS and Windows hosts |
 | HarmonyOS | `marsrs-harmonyos-xlog`, or the three `.so` of `marsrs-harmony-<version>.tar.gz` | the release — ohpm is not switched on yet |
+| a desktop — Linux, macOS or Windows | the `xlog` CLI | [the latest release](https://github.com/orangeboyChen/mars-rs/releases/latest), as `marsrs-xlog-cli-<version>-<host>` |
 
 The Kotlin Multiplatform package is the widest of them: the same calls in shared
 code write the same file on Android, iOS, watchOS, tvOS, macOS, Linux and
@@ -47,7 +48,9 @@ through, and `marsrs-harmony-<version>.tar.gz` is the three `.so` and the header
 for an app that would rather write NAPI of its own.
 
 Every release also ships the `xlog` CLI, which writes and reads those files from
-a shell and makes the key pair that decides who can — `cargo install marsrs-xlog`,
+a shell and makes the key pair that decides who can — one archive per host on
+[the latest release](https://github.com/orangeboyChen/mars-rs/releases/latest),
+`marsrs-xlog-cli-<version>-<host>`, or `cargo install marsrs-xlog` — and then
 `xlog keygen`.
 
 Every one of those platforms has a demo in [`demo/`](demo/README.md) — one
