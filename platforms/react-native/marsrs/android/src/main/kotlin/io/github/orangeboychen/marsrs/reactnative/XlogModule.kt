@@ -232,7 +232,9 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
 
     /**
      * What React Native calls when the bridge this module was made for goes
-     * away, and the one place the thread [flushQueue] runs on is shut down:
+     * away: the one place every appender [open] made is closed — see
+     * [closeAll] — and the one place the thread [flushQueue] runs on is shut
+     * down:
      * `Executors.newSingleThreadExecutor` keeps a non-daemon thread alive
      * until something shuts it, so a module that did not would leave one
      * behind per bridge reload — each of them idle, and each of them a
@@ -240,7 +242,31 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      */
     override fun invalidate() {
         super.invalidate()
+        closeAll()
         flushQueue.shutdown()
+    }
+
+    /**
+     * Every appender [open] made, closed: what a module that is going away
+     * owes the files it was writing, and the only drain they will get — the
+     * queue is shut down below, so an appender left open is one whose records
+     * stay in its buffer, whose writer thread stays alive and whose cache
+     * stays claimed for the life of the process.
+     *
+     * Closed on the queue and not on this thread, which is the JS thread,
+     * because `Xlog.close` is itself a drain; and `shutdown` runs what it was
+     * handed before it stops, so these do run. A queue that was shut down
+     * already — an `invalidate` before this one — was handed them then.
+     */
+    private fun closeAll() {
+        try {
+            flushQueue.execute {
+                appenders.values.forEach { it.close() }
+                appenders.clear()
+            }
+        } catch (e: RejectedExecutionException) {
+            appenders.clear()
+        }
     }
 
     /**
