@@ -457,9 +457,13 @@ public:
         // not the handle, which drops whatever the prefix answers *now*. Once
         // this object's twin closed the appender and a third one reopened the
         // prefix, releasing here would close an appender that is not ours.
-        if (mars_xlog_get_instance(namePrefix_.c_str()) == handle_) {
-            mars_xlog_release_instance(namePrefix_.c_str());
-        }
+        //
+        // Asked and released in one call, and not in the two an
+        // `isOpen()` and a `mars_xlog_release_instance` would be: two calls
+        // are two answers, and an `open` of this prefix that lands between
+        // them is handed a handle of its own, which the release then closes
+        // while the one this `Xlog` asked about is left open.
+        mars_xlog_release_instance_of(namePrefix_.c_str(), handle_);
         handle_ = 0;
     }
 

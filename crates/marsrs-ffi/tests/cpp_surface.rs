@@ -15,10 +15,11 @@ use std::process::Command;
 
 /// Every `mars_xlog_*` the C++ header is written over: the one member of
 /// [`marsrs::xlog::Xlog`](../../include/mars_xlog.hpp) each of them is.
-const SYMBOLS: [&str; 16] = [
+const SYMBOLS: [&str; 17] = [
     "mars_xlog_new_instance",
     "mars_xlog_get_instance",
     "mars_xlog_release_instance",
+    "mars_xlog_release_instance_of",
     "mars_xlog_get_level",
     "mars_xlog_set_level_instance",
     "mars_xlog_set_mode_instance",
