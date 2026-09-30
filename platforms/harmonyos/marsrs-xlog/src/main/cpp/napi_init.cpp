@@ -485,8 +485,17 @@ static napi_value Log(napi_env env, napi_callback_info info) {
     }
     char* tag = CopyString(env, argv[2]);
     char* message = CopyString(env, argv[3]);
-    mars_xlog_write_instance(handle, level, tag == NULL ? "" : tag, "", "", 0,
-                             message == NULL ? "" : message);
+    // An argument this module cannot read is a record it does not write, which
+    // is the answer the level above gives and the one `IsLoggable` gives a
+    // level it cannot read: substituting an empty tag or an empty message
+    // would write a record at a body — and under a tag — the caller did not
+    // ask for, which is a line in the log no caller can account for.
+    if (tag == NULL || message == NULL) {
+        free(tag);
+        free(message);
+        return Undefined(env);
+    }
+    mars_xlog_write_instance(handle, level, tag, "", "", 0, message);
     free(tag);
     free(message);
     return Undefined(env);
