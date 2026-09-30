@@ -151,16 +151,25 @@ public actual object StnLogic {
     }
 
     public actual fun startTask(task: Task) {
+        // A negative id names no task here, the way the JNI `actual` reads one:
+        // `-1` is `0xFFFF_FFFF` on the C side, which is the noop's own id — the
+        // one the long link keeps itself alive with — and a task started under
+        // it is one a noop of the link's would answer for.
+        if (task.taskID < 0) return
         memScoped {
             mars_stn_start_task(task.native(this).ptr)
         }
     }
 
     public actual fun stopTask(taskID: Int) {
+        // As in [startTask]: `-1` is the noop's id and not a task the app named,
+        // and a `stopTask` of it would stop what the link's own heartbeat is.
+        if (taskID < 0) return
         mars_stn_stop_task(taskID.toUInt())
     }
 
-    public actual fun hasTask(taskID: Int): Boolean = mars_stn_has_task(taskID.toUInt()) != 0
+    // The same reading of a negative: no task has it, so none is in the queues.
+    public actual fun hasTask(taskID: Int): Boolean = taskID >= 0 && mars_stn_has_task(taskID.toUInt()) != 0
 
     public actual fun redoTask() {
         mars_stn_redo_tasks()
@@ -229,7 +238,11 @@ public actual object StnLogic {
     }
 
     public actual fun setClientVersion(version: Int) {
-        mars_stn_set_client_version(version.toUInt())
+        // `0` and not `0xFFFF_FFFF`, which is what a `-1` would read as: the
+        // version goes out in every long-link package, and the JNI `actual`
+        // clamps it the same way rather than hand the link a number of four
+        // billion.
+        mars_stn_set_client_version(version.coerceAtLeast(0).toUInt())
     }
 
     public actual fun genTaskID(): Int = mars_stn_gen_task_id().toInt()
