@@ -470,6 +470,35 @@ fn standard_input_and_output_are_the_defaults() {
     assert_eq!(decoded.stdout, RECORDS, "the records did not come back");
 }
 
+/// An `=` with nothing after it is the stream, and not a value that has to be
+/// looked for in the next argument: `decode -o= a.xlog` reads `a.xlog` and
+/// prints it to the terminal, where `-o` followed by `a.xlog` decodes what is
+/// on standard input and writes it over the file the command line named.
+#[test]
+fn an_equals_with_nothing_after_it_is_the_stream() {
+    let dir = scratch("empty-value");
+    let input = write(&dir, "records.txt", RECORDS);
+    let file = dir.join("a.xlog");
+
+    let (ok, _, err) = run(&[
+        "encode",
+        &input.display().to_string(),
+        "--out",
+        &file.display().to_string(),
+    ]);
+    assert!(ok, "encode failed: {err}");
+    let before = std::fs::read(&file).expect("read the .xlog");
+
+    let (ok, out, err) = run(&["decode", "-o=", &file.display().to_string()]);
+    assert!(ok, "decode failed: {err}");
+    assert_eq!(out, RECORDS, "the records did not come back");
+    assert_eq!(
+        std::fs::read(&file).expect("read the .xlog again"),
+        before,
+        "the file it was given was written over"
+    );
+}
+
 #[test]
 fn an_uncompressed_async_record_is_refused_and_a_sync_one_is_not() {
     let dir = scratch("uncompressed");

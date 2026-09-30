@@ -72,8 +72,10 @@ const MAX_REGION: usize = 64 * 1024 * 1024;
 const DEFAULT_LEVEL: i32 = 6;
 /// The bytes one record needs of the region: the block's header, its own
 /// length, the tailer byte, and the most a compressor adds to an input it
-/// cannot compress — zstd's `ZSTD_COMPRESSBOUND` is `len + len / 128 + 64`,
-/// and that also covers zlib's stored blocks, five bytes per 64 KiB.
+/// cannot compress — zstd's `ZSTD_COMPRESSBOUND` is `len + len / 256 + 64`,
+/// the number [`Compressor::worst_case`] asks for, and this leaves half as
+/// much margin again (`len / 128`), which is also what covers zlib's stored
+/// blocks, five bytes per 64 KiB.
 ///
 /// [`LogBuffer::write`] writes into the room there is and drops the rest, so
 /// the CLI has to know this before it writes and not after: a record that
@@ -272,11 +274,15 @@ impl Command {
                     return Err(format!("unknown option `-{letter}`\n\n{USAGE}"));
                 };
                 let attached = &cluster[letter.len_utf8()..];
-                let attached = attached.strip_prefix('=').unwrap_or(attached);
-                let value = if attached.is_empty() {
-                    value_of(arg, key, &mut index, args)?
-                } else {
-                    attached
+                // An `=` was written, so what follows it is the value even
+                // when what follows it is nothing: `-o=` is `--out=`, which
+                // is the stream and not the next argument — see [`given`].
+                // `-o` on its own is the one that takes the next argument,
+                // and `-oPATH` is the one whose value is in the argument.
+                let value = match attached.strip_prefix('=') {
+                    Some(value) => value,
+                    None if !attached.is_empty() => attached,
+                    None => value_of(arg, key, &mut index, args)?,
                 };
                 command.set(what, key, value)?;
             } else if command.input.replace(arg.clone()).is_some() {
