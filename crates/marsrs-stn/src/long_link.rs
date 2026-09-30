@@ -1608,7 +1608,16 @@ impl LongLink {
             }
         }
 
-        if self.encoder.noop_isresp(Task::NOOP_TASK_ID, cmdid) {
+        // The taskid the package came in with, and not the constant:
+        // `noop_isresp` is the one place the two are compared, so handing it
+        // the constant made its own question answer itself and left the cmdid
+        // as the only thing a heartbeat was told apart by. A business answer
+        // that happens to carry the noop's cmdid was then filed as a
+        // heartbeat — its task never got an answer and waited for its
+        // timeout — and the heartbeat it was filed as cancelled the noop
+        // alarm, so a link that was already dead reported one that went
+        // through.
+        if self.encoder.noop_isresp(taskid, cmdid) {
             is_noop = true;
         }
 
@@ -3255,6 +3264,32 @@ mod tests {
             }]
         );
         assert!(!link.is_nooping(), "the heartbeat answered");
+    }
+
+    /// The cmdid is not the only thing a heartbeat is told apart by. An app
+    /// sets the noop's cmdid, so a business answer can carry it too — and a
+    /// package that does was filed as a heartbeat: the task it answers never
+    /// got one and waited for its own timeout, while the heartbeat that was
+    /// filed in its place cancelled the noop alarm of a link that is dead.
+    #[test]
+    fn a_task_that_answers_with_the_noops_cmdid_is_no_heartbeat() {
+        let _lock = crate::test_lock();
+        let (mut link, seen) = link();
+        link.make_sure_connected();
+        let socket = link.connect_at(1_000).unwrap();
+        assert!(link.send_heartbeat_at(1_000, false, false));
+        written(&mut link);
+        *seen.answer.lock().unwrap() = longlink_pack(NOOP_CMDID, 7, b"answer");
+
+        assert_eq!(
+            link.read_at(1_500, socket).answers,
+            vec![Answer::Task {
+                cmdid: NOOP_CMDID,
+                taskid: 7,
+                body: b"answer".to_vec(),
+            }]
+        );
+        assert!(link.is_nooping(), "the heartbeat is still out");
     }
 
     #[test]
