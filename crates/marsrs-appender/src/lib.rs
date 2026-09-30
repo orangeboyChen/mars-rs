@@ -101,8 +101,8 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 pub use category::{
     current_log_path, flush, flush_now, get_filter, get_level, get_xlogger_instance,
-    is_enabled_for, new_xlogger_instance, release_xlogger_instance, request_flush,
-    set_appender_mode, set_console_log_open, set_filter, set_level,
+    is_enabled_for, new_xlogger_instance, release_xlogger_instance, release_xlogger_instance_of,
+    request_flush, set_appender_mode, set_console_log_open, set_filter, set_level,
     set_max_alive_duration as category_set_max_alive_duration,
     set_max_file_size as category_set_max_file_size, xlogger_write, XloggerCategory, XloggerFilter,
     XloggerHandle, DEFAULT_HANDLE,

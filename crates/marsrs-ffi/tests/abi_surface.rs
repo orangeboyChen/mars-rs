@@ -13,10 +13,10 @@ use mars_ffi::abi::{
     mars_xlog_current_log_path_instance, mars_xlog_flush_now_instance, mars_xlog_get_instance,
     mars_xlog_get_level, mars_xlog_getfilepath_from_timespan_instance, mars_xlog_is_enabled_for,
     mars_xlog_make_logfile_name_instance, mars_xlog_new_instance, mars_xlog_release_instance,
-    mars_xlog_set_console_log_instance, mars_xlog_set_level_instance,
-    mars_xlog_set_max_alive_duration_instance, mars_xlog_set_max_file_size_instance,
-    mars_xlog_set_mode_instance, mars_xlog_write_instance, MarsXLogConfig, MARS_XLOG_ERR_NO_PATH,
-    MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_OUT,
+    mars_xlog_release_instance_of, mars_xlog_set_console_log_instance,
+    mars_xlog_set_level_instance, mars_xlog_set_max_alive_duration_instance,
+    mars_xlog_set_max_file_size_instance, mars_xlog_set_mode_instance, mars_xlog_write_instance,
+    MarsXLogConfig, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_OUT,
 };
 
 fn serial() -> MutexGuard<'static, ()> {
@@ -218,8 +218,60 @@ fn instances_are_created_addressed_and_released() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `XloggerCategory::IsEnabledFor` is `level_ <= _level` on the **raw**
-/// `TLogLevel`, and the C++ casts whatever the caller passes
+/// Releasing takes the prefix and not the handle, so a caller that asks the
+/// registry and then releases is answered twice and not once: an open of the
+/// same prefix that lands between the two is handed a handle of its own, and
+/// the release closes that appender instead of the one the caller asked about.
+/// `mars_xlog_release_instance_of` is the two under one lock.
+#[test]
+fn a_release_names_the_instance_it_closes() {
+    let _guard = serial();
+    let dir = tempdir("release-of");
+    let config = make_config(&dir, 1, 0);
+    let prefix = CString::new("Mars").unwrap();
+    let first = unsafe { mars_xlog_new_instance(&config.raw, 2) };
+    assert!(first > 0, "an instance is a handle");
+
+    // A handle that is not the one this prefix is registered under closes
+    // nothing at all, `0` included: releasing took the prefix only, and both
+    // of these would have closed this appender.
+    unsafe {
+        mars_xlog_release_instance_of(prefix.as_ptr(), 0);
+    }
+    assert_eq!(unsafe { mars_xlog_get_instance(prefix.as_ptr()) }, first);
+    unsafe {
+        mars_xlog_release_instance_of(prefix.as_ptr(), first + 1);
+    }
+    assert_eq!(unsafe { mars_xlog_get_instance(prefix.as_ptr()) }, first);
+
+    // The handle it *is* registered under does.
+    unsafe {
+        mars_xlog_release_instance_of(prefix.as_ptr(), first);
+    }
+    assert_eq!(unsafe { mars_xlog_get_instance(prefix.as_ptr()) }, 0);
+
+    // And the same call again — a second `close` of a prefix another part of
+    // the app has opened since — is what the re-open race looks like from the
+    // caller that lost it: the appender that is there now is not the one this
+    // handle named, so it stays.
+    let second = unsafe { mars_xlog_new_instance(&config.raw, 2) };
+    assert!(second > 0, "the prefix opens again");
+    unsafe {
+        mars_xlog_release_instance_of(prefix.as_ptr(), first);
+    }
+    assert_eq!(
+        unsafe { mars_xlog_get_instance(prefix.as_ptr()) },
+        second,
+        "a stale handle closes none but its own"
+    );
+    unsafe {
+        mars_xlog_release_instance_of(prefix.as_ptr(), second);
+    }
+    assert_eq!(unsafe { mars_xlog_get_instance(prefix.as_ptr()) }, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `IsEnabledFor` answers about the raw level a record carries, so
 /// (`(TLogLevel)_level`) — so `-1` is asked about as `-1`, and not as the
 /// `Verbose` the filter would make of it.
 ///

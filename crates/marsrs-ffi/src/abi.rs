@@ -362,6 +362,35 @@ pub unsafe extern "C" fn mars_xlog_release_instance(name_prefix: *const c_char) 
     });
 }
 
+/// Releases the instance registered for `name_prefix`, and only while it is
+/// still the one `instance` names.
+///
+/// [`mars_xlog_release_instance`] takes the prefix and not the handle, so a
+/// caller that asks the registry which handle the prefix answers and then
+/// releases is answered twice and not once: an `open` of the same prefix that
+/// lands between the two is handed a handle of its own, and the release closes
+/// *that* appender — the one the caller asked about is already gone and the one
+/// it just closed is another's. This is the question and the release under one
+/// lock, so nothing can land between them, which is also what makes a second
+/// `close` of one prefix a no-op however many `Xlog`s hold its handle.
+///
+/// # Safety
+///
+/// `name_prefix` must be null, or a NUL-terminated C string that stays alive for the duration of
+/// the call.
+#[no_mangle]
+pub unsafe extern "C" fn mars_xlog_release_instance_of(
+    name_prefix: *const c_char,
+    instance: c_longlong,
+) {
+    let _ = guard(0, || {
+        // SAFETY: null is reported as an empty prefix by the helper.
+        let prefix = unsafe { cstr::ptr_to_string_lossy(name_prefix) };
+        marsrs_appender::release_xlogger_instance_of(&prefix, instance as XloggerHandle);
+        0
+    });
+}
+
 /// Writes through a specific instance.
 ///
 /// The instance's own level decides: a record below it is dropped. A handle

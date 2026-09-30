@@ -140,6 +140,16 @@ long long mars_xlog_get_instance(const char* name_prefix);
 /* Releases the instance and closes its appender. */
 void mars_xlog_release_instance(const char* name_prefix);
 
+/* The same, and only while name_prefix is still registered under `instance`.
+ *
+ * Releasing takes the prefix and not the handle, so asking
+ * mars_xlog_get_instance and then calling mars_xlog_release_instance is two
+ * answers and not one: an open of the same prefix that lands between the two is
+ * handed a handle of its own, and the release closes that one. This is the
+ * question and the release in one call, which is also what makes a second
+ * close of a prefix a no-op however many callers hold its handle. */
+void mars_xlog_release_instance_of(const char* name_prefix, long long instance);
+
 /* Writes through an instance; honours the instance's level. */
 void mars_xlog_write_instance(long long instance,
                               int level,
