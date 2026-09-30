@@ -247,6 +247,12 @@ public final class MarsSdt: NSObject {
         /// the check behind it.
         @objc public var probe: Probe = .nothing
         /// The probe's return value; `0` and above is one that worked.
+        ///
+        /// A `tcp` answer is the one that does not carry it: the error code of
+        /// a tcp profile is the diagnosis's own, read off `sent`, `received`
+        /// and `isNoopResponse` and not off this — what the C++ records there
+        /// is never the socket's own error — so a `tcp` probe that names one
+        /// names a number nothing reads.
         @objc public var errorCode: Int32 = 0
         /// How long the probe took.
         @objc public var rtt: UInt64 = 0
