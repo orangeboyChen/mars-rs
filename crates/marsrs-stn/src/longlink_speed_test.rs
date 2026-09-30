@@ -330,7 +330,6 @@ pub struct LongLinkSpeedTest {
     sockets: Vec<Socket>,
     open: Option<Box<Open>>,
     select: Option<Box<Select>>,
-    retries: usize,
 }
 
 impl Default for LongLinkSpeedTest {
@@ -357,7 +356,6 @@ impl LongLinkSpeedTest {
             sockets: Vec::new(),
             open: None,
             select: None,
-            retries: 0,
         }
     }
 
@@ -410,6 +408,13 @@ impl LongLinkSpeedTest {
     }
 
     fn race(&mut self, mut clock: impl FnMut() -> u64) -> Option<Fastest> {
+        // One race's count of the `EINTR`s it sat through, and not the test's
+        // across every race it has run: the C++ keeps it inside the run, so a
+        // race started again on the same test is a race with its three again.
+        // Kept on the value it is a ceiling a race that has not started yet
+        // has already spent, which is a race that gives up on its first
+        // `EINTR`.
+        let mut retries = 0;
         while self.sockets.len() < self.items.len() {
             let Some(open) = self.open.as_mut() else {
                 break;
@@ -425,8 +430,8 @@ impl LongLinkSpeedTest {
             let events = match self.select() {
                 Ok(events) => events,
                 // `EINTR` is sat through, but not for ever
-                Err(Stop::Interrupted) if self.retries < MAX_RETRIES => {
-                    self.retries += 1;
+                Err(Stop::Interrupted) if retries < MAX_RETRIES => {
+                    retries += 1;
                     continue;
                 }
                 Err(_) => break,
@@ -549,7 +554,6 @@ impl std::fmt::Debug for LongLinkSpeedTest {
         f.debug_struct("LongLinkSpeedTest")
             .field("items", &self.items)
             .field("open_sockets", &self.sockets.len())
-            .field("retries", &self.retries)
             .finish_non_exhaustive()
     }
 }
@@ -911,6 +915,14 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
             MAX_RETRIES + 1
+        );
+        // and a race started again is a race with its three again
+        assert_eq!(test.fastest_at(0), None);
+        assert_eq!(
+            *rounds
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            2 * (MAX_RETRIES + 1)
         );
 
         // and an exception or a woken breaker ends it at once
