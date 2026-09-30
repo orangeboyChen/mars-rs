@@ -284,13 +284,28 @@ public actual object SdtLogic {
             val ports = allocArray<MarsSdtIpPort>(pairs)
             for (pair in 0 until pairs) {
                 ports[pair].ip = cstring(link.hosts[pair])
-                ports[pair].port = link.ports[pair].toUShort()
+                ports[pair].port = portOf(link.ports[pair])
             }
             array[index].ports = ports
             array[index].port_count = pairs.toUInt()
         }
         return array
     }
+
+    /** The largest port an `unsigned short` carries. */
+    private const val MAX_PORT = 65_535
+
+    /**
+     * One port of a link, as the `unsigned short` the C ABI carries.
+     *
+     * A number the `unsigned short` cannot hold is `0` and not its own low
+     * sixteen bits: `70000` truncated is `4464` and `-1` is `65535`, which are
+     * ports another host really listens on, and a diagnosis that probes them is
+     * one that reports on the wrong place. `0` is the port the JNI bridge
+     * answers for the same number, which is what makes one `Link` mean one
+     * thing on either `actual`.
+     */
+    private fun portOf(port: Int): UShort = if (port in 0..MAX_PORT) port.toUShort() else 0.toUShort()
 
     /** The buffer `httpNetcheckCGI` writes into; a URL never fills it. */
     private const val CGI_BUFFER_SIZE = 1_024
