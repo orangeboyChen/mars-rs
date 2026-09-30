@@ -68,9 +68,19 @@ fn a_socket_is_only_for_the_pair_it_was_made_for() {
 
 #[test]
 fn keepalive_is_seconds_and_a_socket_that_outlived_it_is_closed() {
-    // `DEFAULT_MAX_KEEPALIVE_TIME` is what the C++ keeps one for, and the item
-    // counts it in seconds — which is what `HasTimeout` multiplies by 1000
-    assert_eq!(DEFAULT_MAX_KEEPALIVE_TIME, 5 * 1000);
+    // the item counts its timeout in seconds — which is what `HasTimeout`
+    // multiplies by 1000 — so what the default says is five of them, and a
+    // socket put in with it is out of the pool five seconds later and not
+    // eighty-three minutes later
+    let pool_address = item("1.1.1.1", 80, "short.example");
+    let socket = CachedSocket::new_at(
+        0,
+        pool_address.clone(),
+        SocketFd(3),
+        DEFAULT_MAX_KEEPALIVE_TIME,
+    );
+    assert!(!socket.has_timeout_at(4_999));
+    assert!(socket.has_timeout_at(5_000));
 
     let (mut pool, closed) = pool();
     let address = item("1.1.1.1", 80, "short.example");

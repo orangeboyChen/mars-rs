@@ -26,11 +26,13 @@ use marsrs_comm::tickcount::gettickcount;
 /// `BAN_INTERVAL` — how long a socket that was taken from the pool and turned
 /// out to be no good keeps the pool from handing one out, in milliseconds.
 pub const BAN_INTERVAL: u64 = 5 * 60 * 1000;
-/// `DEFAULT_MAX_KEEPALIVE_TIME` — what the C++ keeps a cached socket for. No
-/// caller in this crate passes it in: the timeout is the one the caller writes
-/// in the [`CachedSocket`] it puts in, which is why it lives here and not in
-/// the pool.
-pub const DEFAULT_MAX_KEEPALIVE_TIME: u32 = 5 * 1000;
+/// `DEFAULT_MAX_KEEPALIVE_TIME` — what the C++ keeps a cached socket for, in
+/// **seconds**: the [`CachedSocket::timeout`] it is written into counts
+/// seconds, and [`CachedSocket::has_timeout_at`] is what multiplies it by
+/// 1000. No caller in this crate passes it in: the timeout is the one the
+/// caller writes in the [`CachedSocket`] it puts in, which is why it lives
+/// here and not in the pool.
+pub const DEFAULT_MAX_KEEPALIVE_TIME: u32 = 5;
 
 /// `closefunc` — `CacheSocketItem::CloseSocket()`.
 pub type CloseSocket = dyn FnMut(SocketFd) + Send;
