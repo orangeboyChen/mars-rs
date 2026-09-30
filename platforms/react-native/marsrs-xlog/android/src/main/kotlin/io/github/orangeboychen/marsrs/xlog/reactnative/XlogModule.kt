@@ -142,7 +142,16 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
         return appender(namePrefix)?.isLoggable(LogLevel.of(native)) ?: false
     }
 
-    /** `Xlog.level`, read: what `marsrs-jni` answers, and not what JS holds. */
+    /**
+     * `Xlog.level`, read: what `marsrs-jni` answers, and not what JS holds.
+     *
+     * `NONE` and not a level the enum does not carry, which is what the iOS
+     * half of this module answers for the same numbers and the answer that is
+     * safe: `VERBOSE` is the ordinal `0`, so a `-1` read as a level is the
+     * level that logs everything — the opposite of what an appender that
+     * writes nothing was asked. An appender there is none of is `NONE` on
+     * both halves.
+     */
     override fun getLevel(namePrefix: String): Double =
         appender(namePrefix)?.level?.ordinal?.toDouble() ?: LogLevel.NONE.ordinal.toDouble()
 
