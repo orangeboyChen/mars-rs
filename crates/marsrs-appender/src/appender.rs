@@ -3106,9 +3106,8 @@ mod tests {
         appender.close();
 
         let name = crate::file_util::make_log_file_name_prefix(now_secs(), "Mars");
-        let text =
-            String::from_utf8_lossy(&fs::read(cache.join(format!("{name}.xlog"))).unwrap())
-                .to_string();
+        let text = String::from_utf8_lossy(&fs::read(cache.join(format!("{name}.xlog"))).unwrap())
+            .to_string();
         assert!(
             text.contains("a batch only the cache directory will take"),
             "the batch the cache directory was given is not in it: {text}"

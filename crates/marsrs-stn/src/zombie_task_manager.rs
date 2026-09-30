@@ -581,7 +581,11 @@ mod tests {
         assert!(manager.save_task_at(0, &task, 0));
         assert_eq!(manager.len(), 1, "kept, although nothing will start it");
         assert!(manager.has_task(1));
-        assert_eq!(manager.due_time(), Some(TIMER_INTERVAL), "the check is armed");
+        assert_eq!(
+            manager.due_time(),
+            Some(TIMER_INTERVAL),
+            "the check is armed"
+        );
 
         manager.redo_tasks_at(10);
         assert!(manager.is_empty(), "started and forgotten");
