@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
+import java.util.HashMap
 import java.util.Locale
 import java.util.TreeSet
 
@@ -69,6 +70,7 @@ class Alarm : BroadcastReceiver() {
                         )
                     )
                     iterator.remove()
+                    requestCodes.remove(id)
                     hit = true
                     break
                 }
@@ -99,6 +101,24 @@ class Alarm : BroadcastReceiver() {
 
         private val alarmWaitingSet = TreeSet<Waiting>(compareBy { it.id })
 
+        /**
+         * The request code the `PendingIntent` of each live alarm goes out
+         * under.
+         *
+         * `PendingIntent.getBroadcast` asks for an `Int` and an id of STN's is
+         * a `Long`: two ids that agree in their low 32 bits are one request
+         * code, and `FLAG_CANCEL_CURRENT` is then what the second
+         * `getBroadcast` does to the first one's `PendingIntent` — it cancels
+         * it, and an alarm whose `PendingIntent` was cancelled is an alarm
+         * that never fires. So a code of its own is handed out per id instead
+         * of read off one, and given back where the alarm leaves
+         * [alarmWaitingSet].
+         */
+        private val requestCodes = HashMap<Long, Int>()
+
+        /** The next request code [requestCodeFor] hands out. */
+        private var nextRequestCode = 1
+
         private var bcAlarm: Alarm? = null
 
         @JvmStatic
@@ -109,6 +129,7 @@ class Alarm : BroadcastReceiver() {
                     cancelAlarmMgr(context, iterator.next().pendingIntent)
                 }
                 alarmWaitingSet.clear()
+                requestCodes.clear()
                 bcAlarm?.let {
                     context.unregisterReceiver(it)
                     bcAlarm = null
@@ -178,12 +199,31 @@ class Alarm : BroadcastReceiver() {
                     if (next.id == id) {
                         cancelAlarmMgr(context, next.pendingIntent)
                         iterator.remove()
+                        requestCodes.remove(id)
                         return true
                     }
                 }
             }
 
             return false
+        }
+
+        /**
+         * The request code the alarm of `id` goes out under: the one it already
+         * has while it is live, and a fresh one otherwise.
+         *
+         * [requestCodes] and [alarmWaitingSet] are read and written under the
+         * same lock, so an id that is in one is in the other.
+         */
+        private fun requestCodeFor(id: Long): Int {
+            val given = requestCodes[id]
+            if (given != null) {
+                return given
+            }
+            val fresh = nextRequestCode
+            nextRequestCode += 1
+            requestCodes[id] = fresh
+            return fresh
         }
 
         private fun setAlarmMgr(id: Long, time: Long, context: Context): PendingIntent? {
@@ -203,7 +243,7 @@ class Alarm : BroadcastReceiver() {
             } else {
                 PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE
             }
-            val pendingIntent = PendingIntent.getBroadcast(context, id.toInt(), intent, flags)
+            val pendingIntent = PendingIntent.getBroadcast(context, requestCodeFor(id), intent, flags)
 
             // `set` is the one Android batches from KITKAT on, and an alarm it
             // batches is one it fires inside a window of its own choosing —
