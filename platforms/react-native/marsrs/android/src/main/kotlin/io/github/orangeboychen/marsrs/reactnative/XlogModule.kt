@@ -185,8 +185,16 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
     override fun flush(namePrefix: String, promise: Promise) {
         try {
             flushQueue.execute {
-                appender(namePrefix)?.flushNow()
-                promise.resolve(null)
+                // Settled whatever the drain does, and not only when it ends
+                // well: a throw inside a `Runnable` is swallowed by the
+                // executor that was handed it, and a promise nobody settles
+                // is an `await` in JS that never comes back.
+                try {
+                    appender(namePrefix)?.flushNow()
+                    promise.resolve(null)
+                } catch (e: Exception) {
+                    promise.reject(FLUSH_FAILED, e.message)
+                }
             }
         } catch (e: RejectedExecutionException) {
             // The queue is shut down, so the drain it was handed is one it
@@ -322,6 +330,9 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
 
         /** `0` keeps every cache file, which is what the C++'s default is. */
         private const val NO_CACHE_DAYS = 0
+
+        /** What a drain that threw is answered with: see [flush]. */
+        private const val FLUSH_FAILED = "E_XLOG_FLUSH"
 
         /**
          * `AppenderMode` of the number `mars_xlog.h` gives a mode: an ordinal
