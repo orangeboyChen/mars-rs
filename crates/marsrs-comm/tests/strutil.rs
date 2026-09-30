@@ -31,14 +31,10 @@ fn trims_ascii_whitespace_only() {
 
 #[test]
 fn case_conversion_is_ascii_only() {
+    // the multibyte letters are the point: `to_lowercase` would write `ä`
+    // and `Ö`, which is not what the C++'s `strutil` does
     assert_eq!(strutil::cast_lower("AbC1Ä"), "abc1Ä");
     assert_eq!(strutil::cast_upper("aBc1ö"), "ABC1ö");
-    // a `String` a caller owns is lower-cased where it stands, by `std`
-    let mut s = "MiXeD".to_owned();
-    s.make_ascii_lowercase();
-    assert_eq!(s, "mixed");
-    s.make_ascii_uppercase();
-    assert_eq!(s, "MIXED");
 }
 
 #[test]

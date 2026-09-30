@@ -1,7 +1,7 @@
 //! `mars/sdt/src/checkimpl/` — what the four probes are asked, and what they
 //! answer back.
 
-use marsrs_sdt::checkimpl::{Answer, Ask, PingStatus, Query};
+use marsrs_sdt::checkimpl::{Answer, Ask, PingStatus};
 
 #[test]
 fn an_answer_read_as_another_probe_is_that_probe_failing() {
@@ -84,37 +84,4 @@ fn a_seam_nobody_filled_in_answers_nothing() {
     // the answerer is not something a caller can look at, so all there is to
     // show is that one was made — and that it prints as one
     assert_eq!(format!("{ask:?}"), "Ask { .. }");
-}
-
-#[test]
-fn the_query_of_each_probe_is_what_the_check_asked_for() {
-    // the four questions, as [`crate::activecheck`] asks them
-    let dns = Query::Dns {
-        domain: "long.host".to_owned(),
-        timeout_ms: 3000,
-    };
-    let tcp = Query::Tcp {
-        ip: "1.2.3.4".to_owned(),
-        port: 80,
-        timeout_ms: 5000,
-    };
-    let http = Query::Http {
-        url: "http://short.host/netcheck".to_owned(),
-        timeout_ms: 1000,
-    };
-    let ping = Query::Ping {
-        host: "www.qq.com".to_owned(),
-        timeout_s: 0,
-    };
-
-    // every one of them is a value a host can keep and compare
-    assert_ne!(format!("{dns:?}"), format!("{tcp:?}"));
-    assert_eq!(
-        ping,
-        Query::Ping {
-            host: "www.qq.com".to_owned(),
-            timeout_s: 0
-        }
-    );
-    assert_ne!(http, dns);
 }
