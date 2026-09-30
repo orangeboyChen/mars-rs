@@ -321,6 +321,9 @@ export class Xlog {
    */
   logFiles(daysAgo: number): string[] {
     if (!this.opened) {
+      // `[]` for an appender that is closed, which is the answer the Swift and
+      // the Kotlin give the same question: an app that wants to know whether a
+      // day has files asks while the appender is open.
       return [];
     }
     // What the native side answers for a question it could not read is a throw
