@@ -54,6 +54,7 @@
 //! metas they are, and the port keeps the links in the core.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -394,6 +395,13 @@ pub struct NetCore {
     /// `OnLonglinkIdentifyResponse` — the app's verdict on the answer.
     identify_response: Arc<Mutex<Option<Box<OnIdentifyResponse>>>>,
     /// `ActiveLogic::Instance()->IsForeground()`.
+    /// `ActiveLogic::isactive_` — what [`NetSource`] and [`TimingSync`] ask
+    /// [`ActiveLogic::IsActive()`] about, and what [`NetCore::set_active_at`]
+    /// sets. It is a cell and not a plain `bool` because the two of them ask
+    /// through a callback they were handed at construction, and the core is
+    /// the only thing that knows the answer: the C++'s is a member of a
+    /// singleton both read directly.
+    active: Arc<AtomicBool>,
     is_foreground: Option<Box<IsForeground>>,
     /// `ActiveLogic::Instance()->LastForegroundChangeTime()`.
     last_foreground_change_time: Option<Box<LastForegroundChangeTime>>,
@@ -433,6 +441,7 @@ impl NetCore {
             anti_avalanche: Arc::new(Mutex::new(AntiAvalanche::new_at(false, now))),
             zombie: Arc::new(Mutex::new(ZombieTaskManager::new_at(now))),
             pending: Arc::new(Mutex::new(VecDeque::new())),
+            active: Arc::new(AtomicBool::new(false)),
             net_info: Arc::new(Mutex::new(Box::new(|| crate::NET_TYPE_WIFI))),
             hooks: Arc::new(Mutex::new(Hooks::default())),
             use_long_link,
@@ -455,6 +464,16 @@ impl NetCore {
             last_foreground_change_time: None,
             clock: None,
         };
+        // `ActiveLogic::IsActive()`, which the C++'s `NetSource` and
+        // `TimingSync` ask of the singleton themselves: an app that never
+        // said it was active is one whose host lists are made the short way
+        // and whose sync waits half an hour, for the life of the process.
+        let active = Arc::clone(&core.active);
+        core.timing_sync
+            .set_is_active(move || active.load(Ordering::SeqCst));
+        let active = Arc::clone(&core.active);
+        core.net_source
+            .set_is_active(move || active.load(Ordering::SeqCst));
         // `dynamic_timeout_`: the C++ owns one and hands the *same* one to both
         // queues (`net_core.cc:85,217`), so a package that went out on either
         // of them is what both compute their first-package timeouts from
@@ -1068,6 +1087,7 @@ impl NetCore {
 
     /// The same, with the reading handed in.
     pub fn set_active_at(&mut self, now: u64, is_active: bool) {
+        self.active.store(is_active, Ordering::SeqCst);
         self.anti_avalanche().on_signal_active(is_active);
         self.timing_sync.on_active_changed_at(now, is_active);
     }
@@ -3972,21 +3992,80 @@ mod tests {
     #[test]
     fn the_active_signal_moves_the_sync_and_not_only_the_avalanche() {
         let (mut core, _rec) = wired();
-        core.timing_sync().set_is_active(|| true);
         core.timing_sync().set_is_logoned(|| true);
 
         // `ActiveLogic::SignalActive` has two listeners in the C++, and the
-        // anti-avalanche check was the only one that heard it here
+        // anti-avalanche check was the only one that heard it here: the sync
+        // reads `IsActive()` for itself, so it is the signal that tells it
         core.set_active_at(NOW, true);
         assert_eq!(
             core.timing_sync().due_time(),
             Some(NOW + ACTIVE_SYNC_INTERVAL)
         );
+        // ... and the alarm that fires after the signal has gone quiet is
+        // the one that reads the flag for itself, which is what makes the
+        // wiring and not only the signal worth testing: an app that went to
+        // the background keeps waiting the short time until it is asked again
+        // if the sync is the only thing that ever heard of it
+        let fired = core.timing_sync().on_alarm_at(NOW + ACTIVE_SYNC_INTERVAL);
+        assert_eq!(fired, NOW + ACTIVE_SYNC_INTERVAL + ACTIVE_SYNC_INTERVAL);
+
         core.set_active_at(NOW + 1_000, false);
         assert_eq!(
             core.timing_sync().due_time(),
             Some(NOW + 1_000 + INACTIVE_SYNC_INTERVAL)
         );
+        let fired = core
+            .timing_sync()
+            .on_alarm_at(NOW + 1_000 + INACTIVE_SYNC_INTERVAL);
+        assert_eq!(
+            fired,
+            NOW + 1_000 + INACTIVE_SYNC_INTERVAL + INACTIVE_SYNC_INTERVAL
+        );
+    }
+
+    /// `ActiveLogic::IsActive()` is what the net source asks before it makes a
+    /// host list, and it is the same flag: an app the core was told is active
+    /// gets a list made the long way, and one it was never told about gets the
+    /// pairs shared out over the hosts — the background list, however long the
+    /// app is in front.
+    #[test]
+    fn an_active_app_is_one_the_net_source_makes_the_foreground_list_for() {
+        let (mut core, _rec) = wired();
+        core.net_source().set_longlink(
+            vec!["long.example".to_string(), "long2.example".to_string()],
+            vec![80],
+            "",
+        );
+        core.net_source().set_new_dns(|host, _, _| match host {
+            "long.example" => vec![
+                "1.1.1.1".to_string(),
+                "1.1.1.2".to_string(),
+                "1.1.1.3".to_string(),
+                "1.1.1.4".to_string(),
+                "1.1.1.5".to_string(),
+            ],
+            _ => vec![
+                "2.2.2.1".to_string(),
+                "2.2.2.2".to_string(),
+                "2.2.2.3".to_string(),
+                "2.2.2.4".to_string(),
+                "2.2.2.5".to_string(),
+            ],
+        });
+        core.net_source().set_random(|_bound| 0);
+
+        let config = LonglinkConfig::new(MAIN);
+        let background = core.net_source().get_longlink_items(&config);
+        core.set_active_at(NOW, true);
+        let foreground = core.net_source().get_longlink_items(&config);
+
+        // five pairs a host while the app is in front — and one more, which
+        // is the `merge_type_count` ladder letting the second host in once
+        // the first has filled the list — against four shared out between
+        // them behind it
+        assert_eq!(background.len(), 4, "the quota shared out over two hosts");
+        assert_eq!(foreground.len(), 6, "five from one host, and one more");
     }
 
     #[test]
