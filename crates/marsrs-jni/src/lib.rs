@@ -9,7 +9,6 @@
 //! | `appenderRequestFlush`     | `Java_…_appenderRequestFlush`                  |
 //! | `appenderFlushNow`        | `Java_…_appenderFlushNow`                     |
 //! | `newXlogInstance`         | [`marsrs_appender::new_xlogger_instance`]  |
-//! | `getXlogInstance`         | [`marsrs_appender::get_xlogger_instance`]  |
 //! | `releaseXlogInstance`     | [`marsrs_appender::release_xlogger_instance`] |
 //! | `write`                  | [`marsrs_appender::is_enabled_for`] + `xlogger_write` |
 //! | `getLogLevel`/`setLogLevel` | [`marsrs_appender::get_level`] / `set_level` |
