@@ -114,10 +114,12 @@ fn a_new_instance_refuses_a_bad_config_before_touching_the_disk() {
     // `0` is the answer to every one of these: an instance is a handle, and
     // there is no room in one for a `MARS_XLOG_ERR_*` code. What is pinned
     // here is that the config is refused at all, and before the disk is
-    // touched.
+    // touched — so the directory a refused config names is one that was
+    // never made, and it is still not there at the end of it.
     assert_eq!(unsafe { mars_xlog_new_instance(std::ptr::null(), 0) }, 0);
 
-    let dir = tempdir("bad");
+    let parent = tempdir("bad");
+    let dir = parent.join("never");
     for (mode, compress) in [(7, 0), (0, 9)] {
         let config = make_config(&dir, mode, compress);
         assert_eq!(unsafe { mars_xlog_new_instance(&config.raw, 0) }, 0);
@@ -127,7 +129,11 @@ fn a_new_instance_refuses_a_bad_config_before_touching_the_disk() {
     let mut config = make_config(&dir, 0, 0);
     config.raw.log_dir = empty.as_ptr();
     assert_eq!(unsafe { mars_xlog_new_instance(&config.raw, 0) }, 0);
-    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        !dir.exists(),
+        "a config the ABI refused is not one it opened the directory of"
+    );
+    let _ = std::fs::remove_dir_all(&parent);
 }
 
 #[test]
