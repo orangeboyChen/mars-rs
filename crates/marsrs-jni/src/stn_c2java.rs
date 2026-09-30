@@ -177,6 +177,13 @@ pub enum Answer {
         handle: i32,
         /// `errCode[0]`
         err_code: i32,
+        /// `serverSequenceId[0]` — the sequence the app matched the answer to,
+        /// which is the one out-parameter of the call that is not the error
+        /// code. The C++ declares it `0` at every call site and reads it back
+        /// nowhere in mars, so the net core takes nothing from it; it is carried
+        /// all the same, because an app that writes it has written it for a
+        /// reason and there is no other way out of the bridge.
+        sequence: i32,
     },
     /// `onTaskEnd` — the code the task is remembered with.
     Ended(i32),
@@ -228,8 +235,18 @@ impl Answer {
     /// nobody read is a good one.
     pub fn decoded(&self) -> (i32, TaskFailHandleType) {
         match self {
-            Self::Decoded { handle, err_code } => (*err_code, TaskFailHandleType::of(*handle)),
+            Self::Decoded {
+                handle, err_code, ..
+            } => (*err_code, TaskFailHandleType::of(*handle)),
             _ => (0, TaskFailHandleType::Normal),
+        }
+    }
+
+    /// `buf2Resp` — `0` when the answer is not this one.
+    pub fn decoded_sequence(&self) -> i32 {
+        match self {
+            Self::Decoded { sequence, .. } => *sequence,
+            _ => 0,
         }
     }
 
@@ -556,6 +573,7 @@ mod tests {
         let (questions, mut app) = app(Answer::Decoded {
             handle: -14,
             err_code: 9,
+            sequence: 4,
         });
         assert_eq!(
             app.buf2resp(7, "user", b"answer", 2),

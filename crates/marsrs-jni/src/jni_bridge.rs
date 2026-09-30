@@ -1432,6 +1432,10 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: &JClass<'_>, question: Question) -> Ans
             Answer::Decoded {
                 handle: int_of(env, called),
                 err_code: int_at(env, &errcode, 0),
+                // What the app wrote into `serverSequenceId[0]`, which is the
+                // one thing the array is handed over for: without the read, a
+                // write to it is dropped on the floor.
+                sequence: int_at(env, &sequence, 0),
             }
         }
         Question::OnTaskEnd {
