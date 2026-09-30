@@ -37,7 +37,8 @@ use crate::long_link::{
 };
 use crate::net_source::TimeoutSource;
 use crate::shortlink::{
-    answer, is_keep_alive, keep_alive, pack, request_headers, request_url, Answer, KeepAlive,
+    answer, default_packer, is_keep_alive, keep_alive, request_headers, request_url, Answer,
+    KeepAlive, Packer,
 };
 use crate::socket_operator::{SocketFd, SocketOperator, SocketProfile};
 use crate::{ConnectProfile, ErrCmdType, IpPortItem, IpSourceType, Task};
@@ -313,6 +314,10 @@ pub struct ShortLink {
     /// `recv_pos` — how much of the answer has come in, which is the "total" of
     /// `OnRecv`.
     received: usize,
+    /// `shortlink_pack` — the request this link writes, and the seam an app
+    /// replaces it with: [`default_packer`] until [`ShortLink::set_packer`]
+    /// hands it another.
+    packer: Box<Packer>,
 
     operator: Option<Box<dyn SocketOperator>>,
     items: Option<Box<ShortLinkItems>>,
@@ -363,6 +368,7 @@ impl ShortLink {
             v6_connect_timeout_ms: DEFAULT_CONNECT_TIMEOUT_MS,
             answer: Parser::new(),
             received: 0,
+            packer: default_packer(),
             operator: None,
             items: None,
             proxy: None,
@@ -458,6 +464,14 @@ impl ShortLink {
     /// lets an http proxy in.
     pub fn set_debug_ip(&mut self, debug_ip: impl FnMut() -> String + Send + 'static) {
         self.debug_ip = Some(Box::new(debug_ip));
+    }
+
+    /// `shortlink_pack` — the request this link writes. The C++'s is a weak
+    /// symbol an app overrides by linking its own, which a Rust crate cannot
+    /// be; what stands in for it is the link's own, handed over here, and
+    /// what it starts out as is [`default_packer`].
+    pub fn set_packer(&mut self, packer: Box<Packer>) {
+        self.packer = packer;
     }
 
     /// `NetSource::GetShortLinkPort` — unset answers `0`.
@@ -885,7 +899,10 @@ impl ShortLink {
 
         let url = request_url(&self.profile, &self.task.cgi);
         let headers = request_headers(&self.profile, &self.task);
-        let request = pack(&url, &headers, body);
+        // The link's own packer, which is [`default_packer`] until an app
+        // hands it another: the url and the head the connect decided, and
+        // the body this was handed.
+        let request = (self.packer)(&url, &headers, body);
 
         let (timeout, source) = if self.protocol() == Task::TRANSPORT_PROTOCOL_QUIC {
             let cgi = self.task.cgi.clone();
@@ -1484,6 +1501,8 @@ fn first_is_v6(addresses: &[SocketAddress]) -> bool {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
+    // what a link writes with until an app hands it another
+    use crate::shortlink::pack;
 
     use super::*;
     use crate::socket_operator::OpBreaker;

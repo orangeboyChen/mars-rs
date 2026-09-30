@@ -14,8 +14,8 @@ use marsrs_comm::http::{Parser, RecvStatus};
 use marsrs_comm::{ProxyInfo, ProxyType};
 use marsrs_stn::shortlink::{answer, Answer};
 use marsrs_stn::{
-    default_packer, is_keep_alive, keep_alive, pack, request_headers, request_url, ConnectProfile,
-    IpPortItem, IpSourceType, KeepAlive, Task,
+    is_keep_alive, keep_alive, pack, request_headers, request_url, ConnectProfile, IpPortItem,
+    IpSourceType, KeepAlive, Task,
 };
 
 /// A task of five bytes on the short-link host, and the connect that was made
@@ -229,15 +229,8 @@ fn a_socket_the_server_kept_is_the_one_the_next_task_reuses() {
 
 #[test]
 fn the_packer_the_app_replaced_is_the_one_that_writes() {
-    let (task, profile) = a_task();
-    let headers = request_headers(&profile, &task);
-
-    assert_eq!(
-        default_packer()("/cgi", &headers, b"hello"),
-        pack("/cgi", &headers, b"hello")
-    );
-
     // one that writes its own head, which is what the app hands a link instead
+    // of the `shortlink_pack` mars ships
     let own: Box<marsrs_stn::Packer> =
         Box::new(|url, _, body| format!("GET {url}\r\n\r\n{}", body.len()).into_bytes());
     let (task, profile) = a_task();

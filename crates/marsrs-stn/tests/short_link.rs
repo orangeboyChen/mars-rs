@@ -15,9 +15,9 @@ use marsrs_comm::tickcount::gettickcount;
 use marsrs_comm::{LocalIpStack, ProxyInfo, ProxyType, SocketAddress};
 use marsrs_stn::short_link::{ConnectFail, RunFail, ShortLink, ETIMEDOUT};
 use marsrs_stn::{
-    default_packer, pack, request_headers, request_url, CachedSocket, ConnectProfile, ErrCmdType,
-    ExtraInfo, IpPortItem, IpSourceType, NetSource, OpBreaker, SocketFd, SocketOperator,
-    SocketPool, SocketProfile, Task,
+    pack, request_headers, request_url, CachedSocket, ConnectProfile, ErrCmdType, ExtraInfo,
+    IpPortItem, IpSourceType, NetSource, OpBreaker, SocketFd, SocketOperator, SocketPool,
+    SocketProfile, Task,
 };
 
 /// The reading the whole test runs on: the C++'s `gettickcount()`.
@@ -548,12 +548,24 @@ fn a_link_uses_the_clock_the_host_gives_it() {
 fn the_packer_the_app_replaced_is_the_one_the_run_writes_with() {
     let seen = Seen::default();
     let mut link = link(Arc::new(Mutex::new(net_source())), &seen);
-    link.connect_at(NOW).unwrap();
+    let socket = link.connect_at(NOW).unwrap();
 
-    let headers = request_headers(link.profile(), link.task());
+    // one that writes a head of its own, which is what an app hands a link
+    // instead of the `shortlink_pack` mars ships — a weak symbol in the C++,
+    // and here the link's own packer
+    link.set_packer(Box::new(|url, _, body| {
+        format!("GET {url}\r\n\r\n{}", body.len()).into_bytes()
+    }));
+
+    let request = b"GET /cgi-bin/micromsg-bin/short\r\n\r\n5".to_vec();
     assert_eq!(
-        default_packer()("/cgi", &headers, b"hello"),
-        pack("/cgi", &headers, b"hello")
+        link.write_at(NOW + 100, socket, b"hello"),
+        Ok(request.len())
+    );
+    assert_eq!(
+        seen.sent(),
+        vec![request],
+        "the run wrote with the packer it was handed, and not with `pack`"
     );
 }
 
