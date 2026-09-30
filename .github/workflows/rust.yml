@@ -161,7 +161,13 @@ jobs:
         if: needs.changes.outputs.needed == 'true'
       - name: Install cargo-llvm-cov
         if: needs.changes.outputs.needed == 'true' && matrix.os == 'ubuntu-latest'
-        uses: taiki-e/install-action@cargo-llvm-cov
+        # `v2` and a `tool`, and not the `cargo-llvm-cov` tag, which is what
+        # this used to name: that one moves with the tool and carries no
+        # version, so Dependabot — which updates every other `uses:` here
+        # weekly — has nothing to update it to.
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
       - name: cargo test
         if: needs.changes.outputs.needed == 'true'
         run: cargo test --workspace --all-targets
