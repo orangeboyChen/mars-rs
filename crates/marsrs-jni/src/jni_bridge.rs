@@ -2162,6 +2162,11 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_startAct
             &longlink_items,
             &shortlink_items,
             mode,
+            // A timeout below zero is one that was not given: `0` is what the
+            // run reads as `UNUSE_TIMEOUT`, which is every probe on the
+            // default of its own kind and nothing to break the plan off. The
+            // C++ hands the negative straight to its probes instead, which is
+            // a run that stops after the first one.
             u32::try_from(timeout).unwrap_or(0),
         ) as jboolean
     })

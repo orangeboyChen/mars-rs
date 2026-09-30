@@ -363,7 +363,9 @@ pub unsafe extern "C" fn mars_sdt_http_netcheck_cgi(out: *mut c_char, len: c_uin
 }
 
 /// `StartActiveCheck` — a diagnosis of the two links' hosts, in `mode` and with
-/// `timeout` milliseconds to spend on it.
+/// `timeout` milliseconds to spend on it. A `timeout` of `0` is a run with no
+/// timeout of its own: every probe is asked with the default of its kind, and
+/// nothing breaks the plan off for having spent too long.
 ///
 /// @return [`MARS_SDT_OK`], or [`MARS_SDT_ERR_BUSY`] when a check is already in
 /// flight — the one answer worth retrying — or [`MARS_SDT_ERR_BAD_ARG`] when

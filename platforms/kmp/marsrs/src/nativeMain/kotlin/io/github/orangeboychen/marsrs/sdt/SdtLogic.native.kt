@@ -124,7 +124,11 @@ public actual object SdtLogic {
             hosts(shortLink),
             shortLink.size.toUInt(),
             mode,
-            timeout.toUInt()
+            // A timeout below zero is one that was not given, which is what
+            // `0` says on the C side. `(-1).toUInt()` is forty-two hundred
+            // million milliseconds — a number no probe was asked for, and the
+            // one the JNI path would read as `0` instead.
+            timeout.coerceAtLeast(0).toUInt()
         )
         started == MARS_SDT_OK
     }

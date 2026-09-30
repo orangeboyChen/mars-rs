@@ -162,6 +162,12 @@ impl SdtLogic {
     /// `StartActiveCheck(longlink_check_item, shortlink_check_item, mode, timeout)`.
     ///
     /// `false` when a check is already in flight.
+    ///
+    /// A `timeout` of `0` is a run with no timeout of its own: every probe is
+    /// asked with the default of its kind, and nothing breaks the plan off for
+    /// having spent too long. A bridge that hands a signed timeout across reads
+    /// a negative one as this — the C++ hands the negative to its probes
+    /// instead, which is a run that ends behind the first of them.
     pub fn start_active_check(
         &mut self,
         longlink_items: &CheckIPPorts,

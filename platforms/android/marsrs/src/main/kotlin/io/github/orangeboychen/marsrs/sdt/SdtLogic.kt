@@ -246,7 +246,8 @@ object SdtLogic {
      * @param longLink the long link's hosts, one [Link] per host name
      * @param shortLink the short link's, which is what the HTTP check asks
      * @param mode the [CheckMode] bits, which is what the plan is made of
-     * @param timeout milliseconds, or `0` for a run that never times out
+     * @param timeout milliseconds, or `0` — or less, which is read as `0` — for
+     *   a run with no timeout of its own: every probe keeps the default of its kind
      * @return `false` when a check is already in flight
      */
     @JvmStatic
