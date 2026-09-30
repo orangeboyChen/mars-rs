@@ -179,7 +179,7 @@ line_length:
   warning: 120
   error: 121
 
-# One type per file is the rule the sources already keep; 558 lines is what the
+# One type per file is the rule the sources already keep; 572 lines is what the
 # largest of them is, which is `MarsRSXlog/Xlog.swift`: `Xlog` is the whole
 # surface of `mars_xlog.h` in one class, and an extension may not carry an
 # access modifier nor may its members, so no part of it can move to a file of
@@ -192,28 +192,35 @@ line_length:
 # took it from 476 to 511 is the flush split in three — the signal that wakes
 # the writer, the drain that is the caller's own thread's, and the same drain
 # off it: three declarations and three doc comments where one took a `Bool`.
-# The two of them are 558 and 484 now: `Xlog` answered the path its own files
+# The two of them are 572 and 484 now: `Xlog` answered the path its own files
 # are written to, which is the one spelling an appender of its own has, and the
 # two process-wide ones said whose they are; `MarsStn` took the app it
 # installed back out again, and guarded the swap that does it; and the day of
 # log files says, in the two spellings of it, what it does with a count `Int32`
-# cannot hold — clamped into one, and not trapped on.
+# cannot hold — clamped into one, and not trapped on. What took `Xlog` from 558
+# to 572 is the handle read once: the four members that asked whether it was
+# open and then read it again for the call the question guards read it once
+# now, and `withHandle` carries the reason — a `close()` between the two
+# readings answers `0`, which is the process-wide appender's handle.
 file_length:
-  # 580, and not the 560 it was: a threshold is a margin over the largest
-  # file, and two lines above a 558-line one is a tripwire the next doc
+  # 594, and not the 580 it was: a threshold is a margin over the largest
+  # file, and the 22 lines it kept over a 558-line one is the margin it keeps
+  # over a 572-line one — level with the file is a tripwire the next doc
   # comment sets off rather than a measure of a file that grew.
-  warning: 580
+  warning: 594
   error: 1000
 
 # SwiftLint's own default is a 200-line warning, which `--strict` turns into an
 # error — a threshold the two bodies the file above is about cannot be under,
 # for the reason it gives: `Xlog` is `mars_xlog.h` in one class and `MarsStn` is
 # `mars_stn.h` in one enum, and no part of either can move to an extension of
-# its own. 500 is what a body is held to, and the largest is `Xlog` at 486
+# its own. 520 is what a body is held to, and the largest is `Xlog` at 500
 # lines, `MarsStn` at 450: counted from the opening brace to the closing one,
 # which is every line of the body, or with the comments and the blanks left
-# out, which is 256 and 216, 500 is above both ways of counting. The error is
-# 1000 as it is above: `--strict` is what makes the warning fail.
+# out, which is 260 and 216, 520 is above both ways of counting. The error is
+# 1000 as it is above: `--strict` is what makes the warning fail, and the 20
+# lines between the warning and the largest body are the margin the rule above
+# argues for — a threshold level with a body is a tripwire.
 type_body_length:
-  warning: 500
+  warning: 520
   error: 1000
