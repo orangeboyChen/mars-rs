@@ -1009,6 +1009,12 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_startTas
 }
 
 /// `StnLogic.stopTask`.
+///
+/// A negative id names no task: the noop's is `0xFFFF_FFFF` in the port and
+/// `-1` as a `jint`, and an id the app did not like is a sentinel of its own.
+/// Clamping one to `0` would stop — and cancel the await of — a task the app
+/// *did* name `0`, which is an id nothing here hands out but nothing refuses
+/// either.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_stopTask<'local>(
     _env: EnvUnowned<'local>,
@@ -1016,7 +1022,9 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_stopTask
     taskid: jint,
 ) {
     guard(|| {
-        stop_task_impl(taskid.max(0) as u32);
+        if taskid >= 0 {
+            stop_task_impl(taskid as u32);
+        }
     })
 }
 
@@ -1027,7 +1035,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_hasTask<
     _class: JClass<'local>,
     taskid: jint,
 ) -> jboolean {
-    guard(|| has_task_impl(taskid.max(0) as u32))
+    guard(|| taskid >= 0 && has_task_impl(taskid as u32))
 }
 
 /// `StnLogic.redoTask`.
