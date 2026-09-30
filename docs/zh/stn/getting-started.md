@@ -184,7 +184,7 @@ MarsStn.setApp { question in
     case .req2Buf:  return .encoded(try! encode(question.task!))
     case .buf2Resp: handle(question.body); return .decoded(errorCode: 0, handle: .normal)
     case .onTaskEnd: return .ended(errorCode: 0)
-    default:        return .nothing
+    default:        return .nothing()
     }
 }
 

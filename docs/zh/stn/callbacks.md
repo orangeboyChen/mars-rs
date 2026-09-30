@@ -38,7 +38,7 @@ STN 给它们编的号排：
 | 18 | `reportDnsProfile` | 一次 dns 问得怎么样 | `report_dns_profile` | `.reportDnsProfile` | `Question.Kind.ReportDnsProfile` | — | `MarsStnQuestionReportDnsProfile` |
 
 App 不回答的问题，STN 都给它默认答案；除 Android 之外每个平台都为全部十八个准备了
-默认 —— 所以 App 只写它关心的那几个：Swift 里 `default: return .nothing`，共享
+默认 —— 所以 App 只写它关心的那几个：Swift 里 `default: return .nothing()`，共享
 Kotlin 里 `else -> Answer.None`，Rust 里一个带三个方法的 `App`。
 
 在 Rust 里，十八个里有两个只在没人 await 的任务上才问 App：你交给
