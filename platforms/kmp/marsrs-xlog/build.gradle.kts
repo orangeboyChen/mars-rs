@@ -225,11 +225,23 @@ afterEvaluate {
     // publish it all the same, so fail loudly instead. The check is
     // orangeboyChen/mars', and it is the one
     // `platforms/android/marsrs-xlog` makes.
-    if (!nativeDir.isDirectory) {
+    //
+    // Asked per target and not once for the directory: `native/` holding the
+    // archives of nine targets is not the same module as one holding ten, and
+    // a directory that is merely there is a check that finds nothing missing
+    // in nothing — one archive short is one klib that links nothing, and
+    // Gradle publishes it. `:marsrs` asks the same question of
+    // `libmars_net_ffi.a`, and for the same reason.
+    //
+    // A `native/` that is not there at all is the same failure, and it is the
+    // one `listFiles()` answers `null` for.
+    val klibDirs = nativeDir.listFiles()?.filter { it.isDirectory && it.name != androidNativeDir.name } ?: emptyList()
+    val withoutArchive = if (klibDirs.isEmpty()) listOf(nativeDir) else klibDirs.filter { !File(it, "libmars_ffi.a").isFile }
+    if (withoutArchive.isNotEmpty()) {
         throw GradleException(
-            "No native libraries found in $nativeDir. Run scripts/build_kmp_native.sh, " +
-                "or download marsrs-kmp-native.zip of the release into it " +
-                "(see the 'kmp' job of .github/workflows/release.yml)."
+            "No libmars_ffi.a in ${withoutArchive.joinToString { it.name }}. " +
+                "Run scripts/build_kmp_native.sh, or download marsrs-kmp-native.zip of the " +
+                "release into $nativeDir (see the 'kmp' job of .github/workflows/release.yml)."
         )
     }
     val abis = androidNativeDir.listFiles()?.filter { it.isDirectory } ?: emptyList()
