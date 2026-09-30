@@ -458,11 +458,17 @@ fn post(
     let Some(queue) = queue(handler.queue) else {
         return NULL_POST;
     };
-    if handler.seq != 0 && !queue.lock().handlers.iter().any(|it| it.seq == handler.seq) {
-        return NULL_POST;
-    }
     let (due, period) = first_due(&timing);
     let mut state = queue.lock();
+    // The check and the insert are one step under the lock, and not the two
+    // they were: a handler uninstalled in between leaves a message in the
+    // queue whose handler is gone, and a dispatch of it collects no handlers
+    // at all and drops it — so what this answers with is a post no message
+    // will ever be delivered for, which is the answer `NULL_POST` is for.
+    // `singleton_message` gives the same reason for doing the same thing.
+    if handler.seq != 0 && !state.handlers.iter().any(|it| it.seq == handler.seq) {
+        return NULL_POST;
+    }
     let seq = state.next_post_seq();
     let entry = PostedMessage {
         post: MessagePost { reg: *handler, seq },
