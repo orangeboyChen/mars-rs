@@ -37,6 +37,11 @@ failed, which ends the run: what stands behind it in the plan is not checked.
 A ping is the one exception — a ping nobody sent is a check that did not run,
 so it is left out of the report and the run goes on behind it.
 
+A probe is asked while the port holds the diagnosis, so it must not call back
+into it from inside its answer — not to start a second run, not to ask whether
+one is in flight: what it asked would wait for the run that is asking it, on the
+thread that is running it. Everything a check needs comes with the question.
+
 ## The answers
 
 | the check | Rust | Swift | shared Kotlin | Android | C |

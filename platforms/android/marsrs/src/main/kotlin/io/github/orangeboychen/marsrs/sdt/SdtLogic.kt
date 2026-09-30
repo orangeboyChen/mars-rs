@@ -186,6 +186,12 @@ object SdtLogic {
      * A check whose probe answered nothing records a failure, so this is what a
      * diagnosis is made of — and what makes one possible at all on a host that
      * is not a phone.
+     *
+     * A probe is asked while the native side holds the process-wide diagnosis,
+     * so it must not call back into this class — `startActiveCheck`,
+     * `isChecking`, `plan`, another `runChecks` — from its answer: what it
+     * asked would wait for the lock the thread it is running on already holds.
+     * Everything a check needs is in the query it was given.
      */
     interface IProbe {
         /**
