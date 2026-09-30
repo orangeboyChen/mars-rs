@@ -97,6 +97,9 @@ impl Answer {
 /// What the app is asked with: [`Ask::jvm`] asks Java, and a host hands over
 /// its own with [`set_ask`] — which is what the C++'s `NATIVE_CALLBACK` build
 /// is.
+///
+/// An `ask` is called with the one lock on the app held, so it must not ask
+/// the app again while it answers: see the note on `asker`.
 pub struct Ask {
     ask: Box<dyn FnMut(Question) -> Answer + Send>,
 }
@@ -123,6 +126,16 @@ impl std::fmt::Debug for Ask {
     }
 }
 
+/// The one `Ask` of the process, behind a lock: the C++ has one
+/// `SetAppLogicNativeCallback` too, and a host that sets one sets it for
+/// everything that asks.
+///
+/// The lock is held *while the app answers*, which is what makes one question
+/// at a time — the alternative is a snapshot, and a snapshot is a second shape
+/// of every answer. So an `ask` must not ask again from inside itself: the
+/// second ask waits for a lock the first is holding, and the first is waiting
+/// for the answer that has not come back. Calling back into Java is calling
+/// back into Java, and a Java answer that reads the app is a second ask.
 fn asker() -> &'static Mutex<Ask> {
     static ASK: OnceLock<Mutex<Ask>> = OnceLock::new();
     ASK.get_or_init(|| Mutex::new(Ask::jvm()))
