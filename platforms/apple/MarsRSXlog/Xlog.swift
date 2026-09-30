@@ -115,34 +115,38 @@ public final class Xlog: NSObject {
     /// `XlogConfig` gave, until this says otherwise. The C ABI has no getter
     /// for it, so this is the last value this side wrote.
     @objc public var mode: AppenderMode {
-        get {
-            currentMode
-        }
+        get { withHandleLock { currentMode } }
         set {
-            currentMode = newValue
+            withHandleLock { currentMode = newValue }
             withHandle { mars_xlog_set_mode_instance($0, newValue.rawValue) }
         }
     }
 
     /// Whether the console prints the log too — off until an app turns it on.
-    @objc public var isConsoleLogEnabled: Bool = false {
-        didSet {
-            withHandle { mars_xlog_set_console_log_instance($0, isConsoleLogEnabled ? 1 : 0) }
+    @objc public var isConsoleLogEnabled: Bool {
+        get { withHandleLock { consoleLogEnabled } }
+        set {
+            withHandleLock { consoleLogEnabled = newValue }
+            withHandle { mars_xlog_set_console_log_instance($0, newValue ? 1 : 0) }
         }
     }
 
     /// How many bytes a log file may reach before it is closed and a new one
     /// opened; `0` is "never split".
-    @objc public var maxFileSizeBytes: UInt64 = 0 {
-        didSet {
-            withHandle { mars_xlog_set_max_file_size_instance($0, maxFileSizeBytes) }
+    @objc public var maxFileSizeBytes: UInt64 {
+        get { withHandleLock { fileSizeLimit } }
+        set {
+            withHandleLock { fileSizeLimit = newValue }
+            withHandle { mars_xlog_set_max_file_size_instance($0, newValue) }
         }
     }
 
     /// How many seconds a log file is kept; `0` is the C++'s own ten days.
-    @objc public var maxAliveTimeSeconds: Int64 = 0 {
-        didSet {
-            withHandle { mars_xlog_set_max_alive_duration_instance($0, maxAliveTimeSeconds) }
+    @objc public var maxAliveTimeSeconds: Int64 {
+        get { withHandleLock { aliveTimeLimit } }
+        set {
+            withHandleLock { aliveTimeLimit = newValue }
+            withHandle { mars_xlog_set_max_alive_duration_instance($0, newValue) }
         }
     }
 
@@ -478,8 +482,19 @@ public final class Xlog: NSObject {
     /// all.
     private let handleLock = NSLock()
 
-    /// What [mode] answers while this side is the only one that knows it.
+    /// What [mode], [isConsoleLogEnabled], [maxFileSizeBytes] and
+    /// [maxAliveTimeSeconds] answer: the C ABI has no getter for any of them,
+    /// so this side keeps the last value it wrote. Read and written under
+    /// [handleLock], because a setter is called from whichever thread an app
+    /// set it on and a getter from whichever thread asks, and Swift gives a
+    /// stored property no lock of its own.
     private var currentMode: AppenderMode
+
+    private var consoleLogEnabled = false
+
+    private var fileSizeLimit: UInt64 = 0
+
+    private var aliveTimeLimit: Int64 = 0
 
     /// The queue an `await flush()` waits for the disk on: serial, because a
     /// drain holds the appender's lock from the cache to the OS anyway.
@@ -518,6 +533,16 @@ public final class Xlog: NSObject {
             return
         }
         body(opened)
+    }
+
+    /// Runs `body` with [handleLock] held, which is what the settings this
+    /// side mirrors are read and written under — and not [withHandle], because
+    /// a setting is a value this `Xlog` keeps and not a call through the
+    /// handle.
+    private func withHandleLock<T>(_ body: () -> T) -> T {
+        handleLock.lock()
+        defer { handleLock.unlock() }
+        return body()
     }
 
     /// The handle of this appender, [noHandle] when it is closed: what every
