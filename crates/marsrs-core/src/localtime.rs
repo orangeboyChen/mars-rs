@@ -141,12 +141,46 @@ mod tests {
     }
 
     #[test]
-    fn local_hour_is_an_hour() {
-        assert!(local_hour() < 24);
+    fn the_hour_of_now_is_the_hour_of_the_second_it_was_read_at() {
+        // `local_hour()` is the hour of the second `now_secs()` read, so a
+        // bound `chrono` guarantees anyway — `hour() < 24` — is not what
+        // pins it: what does is that it is the hour of one of the seconds
+        // the two calls may have fallen in, in *this* zone and not in UTC.
+        let before = now_secs();
+        let hour = local_hour();
+        let after = now_secs();
+
+        let mut hours = Vec::new();
+        for secs in before..=after {
+            if let Some(local) = Local.timestamp_opt(secs, 0).single() {
+                hours.push(local.hour() as u8);
+            }
+        }
+        assert!(
+            hours.contains(&hour),
+            "{hour} is the hour of no second between {before} and {after}: {hours:?}"
+        );
     }
 
     #[test]
-    fn now_secs_is_after_the_build() {
-        assert!(now_secs() > 1_600_000_000);
+    fn now_secs_is_the_second_the_clock_is_at() {
+        // Asked of the clock this function reads and not of a date in the
+        // past: an assertion that `now` is later than some second a build
+        // happened on is one the machine's own clock answers, whichever
+        // number this function returns.
+        let before = seconds_of(SystemTime::now());
+        let secs = now_secs();
+        let after = seconds_of(SystemTime::now());
+        assert!(
+            (before..=after).contains(&secs),
+            "{secs} is not a second between {before} and {after}"
+        );
+    }
+
+    /// The seconds of a [`SystemTime`], the way [`now_secs`] reads them.
+    fn seconds_of(time: SystemTime) -> i64 {
+        time.duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs() as i64)
+            .unwrap_or(0)
     }
 }
