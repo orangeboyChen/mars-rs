@@ -311,15 +311,17 @@ public final class Xlog: NSObject {
     /// `namePrefix` answers `0`. Safe to call twice.
     @objc
     public func close() {
+        Self.registryLock.lock()
+        defer { Self.registryLock.unlock() }
         guard openHandle() != Self.noHandle else {
             return
         }
-        // Releasing takes the prefix and not the handle, which drops whatever
+        // Releasing takes the prefix and not the handle, so it drops whatever
         // the prefix answers *now* — and [openHandle] has just asked the
-        // registry and been answered this one, so what is released here is
-        // this appender and not the one a third `Xlog` reopened the prefix
-        // with. A prefix is one appender to the C ABI, so two `Xlog`s of one
-        // prefix hold one handle between them and this closes both.
+        // registry and been answered this one, with [registryLock] holding an
+        // open of that prefix outside the window between the question and the
+        // release. A prefix is one appender to the C ABI, so two `Xlog`s of
+        // one prefix hold one handle between them and this closes both.
         namePrefix.withCString { prefix in
             mars_xlog_release_instance(prefix)
         }
@@ -424,6 +426,10 @@ public final class Xlog: NSObject {
             throw XlogError.negativeCacheDays
         }
 
+        // An open is the other half of [registryLock]: a close that has asked
+        // the registry and been answered cannot have this prefix's new handle
+        // taken out from under it by the open that follows.
+        Self.registryLock.lock()
         let opened = withCStrings(
             first: config.logDirectory,
             second: config.namePrefix,
@@ -442,6 +448,7 @@ public final class Xlog: NSObject {
             )
             return mars_xlog_new_instance(&cConfig, config.level.rawValue)
         }
+        Self.registryLock.unlock()
         guard opened != Self.noHandle else {
             throw XlogError.refused
         }
@@ -480,6 +487,14 @@ public final class Xlog: NSObject {
 
     /// The handle the C ABI answers for an appender it did not open.
     private static let noHandle: Int64 = 0
+
+    /// What makes [close()] one step and not two: a close releases by prefix,
+    /// so the question it asks of the registry and the release that trusts the
+    /// answer are held together, and an open of the same prefix — the thing
+    /// that would otherwise land between them and be closed in this one's
+    /// place — waits outside. One lock for every `Xlog` of the process,
+    /// because the appender a prefix names is one for the whole process.
+    private static let registryLock = NSLock()
 
     /// `COMPRESS_LEVEL9`: the hardest deflate is asked to try.
     private static let maxZlibCompressionLevel: Int32 = 9
