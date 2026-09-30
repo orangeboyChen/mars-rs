@@ -110,12 +110,15 @@ fn os_thread_id() -> i64 {
     }
 }
 
-/// `xlogger_maintid()` — the id of the thread that first called this, i.e. the
-/// process main thread for every realistic caller.
+/// `xlogger_maintid()` — the value a record's `maintid` is filled in with,
+/// captured once so that a record written on a worker thread reports the same
+/// one for the lifetime of the process (`XloggerAppender` marks records whose
+/// `tid == maintid` with a `*`).
 ///
-/// Captured once so that a record written on a worker thread still reports the
-/// real main thread id (`XloggerAppender` marks records whose `tid == maintid`
-/// with a `*`).
+/// What that value *is* is `os_main_thread_id`'s answer: the real main
+/// thread on Apple, and the process id everywhere else — which is what the
+/// C++'s own `getpid()` gives too. It is a main *thread* id only on the one
+/// platform that has an api for asking.
 pub fn main_thread_id() -> i64 {
     static MAIN: OnceLock<i64> = OnceLock::new();
     *MAIN.get_or_init(os_main_thread_id)
