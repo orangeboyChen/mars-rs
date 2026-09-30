@@ -331,8 +331,14 @@ jobs:
       # The NDK, and the SDK platform and the build tools the AAR is assembled
       # with. `android-actions/setup-android` is deliberately not used, and why
       # is written down in .github/scripts/install_android_ndk.sh.
+      #
+      # `android-36`, and not a platform of its own: it is the `compileSdk` of
+      # all four modules this job assembles, and a build that asks Gradle for a
+      # platform the SDK has not installed is a build that fails — on an image
+      # without `android-36` already on it, which is what made the number here
+      # the one number nobody had to keep in step with the Gradle files.
       - name: Install the Android SDK components
-        run: .github/scripts/install_android_ndk.sh "platforms;android-34" "build-tools;34.0.0"
+        run: .github/scripts/install_android_ndk.sh "platforms;android-36" "build-tools;34.0.0"
       - uses: Swatinem/rust-cache@v2
       - name: Build the native libraries
         # `RUSTFLAGS` is not exported here on purpose: an exported one replaces
