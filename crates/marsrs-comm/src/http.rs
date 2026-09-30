@@ -1141,7 +1141,12 @@ impl Parser {
                 self.status = RecvStatus::BodyError;
                 return true;
             };
-            if self.buffer.len() < end + CRLF.len() {
+            // Asked without the sum: `end` can be within `CRLF.len()` of
+            // `usize::MAX` — the size is capped at a value one past what a
+            // `u32` holds — and `end + CRLF.len()` then wraps to a length the
+            // buffer is longer than, so the two indexes below are taken and
+            // the parser panics on a chunk-size line a peer chose.
+            if self.buffer.len().saturating_sub(CRLF.len()) < end {
                 return true;
             }
             if self.buffer[end] != b'\r' || self.buffer[end + 1] != b'\n' {
