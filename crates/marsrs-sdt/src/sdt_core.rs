@@ -87,7 +87,14 @@ impl Drop for RunOn<'_> {
 }
 
 /// `SdtCore`.
-#[derive(Debug, Clone)]
+///
+/// Not [`Clone`], and that is the cancellation flag's doing: `cancel_` is
+/// shared behind an [`Arc`] on purpose ([`CancelHandle`]), so a derived clone
+/// would hand out a second core whose flag is the original's — one that
+/// cancels the run of the core it was cloned from, and whose
+/// [`SdtCore::start_check`] takes that cancellation back. A core is a
+/// diagnosis of its own, so it is built with [`SdtCore::new`].
+#[derive(Debug)]
 pub struct SdtCore {
     /// `check_list_` — the checks of the current request, in the order they run.
     check_list: Vec<NetCheckType>,
