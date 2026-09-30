@@ -555,9 +555,27 @@ mod tests {
         assert!(!encoder.identify_isresp(0, 0), "seq 0 is not an answer");
     }
 
+    /// The `int` an HTTP/2 stream reads is the one the unpacker answers: on a
+    /// stream, the end of it is a package boundary like any other, so the
+    /// code for "a whole package" is the code for "the stream ended" — and
+    /// not the one for a package the caller still has to read, which the
+    /// unpacker never answers.
     #[test]
     fn the_stream_constants_are_the_ones_the_http2_path_reads() {
-        assert_eq!(LONGLINK_UNPACK_STREAM_END, LONGLINK_UNPACK_OK);
-        assert_eq!(LONGLINK_UNPACK_STREAM_PACKAGE, 1);
+        with_client_version(0, || {
+            let packed = longlink_pack(1, 1, b"body");
+            let codes = [
+                longlink_unpack(&packed[..HEADER_LEN - 1]).code(),
+                longlink_unpack(&packed).code(),
+            ];
+            assert_eq!(
+                codes,
+                [LONGLINK_UNPACK_CONTINUE, LONGLINK_UNPACK_STREAM_END]
+            );
+            assert!(
+                !codes.contains(&LONGLINK_UNPACK_STREAM_PACKAGE),
+                "a package a stream still has to read is not one this unpacker answers"
+            );
+        })
     }
 }
