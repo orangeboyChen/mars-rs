@@ -115,7 +115,11 @@ jobs:
           TAG: ${{ needs.resolve.outputs.tag }}
         run: |
           set -euo pipefail
-          gh release download "$TAG" --pattern 'marsrs-react-native-*.tgz' --dir dist
+          # An asset no release carries is the message below and not a failure
+          # of `gh`: it exits 1 when the pattern matches nothing, and under
+          # `set -e` that ends the step before the guard that says what is
+          # missing.
+          gh release download "$TAG" --pattern 'marsrs-react-native-*.tgz' --dir dist || true
           if [ -z "$(find dist -name '*.tgz' -print -quit)" ]; then
             echo "::error::$TAG released no React Native module, and there is nothing to publish"
             exit 1
