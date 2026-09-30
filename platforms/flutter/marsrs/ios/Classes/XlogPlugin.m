@@ -99,6 +99,14 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
 /// `mars_xlog_release_instance` releases is the one of the prefix it is given.
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *instances;
 
+/// The one queue a drain runs on — `flush:` and `close:` both — and serial,
+/// which is what makes two drains of one appender one after the other: a
+/// global concurrent queue runs the blocks it is handed at once, on as many
+/// threads as it has. The Kotlin half of this plugin drains on a
+/// single-thread executor and says as much of it, and this is the queue that
+/// sentence is about.
+@property(nonatomic, strong) dispatch_queue_t flushQueue;
+
 @end
 
 @implementation XlogPlugin
@@ -115,6 +123,8 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   self = [super init];
   if (self) {
     _instances = [[NSMutableDictionary alloc] init];
+    _flushQueue = dispatch_queue_create("io.github.orangeboychen.marsrs.flush",
+                                        DISPATCH_QUEUE_SERIAL);
   }
   return self;
 }
@@ -296,7 +306,7 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   // Off the thread the call came in on, and back to it for the answer: a
   // platform channel is answered on the app's main thread, and a drain blocks
   // the thread it runs on.
-  dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+  dispatch_async(self.flushQueue, ^{
     mars_xlog_flush_now_instance(instance);
     dispatch_async(dispatch_get_main_queue(), ^{
       XlogAnswer(result, nil);
@@ -392,7 +402,7 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   // after this one was closed. Naming the handle makes the question and the
   // release one call, which a `mars_xlog_get_instance` before a release is
   // not: a `close` on another thread lands between the two.
-  dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+  dispatch_async(self.flushQueue, ^{
     mars_xlog_release_instance_of(namePrefix.UTF8String, opened);
     dispatch_async(dispatch_get_main_queue(), ^{
       XlogAnswer(result, nil);
