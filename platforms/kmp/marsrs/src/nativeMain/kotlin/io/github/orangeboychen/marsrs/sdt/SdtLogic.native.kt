@@ -92,6 +92,12 @@ public actual object SdtLogic {
      */
     private val pending = AtomicReference<List<String>>(emptyList())
 
+    /**
+     * Whether a run of the checks is in flight, which is what refuses a second
+     * one: see [runChecks], where the refusal is and where the reason is.
+     */
+    private val running = AtomicReference(false)
+
     /** What [SdtLogic]'s own KDoc says, which is where the words are. */
     public actual fun interface ICallBack {
         public actual fun reportSignalDetectResults(resultsJson: String?)
@@ -157,6 +163,23 @@ public actual object SdtLogic {
     }
 
     public actual fun runChecks(networkType: Int, probe: IProbe): Boolean {
+        // A run started from inside a run — from one of the four probes, or from
+        // the callback the report is handed to — is refused and not run, which
+        // is what the common API promises: the C ABI holds its own mutex across
+        // every check of the run, so a second `mars_sdt_run_checks` on the
+        // thread that is inside the first never comes back, and the `finally`
+        // below this takes the probe away from the run that is still asking it.
+        //
+        // Android's `actual` asks `Thread.holdsLock` for the same thing, which
+        // is a question about one thread: there is no `synchronized` and no
+        // reentrant lock on Kotlin/Native, and nothing here answers which
+        // thread a call came from, so this is one flag for the whole process.
+        // What a second thread pays for that is a `false` where it would have
+        // waited: the diagnosis is one process-wide value, so the run it was
+        // refused would have run the request the first one already ran.
+        if (!running.compareAndSet(false, true)) {
+            return false
+        }
         val box = ProbeBox(probe)
         val reference = StableRef.create(box)
         return try {
@@ -178,10 +201,22 @@ public actual object SdtLogic {
                 if (report != null) {
                     putBy(report)
                 }
-                callBack?.reportSignalDetectResults(report)
+                // A callback that threw is answered here and not by the run:
+                // the report was put by before it was called, so what an app
+                // that asks is handed is the report either way, and the JNI
+                // bridge behind the Android `actual` clears a pending
+                // exception of its own, so the two seams answer the app with
+                // the answer of the run and not with a throw of its callback.
+                // Printed and not rethrown, the way a probe that threw is.
+                try {
+                    callBack?.reportSignalDetectResults(report)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
             ran == MARS_SDT_OK
         } finally {
+            running.value = false
             reference.dispose()
             box.dispose()
         }
