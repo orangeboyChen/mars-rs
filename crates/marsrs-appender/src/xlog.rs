@@ -110,6 +110,9 @@ impl Xlog {
     ///
     /// * `config.logdir` or `config.nameprefix` is empty — both of them are
     ///   what an appender is known by;
+    /// * `config.nameprefix` is not one file name — it goes into the log
+    ///   file's, the lock's and the cache file's name, so a separator in it
+    ///   writes outside `logdir`;
     /// * the appender refused the config, which is what a directory it cannot
     ///   create comes to.
     pub fn open(config: XLogConfig, level: LogLevel) -> Result<Self, AppenderError> {

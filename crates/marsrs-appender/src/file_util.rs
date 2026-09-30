@@ -11,7 +11,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{Local, TimeZone};
@@ -113,6 +113,25 @@ fn local_date_parts(tv_sec: i64) -> (i32, u32, u32) {
 pub(crate) fn make_log_file_name_prefix(tv_sec: i64, prefix: &str) -> String {
     let (year, month, day) = local_date_parts(tv_sec);
     format!("{prefix}_{year:04}{month:02}{day:02}")
+}
+
+/// Whether `prefix` is one a file can be named after: one component of a path,
+/// and a normal one.
+///
+/// A nameprefix is spliced into three names — the day's log file, the directory
+/// lock and the mmap'd cache file — and each of them is joined onto a directory,
+/// so a prefix of `../other` writes `logdir/../other_<day>.xlog`, locks
+/// `logdir/../other.lock` and maps `logdir/../other.mmap3`, and an absolute one
+/// replaces `logdir` altogether: a logger the app pointed at its own directory
+/// writes in three others, and [`Xlog::log_files`] then reports them as its
+/// own. [`Appender::open`] is where a prefix that is not one is refused.
+///
+/// [`Xlog::log_files`]: crate::Xlog::log_files
+pub(crate) fn is_name_prefix(prefix: &str) -> bool {
+    let mut components = Path::new(prefix).components();
+    // `.` and `..` are components of their own, `C:\` is three, and `a/b` is
+    // two: what is left is a name with no directory in front of it.
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 /// Whether `name` is a log file this appender wrote:

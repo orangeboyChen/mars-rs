@@ -72,8 +72,9 @@ use marsrs_core::{local_time, AutoBuffer, PtrBuffer};
 use crate::config::{AppenderMode, LogLevel, XLogConfig, XLoggerInfo};
 use crate::console::console_log;
 use crate::file_util::{
-    append_file, create_private_dir, del_timeout_file, format_local_timestamp, make_log_file_name,
-    monotonic_millis, move_old_files, now_secs, private_file, LOG_EXT, MMAP_EXT, SECONDS_PER_DAY,
+    append_file, create_private_dir, del_timeout_file, format_local_timestamp, is_name_prefix,
+    make_log_file_name, monotonic_millis, move_old_files, now_secs, private_file, LOG_EXT,
+    MMAP_EXT, SECONDS_PER_DAY,
 };
 use crate::formater::log_formater;
 use crate::sys;
@@ -1433,6 +1434,18 @@ impl Appender {
         if config.logdir.as_os_str().is_empty() {
             return Err(AppenderError("Appender::open: logdir is empty".to_owned()));
         }
+        // The prefix is put into a path and not only into a name: see
+        // [`crate::file_util::is_name_prefix`]. What is refused here is a
+        // prefix that would write, lock or map outside the two directories
+        // above, and not one that reads badly.
+        if !is_name_prefix(&config.nameprefix) {
+            return Err(AppenderError(format!(
+                "Appender::open: nameprefix `{}` is not one file name: a prefix goes into the \
+                 log file's, the lock's and the cache file's name, so a separator or an \
+                 absolute path in it writes outside the log directory",
+                config.nameprefix
+            )));
+        }
 
         let cachedir = config.cachedir.clone();
         if let Some(dir) = &cachedir {
@@ -2778,6 +2791,44 @@ mod tests {
         let text = decoded_text(&bytes);
         assert!(text.contains("t0-i0"), "{text}");
         assert!(text.contains("t3-i24"), "{text}");
+    }
+
+    /// A nameprefix is joined onto a directory and not only written into a
+    /// name, so what it may be is one file name: a prefix of `../escaped`
+    /// writes, locks and maps in the directory *behind* the one the app gave.
+    #[test]
+    fn a_prefix_that_is_not_one_file_name_is_refused() {
+        // A log directory of its own inside a directory of its own: what a
+        // prefix that escapes is asked to escape *into* has to be somewhere
+        // this test can look, and not the machine's own temporary directory.
+        let outside = tempfile::tempdir().unwrap();
+        let tmp = outside.path().join("log");
+        fs::create_dir(&tmp).expect("the log directory");
+        for prefix in ["../escaped", "/escaped", "a/b", "..", "."] {
+            let mut cfg = config(&tmp, AppenderMode::Sync);
+            cfg.nameprefix = prefix.to_string();
+            let Err(err) = Appender::open(cfg, 0, 0) else {
+                panic!("`{prefix}` was accepted")
+            };
+            assert!(
+                err.to_string().contains("is not one file name"),
+                "`{prefix}`: {err}"
+            );
+        }
+
+        // Nothing of it landed outside the directory the app gave.
+        let outside: Vec<_> = fs::read_dir(outside.path())
+            .expect("read the parent")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("escaped"))
+            .collect();
+        assert!(outside.is_empty(), "the prefix wrote outside: {outside:?}");
+
+        // And a prefix that is one name opens as before.
+        let mut cfg = config(&tmp, AppenderMode::Sync);
+        cfg.nameprefix = "Mars".to_string();
+        Appender::open(cfg, 0, 0).expect("a normal prefix opens");
     }
 
     #[test]
