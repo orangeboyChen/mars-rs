@@ -34,7 +34,7 @@ name: marsrs_xlog
 description: >-
   Flutter plugin for xlog, the logging half of mars-rs: a Rust implementation of
   Tencent/mars that writes the .xlog the C++ implementation produced.
-version: 0.1.0-alpha.2
+version: 0.1.0-alpha.3
 homepage: https://github.com/orangeboyChen/mars-rs
 repository: https://github.com/orangeboyChen/mars-rs
 issue_tracker: https://github.com/orangeboyChen/mars-rs/issues
