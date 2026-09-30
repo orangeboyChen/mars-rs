@@ -93,7 +93,10 @@ fn a_saved_task_loses_the_time_it_spent_and_its_retries() {
     assert_eq!(started.len(), 1, "one task was started again: {started:?}");
     let (taskid, retry_count, total_timeout) = started[0];
     assert_eq!(taskid, 7);
-    assert_eq!(retry_count, 0, "a task started again starts its retries over");
+    assert_eq!(
+        retry_count, 0,
+        "a task started again starts its retries over"
+    );
     assert_eq!(
         total_timeout, 600,
         "the 300 it had spent and the 100 on the way are off the 1_000"
