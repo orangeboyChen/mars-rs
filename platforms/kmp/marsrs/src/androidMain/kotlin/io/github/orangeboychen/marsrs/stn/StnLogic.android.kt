@@ -174,11 +174,18 @@ public actual object StnLogic {
     }
 
     @JvmStatic
-    private fun onNewDns(host: String?): Array<String>? =
-        when (val answer = ask(Question.Kind.OnNewDns) { this.host = host.orEmpty() }) {
+    private fun onNewDns(host: String?, isLongLinkHost: Boolean): Array<String>? {
+        val answer = ask(Question.Kind.OnNewDns) {
+            this.host = host.orEmpty()
+            // What the bridge was asked and Kotlin/Native is told: a shared
+            // module that branches on this reads one thing on either target.
+            this.isLongLinkHost = isLongLinkHost
+        }
+        return when (answer) {
             is Answer.Addresses -> answer.addresses.toTypedArray()
             else -> null
         }
+    }
 
     @JvmStatic
     private fun onPush(channelID: String?, cmdid: Int, taskid: Int, data: ByteArray?) {

@@ -36,9 +36,12 @@ use marsrs_stn::{
 /// One of the thirteen questions: what STN asked, in the arguments the Java
 /// method takes.
 ///
-/// The C++ hands the app more than Java asks for — `user_id`, whether the host
-/// is a long-link one, the `ExtraInfo` of the dns question — and Java's own api
-/// takes none of it, so it is not handed over here either.
+/// The C++ hands the app more than Java asks for — `user_id` and the
+/// `ExtraInfo` of the dns question — and Java's own api takes none of it, so
+/// it is not handed over here either. Whether the host of `onNewDns` is a
+/// long-link one is handed over all the same: the Kotlin Multiplatform
+/// `Question` has a field for it and the C ABI fills it in, so the Android
+/// `actual` has to be able to as well.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Question {
     /// `makesureAuthed(String)` — the host, but not the user: the Java api has
@@ -56,10 +59,13 @@ pub enum Question {
         /// `_recv`
         recv: i64,
     },
-    /// `onNewDns(String)`.
+    /// `onNewDns(String, boolean)`.
     OnNewDns {
         /// `host`
         host: String,
+        /// `isLongLinkHost` — whether the host is one of the long link's, which
+        /// STN knows and the app may branch on.
+        longlink_host: bool,
     },
     /// `onPush(String, int, int, byte[])` — the C++ passes an `AutoBuffer`
     /// extension too, which Java's api does not take.
@@ -299,9 +305,10 @@ impl App for JavaApp {
         let _ = self.ask(Question::TrafficData { send, recv });
     }
 
-    fn on_new_dns(&mut self, host: &str, _longlink_host: bool, _extra: &ExtraInfo) -> Vec<String> {
+    fn on_new_dns(&mut self, host: &str, longlink_host: bool, _extra: &ExtraInfo) -> Vec<String> {
         self.ask(Question::OnNewDns {
             host: host.to_owned(),
+            longlink_host,
         })
         .ips()
     }
@@ -502,7 +509,8 @@ mod tests {
         assert_eq!(
             asked(&questions),
             vec![Question::OnNewDns {
-                host: "host".to_owned()
+                host: "host".to_owned(),
+                longlink_host: true,
             }]
         );
     }

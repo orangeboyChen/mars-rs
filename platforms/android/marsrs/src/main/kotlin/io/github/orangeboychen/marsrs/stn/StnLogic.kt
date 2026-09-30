@@ -346,8 +346,10 @@ object StnLogic {
          * The SDK asks the app to resolve a host name: the app may answer with ordinary DNS, or
          * with a host-to-IP mapping of its own
          * @param host  the host name
+         * @param isLongLinkHost whether the host is one of the long link's, which the app may
+         *                       answer differently for
          */
-        fun onNewDns(host: String?): Array<String>?
+        fun onNewDns(host: String?, isLongLinkHost: Boolean): Array<String>?
 
         /**
          * A message the SVR pushed down has come in
@@ -671,17 +673,19 @@ object StnLogic {
      * The host the long link is set up with, and the host a short-link task names: the network
      * layer asks the app for what DNS makes of a host.
      * @param host  the host name
+     * @param isLongLinkHost whether the host is one of the long link's, which the network layer
+     *                       knows and the app is told
      * @return empty: the layer below resolves it itself
      */
     @JvmStatic
-    private fun onNewDns(host: String?): Array<String>? {
+    private fun onNewDns(host: String?, isLongLinkHost: Boolean): Array<String>? {
         return try {
             val imp = callBack
             if (imp == null) {
                 NullPointerException("callback is null").printStackTrace()
                 return null
             }
-            imp.onNewDns(host)
+            imp.onNewDns(host, isLongLinkHost)
         } catch (e: Exception) {
             e.printStackTrace()
             null

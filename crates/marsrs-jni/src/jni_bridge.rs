@@ -1327,7 +1327,10 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: &JClass<'_>, question: Question) -> Ans
             void_of(env, called);
             Answer::Nothing
         }
-        Question::OnNewDns { host } => {
+        Question::OnNewDns {
+            host,
+            longlink_host,
+        } => {
             let Ok(host) = env.new_string(&host) else {
                 return Answer::Nothing;
             };
@@ -1335,8 +1338,8 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: &JClass<'_>, question: Question) -> Ans
             let called = env.call_static_method(
                 class,
                 jni_str!("onNewDns"),
-                jni_sig!("(Ljava/lang/String;)[Ljava/lang/String;"),
-                &[JValue::Object(&host)],
+                jni_sig!("(Ljava/lang/String;Z)[Ljava/lang/String;"),
+                &[JValue::Object(&host), JValue::Bool(longlink_host)],
             );
             Answer::Ips(strings_of(env, called))
         }
