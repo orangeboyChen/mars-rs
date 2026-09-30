@@ -216,6 +216,31 @@ static bool Int64Arg(napi_env env, napi_callback_info info, size_t index, long l
     return true;
 }
 
+// The number argument at `index` as an `unsigned long long`, and `0` when it is
+// not one that fits.
+//
+// `0` is a size and not a missing argument: it is the appender's own "never
+// split", so a caller that takes the split away again has to reach it, and a
+// setter that only ever moved the size up is a size an app cannot turn off.
+// The ceiling is `2^64`, which is what the `unsigned long long` of the C ABI
+// holds: a double at or above it is not a size the conversion has an answer
+// for, and one below `0` is not a size at all.
+static bool UInt64Arg(napi_env env, napi_callback_info info, size_t index, unsigned long long* out) {
+    size_t argc = index + 1;
+    napi_value argv[4] = {NULL, NULL, NULL, NULL};
+    napi_value self = NULL;
+    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || argc <= index) {
+        return false;
+    }
+    double number = 0;
+    if (napi_get_value_double(env, argv[index], &number) != napi_ok ||
+        !(number >= 0 && number < 18446744073709551616.0)) {
+        return false;
+    }
+    *out = (unsigned long long)number;
+    return true;
+}
+
 // --- the table ------------------------------------------------------------
 
 // The handle of a prefix, or 0 when this module has no appender of that name —
@@ -438,16 +463,9 @@ static napi_value SetMaxFileSize(napi_env env, napi_callback_info info) {
     if (handle == 0) {
         return Undefined(env);
     }
-    double bytes = 0;
-    // Clamped and not dropped: `0` is the appender's own "never split", so a
-    // caller that takes the split away again has to reach it — a setter that
-    // only ever moves the size up is a size an app cannot turn off. The
-    // ceiling is `2^64`, which is what the `unsigned long long` of the C ABI
-    // holds: a double above it is not a size the conversion has an answer
-    // for.
-    if (napi_get_value_double(env, argv[1], &bytes) == napi_ok && bytes >= 0 &&
-        bytes < 18446744073709551616.0) {
-        mars_xlog_set_max_file_size_instance(handle, (unsigned long long)bytes);
+    unsigned long long bytes = 0;
+    if (UInt64Arg(env, info, 1, &bytes)) {
+        mars_xlog_set_max_file_size_instance(handle, bytes);
     }
     return Undefined(env);
 }
