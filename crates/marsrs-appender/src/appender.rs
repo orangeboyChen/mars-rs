@@ -643,6 +643,26 @@ struct AppenderInner {
     dir_lock_held: bool,
 }
 
+/// What releases the directory lock [`AppenderInner::with_dir_lock`] took, on
+/// every way out of the section — a panic inside it included.
+struct DirLockGuard<'a> {
+    inner: &'a mut AppenderInner,
+    /// Whether the `flock` was actually taken: an appender with no lock file
+    /// runs its sections unprotected, and there is nothing to release.
+    held: bool,
+}
+
+impl Drop for DirLockGuard<'_> {
+    fn drop(&mut self) {
+        if self.held {
+            self.inner.dir_lock_held = false;
+            if let Some(file) = self.inner.dir_lock.as_ref() {
+                sys::unlock(file);
+            }
+        }
+    }
+}
+
 impl AppenderInner {
     fn is_sync(&self) -> bool {
         self.config.mode == AppenderMode::Sync
@@ -691,14 +711,12 @@ impl AppenderInner {
         }
         let held = self.dir_lock.as_ref().is_some_and(sys::lock_exclusive);
         self.dir_lock_held = held;
-        let out = f(self);
-        if held {
-            self.dir_lock_held = false;
-            if let Some(file) = self.dir_lock.as_ref() {
-                sys::unlock(file);
-            }
-        }
-        out
+        // A `Drop` and not the two lines at the end: a panic inside `f` would
+        // otherwise leave `dir_lock_held` true — so no section of this
+        // appender is ever locked again — and leave the `flock` held until the
+        // process exits, which wedges every *other* process that asks for it.
+        let guard = DirLockGuard { inner: self, held };
+        f(guard.inner)
     }
 
     /// `cond_buffer_async_.notifyAll()`
@@ -1252,10 +1270,15 @@ impl AppenderInner {
         // modes behave the same.
         let len = self.flushed_len + self.pending.len() as u64;
         if self.max_file_size > 0 && len > self.max_file_size {
-            self.close_log_file();
+            // The answer is the flush's and not `true`: a rotation is a close,
+            // and a close whose flush failed still holds the batch. Answering
+            // "reached the file" here lets the caller clear the cache region,
+            // and the batch in it is gone — while the record's writer was told
+            // it was written.
+            let closed = self.close_log_file();
             self.open_file_time = 0;
             self.open_file_day = NO_DAY;
-            return true;
+            return closed;
         }
 
         if self.pending.len() >= LOG_FLUSH_THRESHOLD {

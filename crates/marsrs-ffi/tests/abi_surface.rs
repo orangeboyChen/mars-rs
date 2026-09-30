@@ -13,8 +13,10 @@ use mars_ffi::abi::{
     mars_xlog_current_log_path_instance, mars_xlog_flush_now_instance, mars_xlog_get_instance,
     mars_xlog_get_level, mars_xlog_getfilepath_from_timespan_instance, mars_xlog_is_enabled_for,
     mars_xlog_make_logfile_name_instance, mars_xlog_new_instance, mars_xlog_release_instance,
-    mars_xlog_set_level_instance, mars_xlog_set_mode_instance, mars_xlog_write_instance,
-    MarsXLogConfig, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_OUT,
+    mars_xlog_set_console_log_instance, mars_xlog_set_level_instance,
+    mars_xlog_set_max_alive_duration_instance, mars_xlog_set_max_file_size_instance,
+    mars_xlog_set_mode_instance, mars_xlog_write_instance, MarsXLogConfig, MARS_XLOG_ERR_NO_PATH,
+    MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_OUT,
 };
 
 fn serial() -> MutexGuard<'static, ()> {
@@ -282,7 +284,73 @@ fn the_file_questions_are_answered_by_the_instance() {
     let closed = unsafe {
         mars_xlog_current_log_path_instance(handle, after.as_mut_ptr().cast(), after.len() as u32)
     };
-    assert!(closed <= 0, "a released appender answered {closed}");
+    assert_eq!(
+        closed, MARS_XLOG_ERR_NO_PATH,
+        "a released appender answered {closed} and not 'no path'"
+    );
+}
+
+/// The three setters the C ABI carries and no getter answers for — the mode,
+/// the console and the two sizes — are the three no test called. They are
+/// asked for here, and what is asserted is the one of the four whose effect
+/// can be seen from outside: a file that is closed once it reaches its size.
+#[test]
+fn the_setters_the_abi_has_no_getter_for_take_effect() {
+    let _guard = serial();
+    let dir = tempdir("setters");
+    let config = make_config(&dir, 1, 1); // sync, so every record is filed at once
+    let handle = unsafe { mars_xlog_new_instance(&config.raw, 2) };
+    assert!(handle > 0, "an instance is a handle");
+
+    mars_xlog_set_mode_instance(handle, 1);
+    mars_xlog_set_console_log_instance(handle, 0);
+    mars_xlog_set_max_alive_duration_instance(handle, 0);
+    // Small enough that one record closes the file: what shows the setter
+    // reached the appender is the second file that opens after it.
+    mars_xlog_set_max_file_size_instance(handle, 64);
+
+    let tag = CString::new("Net").unwrap();
+    let message =
+        CString::new("a record long enough to pass sixty-four bytes, twice over").unwrap();
+    for _ in 0..4 {
+        unsafe {
+            mars_xlog_write_instance(
+                handle,
+                2,
+                tag.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                message.as_ptr(),
+            );
+        }
+        mars_xlog_flush_now_instance(handle);
+    }
+
+    let split: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "xlog"))
+        .collect();
+    assert!(
+        split.len() > 1,
+        "a max file size of 64 bytes did not split the day: {} file(s)",
+        split.len()
+    );
+
+    // And the appender is still an appender afterwards.
+    assert_eq!(mars_xlog_get_level(handle), 2);
+    let mut out = [0u8; 1024];
+    let written = unsafe {
+        mars_xlog_current_log_path_instance(handle, out.as_mut_ptr().cast(), out.len() as u32)
+    };
+    assert!(written > 0, "the directory was answered as {written}");
+
+    let prefix = CString::new("Mars").unwrap();
+    unsafe {
+        mars_xlog_release_instance(prefix.as_ptr());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The index walk the two day-of-files symbols share: up to the first index
