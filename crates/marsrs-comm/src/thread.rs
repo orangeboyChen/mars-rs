@@ -275,12 +275,6 @@ impl Drop for MutexVectorGuard<'_> {
     }
 }
 
-/// `comm::Thread` — a named thread with an optional delayed or periodic start.
-///
-/// The C++ keeps a reference-counted `RunnableReference` so the target can be
-/// replaced between runs; the port takes the closure at start time, which is
-/// what every caller in mars actually does (`Thread(boost::bind(...), "name")`
-/// or `thread.start(op)`).
 /// Clears the `running` flag when the thread body ends, however it ends.
 ///
 /// A panicking callback unwinds past everything after it in the body, so the
@@ -294,6 +288,12 @@ impl Drop for RunningGuard {
     }
 }
 
+/// `comm::Thread` — a named thread with an optional delayed or periodic start.
+///
+/// The C++ keeps a reference-counted `RunnableReference` so the target can be
+/// replaced between runs; the port takes the closure at start time, which is
+/// what every caller in mars actually does (`Thread(boost::bind(...), "name")`
+/// or `thread.start(op)`).
 #[derive(Debug)]
 pub struct Thread {
     name: Option<String>,
