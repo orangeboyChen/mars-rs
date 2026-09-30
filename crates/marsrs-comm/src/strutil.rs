@@ -297,6 +297,9 @@ pub unsafe fn cstr_cmp_safe(a: *const c_char, b: *const c_char) -> bool {
 /// `"abc"` is `0`, not `default_num` — the fallback is reserved for a null
 /// pointer, which is what the "safe" in the C++ name buys.
 ///
+/// Not like `atoi` in one way: a number past `int` saturates, where the
+/// C++'s `(int)strtol` wraps.
+///
 /// # Safety
 ///
 /// See [`cstr_to_string_safe`].
@@ -313,7 +316,10 @@ pub unsafe fn cstr_to_i32_safe(ptr: *const c_char, default_num: i32) -> i32 {
     if digits.is_empty() {
         return 0;
     }
-    // `atoi` has no range: it saturates the way a cast does.
+    // The C++'s `atoi` is `(int)strtol`, so a number past `int` comes out of
+    // it wrapped and not clamped. The port clamps: a caller that wrote
+    // `99999999999999` is asking for a number it did not write otherwise,
+    // and what "safe" buys here is the same thing it buys for the pointer.
     (sign * digits.parse::<i64>().unwrap_or(i64::MAX)).clamp(i32::MIN as i64, i32::MAX as i64)
         as i32
 }
