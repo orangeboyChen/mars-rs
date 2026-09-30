@@ -68,7 +68,8 @@ the logger under both names without the other two pieces — Flutter's `marsrs` 
 is one of name and not of contents. Everywhere else the wider name is the wider
 port: `marsrs` on Android, `marsrs-kmp` in shared Kotlin and the `MarsRS` product
 on Apple are where an app reaches the task pipeline and the diagnosis, and the C
-archive ships both headers beside the libraries.
+archive ships every header beside the libraries: `mars_xlog.h` and the
+`mars_xlog.hpp` beside it, and `mars_sdt.h` and `mars_stn.h`.
 
 ```bash
 # The crates are not on crates.io yet — publication is pending — so a Rust app
