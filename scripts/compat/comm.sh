@@ -62,8 +62,24 @@
 #   `010.1.1.1` is a valid `10.1.1.1` in the C++ and `AF_UNSPEC` here. No case
 #   feeds one in; the address table is about the bytes and not the parse.
 #
-# Three more belong to `http`, and no case asks for any of them:
+# Five more belong to `http`, and the first two of them are cases that are
+# asked for:
 #
+# - The body of a `Connection: close` answer that names no `Content-Length`.
+#   The C++ ends it the moment its head is whole and nothing came behind it —
+#   `bodyreceiver_->Length()` is `0`, which is also what `ContentLength()`
+#   answers for a field that is not there — so the bytes that arrive in the
+#   next read sit in the buffer for the rest of the connection, and the answer
+#   is an empty one. The port waits for the socket, which is what the length
+#   of such a body is.
+# - A `Content-Length: 0` on a socket the peer closes, which the C++ reads as
+#   a body the socket is the length of — it asks `0 == contentLength` and not
+#   whether the field is there — and the port ends at the head.
+#
+# Both are asked for, and both answers of both are pinned: a row like that
+# prints `diverges` where the others print `ok`, and it fails when either side
+# changes what it answers — which is what keeps a divergence from being a case
+# the table quietly stops asking about.
 # - `KeepAliveTimeout` of a `Keep-Alive` whose `timeout=` is not at the front of
 #   a token. The C++ gets past `timeout=` by skipping `sizeof(const char*)` — 8
 #   — characters, and not the 7 the string is long, so `max=100, timeout=7`
@@ -162,13 +178,25 @@ normalize() {
 # `SUBCMD` is the words before `--in=`, the same on both sides. `CROSS` ends as
 # `ok` when every reading of every artifact is one reading, and `EXPECTED` when
 # that reading is the line in `exp-NAME.txt`.
+#
+# A case whose two readings are not one — `exp-rust-NAME.txt` and
+# `exp-cpp-NAME.txt` are written for it instead — is pinned on either side and
+# not diffed: `CROSS` ends as `diverges`, and a side that answers something
+# else than the line that is its own fails the case all the same.
 compare_readings() {
     _name=$1
     _subcmd=$2
     shift 2
     CROSS=ok
     EXPECTED=ok
-    normalize "$WORK/exp-$_name.txt" > "$WORK/$_name-expected.txt"
+    _diverges=no
+    if [ -f "$WORK/exp-rust-$_name.txt" ]; then
+        _diverges=yes
+        normalize "$WORK/exp-rust-$_name.txt" > "$WORK/$_name-expected-rust.txt"
+        normalize "$WORK/exp-cpp-$_name.txt" > "$WORK/$_name-expected-cpp.txt"
+    else
+        normalize "$WORK/exp-$_name.txt" > "$WORK/$_name-expected.txt"
+    fi
     _at=0
     for _bin in "$@"; do
         _at=$((_at + 1))
@@ -180,19 +208,22 @@ compare_readings() {
             # `--kind=`, both unquoted so that the shell splits them.
             $_bin_of_side $_subcmd --in="$_bin" > "$WORK/$_name-$_side-$_at.txt"
             normalize "$WORK/$_name-$_side-$_at.txt" > "$WORK/$_name-$_side-$_at-norm.txt"
-            if [ "$_side$_at" != "rust1" ] && ! cmp -s "$WORK/$_name-$_side-$_at-norm.txt" "$WORK/$_name-rust-1-norm.txt"; then
+            _expected=$WORK/$_name-expected.txt
+            if [ "$_diverges" = yes ]; then _expected=$WORK/$_name-expected-$_side.txt; fi
+            if [ "$_diverges" = no ] && [ "$_side$_at" != "rust1" ] && ! cmp -s "$WORK/$_name-$_side-$_at-norm.txt" "$WORK/$_name-rust-1-norm.txt"; then
                 CROSS=FAILED
                 FAILED=$((FAILED + 1))
                 diff "$WORK/$_name-rust-1-norm.txt" "$WORK/$_name-$_side-$_at-norm.txt" || true
             fi
-            if ! cmp -s "$WORK/$_name-$_side-$_at-norm.txt" "$WORK/$_name-expected.txt"; then
+            if ! cmp -s "$WORK/$_name-$_side-$_at-norm.txt" "$_expected"; then
                 EXPECTED=FAILED
                 FAILED=$((FAILED + 1))
                 echo "$_name $_side: read $(cat "$WORK/$_name-$_side-$_at-norm.txt")" >&2
-                echo "$_name $_side: want $(cat "$WORK/$_name-expected.txt")" >&2
+                echo "$_name $_side: want $(cat "$_expected")" >&2
             fi
         done
     done
+    if [ "$CROSS" = ok ] && [ "$_diverges" = yes ]; then CROSS=diverges; fi
 }
 
 # One line of two halves: `compare_line NAME FIELDS`, where `FIELDS` is a `cut`
@@ -305,6 +336,13 @@ def expect_of(kind, name, line):
     # the same, for a case that answers more than one line — the line a head
     # reads as, and the line the answer built out of it reads back as
     with open(os.path.join(work, "exp-%s-%s.txt" % (kind, name)), "w") as f:
+        f.write(line + "\n")
+
+
+def expect_side(side, name, line):
+    # the answer one side has to give, for a case the two answer differently:
+    # both of them are pinned, so a side that changes what it answers fails
+    with open(os.path.join(work, "exp-%s-%s.txt" % (side, name)), "w") as f:
         f.write(line + "\n")
 
 
@@ -909,9 +947,14 @@ def build_of(mode, first, text, kind, body):
     return "ok", out
 
 
-def parse_of(raw):
+def parse_of(raw, waits_for_the_socket=False):
     # what one `Recv` of a whole answer gives: the head is in it, and so is the
     # body the head told it how long to expect
+    #
+    # `waits_for_the_socket` is the port's answer and not the C++'s, and it is
+    # about one thing: whose length a body with no `Content-Length` on a socket
+    # the peer closes has. It is a third implementation of both, so that the
+    # one case that asks for it is pinned on either side and not just diffed.
     default = status_line("HTTP/1.0", 0, "").encode().hex()
     if not raw:
         return "start 0 0 0 respond %s - -" % default
@@ -948,6 +991,7 @@ def parse_of(raw):
 
     values = {name.lower(): value for name, value in fields}
     close = (values.get("connection") or "").lower() == "close"
+    has_length = "content-length" in values
     length = to_uint(values.get("content-length") or "")
 
     if (values.get("transfer-encoding") or "").lower() == "chunked":
@@ -973,9 +1017,19 @@ def parse_of(raw):
                 break
             body += rest[begin:begin + size]
             rest = rest[begin + size + 2:]
+    elif close and not has_length:
+        # a body the peer closes the socket at the end of: no field said how
+        # long, so its length is the socket's. The C++ compares the body it has
+        # to the `0` a field that is not there reads as, and ends the moment
+        # its head is whole — with the bytes of the body still to come, which
+        # is every head a socket hands over on its own. The port waits.
+        body, status = rest, ("body" if rest or waits_for_the_socket else "end")
     elif close and length == 0:
-        # a body the peer closes the socket at the end of has no length
-        body, status = rest, ("body" if rest else "end")
+        # a `Content-Length: 0` on a socket the peer closes, which the C++ asks
+        # as `0 == contentLength` and reads as the branch above — a body the
+        # socket is the length of — while the port ends it at the head. No case
+        # feeds one in.
+        body, status = (b"", "end") if waits_for_the_socket else (rest, "body")
     elif len(rest) <= length:
         body, status = rest, ("end" if len(rest) == length else "body")
     else:
@@ -1154,6 +1208,10 @@ with open(os.path.join(work, "http-build.txt"), "w") as f:
     f.write("\n".join(rows) + "\n")
 
 # --- http parse: bytes neither side wrote, read by both. ----------------------
+# `DIVERGENT` is a case the two sides answer differently, and it is pinned on
+# each of them — see the two `http` answers at the top of this file.
+DIVERGENT = {"a-closed-connection-of-nothing",
+             "a-closed-connection-of-a-length-of-nothing"}
 rows = []
 for name, data in [
     # a name a case of another table has is not a name this one may have: the
@@ -1167,7 +1225,11 @@ for name, data in [
     ("a-body-that-is-short", b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nmars"),
     ("a-body-that-is-long", b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nmars"),
     ("a-closed-connection", b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nmars"),
+    # the two answers the port does not share with the C++: how long a body on
+    # a socket the peer closes is
     ("a-closed-connection-of-nothing", b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n"),
+    ("a-closed-connection-of-a-length-of-nothing",
+     b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\nmars"),
     ("a-chunked-body",
      b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nmars\r\n0\r\n\r\n"),
     ("a-chunk-that-is-not-the-size-it-says",
@@ -1181,7 +1243,14 @@ for name, data in [
 ]:
     row(name)
     artifact(name, data)
-    expect(name, parse_of(data))
+    if name in DIVERGENT:
+        # a case the two sides answer differently, pinned on both of them
+        # rather than hidden: `compare_readings` asks each side for the answer
+        # that is its own, and either one changing fails the case.
+        expect_side("cpp", name, parse_of(data))
+        expect_side("rust", name, parse_of(data, waits_for_the_socket=True))
+    else:
+        expect(name, parse_of(data))
 
 with open(os.path.join(work, "http-parse.txt"), "w") as f:
     f.write("\n".join(rows) + "\n")
