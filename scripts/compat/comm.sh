@@ -76,10 +76,21 @@
 #   a body the socket is the length of — it asks `0 == contentLength` and not
 #   whether the field is there — and the port ends at the head.
 #
+# - A chunk whose size line never ends. The C++ waits for the `CRLF` for as
+#   long as the peer writes — `recvbuf_` grows by every read — and the port
+#   refuses a line longer than the bound a line of a head has.
+#
 # Both are asked for, and both answers of both are pinned: a row like that
 # prints `diverges` where the others print `ok`, and it fails when either side
 # changes what it answers — which is what keeps a divergence from being a case
 # the table quietly stops asking about.
+#
+# One more of the same belongs to `http`, and no case asks for it:
+#
+# - A body of chunks that add up to more than 4g. The C++ bounds each chunk on
+#   its own and nothing else, so a peer that announces one after another of
+#   them is waved through, and the port bounds the body they add up to. Four
+#   gibibytes is what a case would have to carry.
 # - `KeepAliveTimeout` of a `Keep-Alive` whose `timeout=` is not at the front of
 #   a token. The C++ gets past `timeout=` by skipping `sizeof(const char*)` — 8
 #   — characters, and not the 7 the string is long, so `max=100, timeout=7`
@@ -947,14 +958,21 @@ def build_of(mode, first, text, kind, body):
     return "ok", out
 
 
-def parse_of(raw, waits_for_the_socket=False):
+# The bound a line of a head has, which is also the bound the port puts on the
+# size line of a chunk: `MAX_CHUNK_SIZE_LINE` is `MAX_FIRST_LINE`, 8k.
+MAX_LINE = 8 * 1024
+
+
+def parse_of(raw, waits_for_the_socket=False, bounds_the_chunk_line=False):
     # what one `Recv` of a whole answer gives: the head is in it, and so is the
     # body the head told it how long to expect
     #
     # `waits_for_the_socket` is the port's answer and not the C++'s, and it is
     # about one thing: whose length a body with no `Content-Length` on a socket
-    # the peer closes has. It is a third implementation of both, so that the
-    # one case that asks for it is pinned on either side and not just diffed.
+    # the peer closes has. `bounds_the_chunk_line` is the same for the size
+    # line of a chunk that never ends. It is a third implementation of both,
+    # so that a case that asks for either is pinned on both sides and not just
+    # diffed.
     default = status_line("HTTP/1.0", 0, "").encode().hex()
     if not raw:
         return "start 0 0 0 respond %s - -" % default
@@ -1000,6 +1018,12 @@ def parse_of(raw, waits_for_the_socket=False):
         while True:
             size_end = rest.find(b"\r\n")
             if size_end < 0:
+                # the size line is not whole yet. The C++ waits for the
+                # `CRLF`, and `recvbuf_` is as long as the peer wrote; the
+                # port refuses a line past the bound and ends the answer in
+                # an error.
+                if bounds_the_chunk_line and len(rest) > MAX_LINE:
+                    status = "body-error"
                 break
             size = to_hex(rest[:size_end].decode("latin-1"))
             begin = size_end + 2
@@ -1211,7 +1235,8 @@ with open(os.path.join(work, "http-build.txt"), "w") as f:
 # `DIVERGENT` is a case the two sides answer differently, and it is pinned on
 # each of them — see the two `http` answers at the top of this file.
 DIVERGENT = {"a-closed-connection-of-nothing",
-             "a-closed-connection-of-a-length-of-nothing"}
+             "a-closed-connection-of-a-length-of-nothing",
+             "a-chunk-size-line-that-never-ends"}
 rows = []
 for name, data in [
     # a name a case of another table has is not a name this one may have: the
@@ -1236,6 +1261,11 @@ for name, data in [
      b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nmar\r\n0\r\n\r\n"),
     ("a-chunked-body-that-is-not-whole",
      b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nmars"),
+    # the third answer the port does not share with the C++: a size line the
+    # peer writes and never ends, which is a line the C++ waits on for as
+    # long as it is written and the port refuses past `MAX_LINE`
+    ("a-chunk-size-line-that-never-ends",
+     b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" + b"0" * (MAX_LINE + 1)),
     ("a-request", b"GET / HTTP/1.1\r\nHost: mars\r\n\r\n"),
     ("a-field-of-no-colon", b"HTTP/1.1 200 OK\r\nmars\r\n\r\n"),
     ("a-field-of-colons", b"HTTP/1.1 200 OK\r\n:::\r\n\r\n"),
@@ -1246,9 +1276,15 @@ for name, data in [
     if name in DIVERGENT:
         # a case the two sides answer differently, pinned on both of them
         # rather than hidden: `compare_readings` asks each side for the answer
-        # that is its own, and either one changing fails the case.
+        # that is its own, and either one changing fails the case. Each flag
+        # is the port's answer to one case and is asked of no other — the
+        # chunked one never reaches the socket, and the two on a closed
+        # socket never reach a chunk.
         expect_side("cpp", name, parse_of(data))
-        expect_side("rust", name, parse_of(data, waits_for_the_socket=True))
+        expect_side("rust", name,
+                    parse_of(data,
+                             waits_for_the_socket=True,
+                             bounds_the_chunk_line=True))
     else:
         expect(name, parse_of(data))
 
