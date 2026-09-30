@@ -213,17 +213,18 @@ impl SocketPool {
 
             let socket = cached.socket;
             let timed_out = cached.has_timeout_at(now);
-            // only a tcp socket is asked: a quic one is there for its streams
-            let closed =
-                item.transport_protocol == Task::TRANSPORT_PROTOCOL_TCP && self.is_closed(socket);
+            // only a quic socket is not asked: it is in the pool for its
+            // streams, and `Task::TRANSPORT_PROTOCOL_DEFAULT` is a tcp one
+            // and not the quic a `!= TRANSPORT_PROTOCOL_TCP` would make of it
+            let is_quic = item.transport_protocol == Task::TRANSPORT_PROTOCOL_QUIC;
+            let closed = !is_quic && self.is_closed(socket);
             if timed_out || closed {
                 self.close(socket);
                 self.pool.remove(index);
                 continue;
             }
 
-            if item.transport_protocol == Task::TRANSPORT_PROTOCOL_TCP || self.is_sub_stream(socket)
-            {
+            if !is_quic || self.is_sub_stream(socket) {
                 self.pool.remove(index);
                 return Some(socket);
             }

@@ -5,7 +5,7 @@
 use std::sync::{Arc, Mutex};
 
 use marsrs_stn::{
-    CachedSocket, IpPortItem, SocketFd, SocketPool, BAN_INTERVAL, DEFAULT_MAX_KEEPALIVE_TIME,
+    CachedSocket, IpPortItem, SocketFd, SocketPool, Task, BAN_INTERVAL, DEFAULT_MAX_KEEPALIVE_TIME,
 };
 
 /// The pool plus what the host saw it close.
@@ -23,6 +23,16 @@ fn item(ip: &str, port: u16, host: &str) -> IpPortItem {
         port,
         host: host.to_string(),
         ..IpPortItem::new(ip, port)
+    }
+}
+
+/// The same pair as [`item`], asked for by a task that never chose a
+/// transport: `Task::new` writes `TRANSPORT_PROTOCOL_DEFAULT`, which is the
+/// tcp one.
+fn default_transport(ip: &str, port: u16, host: &str) -> IpPortItem {
+    IpPortItem {
+        transport_protocol: Task::TRANSPORT_PROTOCOL_DEFAULT,
+        ..item(ip, port, host)
     }
 }
 
@@ -44,6 +54,30 @@ fn the_socket_a_task_is_done_with_comes_back_for_the_next_one() {
     assert_eq!(pool.get_socket_at(1_000, &address), Some(SocketFd(3)));
     // and it is gone: one socket serves one task
     assert_eq!(pool.get_socket_at(1_000, &address), None);
+}
+
+#[test]
+fn a_task_that_chose_no_transport_is_a_tcp_one() {
+    // `Task::TRANSPORT_PROTOCOL_DEFAULT` is what `Task::new` writes, and the
+    // C++ answers TCP for it: a socket cached for such a pair is handed out,
+    // and not taken for a quic one the pool would have to make a stream on —
+    // which is a socket that left the pool without being closed at all, and
+    // a fresh connect for every task that came after it
+    let (mut cached, closed) = pool();
+    let address = default_transport("1.1.1.1", 80, "short.example");
+    cached.add_cache(CachedSocket::new_at(0, address.clone(), SocketFd(3), 5));
+
+    assert_eq!(cached.get_socket_at(1_000, &address), Some(SocketFd(3)));
+    assert!(cached.is_empty());
+    assert!(closed.lock().unwrap().is_empty());
+
+    // and it is asked whether the peer closed it, which is the question a
+    // quic socket is there to be spared
+    let (mut peer_closed, closed) = pool();
+    peer_closed.set_is_closed(|_| true);
+    peer_closed.add_cache(CachedSocket::new_at(0, address.clone(), SocketFd(4), 5));
+    assert_eq!(peer_closed.get_socket_at(1_000, &address), None);
+    assert_eq!(*closed.lock().unwrap(), vec![SocketFd(4)]);
 }
 
 #[test]
