@@ -51,11 +51,16 @@
 |---|---|---|---|---|
 | 停掉这一趟 | `cancel_active_check` / `cancel_handle` | `cancelActiveCheck` | `cancelActiveCheck` | `mars_sdt_cancel_active_check` |
 | 有一趟在跑吗 | `is_checking` | `isChecking` | `isChecking` | `mars_sdt_is_checking` |
-| 全丢掉 | `SdtCore::reset` | `reset` | `reset` | `mars_sdt_reset` |
+| 全丢掉 | 换一个 `SdtLogic` | `reset` | `reset` | `mars_sdt_reset` |
 
 在 Rust 里一趟会独占借用这个 logic，所以 `run_checks` 还在栈上的时候调不了
 `cancel_active_check`：先用 `cancel_handle()` 拿一个 `CancelHandle`，交给要停这一趟
 的那一方 —— 那个探测闭包，socket 握在它手上，而这个 socket 必须让出来。
+
+`SdtLogic` 上没有 `reset` —— 它背后的 `SdtCore` 是私有字段 —— 所以 Rust 要把一次诊断
+全丢掉的办法是换一个：把这个 logic drop 掉，再建一个，然后把回调再设到新的那个上。跑完
+的一趟不需要这些：它结束时清掉计划和 request，而 `run_checks` 是把结果交回来而不是留
+着，所以下一次 `start_active_check` 就是一次从零开始的诊断。
 
 其余每个平台的取消都不需要 handle：它设的是这一趟会读的那个标志，不拿这一趟握着的
 锁，所以它能在探测还没问完的时候从另一个线程落下来 —— 而这也正是取消有意义的唯一

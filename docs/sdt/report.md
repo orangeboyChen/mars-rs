@@ -53,12 +53,19 @@ diagnosis rather than an empty one.
 |---|---|---|---|---|
 | stop the run | `cancel_active_check` / `cancel_handle` | `cancelActiveCheck` | `cancelActiveCheck` | `mars_sdt_cancel_active_check` |
 | is one in flight | `is_checking` | `isChecking` | `isChecking` | `mars_sdt_is_checking` |
-| throw it all away | `SdtCore::reset` | `reset` | `reset` | `mars_sdt_reset` |
+| throw it all away | a new `SdtLogic` | `reset` | `reset` | `mars_sdt_reset` |
 
 A run borrows the logic exclusively in Rust, so `cancel_active_check` cannot be
 called while `run_checks` is on the stack: take a `CancelHandle` with
 `cancel_handle()` first and hand it to whoever has to stop the run — the probe
 closure, which owns the socket that has to give up.
+
+There is no `reset` on `SdtLogic` — the `SdtCore` behind it is a private field —
+so the way Rust throws a diagnosis away is a new logic: drop this one, make
+another, and set the callback on that one again. A run that finished needs none
+of it: its end clears the plan and the request, and `run_checks` hands the
+results back instead of keeping them, so the next `start_active_check` is a
+diagnosis made from nothing.
 
 Everywhere else the cancel needs no handle: it sets the flag the run reads and
 takes no lock the run holds, so it lands from another thread while the probes are
