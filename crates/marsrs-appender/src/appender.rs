@@ -1369,7 +1369,11 @@ impl AppenderInner {
         // Rotation: the C++ only re-computes the split index when the file is
         // (re)opened, so a long-lived sync-mode file never splits. The port
         // closes the file as soon as it grows past the limit, which makes both
-        // modes behave the same.
+        // modes behave the same. Two places ask, because one number cannot:
+        // this one is this appender's own count of the bytes, which is the
+        // whole file for one writer and a floor of it for two, and
+        // [`Self::flush_pending_locked`] asks the file itself as each batch
+        // goes out.
         let len = self.flushed_len + self.pending.len() as u64;
         if self.max_file_size > 0 && len > self.max_file_size {
             // The answer is the flush's and not `true`: a rotation is a close,
@@ -1719,6 +1723,24 @@ impl Appender {
 
         *self.thread_lock() = Some(handle);
         Ok(())
+    }
+
+    /// The writer thread, stopped and joined: the mode that asked for it is
+    /// over — see [`Self::set_mode`] — or the appender is closing.
+    ///
+    /// `Msg::Close` is a drain and an end of the loop and not just an end, so a
+    /// block still in the cache region reaches the file before the thread does.
+    fn stop_thread(&self) {
+        // Not under the lock, for the reason [`Self::close_sender`] gives: the
+        // channel holds one message, so this waits for the thread to take it,
+        // and the thread needs the lock to drain.
+        let tx = self.lock().tx.take();
+        if let Some(tx) = tx {
+            let _ = tx.send(Msg::Close);
+        }
+        if let Some(handle) = self.thread_lock().take() {
+            let _ = handle.join();
+        }
     }
 
     /// `thread_async_`.
@@ -2073,6 +2095,15 @@ impl Appender {
                 guard.tx = None;
                 return Err(err);
             }
+        } else {
+            // Sync, so the thread an async mode started is one nothing writes
+            // through any more: every record from here on is handed to the file
+            // by the thread that logged it. Left running it would wake every
+            // quarter of an hour to drain a region nobody fills, and one of
+            // them would stay per mode switch an app made. `Msg::Close` drains
+            // the block that is still in the region before the thread ends, so
+            // the switch costs no record.
+            self.stop_thread();
         }
         // A mode the configured `pub_key` does nothing in is worth a line in
         // the log as much as an open in that mode is: see
@@ -3150,6 +3181,49 @@ mod tests {
             "{names:?}"
         );
         assert!(names.len() > 1, "{names:?}");
+    }
+
+    /// A switch to sync mode takes the writer thread back with it: from then
+    /// on every record is handed to the file by the thread that logged it, so
+    /// a thread left running would be one that wakes on a timer to drain a
+    /// region nobody fills — one per switch an app made, for the life of the
+    /// process.
+    #[test]
+    fn a_switch_to_sync_takes_the_writer_thread_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Async), 0, 0).unwrap();
+        appender.write(Some(&info(LogLevel::Info)), "written while async");
+        assert!(appender.thread_lock().is_some(), "async mode runs a thread");
+
+        appender.set_mode(AppenderMode::Sync).unwrap();
+        assert!(
+            appender.thread_lock().is_none(),
+            "the thread outlived the mode that asked for it"
+        );
+
+        // `Msg::Close` is a drain and not only an end, so the block the region
+        // was still holding is in the file and not lost with the thread. It is
+        // a compressed block, which is why what is asserted is that the file
+        // grew and not that the record can be read out of it in the clear.
+        let drained = fs::metadata(today_name(tmp.path())).map_or(0, |meta| meta.len());
+        assert!(
+            drained > 0,
+            "the record written while async reached the file"
+        );
+
+        // Sync from here: the record is filed by the thread that logged it, and
+        // a second switch back finds no thread in the way of the one it starts.
+        appender.write(Some(&info(LogLevel::Info)), "written after the switch");
+        appender.set_mode(AppenderMode::Async).unwrap();
+        assert!(
+            appender.thread_lock().is_some(),
+            "the thread is started again"
+        );
+        appender.close();
+
+        let log = String::from_utf8_lossy(&fs::read(today_name(tmp.path())).unwrap()).into_owned();
+        assert!(log.contains("written after the switch"), "{log}");
+        assert!(fs::metadata(today_name(tmp.path())).map_or(0, |meta| meta.len()) > drained);
     }
 
     /// Leaves a cache file with one record in it behind, the way a process that
