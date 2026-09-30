@@ -74,9 +74,18 @@ public final class Xlog: NSObject {
     /// What every file of this appender starts with, and what it is known by.
     @objc public let namePrefix: String
 
-    /// Whether this appender is still open: `false` after [close()].
+    /// Whether this appender is still open: `false` after [close()], and
+    /// `false` once another `Xlog` of this `namePrefix` closed it.
+    ///
+    /// Asked of the C ABI and not answered from the handle alone, the way the
+    /// Kotlin `actual` of this API asks it: a prefix is one appender to the C
+    /// ABI, so the twin that closed it took the appender this object writes
+    /// through, and a handle this side still holds is then not one the C ABI
+    /// answers anything for. Answering `true` for that is what left an app
+    /// gating on `isOpen` logging into a closed file — and reading a [level]
+    /// out of it that says "logs everything".
     @objc public var isOpen: Bool {
-        handle != Self.noHandle
+        openHandle() != Self.noHandle
     }
 
     /// The level of this appender: a record less severe than this is dropped.
@@ -553,20 +562,41 @@ public final class Xlog: NSObject {
     }
 
     /// Runs `body` with this appender's handle, and runs nothing at all once
-    /// [close()] has: handle `0` is the process-wide appender to the C ABI,
-    /// so a call through it would move a logger this object does not own.
+    /// [close()] has, and nothing at all once a twin of this [namePrefix]
+    /// closed the appender this object's handle names: handle `0` is the
+    /// process-wide appender to the C ABI, so a call through it would move a
+    /// logger this object does not own.
     ///
-    /// Read once, and the reading `body` is handed is the one [close()] was
-    /// asked about: a `close()` on another thread between the question and the
-    /// call answers `0` to the call, and `0` is the process-wide appender's —
-    /// the one handle no instance call may be made through. Every member that
-    /// asks [isOpen] and then reads the handle again for the call it is
-    /// guarding is the same bug, and all of them read once now.
+    /// Read once — see [openHandle] — because the two reads it replaces are
+    /// not one answer: a `close()` on another thread between the question and
+    /// the call answers `0` to the call, and `0` is the process-wide
+    /// appender's, the one handle no instance call may be made through.
     private func withHandle(_ body: (Int64) -> Void) {
-        let opened = handle
+        let opened = openHandle()
         guard opened != Self.noHandle else {
             return
         }
         body(opened)
+    }
+
+    /// The handle of this appender, or [noHandle] when there is none to write
+    /// through: what [withHandle] guards with, and what [isOpen] asks.
+    ///
+    /// The registry and not the handle alone, because a prefix is one appender
+    /// to the C ABI and releasing takes the prefix: the twin that called
+    /// [close()] dropped the appender this object holds the handle of, and
+    /// [noHandle] — `0` — is the process-wide appender, so a call made through
+    /// a handle that is gone is a write into the logger every other part of
+    /// the process logs through. Read once, and the reading [body] is handed
+    /// is the one the registry answered for.
+    private func openHandle() -> Int64 {
+        let opened = handle
+        guard opened != Self.noHandle else {
+            return Self.noHandle
+        }
+        let owns = namePrefix.withCString { prefix in
+            mars_xlog_get_instance(prefix) == opened
+        }
+        return owns ? opened : Self.noHandle
     }
 }
