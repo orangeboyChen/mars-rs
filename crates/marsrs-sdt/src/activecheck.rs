@@ -385,7 +385,10 @@ impl Check {
                     profile.network_type = network_type;
                 }
 
-                // the C++'s `UNUSE_TIMEOUT == total_timeout ? 0 : total_timeout / 1000`
+                // the C++'s `UNUSE_TIMEOUT == total_timeout ? 0 : total_timeout / 1000`,
+                // and `0` is what a ping reads as no timeout: a budget that
+                // is spent leaves this one alone, which is the C++'s own
+                // answer for a run that was started without one
                 let timeout_s = if self.remaining == UNUSE_TIMEOUT {
                     0
                 } else {
@@ -441,8 +444,15 @@ impl Check {
 
     /// The timeout one probe gets: the C++'s
     /// `UNUSE_TIMEOUT == total_timeout ? <the default> : total_timeout`.
+    ///
+    /// A budget that is spent is one as well. The C++'s `uint32_t`
+    /// subtraction wraps there, to four billion milliseconds, so the probes
+    /// it asks for after the walk spent its budget are as good as unlimited;
+    /// [`Check::spend`] saturates instead, and `0` milliseconds is not a
+    /// probe that is given no time at all — it is one that cannot answer,
+    /// which the check then files as the network being down.
     fn probe_timeout(&self, default_ms: u32) -> u32 {
-        if self.remaining == UNUSE_TIMEOUT {
+        if self.remaining == UNUSE_TIMEOUT || self.remaining == 0 {
             default_ms
         } else {
             self.remaining

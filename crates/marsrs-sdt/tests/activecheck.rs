@@ -10,8 +10,8 @@ use marsrs_sdt::sdt::{Callback, CheckIPPort, CheckIPPorts, CheckStatus, NetCheck
 use marsrs_sdt::sdt_core::{CancelHandle, SdtCore};
 use marsrs_sdt::sdt_logic::SdtLogic;
 use marsrs_sdt::{
-    DEFAULT_HTTP_HOST, DEFAULT_PING_COUNT, DEFAULT_PING_HOST, NET_CHECK_BASIC, NET_CHECK_SHORT,
-    UNUSE_TIMEOUT,
+    DEFAULT_DNS_TIMEOUT, DEFAULT_HTTP_HOST, DEFAULT_PING_COUNT, DEFAULT_PING_HOST, NET_CHECK_BASIC,
+    NET_CHECK_SHORT, UNUSE_TIMEOUT,
 };
 
 /// The hosts of one link: the name they are filed under, the ip, and the port.
@@ -730,4 +730,34 @@ fn a_diagnosis_runs_through_the_core_and_the_logic() {
     assert_eq!(results.len(), 5);
     // `ReportNetCheckResult` is what `run` does that `run_on` does not
     assert_eq!(reported.lock().unwrap().len(), 5);
+}
+
+/// The walk goes on after the budget is spent — the C++ `break`s out of the
+/// loop it is in and no more — but a probe is not asked for with nothing:
+/// `0` milliseconds is a resolve or a connect that cannot answer, which the
+/// check files as the network being down. It gets the default instead.
+#[test]
+fn a_probe_asked_for_with_nothing_left_is_asked_with_the_default() {
+    let longlink = link(&[("long.a", "1.1.1.1", 80)]);
+    let shortlink = link(&[("short.a", "3.3.3.3", 80)]);
+    let mut request = request_of(longlink, shortlink, 10);
+    let (mut ask, asked) = stub(slow);
+
+    let mut check = check_of(&request);
+    assert!(check.start_do_check(NetCheckType::DnsCheck, &mut request, &mut ask, 1, ""));
+    let asked = asked.lock().unwrap().clone();
+    assert_eq!(
+        asked,
+        vec![
+            Query::Dns {
+                domain: "long.a".to_owned(),
+                timeout_ms: 10
+            },
+            Query::Dns {
+                domain: "short.a".to_owned(),
+                timeout_ms: DEFAULT_DNS_TIMEOUT
+            },
+        ],
+        "the short-link host is asked anyway, and not for nothing"
+    );
 }
