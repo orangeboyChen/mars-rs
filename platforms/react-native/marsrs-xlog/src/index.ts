@@ -154,12 +154,21 @@ export class Xlog {
    * second one over the first would be a handle nothing releases. So two calls
    * of one prefix are one `Xlog`, and `close` on it is `close` on both.
    *
+   * The native side is asked either way, and not only the first time: one
+   * appender per prefix is one for the whole app, so one the app closed
+   * through its own Kotlin or Swift is gone from under this map, and asking
+   * again is what opens it again.
+   *
    * Throws when the appender would not take the configuration — an empty
    * `logDir`, or a directory it cannot write to. */
   static open(config: XlogConfig): Xlog {
     const namePrefix = namePrefixOf(config);
     const alreadyOpen = openAppenders.get(namePrefix);
-    if (alreadyOpen) {
+    // The appender of a prefix is one for the whole process, so one another
+    // part of the app closed is gone from under this map: the open is asked
+    // again instead of trusted, and what it answers is the appender that is
+    // there now — the same one when nothing closed it.
+    if (alreadyOpen && NativeXlog.open({ ...config, namePrefix })) {
       return alreadyOpen;
     }
     const xlog = new Xlog(config);

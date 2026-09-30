@@ -51,7 +51,9 @@ internal final class Xlog: NSObject {
     /// `false` is a configuration it refused — an empty `logDir` or
     /// `namePrefix`, or a directory it cannot write to — and it is what the JS
     /// caller turns into a throw rather than a handle nothing was opened
-    /// for.
+    /// for. `true` for a prefix that is already open says which appender the
+    /// prefix has, and not that the configuration was taken again: the C ABI
+    /// answers the appender that is already there.
     @objc(open:)
     internal func openAppender(_ config: [AnyHashable: Any]) -> Bool {
         let logDir = string(config, "logDir")
@@ -61,14 +63,14 @@ internal final class Xlog: NSObject {
         let namePrefix = string(config, "namePrefix").isEmpty
             ? Self.defaultNamePrefix
             : string(config, "namePrefix")
-        // One appender per prefix: a prefix this module has already opened is
-        // answered as it is, and not opened again over the first, which would be
-        // a handle nothing releases. `src/index.ts` keeps the same map, so the
-        // two names an app holds for one prefix are one appender, and `close` on
-        // either is `close` on both.
-        guard handles[namePrefix] == nil else {
-            return true
-        }
+        // The C ABI is what keeps one appender per prefix: it answers the
+        // handle of the appender this prefix already has rather than opening a
+        // second one over its files, so asking again is how a prefix another
+        // part of the app closed is opened again — and the handle this stores
+        // is the one the registry answers, and not a dead one the last `open`
+        // left behind. `src/index.ts` keeps the same map, so the two names an
+        // app holds for one prefix are one appender, and `close` on either is
+        // `close` on both.
         let level = int(config, "level", Int32(MarsLevelInfo.rawValue))
         let mode = int(config, "mode", Int32(MarsAppenderAsync.rawValue))
         let compressMode = int(config, "compressMode", Int32(MarsCompressZlib.rawValue))
@@ -102,7 +104,7 @@ internal final class Xlog: NSObject {
     /// empty: there is no JS frame to name, and the C++ writes an empty one too.
     @objc(log:level:tag:message:)
     internal func log(_ namePrefix: String, level: Double, tag: String, message: String) {
-        guard let handle = handles[namePrefix], let native = int32(level) else {
+        guard let handle = openHandle(of: namePrefix), let native = int32(level) else {
             return
         }
         tag.withCString { cTag in
@@ -120,7 +122,7 @@ internal final class Xlog: NSObject {
     /// state, and the day's file is the question `logFiles` asks.
     @objc(currentLogPath:)
     internal func currentLogPath(of namePrefix: String) -> String? {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix) else {
             return nil
         }
         return path { out, len in
@@ -152,7 +154,7 @@ internal final class Xlog: NSObject {
     /// to build.
     @objc(isLoggable:level:)
     internal func isLoggable(_ namePrefix: String, level: Double) -> Bool {
-        guard let handle = handles[namePrefix], let native = int32(level) else {
+        guard let handle = openHandle(of: namePrefix), let native = int32(level) else {
             return false
         }
         return mars_xlog_is_enabled_for(handle, native) != 0
@@ -192,7 +194,7 @@ internal final class Xlog: NSObject {
     /// `flush`.
     @objc(requestFlush:)
     internal func requestFlush(_ namePrefix: String) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix) else {
             return
         }
         mars_xlog_request_flush_instance(handle)
@@ -204,7 +206,7 @@ internal final class Xlog: NSObject {
     /// on the JS thread and nowhere else.
     @objc(flushNow:)
     internal func flushNow(_ namePrefix: String) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix) else {
             return
         }
         mars_xlog_flush_now_instance(handle)
@@ -226,7 +228,7 @@ internal final class Xlog: NSObject {
         resolve: @escaping (Any?) -> Void,
         reject: @escaping (String?, String?, Error?) -> Void
     ) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix) else {
             resolve(nil)
             return
         }
@@ -239,7 +241,7 @@ internal final class Xlog: NSObject {
     /// `mars_xlog_set_level_instance`.
     @objc(setLevel:level:)
     internal func setLevel(_ namePrefix: String, level: Double) {
-        guard let handle = handles[namePrefix], let native = int32(level) else {
+        guard let handle = openHandle(of: namePrefix), let native = int32(level) else {
             return
         }
         mars_xlog_set_level_instance(handle, native)
@@ -248,7 +250,7 @@ internal final class Xlog: NSObject {
     /// `mars_xlog_set_mode_instance`.
     @objc(setMode:mode:)
     internal func setMode(_ namePrefix: String, mode: Double) {
-        guard let handle = handles[namePrefix], let native = int32(mode) else {
+        guard let handle = openHandle(of: namePrefix), let native = int32(mode) else {
             return
         }
         mars_xlog_set_mode_instance(handle, native)
@@ -257,7 +259,7 @@ internal final class Xlog: NSObject {
     /// `mars_xlog_set_console_log_instance`.
     @objc(setConsoleLogEnabled:enabled:)
     internal func setConsoleLogEnabled(_ namePrefix: String, enabled: Bool) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix) else {
             return
         }
         mars_xlog_set_console_log_instance(handle, enabled ? 1 : 0)
@@ -268,7 +270,7 @@ internal final class Xlog: NSObject {
     /// 2^53.
     @objc(setMaxFileSize:bytes:)
     internal func setMaxFileSize(_ namePrefix: String, bytes: Double) {
-        guard let handle = handles[namePrefix], let native = uint64(bytes) else {
+        guard let handle = openHandle(of: namePrefix), let native = uint64(bytes) else {
             return
         }
         mars_xlog_set_max_file_size_instance(handle, native)
@@ -277,16 +279,27 @@ internal final class Xlog: NSObject {
     /// `mars_xlog_set_max_alive_duration_instance`.
     @objc(setMaxAliveTime:seconds:)
     internal func setMaxAliveTime(_ namePrefix: String, seconds: Double) {
-        guard let handle = handles[namePrefix], let native = int64(seconds) else {
+        guard let handle = openHandle(of: namePrefix), let native = int64(seconds) else {
             return
         }
         mars_xlog_set_max_alive_duration_instance(handle, native)
     }
 
     /// `mars_xlog_release_instance`: closes the appender `open` made.
+    ///
+    /// The prefix is released only while the appender of it is still the one
+    /// `open` was answered with: `mars_xlog_release_instance` closes the
+    /// appender of a *prefix*, so one another part of the app opened after
+    /// this one was closed would be theirs and would be closed by this.
     @objc(close:)
     internal func close(_ namePrefix: String) {
-        guard handles.removeValue(forKey: namePrefix) != nil else {
+        guard let handle = handles.removeValue(forKey: namePrefix) else {
+            return
+        }
+        let owns = namePrefix.withCString { prefix in
+            mars_xlog_get_instance(prefix) == handle
+        }
+        guard owns else {
             return
         }
         namePrefix.withCString { mars_xlog_release_instance($0) }
@@ -296,7 +309,13 @@ internal final class Xlog: NSObject {
     /// goes away with the bridge, and an appender is a file its writer thread
     /// holds open.
     deinit {
-        for namePrefix in handles.keys {
+        for (namePrefix, handle) in handles {
+            let owns = namePrefix.withCString { prefix in
+                mars_xlog_get_instance(prefix) == handle
+            }
+            guard owns else {
+                continue
+            }
             namePrefix.withCString { mars_xlog_release_instance($0) }
         }
         handles.removeAll()
@@ -439,7 +458,7 @@ internal final class Xlog: NSObject {
         daysAgo: Double,
         at symbol: (Int64, Int32, UInt32, UnsafeMutablePointer<CChar>, UInt32) -> Int32
     ) -> [String] {
-        guard let handle = handles[namePrefix], let timespan = int32(daysAgo) else {
+        guard let handle = openHandle(of: namePrefix), let timespan = int32(daysAgo) else {
             return []
         }
         var walked: [String] = []

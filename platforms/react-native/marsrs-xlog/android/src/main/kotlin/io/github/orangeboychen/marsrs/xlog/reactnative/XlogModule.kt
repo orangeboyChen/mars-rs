@@ -64,11 +64,12 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * `Xlog.open(XlogConfig(...))`: opens the appender of the configuration
      * `src/index.ts` sent, and answers whether it took it.
      *
-     * One appender per prefix: a prefix [appenders] already holds is answered
-     * as `true` without a second `Xlog` over the first, which would be a handle
-     * nothing releases. `src/index.ts` does the same, so the two names an app
-     * holds for one prefix are one appender and `close` on either closes it for
-     * both.
+     * One appender per prefix: `Xlog.open` answers the appender the prefix
+     * already has rather than a second one over its files, so asking again is
+     * how a prefix another part of the app closed is opened again — and a
+     * prefix whose appender is still open is answered as it is. `src/index.ts`
+     * does the same, so the two names an app holds for one prefix are one
+     * appender and `close` on either closes it for both.
      *
      * [Xlog.open] is what refuses a configuration the appender cannot honour —
      * a blank `logDir` or `namePrefix`, a compression level out of range — and
@@ -78,9 +79,12 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      */
     override fun open(config: ReadableMap): Boolean {
         val namePrefix = config.string("namePrefix").ifBlank { DEFAULT_NAME_PREFIX }
-        if (appenders.containsKey(namePrefix)) {
-            return true
-        }
+        // [appenders] holding one is not the same as there being one: the
+        // appender of a prefix is one for the whole process, so an `Xlog` of
+        // this prefix the app closed itself took it away, and answering `true`
+        // for it would leave every later call writing through a handle that
+        // has no appender behind it.
+        appenders[namePrefix]?.takeIf { it.isOpen }?.let { return true }
         // Both calls and not the open only: `XlogConfig` is where a blank
         // `logDir`, a negative `cacheDays` and a compression level out of
         // range are refused, and it throws before `Xlog.open` is ever reached

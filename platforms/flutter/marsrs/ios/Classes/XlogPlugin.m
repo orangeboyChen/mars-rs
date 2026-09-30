@@ -368,12 +368,20 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
 /// `mars_xlog_release_instance`: closes the appender `open` made.
 - (void)close:(FlutterMethodCall *)call result:(FlutterResult)result {
   NSString *namePrefix = XlogString(call.arguments, @"namePrefix");
-  if (self.instances[namePrefix] == nil) {
+  NSNumber *handle = self.instances[namePrefix];
+  if (handle == nil) {
     XlogAnswer(result, nil);
     return;
   }
-  mars_xlog_release_instance(namePrefix.UTF8String);
+  long long opened = handle.longLongValue;
   [self.instances removeObjectForKey:namePrefix];
+  // The prefix is released only while the appender of it is still the one
+  // `open` was answered with: releasing takes the prefix and not the handle, so
+  // one another part of the app opened after this one was closed would be
+  // theirs, and releasing by prefix would close it.
+  if (mars_xlog_get_instance(namePrefix.UTF8String) == opened) {
+    mars_xlog_release_instance(namePrefix.UTF8String);
+  }
   XlogAnswer(result, nil);
 }
 
@@ -385,7 +393,13 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
 - (long long)instanceForCall:(FlutterMethodCall *)call result:(FlutterResult)result {
   NSString *namePrefix = XlogString(call.arguments, @"namePrefix");
   NSNumber *handle = self.instances[namePrefix];
-  if (handle == nil) {
+  // The registry and not the handle [instances] holds: `mars_xlog_release_instance`
+  // releases the appender of a *prefix* and not of a handle, so a handle whose
+  // appender another part of the app closed is still the number this dictionary
+  // holds — and every symbol of the C ABI answers nothing for a handle it does
+  // not know, which is a call that silently writes nothing.
+  long long opened = handle == nil ? 0 : handle.longLongValue;
+  if (opened == 0 || mars_xlog_get_instance(namePrefix.UTF8String) != opened) {
     XlogAnswer(result,
                [FlutterError errorWithCode:kXlogError
                                    message:[NSString stringWithFormat:
@@ -393,7 +407,7 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
                                    details:nil]);
     return 0;
   }
-  return handle.longLongValue;
+  return opened;
 }
 
 @end
