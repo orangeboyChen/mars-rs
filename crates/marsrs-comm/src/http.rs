@@ -895,10 +895,16 @@ impl Parser {
     /// `Recv(buffer, length, nullptr, true)` — the same, stopping as soon
     /// as the head is whole.
     ///
-    /// A read of nothing ends it too: `only_parse_header` decides how much
-    /// of an answer is parsed and not whether the peer hanging up is one,
-    /// which is why the C++ answers `kEnd` out of the same branch whatever
-    /// it was asked for (`http.cc:714`).
+    /// A read of nothing is the peer hanging up here as it is there, and ends
+    /// the answer on the same terms: `only_parse_header` decides how much of
+    /// an answer is parsed and not whether the peer hanging up is one, which
+    /// is why the C++ answers `kEnd` out of the same branch whatever it was
+    /// asked for (`http.cc:714`).
+    ///
+    /// The status a whole head answers is [`RecvStatus::Body`] and not
+    /// [`RecvStatus::End`], with the bytes after it still in `buffered()`: the
+    /// head is what stops the parse, and the body is a parse of its own that a
+    /// caller still asks for.
     pub fn recv_header_only(&mut self, bytes: &[u8]) -> RecvStatus {
         if bytes.is_empty() {
             self.peer_hung_up();
