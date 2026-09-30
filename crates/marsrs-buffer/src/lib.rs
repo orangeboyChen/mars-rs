@@ -370,12 +370,16 @@ impl LogBuffer {
         // exactly as it was so that the next drain can copy it again — with the
         // tailer written into the region, a later `write` would append behind
         // it and leave a stray `kMagicEnd` in the middle of the payload.
-        if flush_len + TAILER_LEN <= region.len() {
-            out.write(&[self.magic_end]);
-            flush_len + TAILER_LEN
-        } else {
-            flush_len
-        }
+        // It is written into `out`, and not into the region, so it needs no
+        // room there — which is why nothing tests `flush_len + TAILER_LEN <=
+        // region.len()`: a caller that hands `flush` a shorter slice than the
+        // one `write` sized the buffer against is the caller this `min` exists
+        // for, and the guard used to drop the one byte that ends the block for
+        // exactly that caller. A block with no tailer is one every reader
+        // resyncs over, so the records lost are all of them and not the last
+        // byte.
+        out.write(&[self.magic_end]);
+        flush_len + TAILER_LEN
     }
 
     /// `__Clear()` — the other half of [`LogBuffer::flush`], and only for the
@@ -516,6 +520,28 @@ mod tests {
         buf.drained(&mut region);
         assert_eq!(buf.len(), 0);
         assert!(region.iter().all(|&b| b == 0), "region must be zeroed");
+    }
+
+    /// The tailer is written into `out`, so it does not compete with the
+    /// payload for room in the region — and a flush that was handed a shorter
+    /// slice than the buffer was sized against is the one that used to lose it.
+    /// A block with no tailer is one every reader resyncs over, so the records
+    /// lost were all of them.
+    #[test]
+    fn a_flush_of_a_region_the_tailer_does_not_fit_in_writes_the_tailer() {
+        let mut region = vec![0u8; REGION_LEN];
+        let mut buf = LogBuffer::new(false, None, CompressMode::Zlib, 6);
+
+        assert!(buf.write(&mut region, b"one\n"));
+        let len = buf.len();
+
+        let mut out = AutoBuffer::new();
+        let n = buf.flush(&mut region[..len], &mut out);
+
+        assert_eq!(n, len + TAILER_LEN);
+        assert_eq!(out.len(), n);
+        assert_eq!(out.as_slice()[n - 1], magic::END, "tailer");
+        assert_eq!(&out.as_slice()[..len], &region[..len]);
     }
 
     /// A record that does not fit the room that is left is refused, and not
