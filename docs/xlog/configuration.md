@@ -7,13 +7,13 @@ one with no default — the appender is not opened without somewhere to write.
 | what it does | Rust | Swift | Android | Kotlin Multiplatform | Flutter / React Native | C | C++ | HarmonyOS | default |
 |---|---|---|---|---|---|---|---|---|---|
 | where the `.xlog` files go; created when it is not there | `logdir` | `logDirectory` | `logDir` | `logDir` | `logDir` | `log_dir` | `logDir` | `logDir` | **required** (`./log` in Rust) |
-| what every file starts with, and the name the appender is known by | `nameprefix` | `namePrefix` | `namePrefix` | `namePrefix` | `namePrefix` | `name_prefix` | `namePrefix` | `namePrefix` | `xlog` (none in C/C++: the prefix is used verbatim, and an empty one stays empty) |
+| what every file starts with, and the name the appender is known by | `nameprefix` | `namePrefix` | `namePrefix` | `namePrefix` | `namePrefix` | `name_prefix` | `namePrefix` | `namePrefix` | `xlog` (C++ gives `xlog` too; C gives none — `name_prefix` is used verbatim, and an empty one stays empty) |
 | the level a record has to reach | see [levels](#levels) | `level` | `level` | `level` | `level` | `mars_xlog_new_instance(&config, level)` | `level` | `level` | `info` |
 | whether a write waits for the file | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | async |
 | where the async cache file goes | `cachedir` | `cacheDirectory` | `cacheDir` | `cacheDir` | `cacheDir` | `cache_dir` | `cacheDir` | `cacheDir` | next to the log files |
 | how many days a file staged in the cache directory waits before it is moved into the log directory | `cache_days` | `cacheDays` | `cacheDays` | `cacheDays` | `cacheDays` | `cache_days` | `cacheDays` | `cacheDays` | `0` — nothing is staged: the day's file is written in the log directory |
 | what a closed file is compressed with | `compress_mode` | `compression` | `compressMode` | `compressMode` | `compressMode` | `compress_mode` | `compressMode` | `compressMode` | zlib |
-| how hard the compressor tries | `compress_level` | `compressionLevel` | `compressLevel` | `compressLevel` | `compressLevel` | `compress_level` | `compressLevel` | `compressLevel` | `0` — the zstd default (3); zlib ignores the level and always compresses at 9; `6` in Rust |
+| how hard the compressor tries | `compress_level` | `compressionLevel` | `compressLevel` | `compressLevel` | `compressLevel` | `compress_level` | `compressLevel` | `compressLevel` | `0` — the appender's own level, `6`, as `mars_xlog.h` spells it; zlib ignores the level and always compresses at 9; `6` in Rust |
 | the public key a record is encrypted with | `pub_key` | `publicKey` | `pubKey` | `pubKey` | `pubKey` | `pub_key` | `pubKey` | `pubKey` | empty — no encryption |
 
 A config the appender cannot honour is refused where you build it and not
@@ -101,6 +101,13 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 | what it costs | the `write` syscall is not on the logging thread | the thread that logs waits for the file |
 | what you must do | `flushNow()` before the file is read or uploaded — and nothing at all when the app goes away ([log files](/xlog/log-files)) | `close()` or `flushNow()` before the process can be killed: what is still buffered goes with it |
 
+This page describes the tree at `main`. The newest release, `v0.1.0-alpha.3`,
+is older than it, and it spells the drain one way: `flush(sync = true)` in
+Kotlin and Swift, `mars_xlog_flush_instance(h, 1)` in C, and
+`appender_flush_sync()` in Rust. The `flushNow()` above is `main`'s: an app
+that takes a tagged release gets the older spelling until the next tag, and a
+Cargo dependency on the repository gets this one by leaving `--tag` off.
+
 Async is the default because the file is slower than the record; sync is what you
 want when a record cannot wait for a writer thread — a crash log, or the last
 lines before an exit.
@@ -116,14 +123,21 @@ thing an exit needs a call for.
 ## Compression and encryption
 
 `zlib` is the default and `zstd` compresses harder; both are per file, applied
-when the file is closed. The level is the zstd backend's knob: `0` keeps its
-default (3) and `22` is its ceiling. zlib ignores it and always compresses at
-9, the way the C++ does.
+when the file is closed. `22` is the ceiling of the level, but `0` is not zstd's
+own default (3): it is the appender's, `6`, which is what `mars_xlog.h` asks a
+`0` to mean, and every platform but Rust answers a `0` with the appender's own
+level, before the compressor sees it. zlib ignores the level and
+always compresses at 9, the way the C++ does. Only a Rust caller who writes `0`
+into the config by hand reaches zstd's own default, because nothing between the
+config and the encoder rewrites it — Rust's own default is `6`.
 
-A `pubKey` encrypts each record's body with ECDH + TEA — the cipher the C++
-implementation uses, over a key the writer and the reader agree on. What you put there is
-the *public* key of the pair whose private key reads the file back; leaving it
-empty writes a file any mars log reader can open.
+A `pubKey` encrypts the body of each **async** record with ECDH + TEA — the
+cipher the C++ implementation uses, over a key the writer and the reader agree
+on. A sync record's body is stored in the clear whatever the key says, as it is
+in the C++: what a `pubKey` encrypts is an async record, so a file written in
+sync mode is readable with no key at all. What you put there is the *public* key
+of the pair whose private key reads the file back; leaving it empty writes a
+file any mars log reader can open.
 
 ## After it is open
 

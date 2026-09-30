@@ -6,6 +6,11 @@
 线程排，返回时记录已经在磁盘上；`await flush()` 是同一次排空，交给别的线程，调用方
 await 到记录落盘。
 
+这几页写的是 `main` 上的树。最新的 release —— `v0.1.0-alpha.3` —— 比它旧，排空只有
+一个写法：Kotlin 和 Swift 是 `flush(sync = true)`，C 是
+`mars_xlog_flush_instance(h, 1)`，Rust 是 `appender_flush_sync()`。上面那三个调用
+是 `main` 的；在下一个 tag 之前只有树上有它们 —— Cargo 依赖去掉 `--tag` 就能取到。
+
 ## 它在哪里
 
 | 你的 App 是 | 谁带着 xlog | 怎么拿到它 |
@@ -284,12 +289,14 @@ Dart 这边没有阻塞式排空的那个面：channel 阻塞不了 Dart 这一�
 ## React Native
 
 ```bash
-npm install marsrs-react-native-xlog       # 要整个移植就 marsrs-react-native
+npm install marsrs-react-native-xlog@alpha       # 要整个移植就 marsrs-react-native@alpha
 cd ios && pod install
 ```
 
-包在 npm 上，所以 `npm install` 拿的是那里最新的版本。App 里不需要提到这个模块：
-autolinking 会找到 `android/` 里的 `ReactPackage` 和 `ios/` 里的 pod，这也就是把
+包在 npm 上，而到目前为止每个版本都是在 `alpha` tag 下发布的预发布版本 —— 所以
+`npm install` 得把 tag 写出来：不写 `@alpha` 就是在要 `latest`，而还没有任何版本
+发布在它下面。App 里不需要提到这个模块：autolinking 会找到 `android/` 里的
+`ReactPackage` 和 `ios/` 里的 pod，这也就是把
 `Xlog` 放进 `TurboModuleRegistry` 的东西。它是 TurboModule，这正是新架构要的 ——
 React Native 0.74 或更新，并且关掉 bridge —— 这也是这层对 App 唯一的要求。
 
@@ -315,7 +322,7 @@ xlog.close();
 回来时排空已经结束。[任务链路](/zh/stn/getting-started)和[网络诊断](/zh/sdt/getting-started)都
 还没进 TypeScript。
 
-## The C ABI {#c-abi}
+## C ABI {#c-abi}
 
 ```text
 marsrs-<version>-<host>.tar.gz   （Linux、macOS）
@@ -324,7 +331,7 @@ marsrs-<version>-<host>.zip      （Windows）
     include/mars_xlog.hpp   日志的 C++ 写法
     include/mars_sdt.h      网络诊断
     include/mars_stn.h      任务链路
-    libmars_ffi.a / libmars_ffi.so（.dylib、.dll）
+    lib/libmars_ffi.a / lib/libmars_ffi.so（.dylib、.dll）
 ```
 
 为 `x86_64-unknown-linux-gnu`、`aarch64-apple-darwin` 和
@@ -355,8 +362,8 @@ mars_xlog_release_instance("marsrs");
 想要第二个 logger 就给它第二个 prefix。
 
 ```bash
-cc -I include -o app app.c libmars_ffi.a -lpthread -ldl     # 静态
-cc -I include -o app app.c -L. -lmars_ffi                  # 动态
+cc -I include -o app app.c lib/libmars_ffi.a -lpthread -ldl     # 静态
+cc -I include -o app app.c -Llib -lmars_ffi                     # 动态
 ```
 
 每个回答 `int` 的调用回答 `MARS_XLOG_OK`（0）或一个负的 `MARS_XLOG_ERR_*`，C ABI
@@ -403,7 +410,7 @@ appender，所以一个自动存储期的 `Xlog` 在作用域末尾不需要 `cl
 这个头文件要 C++17：低于那个标准它拒绝编译，而 `flush()` 回答的是 `std::future`。
 
 ```bash
-c++ -std=c++17 -I include -o app app.cpp libmars_ffi.a -lpthread -ldl
+c++ -std=c++17 -I include -o app app.cpp lib/libmars_ffi.a -lpthread -ldl
 ```
 
 ## HarmonyOS
@@ -417,7 +424,7 @@ ohpm install marsrs-harmonyos-xlog
 `libmarsrs_xlog.so` —— C ABI 的 staticlib 外面包了一层 NAPI 模块 —— 覆盖
 `arm64-v8a`、`armeabi-v7a` 和 `x86_64`，所以拿到它的 App 不需要再解析别的。要自己
 写 NAPI 的 App 改用 `marsrs-harmony-<version>.tar.gz`：三个 `libmars_ffi.so` 和
-`mars_xlog.h`，外面什么都没包。
+C ABI 的四个头文件，外面什么都没包。
 
 ```typescript
 import { AppenderMode, LogLevel, Xlog } from 'marsrs-harmonyos-xlog';
