@@ -166,6 +166,7 @@ public actual object StnLogic {
     private fun makesureAuthed(host: String?): Boolean =
         when (val answer = ask(Question.Kind.MakesureAuthed) { this.host = host.orEmpty() }) {
             is Answer.Yes -> answer.yes
+
             // An app that did not answer is logged in, which is what the port
             // answers on every other platform.
             else -> true

@@ -166,8 +166,8 @@ pub unsafe extern "system" fn JNI_OnLoad(
         // Found here and nowhere else: this is the thread `System.loadLibrary`
         // was called on, so its loader is the app's, which is the one that
         // knows these classes — see [`CLASSES`]. A class the loader does not
-        // have leaves the cache unset and every ask unanswered, the way a
-        // lookup that found nothing did.
+        // have means the bridge cannot answer callbacks safely, so reject the
+        // library load instead of returning success with partial initialization.
         let classes = vm.attach_current_thread(|env| {
             // One at a time: the lookup borrows `env` for itself, and the
             // global reference is taken from what it answered.
@@ -183,9 +183,10 @@ pub unsafe extern "system" fn JNI_OnLoad(
                 sdt_logic: cached(SDT_LOGIC)?,
             })
         });
-        if let Ok(classes) = classes {
-            let _ = CLASSES.set(classes);
-        }
+        let Ok(classes) = classes else {
+            return 0;
+        };
+        let _ = CLASSES.set(classes);
         let _ = VM.set(vm);
         JNI_VERSION_1_6 as jint
     })
