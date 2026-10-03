@@ -602,6 +602,25 @@ mod tests {
         release_xlogger_instance("one");
     }
 
+    #[test]
+    fn a_stale_handle_cannot_release_a_reopened_prefix() {
+        let _guard = serial();
+        let dir = tempfile::tempdir().unwrap();
+        let first = new_xlogger_instance(&config("reopened", dir.path()), LogLevel::Info);
+        assert_ne!(first, DEFAULT_HANDLE);
+
+        release_xlogger_instance_of("reopened", first);
+        let second = new_xlogger_instance(&config("reopened", dir.path()), LogLevel::Info);
+        assert_ne!(second, DEFAULT_HANDLE);
+        assert_ne!(first, second);
+
+        release_xlogger_instance_of("reopened", first);
+        assert_eq!(get_xlogger_instance("reopened"), second);
+
+        release_xlogger_instance_of("reopened", second);
+        assert_eq!(get_xlogger_instance("reopened"), DEFAULT_HANDLE);
+    }
+
     /// Today's log file in `dir`, i.e. the only `*.xlog` there.
     fn log_text(dir: &std::path::Path) -> String {
         let mut text = String::new();

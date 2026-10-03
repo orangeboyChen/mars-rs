@@ -342,6 +342,9 @@ pub unsafe extern "C" fn mars_xlog_get_instance(name_prefix: *const c_char) -> c
 }
 
 /// Releases the instance registered for `name_prefix` and closes its appender.
+/// Prefer [`mars_xlog_release_instance_of`] when the caller holds the handle;
+/// this legacy prefix-only entry point cannot distinguish a stale close from a
+/// newly opened instance with the same prefix.
 ///
 /// The prefix is read the way the open read it, so an appender whose prefix is
 /// not UTF-8 is one this closes: read as text, the whole of such a prefix is

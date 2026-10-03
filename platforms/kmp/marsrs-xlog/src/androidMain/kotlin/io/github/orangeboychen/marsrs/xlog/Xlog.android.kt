@@ -143,16 +143,14 @@ public actual class Xlog actual constructor(config: XlogConfig) {
 
     @Synchronized
     public actual fun close() {
-        // The claim and not a question: `marsrs-jni` releases by prefix, so
-        // only one of the `Xlog`s of a prefix may release it, and the one that
-        // may is whichever takes the entry out of the table first. A `close`
-        // that finds no entry is a second one, and releasing again would close
-        // an appender a re-open of the prefix has since put there.
+        // Remove the exact handle from the process-local ownership table before
+        // releasing it. The native call repeats that identity check under the
+        // registry lock, so a reopen cannot be closed by a stale Xlog.
         if (!openHandles.remove(namePrefix, handle)) {
             handle = NO_HANDLE
             return
         }
-        releaseXlogInstance(namePrefix)
+        releaseXlogInstanceOf(namePrefix, handle)
         handle = NO_HANDLE
     }
 
@@ -200,7 +198,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
     // asks about.
     private external fun newXlogInstance(config: XLogConfigJni): Long
 
-    private external fun releaseXlogInstance(namePrefix: String)
+    private external fun releaseXlogInstanceOf(namePrefix: String, instance: Long)
 
     private external fun appenderRequestFlush(handle: Long)
 

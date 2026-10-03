@@ -9,7 +9,7 @@
 //! | `appenderRequestFlush`     | `Java_…_appenderRequestFlush`                  |
 //! | `appenderFlushNow`        | `Java_…_appenderFlushNow`                     |
 //! | `newXlogInstance`         | [`marsrs_appender::new_xlogger_instance`]  |
-//! | `releaseXlogInstance`     | [`marsrs_appender::release_xlogger_instance`] |
+//! | `releaseXlogInstanceOf`   | [`marsrs_appender::release_xlogger_instance_of`] |
 //! | `write`                  | [`marsrs_appender::is_enabled_for`] + `xlogger_write` |
 //! | `getLogLevel`/`setLogLevel` | [`marsrs_appender::get_level`] / `set_level` |
 //! | `getCurrentLogPath`      | [`marsrs_appender::current_log_path`]       |
@@ -38,7 +38,7 @@ use std::borrow::Cow;
 use marsrs_appender::{
     category_set_max_alive_duration as set_max_alive_duration,
     category_set_max_file_size as set_max_file_size, flush_now, get_level, is_enabled_for,
-    new_xlogger_instance, release_xlogger_instance, request_flush, set_appender_mode,
+    new_xlogger_instance, release_xlogger_instance_of, request_flush, set_appender_mode,
     set_console_log_open, set_level, xlogger_write, AppenderMode, LogLevel, XLogConfig,
     XLoggerInfo,
 };
@@ -113,9 +113,9 @@ pub(crate) fn new_instance_impl(config: XLogConfig, level: LogLevel) -> jlong {
     new_xlogger_instance(&config, level) as jlong
 }
 
-/// `Xlog.releaseXlogInstance` body.
-pub(crate) fn release_instance_impl(prefix: &str) {
-    release_xlogger_instance(prefix)
+/// `Xlog.releaseXlogInstanceOf` body.
+pub(crate) fn release_instance_impl(prefix: &str, instance: u64) {
+    release_xlogger_instance_of(prefix, instance)
 }
 
 /// `Xlog.write` body — the one record, one JNI call write of the Kotlin API.
@@ -333,8 +333,8 @@ mod tests {
         flush_now_impl(instance as u64);
 
         // a closed appender answers nothing, and closing twice is harmless
-        release_instance_impl("Mars");
-        release_instance_impl("Mars");
+        release_instance_impl("Mars", instance as u64);
+        release_instance_impl("Mars", instance as u64);
         assert_eq!(get_level_impl(instance as u64), -1);
         assert!(current_log_path_impl(instance as u64).is_none());
         assert!(log_files_impl(instance as u64, 0).is_empty());
@@ -382,7 +382,7 @@ mod tests {
         let text = String::from_utf8_lossy(&bytes);
         assert!(!text.contains("not logged"), "{text}");
 
-        release_instance_impl("Mars");
+        release_instance_impl("Mars", instance as u64);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -414,7 +414,7 @@ mod tests {
         ));
         flush_now_impl(instance);
 
-        release_instance_impl("Mars");
+        release_instance_impl("Mars", instance);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -402,19 +402,22 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_newXlogInst
     })
 }
 
-/// `Xlog.releaseXlogInstance`.
+/// `Xlog.releaseXlogInstanceOf`.
 #[no_mangle]
-pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_releaseXlogInstance<'local>(
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_releaseXlogInstanceOf<
+    'local,
+>(
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     nameprefix: JString<'local>,
+    instance: jlong,
 ) {
     guard_env(&mut env, |env| {
         let prefix = nameprefix
             .mutf8_chars(env)
             .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
-        release_instance_impl(&prefix);
+        release_instance_impl(&prefix, instance as u64);
     })
 }
 

@@ -79,7 +79,7 @@ mars_xlog_flush_now_instance(xlog);
 char path[512];
 int n = mars_xlog_current_log_path_instance(xlog, path, sizeof(path));   /* bytes, excl. NUL */
 
-mars_xlog_release_instance("Mars");
+mars_xlog_release_instance_of("Mars", xlog);
 ```
 
 Compile and link:

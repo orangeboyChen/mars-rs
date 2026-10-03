@@ -137,7 +137,8 @@ long long mars_xlog_new_instance(const MarsXLogConfig* config, int level);
 /* The handle registered for name_prefix, or 0 when there is none. */
 long long mars_xlog_get_instance(const char* name_prefix);
 
-/* Releases the instance and closes its appender. */
+/* Releases the instance and closes its appender. Prefer the handle-aware
+ * mars_xlog_release_instance_of() when the caller holds an instance handle. */
 void mars_xlog_release_instance(const char* name_prefix);
 
 /* The same, and only while name_prefix is still registered under `instance`.
