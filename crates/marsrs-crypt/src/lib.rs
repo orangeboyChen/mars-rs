@@ -114,8 +114,8 @@ const TEA_DELTA: u32 = 0x9e37_79b9;
 /// *only* ever called with bytes decoded little-endian; Mars never decrypts on
 /// device, so there is no `__TeaDecrypt` counterpart in the C++ source.
 fn tea_encrypt(v: &mut [u32; 2], k: [u32; 4]) {
-    let (mut v0, mut v1) = (v[0], v[1]);
-    let (k0, k1, k2, k3) = (k[0], k[1], k[2], k[3]);
+    let [mut v0, mut v1] = *v;
+    let [k0, k1, k2, k3] = k;
     let mut sum: u32 = 0;
     for _ in 0..TEA_ROUNDS {
         sum = sum.wrapping_add(TEA_DELTA);
@@ -890,8 +890,8 @@ mod tests {
     #[test]
     fn tea_encrypt_round_trips_with_reference_decrypt() {
         fn tea_decrypt(v: &mut [u32; 2], k: [u32; 4]) {
-            let (mut v0, mut v1) = (v[0], v[1]);
-            let (k0, k1, k2, k3) = (k[0], k[1], k[2], k[3]);
+            let [mut v0, mut v1] = *v;
+            let [k0, k1, k2, k3] = k;
             let mut sum = TEA_DELTA.wrapping_mul(TEA_ROUNDS);
             for _ in 0..TEA_ROUNDS {
                 v1 = v1.wrapping_sub(
