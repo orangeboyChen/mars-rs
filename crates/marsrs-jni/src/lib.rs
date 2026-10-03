@@ -38,9 +38,9 @@ use std::borrow::Cow;
 use marsrs_appender::{
     category_set_max_alive_duration as set_max_alive_duration,
     category_set_max_file_size as set_max_file_size, flush_now, get_level, is_enabled_for,
-    new_xlogger_instance, release_xlogger_instance_of, request_flush, set_appender_mode,
-    set_console_log_open, set_level, xlogger_write, AppenderMode, LogLevel, XLogConfig,
-    XLoggerInfo,
+    new_xlogger_instance, release_xlogger_instance, release_xlogger_instance_of, request_flush,
+    set_appender_mode, set_console_log_open, set_level, xlogger_write, AppenderMode, LogLevel,
+    XLogConfig, XLoggerInfo,
 };
 
 /// `gettimeofday(&info.timeval, NULL)` — seconds + microseconds since the
@@ -116,6 +116,12 @@ pub(crate) fn new_instance_impl(config: XLogConfig, level: LogLevel) -> jlong {
 /// `Xlog.releaseXlogInstanceOf` body.
 pub(crate) fn release_instance_impl(prefix: &str, instance: u64) {
     release_xlogger_instance_of(prefix, instance)
+}
+
+/// Legacy `Xlog.releaseXlogInstance` body for binaries built before the
+/// handle-aware release was added. New callers must use [`release_instance_impl`].
+pub(crate) fn release_instance_by_prefix_impl(prefix: &str) {
+    release_xlogger_instance(prefix)
 }
 
 /// `Xlog.write` body — the one record, one JNI call write of the Kotlin API.

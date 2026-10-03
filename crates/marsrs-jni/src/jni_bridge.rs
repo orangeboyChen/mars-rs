@@ -58,9 +58,9 @@ use crate::stn::{
 
 use crate::{
     current_log_path_impl, flush_now_impl, get_level_impl, guard, level_from_java,
-    log_file_names_impl, log_files_impl, new_instance_impl, release_instance_impl,
-    request_flush_impl, set_appender_mode_impl, set_console_log_open_impl, set_level_impl,
-    set_max_alive_time_impl, set_max_file_size_impl, write_impl,
+    log_file_names_impl, log_files_impl, new_instance_impl, release_instance_by_prefix_impl,
+    release_instance_impl, request_flush_impl, set_appender_mode_impl, set_console_log_open_impl,
+    set_level_impl, set_max_alive_time_impl, set_max_file_size_impl, write_impl,
 };
 
 /// Runs `f` with an [`Env`], which is what an entry point has to go through
@@ -418,6 +418,24 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_releaseXlog
             .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
         release_instance_impl(&prefix, instance as u64);
+    })
+}
+
+/// Legacy `Xlog.releaseXlogInstance` entry point kept for older platform
+/// artifacts. New platform code calls `releaseXlogInstanceOf` so a stale close
+/// cannot release a logger reopened under the same prefix.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_releaseXlogInstance<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    nameprefix: JString<'local>,
+) {
+    guard_env(&mut env, |env| {
+        let prefix = nameprefix
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
+            .unwrap_or_default();
+        release_instance_by_prefix_impl(&prefix);
     })
 }
 
