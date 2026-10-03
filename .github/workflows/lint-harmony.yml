@@ -135,10 +135,10 @@ jobs:
       # that takes ten minutes: the archive is 2.1 GB on a mirror whose fast day
       # and slow day are a minute and ten apart, so it is downloaded once and
       # then cached — the way rust.yml caches the OHOS SDK — under a key of the
-      # version alone. A cache belongs to the ref that wrote it and to the base
-      # of the pull request on it, so the first run of a branch pays the
-      # download and every run after it does not, and a branch cut from a main
-      # that has run this pays nothing at all.
+      # version and of the archive, and not of this file. A cache belongs to the
+      # ref that wrote it and to the base of the pull request on it, so the
+      # first run of a branch pays the download and every run after it does not,
+      # and a branch cut from a main that has run this pays nothing at all.
       #
       # What goes into the cache is 291 MB and not 2.1 GB: the two SDK
       # components a HAR build never runs are a C++ toolchain and the IDE's
@@ -148,7 +148,15 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .deveco-cli
-          key: deveco-cli-${{ env.DEVECO_CLI_VERSION }}
+          # The version, the checksum of the archive and the script that
+          # unpacks it, and not this file: those three are what the directory
+          # holds, and a key of a file an edit to a comment changes is a key
+          # that downloads 2.1 GB again for nothing. What the key has to cover
+          # is what scripts/fetch_deveco_cli.sh writes beside `hvigorw` — the
+          # version, the URL and the prune flag — and it re-downloads when the
+          # copy in the cache does not carry them, so a cache that is not what
+          # was asked for costs one download and answers nothing wrong.
+          key: deveco-cli-${{ env.DEVECO_CLI_VERSION }}-${{ env.DEVECO_CLI_SHA256 }}-${{ hashFiles('scripts/fetch_deveco_cli.sh') }}
       - name: Fetch the DevEco Command Line Tools ${{ env.DEVECO_CLI_VERSION }}
         run: scripts/fetch_deveco_cli.sh .deveco-cli
       # The real thing: DevEco's own ArkTS compiler over this module, and the

@@ -113,12 +113,13 @@ pub fn get_period_logs(path: &Path, begin_hour: i32, end_hour: i32) -> Result<(u
             continue;
         }
 
-        let Some((begin, end)) = LogCrypt::get_log_hour(&header) else {
-            msg.push_str(&format!(
-                "__GetLogHour(buff.Ptr(), buff.Length(), beginHour, endHour) err, before_len:{before_len}."
-            ));
-            break;
-        };
+        // `None` is not an answer this call can give, and an arm that reads
+        // like a guard while no input reaches it is worse than either having
+        // one or not: `header` is a whole `HEADER_LEN` long, and the magic byte
+        // `get_log_hour` looks at is the one checked above, which is all it
+        // asks. What is left is the two bytes themselves.
+        let (begin, end) = LogCrypt::get_log_hour(&header)
+            .expect("a header of HEADER_LEN whose magic was checked above");
 
         let mut record_begin = begin as i32;
         let record_end = end as i32;
@@ -328,7 +329,15 @@ mod tests {
         assert_eq!(begin, 0);
         assert_eq!(end, bytes.len() as u64);
 
-        // A window that ends before the record's hour finds nothing.
-        assert!(get_period_logs(&path, 0, 1).is_err() || hour == 0);
+        // A window the record's hour is not in finds nothing. The window is
+        // picked off the hour rather than fixed, because the hour is whenever
+        // the test happens to run: one fixed at `[0, 1)` is the hour of a run
+        // that starts at midnight, and a scan that found the record in it
+        // would have been excused rather than caught.
+        let (empty_begin, empty_end) = if hour < 12 { (20, 21) } else { (2, 3) };
+        assert!(
+            get_period_logs(&path, empty_begin, empty_end).is_err(),
+            "a record of hour {hour} is not in [{empty_begin}, {empty_end})"
+        );
     }
 }

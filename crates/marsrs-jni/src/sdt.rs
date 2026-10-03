@@ -46,24 +46,41 @@ use marsrs_sdt::{Callback, CheckIPPorts, NetCheckType, SdtLogic};
 /// loaded, which in this port is this one library.
 pub const LOAD_LIBRARIES: &[&str] = &["marsrsxlog"];
 
-/// Keeps the results `SdtLogic` reported, so the host can pick them up — and
-/// hands them to Java as well, which is what a report is for.
+/// Keeps the results `SdtLogic` reported, so the host can pick them up.
+///
+/// What it does *not* do is hand them to Java: the callback runs inside
+/// [`run_checks_impl`], which holds the process-wide diagnosis for the whole
+/// run, and handing a report over is a call into the JVM — from which an app's
+/// `onSignalDetectResults` is free to ask `isChecking()`, `plan()` or
+/// `startActiveCheck()`, all of which come back into [`with_state`] on the
+/// thread that is already holding it. `std::sync::Mutex` is not reentrant, so
+/// that is a hang, and on the app's main thread it is an ANR. The run hands
+/// its own results over once it has let the diagnosis go; see
+/// [`run_checks_impl`].
 struct Sink(Arc<Mutex<Vec<CheckResultProfile>>>);
 
 impl Callback for Sink {
     fn report_net_check_result(&self, check_results: &[CheckResultProfile]) {
-        if let Ok(mut reported) = self.0.lock() {
-            reported.extend_from_slice(check_results);
-        }
-        deliver_report_impl(check_results);
+        // The poisoned lock is taken anyway: a panic that got out of a run
+        // leaves the flag set, and a report that is dropped for it is one no
+        // later take can hand over either — the results of a diagnosis lost
+        // because something else in the process panicked.
+        let mut reported = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reported.extend_from_slice(check_results);
     }
 }
 
 /// The JSON reports handed to Java since the last call.
 ///
-/// This lives outside [`SdtState`] on purpose: the callback runs *inside*
-/// [`run_checks_impl`], which holds the state lock for the whole run, so
-/// taking that lock again to record a report would deadlock.
+/// Not a field of [`SdtState`]: asking for one must not build a diagnosis to
+/// answer it, and reaching the state does — [`state`] makes the state the
+/// first time anything asks for it, and [`new_state`] is a whole core with a
+/// callback wired into it. A mutex of its own is also one a delivery does not
+/// share with the run it came out of, so a host that asks for what it has
+/// already been given never waits on a run, and a run never waits on it.
 fn delivered() -> &'static Mutex<Vec<String>> {
     static DELIVERED: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
     DELIVERED.get_or_init(|| Mutex::new(Vec::new()))
@@ -142,7 +159,8 @@ pub fn http_netcheck_cgi_impl() -> String {
     with_state(|state| state.logic.http_netcheck_cgi().to_owned())
 }
 
-/// `StartActiveCheck` — `false` when a check is already in flight.
+/// `StartActiveCheck` — `false` when no check was started: one that is
+/// already in flight, or a `mode` with no check in it.
 ///
 /// The C++'s Java declares no such call: there the diagnosis is started from
 /// inside the C++, which has the sockets and the threads a run needs. The port
@@ -186,10 +204,18 @@ pub fn plan_impl() -> Vec<NetCheckType> {
 /// Runs the planned checks, one `do_check` per check, and reports what they
 /// recorded. This is the `__RunOn` thread of the C++, driven by the host: the
 /// port has no sockets of its own, so the caller supplies the checkers.
+///
+/// The report is handed over *after* `with_state` has let the diagnosis go,
+/// which is the whole point: delivering it is a call into the JVM, and an
+/// app's `onSignalDetectResults` asks the diagnosis questions of its own from
+/// inside it. Holding the lock across the delivery would make that a hang —
+/// an ANR on the main thread — because `std::sync::Mutex` is not reentrant.
 pub fn run_checks_impl(
     do_check: impl FnMut(NetCheckType, &mut CheckRequestProfile),
 ) -> Vec<CheckResultProfile> {
-    with_state(|state| state.logic.run(do_check))
+    let results = with_state(|state| state.logic.run(do_check));
+    deliver_report_impl(&results);
+    results
 }
 
 /// [`run_checks_impl`] with the port's own checkers: the four classes the C++
@@ -200,8 +226,17 @@ pub fn run_checks_impl(
 /// profiles. The platform is the host's here, which is why it comes with the
 /// run: [`run_active_check_with_net_info_impl`] is this call with the one
 /// [`crate::platform_comm::net_info_impl`] answered.
+///
+/// The probes are asked while the process-wide diagnosis is held, so a probe
+/// must not ask the diagnosis about itself — `isChecking()`, `plan()`,
+/// `startActiveCheck()` — from inside its answer. The port cannot move the ask
+/// off that lock without moving the run off it, which is `marsrs-sdt`'s and not
+/// this seam's; what the C ABI says about its own probe (`mars_sdt.h`) is the
+/// same constraint, and it is written down there too.
 pub fn run_active_check_impl(ask: &mut Ask, network_type: i32) -> Vec<CheckResultProfile> {
-    with_state(|state| state.logic.run_checks(ask, network_type))
+    let results = with_state(|state| state.logic.run_checks(ask, network_type));
+    deliver_report_impl(&results);
+    results
 }
 
 /// [`run_active_check_impl`] with the network type of the platform: the
@@ -220,11 +255,15 @@ pub fn run_active_check_with_net_info_impl(ask: &mut Ask) -> Vec<CheckResultProf
 ///
 /// This is the `__RunOn` thread of the C++, run on the thread that called it:
 /// it holds the process-wide diagnosis until every probe has answered, so a
-/// run is one at a time and it does not come back until it is over.
+/// run is one at a time and it does not come back until it is over. A probe
+/// that asks the diagnosis about itself from inside its answer waits for that
+/// lock on the thread holding it; see [`run_active_check_impl`].
 ///
-/// `false` when nothing was in flight, and when the one that was got cancelled
-/// before its first check: a run that answered nothing is a run that reported
-/// nothing, which is what `MARS_SDT_ERR_NO_CHECK` is in the C ABI.
+/// `false` when no check recorded anything: nothing was in flight, the one
+/// that was got cancelled before its first check, or the checks it planned had
+/// nothing to check — a link that was given no hosts. A run that answered
+/// nothing is a run that reports nothing, which is what
+/// `MARS_SDT_ERR_NO_CHECK` is in the C ABI.
 pub fn run_checks_java_impl(network_type: i32) -> bool {
     let mut ask = Ask::new(crate::jni_bridge::ask_probe);
     let results = run_active_check_impl(&mut ask, network_type);
@@ -234,11 +273,35 @@ pub fn run_checks_java_impl(network_type: i32) -> bool {
 /// Takes everything the checks have reported since the last call.
 pub fn take_reported_impl() -> Vec<CheckResultProfile> {
     with_state(|state| {
-        state
+        std::mem::take(
+            &mut *state
+                .reported
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
+    })
+}
+
+/// Puts back what [`take_reported_impl`] handed over.
+///
+/// The take empties the sink, and the vec it hands over is the only copy of
+/// the report there is: a report a caller took and could not hand to Java —
+/// a `NewStringUTF` that failed, a panic caught by `guard` — was a report
+/// lost for good, and the `takeReport` the app asks again answers `null` a
+/// second time. What was reported while the report was out goes behind it, so
+/// a take answered afterwards is answered in the order the checks reported.
+pub fn untake_reported_impl(reported: Vec<CheckResultProfile>) {
+    if reported.is_empty() {
+        return;
+    }
+    with_state(|state| {
+        let mut sink = state
             .reported
             .lock()
-            .map(|mut reported| std::mem::take(&mut *reported))
-            .unwrap_or_default()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut waiting = reported;
+        waiting.extend(std::mem::take(&mut *sink));
+        *sink = waiting;
     })
 }
 
@@ -250,6 +313,9 @@ pub fn take_reported_impl() -> Vec<CheckResultProfile> {
 /// This is the call the C++ makes from inside `ReportNetCheckResult`, so a
 /// diagnosis that ends is never just buffered: it reaches the app's
 /// `SdtLogic.ICallBack` (or is recorded, when there is no JVM yet).
+///
+/// It is reached with the process-wide diagnosis released, and never from
+/// inside a run: what it calls is Java, and Java calls back.
 pub fn deliver_report_impl(check_results: &[CheckResultProfile]) -> String {
     let json = report_json_impl(check_results);
     if let Ok(mut delivered) = delivered().lock() {
@@ -324,12 +390,14 @@ mod tests {
             Query::Dns { .. } => Answer::Dns {
                 error_code: 0,
                 rtt: 10,
+                local_dns: String::new(),
                 ips: vec!["1.2.3.4".to_owned()],
             },
             Query::Tcp { .. } => Answer::Tcp {
                 sent: 0,
                 received: 0,
                 is_noop_resp: true,
+                conntime: 0,
                 rtt: 10,
             },
             Query::Http { .. } => Answer::Http {
@@ -380,6 +448,38 @@ mod tests {
             // what ran is what was reported
             assert_eq!(take_reported_impl().len(), 2);
             assert!(take_reported_impl().is_empty(), "taken only once");
+        })
+    }
+
+    /// The report [`take_reported_impl`] hands over is the only copy of it:
+    /// the sink is empty behind it, so a report a caller took and could not
+    /// hand to Java is one the app asks for again — and is answered `null`
+    /// for — unless it goes back.
+    #[test]
+    fn a_report_that_was_not_handed_over_is_asked_again() {
+        isolated(|| {
+            let started = || {
+                assert!(start_active_check_impl(
+                    &hosts("long.weixin.qq.com"),
+                    &hosts("short.weixin.qq.com"),
+                    NET_CHECK_BASIC,
+                    UNUSE_TIMEOUT
+                ));
+            };
+            started();
+            assert_eq!(run_checks_impl(record).len(), 2);
+            let taken = take_reported_impl();
+            assert_eq!(taken.len(), 2);
+            assert!(take_reported_impl().is_empty(), "taken only once");
+
+            // a second diagnosis, which reports while the first is out
+            started();
+            assert_eq!(run_checks_impl(record).len(), 2);
+
+            untake_reported_impl(taken);
+            // what was not handed over is asked again, and what was reported
+            // while it was out is behind it and not in front of it
+            assert_eq!(take_reported_impl().len(), 4);
         })
     }
 

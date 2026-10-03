@@ -99,11 +99,14 @@ fn a_keep_time_that_ran_out_stops_the_signalling() {
     assert!(!keeper.is_keeping());
     assert_eq!(keeper.due_time(), Some(5_000), "the post is not cancelled");
 
-    // a clock that went backwards is treated the same way
-    let (mut backwards, _seen) = keeper_that_records();
-    backwards.keep_at(5_000);
-    backwards.on_network_data_changed_at(4_000);
-    assert!(!backwards.is_keeping());
+    // a reading carried here one turn later than the data it is the reading of
+    // is not a clock that went backwards: data that moved before the touch
+    // still says the mapping is busy
+    let (mut carried, _seen) = keeper_that_records();
+    carried.keep_at(5_000);
+    carried.on_network_data_changed_at(4_000);
+    assert!(carried.is_keeping());
+    assert_eq!(carried.due_time(), Some(6_000));
 
     set_strategy(DEFAULT_PERIOD, DEFAULT_KEEP_TIME);
     drop(guard);
@@ -139,12 +142,18 @@ fn stop_only_ends_a_keeper_that_has_been_posted() {
 
 #[test]
 fn a_cleared_send_keeps_the_time_but_sends_nothing() {
-    let mut keeper = SignallingKeeper::new();
-    keeper.set_send(|_| 7);
+    let (mut keeper, seen) = keeper_that_records();
     keeper.clear_send();
     keeper.keep_at(1_000);
     assert!(keeper.is_keeping());
-    assert_eq!(keeper.sent(), 1, "the buffer still went out");
+    // `sent` is the count of the buffers the keeper meant to send, and not of
+    // the ones that reached the app — `fun_send_signalling_buffer_ = NULL` is
+    // what the C++ clears, and the count goes up either way
+    assert_eq!(keeper.sent(), 1);
+    assert!(
+        seen.lock().unwrap_or_else(|p| p.into_inner()).is_empty(),
+        "the callback is gone, so no buffer went out"
+    );
 }
 
 #[test]

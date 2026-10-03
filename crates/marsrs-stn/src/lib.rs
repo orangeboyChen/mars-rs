@@ -53,9 +53,9 @@
 //!
 //! The eleventh slice is where an ip/port pair comes from ([`net_source`]): the
 //! hosts, ports, debug ips and backup ips the app set, and the history that
-//! says which pairs failed — at most five pairs per host list, sorted by their
-//! history when they came from dns and shuffled when they came from the backup
-//! list.
+//! says which pairs failed — five pairs per host list, or six when one host
+//! answered the five by itself, sorted by their history when they came from
+//! dns and shuffled when they came from the backup list.
 //!
 //! The twelfth slice is the race a link runs between its pairs
 //! ([`longlink_speed_test`]): the same noop goes out on all of them at once,
@@ -204,6 +204,7 @@ pub mod config;
 pub mod dynamic_timeout;
 pub mod flow_limit;
 pub mod frequency_limit;
+pub(crate) mod hook;
 pub mod long_link;
 pub mod longlink;
 pub mod longlink_connect_monitor;
@@ -240,6 +241,8 @@ pub use anti_avalanche::{AntiAvalanche, LimitKind};
 pub use dynamic_timeout::{DynamicTimeout, DynamicTimeoutStatus};
 pub use flow_limit::FlowLimit;
 pub use frequency_limit::FrequencyLimit;
+// `Read` is not here: [`short_link`] already has one of that name, so what one
+// read of a long link gave is [`long_link::Read`].
 pub use long_link::{
     AlarmStatus, Answer, ConnectFail, DisconnectInternalCode, LongLink, MakeSure, NoopAlarm,
     RunEnd, SendData, Written, EBADMSG, ECT_DNS_MAKE_SOCKET_PREPARED,
@@ -288,7 +291,8 @@ pub use report::task_profile_json;
 // value a sent task ends with is [`sent::Answer`].
 pub use sent::{Driver, Failure, Sent};
 // `ConnectFail` is not here: [`long_link`] already has one of that name, so the
-// short link's is [`short_link::ConnectFail`].
+// short link's is [`short_link::ConnectFail`]. Neither is `Read` of the long
+// link's, which is [`long_link::Read`]: what one read of a long link gave.
 pub use short_link::{
     NetworkLabel, Read, RunFail, ShortLink, DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_RW_TIMEOUT_MS,
     ECT_HTTP_PARSE_STATUS_LINE, ECT_HTTP_SPLIT_HTTP_HEAD_AND_BODY, ECT_SOCKET_READ_ONCE,
@@ -332,4 +336,4 @@ pub use timing_sync::{
     UNLOGIN_SYNC_INTERVAL,
 };
 pub use weak_network::{ReportWeak, WeakKey, WeakNetworkLogic};
-pub use zombie_task_manager::ZombieTaskManager;
+pub use zombie_task_manager::{Redo, ZombieCallbacks, ZombieTaskManager};

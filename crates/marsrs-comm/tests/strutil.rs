@@ -31,14 +31,10 @@ fn trims_ascii_whitespace_only() {
 
 #[test]
 fn case_conversion_is_ascii_only() {
+    // the multibyte letters are the point: `to_lowercase` would write `ä`
+    // and `Ö`, which is not what the C++'s `strutil` does
     assert_eq!(strutil::cast_lower("AbC1Ä"), "abc1Ä");
     assert_eq!(strutil::cast_upper("aBc1ö"), "ABC1ö");
-    // a `String` a caller owns is lower-cased where it stands, by `std`
-    let mut s = "MiXeD".to_owned();
-    s.make_ascii_lowercase();
-    assert_eq!(s, "mixed");
-    s.make_ascii_uppercase();
-    assert_eq!(s, "MIXED");
 }
 
 #[test]
@@ -91,6 +87,20 @@ fn hex_round_trips() {
     // above 1024 input characters the C++ refuses
     assert_eq!(strutil::str2hex(&"ab".repeat(600)), None);
     assert_eq!(strutil::str2hex("zz"), None);
+}
+
+/// The C++ reads two characters as two nibbles, so a `+` in front of one is
+/// not a byte at all: `u8::from_str_radix` reads a sign, which made `"+8"`
+/// the byte 8.
+#[test]
+fn hex_reads_two_hex_digits_at_a_time() {
+    assert_eq!(strutil::str2hex("+8"), None);
+    assert_eq!(strutil::str2hex("+f0f"), None);
+    assert_eq!(strutil::str2hex("-f"), None);
+    assert_eq!(strutil::str2hex(" f"), None);
+    assert_eq!(strutil::str2hex("ab"), Some(vec![0xab]));
+    assert_eq!(strutil::str2hex("AB"), Some(vec![0xab]), "either case");
+    assert_eq!(strutil::str2hex("00ff00"), Some(vec![0x00, 0xff, 0x00]));
 }
 
 #[test]

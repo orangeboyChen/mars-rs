@@ -240,6 +240,56 @@ fn open_write_flush_close_lands_on_disk() {
     close();
 }
 
+/// A body one byte of which is not UTF-8 keeps what it can of itself, and a
+/// null one is the C++'s own `NULL == _log` — two ways a caller's message used
+/// to disappear without a word.
+#[test]
+fn a_body_that_is_not_utf8_is_written_and_a_null_one_is_promoted() {
+    let _g = lock();
+    let _close = CloseOnDrop;
+    let dir = tempfile::tempdir().unwrap();
+    let log = open_sync(dir.path());
+
+    let tag = CString::new("smoke").unwrap();
+    let file = CString::new("ffi_smoke.rs").unwrap();
+    let func = CString::new("a_body_that_is_not_utf8").unwrap();
+    // `h\xff i`: the shape a GBK or a Shift-JIS message has to a C ABI that
+    // reads UTF-8.
+    let body = CString::new(vec![b'h', 0xff, b' ', b'i']).unwrap();
+    unsafe {
+        mars_xlog_write_instance(
+            log,
+            2,
+            tag.as_ptr(),
+            file.as_ptr(),
+            func.as_ptr(),
+            42,
+            body.as_ptr(),
+        );
+        mars_xlog_write_instance(
+            log,
+            2,
+            tag.as_ptr(),
+            file.as_ptr(),
+            func.as_ptr(),
+            42,
+            std::ptr::null(),
+        );
+    }
+    mars_xlog_flush_now_instance(log);
+
+    let path = log_file(dir.path());
+    let bytes = fs::read(&path).unwrap();
+    assert!(
+        any_view_contains(&bytes, "h\u{fffd} i"),
+        "a body that is not UTF-8 was dropped instead of written into {path:?}"
+    );
+    assert!(
+        any_view_contains(&bytes, "NULL == _log"),
+        "a null body was dropped instead of promoted into {path:?}"
+    );
+}
+
 #[test]
 fn the_level_one_function_sets_is_the_one_every_write_sees() {
     let _g = lock();
@@ -268,7 +318,17 @@ fn the_level_one_function_sets_is_the_one_every_write_sees() {
         "a-level-none-filter-drops-everything"
     ));
 
+    // The other half of the property, without which the assertion above is one
+    // a write that never works at all would pass: the same write, through the
+    // same handle, lands when the filter lets it through.
     mars_xlog_set_level_instance(log, 0); // back to Verbose
+    write(log, 5, "smoke", "a-verbose-filter-keeps-everything");
+    mars_xlog_flush_now_instance(log);
+    let bytes = fs::read(log_file(dir.path())).unwrap();
+    assert!(
+        any_view_contains(&bytes, "a-verbose-filter-keeps-everything"),
+        "a write the filter lets through was dropped anyway"
+    );
 }
 
 #[test]
@@ -356,7 +416,7 @@ fn zstd_mode_is_accepted() {
 }
 
 #[test]
-fn appender_error_is_reported_not_panicked() {
+fn a_prefix_the_appender_refuses_is_reported_and_opens_nothing() {
     let _g = lock();
     let _close = CloseOnDrop;
     let dir = tempfile::tempdir().unwrap();
@@ -377,7 +437,19 @@ fn appender_error_is_reported_not_panicked() {
     // An instance is registered *under* its prefix, so an empty one has no
     // name to be registered under and gets no handle at all. The appender
     // itself is never asked, which is what the old `OK || ERR_APPENDER`
-    // assertion used to leave open.
+    // assertion used to leave open. "Never asked" is what the empty
+    // directory says: an appender that was opened for it has written the
+    // day-stamped file it opens, and a panic would not have — but a panic
+    // is not something this ABI can report, so what is asserted here is
+    // the half of it that is.
     assert_eq!(unsafe { mars_xlog_new_instance(&cfg, 0) }, 0);
+    let files: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert!(
+        files.is_empty(),
+        "no appender was opened for it, so nothing was written: {files:?}"
+    );
     close();
 }

@@ -43,11 +43,14 @@
 //!   empty string instead of panicking;
 //! * every `unsafe` block carries a `// SAFETY:` note.
 //!
-//! The exported functions are safe `extern "C" fn`s (not `unsafe extern "C"`)
-//! because the null checks make them total: calling them with garbage can never
-//! cause UB inside Rust beyond what the caller already promised about the
-//! pointer. The raw-pointer arguments themselves are only ever touched inside
-//! the audited [`cstr`] helpers.
+//! An entry point that takes a caller's pointer is an `unsafe extern "C" fn`,
+//! and one that takes none is a safe one: the null checks make both total —
+//! calling them with garbage cannot cause UB inside Rust beyond what the
+//! caller already promised — but a pointer is a promise C has to keep, and
+//! `unsafe` is the signature that says so where the call is written. The
+//! raw-pointer arguments themselves are only ever touched inside the audited
+//! [`cstr`] helpers, every `unsafe` block carries a `// SAFETY:` note, and
+//! every `unsafe fn` carries the `# Safety` this crate denies going without.
 
 // `unsafe` is a deliberate, audited part of this crate: this is the boundary a
 // caller's raw pointers are read across. The appender allows it too, beside

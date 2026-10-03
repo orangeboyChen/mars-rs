@@ -155,7 +155,7 @@ int main(void) {
      * whatever the writer thread still held, which with an async appender is the
      * last records it wrote. It takes the prefix and not the handle, because a
      * prefix is one appender: two modules that opened the same one share it. */
-    mars_xlog_release_instance(PREFIX);
+    mars_xlog_release_instance_of(PREFIX, xlog);
 
     return 0;
 }

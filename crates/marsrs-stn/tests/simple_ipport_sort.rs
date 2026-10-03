@@ -129,6 +129,28 @@ fn what_the_host_saved_is_what_the_next_run_reads() {
     assert!(next.save_records(RECORD_TIMEOUT).is_empty());
 }
 
+/// The same draw, out of the range it was asked for: `__PickIpItemRandom`
+/// takes from one of its two queues or from the other, and a draw from neither
+/// is a round that moved nothing — which is a `while` the sort never leaves.
+/// The pair with a history is what is fallen back to.
+#[test]
+fn a_random_that_answers_its_own_bound_is_out_of_range_and_the_pair_with_a_history_is_taken() {
+    let mut sort = a_sort();
+    fail(&mut sort, 0, "1.2.3.4", 80);
+    sort.set_random(|bound| bound);
+
+    // one pair, so the shuffle that comes first has nothing to reorder, and
+    // every draw is the one out of range
+    let items = sort.sort_and_filter_at(0, vec![IpPortItem::new("1.2.3.4", 80)], 1, false);
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.ip.as_str())
+            .collect::<Vec<_>>(),
+        vec!["1.2.3.4"]
+    );
+}
+
 #[test]
 fn a_history_the_host_hands_in_is_read_byte_by_byte() {
     let mut sort = a_sort();
@@ -183,7 +205,7 @@ fn with_no_network_nothing_is_learned_and_nothing_is_banned() {
         .collect();
     let items = sort.sort_and_filter_at(0, items, 4, false);
     assert_eq!(items.len(), 4);
-    assert!(format!("{sort:?}").contains("SimpleIpPortSort"));
+    assert!(format!("{sort:?}").contains("records: 0"));
 }
 
 #[test]

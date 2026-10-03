@@ -77,13 +77,29 @@ pub fn simple_int_pack_length(data_len: usize) -> usize {
 }
 
 /// `SimpleShortPack` — the length of the body in network order, then the body.
-pub fn simple_short_pack(data: &[u8]) -> Vec<u8> {
-    simple_pack(data, 2)
+///
+/// [`None`] when the body and the two bytes in front of it are more than two
+/// bytes can say: a length that wrapped is a package the other end reads as a
+/// different one, so what cannot be said is not packed at all.
+pub fn simple_short_pack(data: &[u8]) -> Option<Vec<u8>> {
+    // `data.len() + head_len`, because `_packlen` counts the length in front
+    let pack_len = data.len() + 2;
+    let mut out = Vec::with_capacity(pack_len);
+    out.extend_from_slice(&u16::try_from(pack_len).ok()?.to_be_bytes());
+    out.extend_from_slice(data);
+    Some(out)
 }
 
 /// `SimpleIntPack` — the length of the body in network order, then the body.
+///
+/// Four bytes say every length a package can have: [`MAX_PACKAGE_LEN`] is a
+/// megabyte, and a body of four gigabytes is not one this process read.
 pub fn simple_int_pack(data: &[u8]) -> Vec<u8> {
-    simple_pack(data, 4)
+    let pack_len = data.len() + 4;
+    let mut out = Vec::with_capacity(pack_len);
+    out.extend_from_slice(&(pack_len as u32).to_be_bytes());
+    out.extend_from_slice(data);
+    out
 }
 
 /// What `simple_short_unpack` / `simple_int_unpack` found.
@@ -310,19 +326,6 @@ pub fn packer_unpack(raw: &[u8]) -> PackerUnpacked {
         pack_len,
         data: body.to_vec(),
     }
-}
-
-/// `hton(SimplePackLength<T>)` and the body: `_packlen` counts the length in
-/// front, which is why it is `data.len() + head_len` and not just the body.
-fn simple_pack(data: &[u8], head_len: usize) -> Vec<u8> {
-    let pack_len = data.len() + head_len;
-    let mut out = Vec::with_capacity(pack_len);
-    match head_len {
-        2 => out.extend_from_slice(&(pack_len as u16).to_be_bytes()),
-        _ => out.extend_from_slice(&(pack_len as u32).to_be_bytes()),
-    }
-    out.extend_from_slice(data);
-    out
 }
 
 /// `ntoh(*(T*)_rawbuf)` and the body behind it.

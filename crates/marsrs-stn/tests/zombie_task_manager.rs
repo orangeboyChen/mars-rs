@@ -22,8 +22,11 @@ fn kept(taskid: u32, priority: i32) -> Task {
 
 /// What the app was told: the task it failed with, and how.
 type Failed = Arc<Mutex<Vec<(u32, ErrCmdType, i32, TaskFailHandleType)>>>;
-/// What the app was asked to start again.
-type Started = Arc<Mutex<Vec<u32>>>;
+/// What the app was asked to start again: the taskid, the `retry_count` and
+/// the `total_timeout` of the task as the manager had it, which is not the
+/// task the caller handed over — a saved one has its retries back at `0` and
+/// the time it already spent off its deadline.
+type Started = Arc<Mutex<Vec<(u32, i32, i32)>>>;
 
 /// A manager that records what it starts and what it fails.
 fn manager() -> (ZombieTaskManager, Started, Failed) {
@@ -35,7 +38,7 @@ fn manager() -> (ZombieTaskManager, Started, Failed) {
         record_start
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .push(task.taskid);
+            .push((task.taskid, task.retry_count, task.total_timeout));
     });
     let record_fail = Arc::clone(&failed);
     manager.set_callback(move |err_type, err_code, fail_handle, task, _cost| {
@@ -87,7 +90,18 @@ fn a_saved_task_loses_the_time_it_spent_and_its_retries() {
     manager.redo_tasks_at(1_100);
     // 1_000 - 300 saved, 100 more spent on the way: 600 is what is left
     let started = started.lock().unwrap_or_else(|p| p.into_inner()).clone();
-    assert_eq!(started, vec![7]);
+    assert_eq!(started.len(), 1, "one task was started again: {started:?}");
+    let (taskid, retry_count, total_timeout) = started[0];
+    assert_eq!(taskid, 7);
+    assert_eq!(
+        retry_count, 0,
+        "a task started again starts its retries over"
+    );
+    assert_eq!(
+        total_timeout, 600,
+        "the 300 it had spent and the 100 on the way are off the 1_000"
+    );
+    // … and neither of the two is written back into the caller's own task.
     assert_eq!(task.retry_count, 3, "the caller's task is not touched");
     assert_eq!(task.total_timeout, 1_000);
 }
@@ -106,8 +120,8 @@ fn redoing_the_tasks_starts_them_most_urgent_first() {
     manager.redo_tasks_at(200);
     assert_eq!(
         *started.lock().unwrap_or_else(|p| p.into_inner()),
-        vec![2, 1],
-        "priority 0 before priority 5"
+        vec![(2, 0, 59_800), (1, 0, 59_800)],
+        "priority 0 before priority 5, and 200 ms off both deadlines"
     );
     assert_eq!(
         *failed.lock().unwrap_or_else(|p| p.into_inner()),
@@ -143,7 +157,11 @@ fn the_periodic_check_waits_for_the_task_and_for_the_net_core() {
 
     // both have waited now
     manager.on_timer_check_at(RETRY_INTERVAL * 2);
-    assert_eq!(*started.lock().unwrap_or_else(|p| p.into_inner()), vec![4]);
+    assert_eq!(
+        *started.lock().unwrap_or_else(|p| p.into_inner()),
+        vec![(4, 0, 480_000)],
+        "ten minutes less the two RETRY_INTERVALs it waited"
+    );
     assert!(manager.is_empty());
     assert_eq!(manager.due_time(), None, "the check cancels itself");
 }
@@ -204,7 +222,8 @@ fn without_the_app_the_tasks_are_still_kept() {
     manager.redo_tasks_at(10);
     assert!(manager.is_empty(), "started and forgotten");
     manager.on_timer_check_at(10);
-    assert!(format!("{manager:?}").contains("ZombieTaskManager"));
+    // the queue is empty, and the check it armed went with it
+    assert!(format!("{manager:?}").contains("tasks: 0"));
 }
 
 #[test]

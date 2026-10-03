@@ -139,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn the_dump_is_exactly_as_long_as_the_c_plus_plus_makes_it() {
+    fn a_dump_is_as_long_as_its_header_and_the_lines_it_rendered() {
         // `\n<len> bytes:\n`, then `6 * bytes` for the line and one more for
         // the newline that ends it
         assert_eq!(xlogger_memory_dump(&[0x5a]).len(), 18);

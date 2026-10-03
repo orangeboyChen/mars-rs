@@ -113,7 +113,7 @@ unsafe fn to_xlog_config(cfg: &MarsXLogConfig) -> Result<XLogConfig, c_int> {
     let (log_dir, name_prefix, pub_key, cache_dir) = unsafe {
         (
             cstr::ptr_to_path_buf(cfg.log_dir),
-            cstr::ptr_to_str_or_empty(cfg.name_prefix),
+            cstr::ptr_to_string_lossy(cfg.name_prefix),
             cstr::ptr_to_str_or_empty(cfg.pub_key),
             cstr::ptr_to_path_buf(cfg.cache_dir),
         )
@@ -129,12 +129,14 @@ unsafe fn to_xlog_config(cfg: &MarsXLogConfig) -> Result<XLogConfig, c_int> {
     // prefix-based — substituting "Mars" would stop the Rust port from draining
     // (or being drained by) a C++ process's cache file. The prefix does go
     // through UTF-8, `XLogConfig` storing a `String`, so a non-UTF-8 one is
-    // converted lossily; the directories above are byte-exact.
+    // converted lossily and not to the empty prefix, which is the name of
+    // another appender and not of a prefix that failed; the directories above
+    // are byte-exact.
     let defaults = XLogConfig::default();
     Ok(XLogConfig {
         mode,
         logdir: log_dir,
-        nameprefix: name_prefix.to_string(),
+        nameprefix: name_prefix,
         pub_key: pub_key.to_string(),
         compress_mode,
         compress_level: if cfg.compress_level > 0 {
@@ -321,6 +323,11 @@ pub unsafe extern "C" fn mars_xlog_new_instance(
 
 /// The handle registered for `name_prefix`, or `0` when there is none.
 ///
+/// The prefix is read the way [`mars_xlog_new_instance`] read the one it
+/// registered — lossily — so one that is not UTF-8 names the appender it
+/// opened. Read as text, the whole of such a prefix is `""`, which is no
+/// prefix at all: an appender that was open was answered with `0`.
+///
 /// # Safety
 ///
 /// `name_prefix` must be null, or a NUL-terminated C string that stays alive for the duration of
@@ -328,13 +335,21 @@ pub unsafe extern "C" fn mars_xlog_new_instance(
 #[no_mangle]
 pub unsafe extern "C" fn mars_xlog_get_instance(name_prefix: *const c_char) -> c_longlong {
     guard(0, || {
-        // SAFETY: null is reported as an empty string by the helper.
-        let prefix = unsafe { cstr::ptr_to_str_or_empty(name_prefix) };
-        marsrs_appender::get_xlogger_instance(prefix) as c_longlong
+        // SAFETY: null is reported as an empty prefix by the helper.
+        let prefix = unsafe { cstr::ptr_to_string_lossy(name_prefix) };
+        marsrs_appender::get_xlogger_instance(&prefix) as c_longlong
     })
 }
 
 /// Releases the instance registered for `name_prefix` and closes its appender.
+/// Prefer [`mars_xlog_release_instance_of`] when the caller holds the handle;
+/// this legacy prefix-only entry point cannot distinguish a stale close from a
+/// newly opened instance with the same prefix.
+///
+/// The prefix is read the way the open read it, so an appender whose prefix is
+/// not UTF-8 is one this closes: read as text, the whole of such a prefix is
+/// `""`, and the appender — its mmap, its files and its writer — stayed open
+/// for as long as the process did.
 ///
 /// # Safety
 ///
@@ -343,9 +358,38 @@ pub unsafe extern "C" fn mars_xlog_get_instance(name_prefix: *const c_char) -> c
 #[no_mangle]
 pub unsafe extern "C" fn mars_xlog_release_instance(name_prefix: *const c_char) {
     let _ = guard(0, || {
-        // SAFETY: null is reported as an empty string by the helper.
-        let prefix = unsafe { cstr::ptr_to_str_or_empty(name_prefix) };
-        marsrs_appender::release_xlogger_instance(prefix);
+        // SAFETY: null is reported as an empty prefix by the helper.
+        let prefix = unsafe { cstr::ptr_to_string_lossy(name_prefix) };
+        marsrs_appender::release_xlogger_instance(&prefix);
+        0
+    });
+}
+
+/// Releases the instance registered for `name_prefix`, and only while it is
+/// still the one `instance` names.
+///
+/// [`mars_xlog_release_instance`] takes the prefix and not the handle, so a
+/// caller that asks the registry which handle the prefix answers and then
+/// releases is answered twice and not once: an `open` of the same prefix that
+/// lands between the two is handed a handle of its own, and the release closes
+/// *that* appender — the one the caller asked about is already gone and the one
+/// it just closed is another's. This is the question and the release under one
+/// lock, so nothing can land between them, which is also what makes a second
+/// `close` of one prefix a no-op however many `Xlog`s hold its handle.
+///
+/// # Safety
+///
+/// `name_prefix` must be null, or a NUL-terminated C string that stays alive for the duration of
+/// the call.
+#[no_mangle]
+pub unsafe extern "C" fn mars_xlog_release_instance_of(
+    name_prefix: *const c_char,
+    instance: c_longlong,
+) {
+    let _ = guard(0, || {
+        // SAFETY: null is reported as an empty prefix by the helper.
+        let prefix = unsafe { cstr::ptr_to_string_lossy(name_prefix) };
+        marsrs_appender::release_xlogger_instance_of(&prefix, instance as XloggerHandle);
         0
     });
 }
@@ -355,6 +399,10 @@ pub unsafe extern "C" fn mars_xlog_release_instance(name_prefix: *const c_char) 
 /// The instance's own level decides: a record below it is dropped. A handle
 /// that is not one writes nothing, `0` among them — no symbol of this ABI
 /// installs a process-wide appender for it to write through.
+///
+/// A null `log` is the C++'s own `NULL == _log`: the write happens, at
+/// `Fatal`, and says so — which is the one case a caller is told about a
+/// body it never gave. An empty one is not written at all.
 ///
 /// # Safety
 ///
@@ -372,15 +420,33 @@ pub unsafe extern "C" fn mars_xlog_write_instance(
 ) {
     let _ = guard(0, || {
         // SAFETY: every pointer is null-checked inside the helpers.
-        let (tag, filename, func_name, log) = unsafe {
+        let (tag, filename, func_name) = unsafe {
             (
                 cstr::ptr_to_str_or_empty(tag),
                 cstr::ptr_to_str_or_empty(filename),
                 cstr::ptr_to_str_or_empty(func_name),
-                cstr::ptr_to_str_or_empty(log),
             )
         };
-        if log.is_empty() {
+        // A body that is not UTF-8 keeps what it can of itself, the way a
+        // prefix does: `ptr_to_str_or_empty` answers `""` for the whole of
+        // one whose single byte fails to decode, and `""` is what the check
+        // below drops — a GBK message would have disappeared instead of
+        // being written. A null one is kept as `None`, which is the `NULL ==
+        // _log` the appender promotes. Borrowed while the body is UTF-8, so
+        // the write itself still costs no allocation.
+        let log = if log.is_null() {
+            None
+        } else {
+            // SAFETY: `log` is non-null and — per the caller's contract —
+            // points to a valid NUL-terminated string that outlives this call.
+            Some(match unsafe { cstr::ptr_to_str(log) } {
+                Some(log) => Cow::Borrowed(log),
+                None => Cow::Owned(unsafe { cstr::ptr_to_string_lossy(log) }),
+            })
+        };
+        // An empty body writes nothing. A null one is not empty but absent,
+        // and it is written: `NULL == _log` is the appender's own promotion.
+        if log.as_deref() == Some("") {
             return 0;
         }
         // A record's level is `Verbose..=Fatal` here as well: `kLevelNone` is
@@ -405,18 +471,23 @@ pub unsafe extern "C" fn mars_xlog_write_instance(
             timeval: state::now_timeval(),
             trace_log: 0,
         };
-        marsrs_appender::xlogger_write(instance as u64, Some(&info), Some(log));
+        marsrs_appender::xlogger_write(instance as u64, Some(&info), log.as_deref());
         0
     });
 }
 
 /// `mars::xlog::IsEnabledFor` — `1` when the instance would write this level.
 ///
-/// `level_ <= _level`, on the **raw** `TLogLevel` the caller passed: the C++
-/// casts it (`(TLogLevel)_level`, `Java2C_Xlog.cc`) and never checks it, so
-/// `MARS_LEVEL_NONE` (6) is a level a caller may ask *about* — and asking about
-/// it is not the same as asking about `Fatal`, which is what collapsing it onto
-/// `Fatal` (or answering nothing) used to do.
+/// `level_ <= _level`, on the **`TLogLevel`** the caller passed and not on a
+/// collapsed copy of it: the C++ casts it (`(TLogLevel)_level`,
+/// `Java2C_Xlog.cc`) and never checks it, so a level of `-1` is asked about as
+/// `-1` — below `Verbose`, and answered `0` — and not as the `Verbose` the
+/// *filter* would make of it.
+///
+/// A level no record can carry is answered `0`, whatever the filter is:
+/// `MARS_LEVEL_NONE` (6) is a filter that drops everything, and the write
+/// refuses it as a record's level, so `1` here would promise a caller a write
+/// that never happens.
 #[no_mangle]
 pub extern "C" fn mars_xlog_is_enabled_for(instance: c_longlong, level: c_int) -> c_int {
     guard(0, || c_int::from(enabled_for(instance as u64, level)))
@@ -426,6 +497,12 @@ pub extern "C" fn mars_xlog_is_enabled_for(instance: c_longlong, level: c_int) -
 /// (`xlogger_IsEnabledFor` for handle `0`, `XloggerCategory::IsEnabledFor` for
 /// an instance).
 fn enabled_for(handle: u64, level: c_int) -> bool {
+    // A record has no level outside `Verbose..=Fatal`, and the write refuses
+    // one that is outside it, so this does too: the question is whether the
+    // instance would write, and nothing is written at such a level.
+    let Some(_) = to_log_level(level) else {
+        return false;
+    };
     match marsrs_appender::get_level(handle) {
         Some(stored) => (stored as i32) <= level,
         // A handle that is not one: nothing is written through it, so nothing
@@ -517,7 +594,7 @@ pub extern "C" fn mars_xlog_set_max_alive_duration_instance(
     instance: c_longlong,
     seconds: c_longlong,
 ) {
-    guard((), || {
+    guard(false, || {
         set_max_alive_duration(instance as u64, seconds.max(0) as u64)
     });
 }
@@ -605,18 +682,160 @@ unsafe fn path_at(
 mod tests {
     use super::*;
 
+    use std::fs;
+    use std::mem::offset_of;
+    use std::path::Path;
+
+    /// The header these tests are read against: the one a C caller includes,
+    /// and not a copy of it, which is what made the two below assert a number
+    /// the header had already stopped agreeing with.
+    fn header() -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("include/mars_xlog.h");
+        fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+    }
+
+    /// The value the header gives `variant`, of the enum it ends with `ty`.
+    ///
+    /// The block is found by the `} ty;` that closes it and not by the variant
+    /// alone, so a variant named after another one's beginning —
+    /// `MarsLevelVerbose` in `MarsLevelVerboseX` — is not taken for it.
+    fn header_enum_value(header: &str, ty: &str, variant: &str) -> c_int {
+        let end = header
+            .find(&format!("}} {ty};"))
+            .unwrap_or_else(|| panic!("include/mars_xlog.h declares no `{ty}`"));
+        let start = header[..end]
+            .rfind("typedef enum")
+            .unwrap_or_else(|| panic!("`{ty}` in include/mars_xlog.h is not a `typedef enum`"));
+        let block = &header[start..end];
+        let at = block
+            .find(&format!("{variant} ="))
+            .unwrap_or_else(|| panic!("`{ty}` in include/mars_xlog.h has no `{variant}`"));
+        let digits: String = block[at + variant.len() + 1..]
+            .trim_start()
+            .trim_start_matches('=')
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '-')
+            .collect();
+        assert!(
+            !digits.is_empty(),
+            "`{ty}`'s `{variant}` in include/mars_xlog.h has no value"
+        );
+        digits
+            .parse()
+            .unwrap_or_else(|e| panic!("`{ty}`'s `{variant}` is not an int: {digits} ({e})"))
+    }
+
+    /// The fields of `MarsXLogConfig` in the order the header declares them,
+    /// comments and all: a field whose comment names another field with a `;`
+    /// in it — `int mode; /* MarsAppenderMode; ... */` — is one a naive parse
+    /// read as two.
+    fn header_config_fields(header: &str) -> Vec<&str> {
+        let end = header
+            .find("} MarsXLogConfig;")
+            .unwrap_or_else(|| panic!("include/mars_xlog.h declares no `MarsXLogConfig`"));
+        let start = header[..end]
+            .rfind("typedef struct")
+            .unwrap_or_else(|| panic!("`MarsXLogConfig` is not a `typedef struct`"));
+        let block = &header[start + "typedef struct".len()..end];
+        let mut fields = Vec::new();
+        for line in block.lines() {
+            // The comment is what carries the `;` that is not a field's.
+            let code = match line.find("/*") {
+                Some(at) => &line[..at],
+                None => line,
+            };
+            let code = code.trim();
+            let Some(name) = code.strip_suffix(';') else {
+                continue;
+            };
+            // `const char* name_prefix`, and the type in front of it.
+            let name = name.rsplit([' ', '*']).next().unwrap_or(name);
+            assert!(!name.is_empty(), "a field of MarsXLogConfig has no name");
+            fields.push(name);
+        }
+        assert!(
+            !fields.is_empty(),
+            "no field of MarsXLogConfig found in include/mars_xlog.h"
+        );
+        fields
+    }
+
+    /// Every variant of the three enums is the integer the header spells for
+    /// it, which is the only place a C caller reads them from: an enum here
+    /// and a `typedef enum` there are the same numbers or a C caller asks for
+    /// `Sync` and gets `Async`.
     #[test]
     fn abi_enums_match_the_c_header() {
-        assert_eq!(MarsAppenderMode::Async as c_int, 0);
-        assert_eq!(MarsAppenderMode::Sync as c_int, 1);
-        assert_eq!(MarsCompressMode::Zlib as c_int, 0);
-        assert_eq!(MarsCompressMode::Zstd as c_int, 1);
-        assert_eq!(MarsLogLevel::Verbose as c_int, 0);
-        assert_eq!(MarsLogLevel::Debug as c_int, 1);
-        assert_eq!(MarsLogLevel::Info as c_int, 2);
-        assert_eq!(MarsLogLevel::Warn as c_int, 3);
-        assert_eq!(MarsLogLevel::Error as c_int, 4);
-        assert_eq!(MarsLogLevel::Fatal as c_int, 5);
+        let header = header();
+        for (ty, variant, value) in [
+            (
+                "MarsAppenderMode",
+                "MarsAppenderAsync",
+                MarsAppenderMode::Async as c_int,
+            ),
+            (
+                "MarsAppenderMode",
+                "MarsAppenderSync",
+                MarsAppenderMode::Sync as c_int,
+            ),
+            (
+                "MarsCompressMode",
+                "MarsCompressZlib",
+                MarsCompressMode::Zlib as c_int,
+            ),
+            (
+                "MarsCompressMode",
+                "MarsCompressZstd",
+                MarsCompressMode::Zstd as c_int,
+            ),
+            (
+                "MarsLogLevel",
+                "MarsLevelVerbose",
+                MarsLogLevel::Verbose as c_int,
+            ),
+            (
+                "MarsLogLevel",
+                "MarsLevelDebug",
+                MarsLogLevel::Debug as c_int,
+            ),
+            ("MarsLogLevel", "MarsLevelInfo", MarsLogLevel::Info as c_int),
+            ("MarsLogLevel", "MarsLevelWarn", MarsLogLevel::Warn as c_int),
+            (
+                "MarsLogLevel",
+                "MarsLevelError",
+                MarsLogLevel::Error as c_int,
+            ),
+            (
+                "MarsLogLevel",
+                "MarsLevelFatal",
+                MarsLogLevel::Fatal as c_int,
+            ),
+        ] {
+            assert_eq!(
+                header_enum_value(&header, ty, variant),
+                value as c_int,
+                "include/mars_xlog.h out of sync: `{ty}`'s `{variant}`"
+            );
+        }
+        // `MARS_LEVEL_NONE` is a `#define` beside the enum and not a variant of
+        // it, because no record carries it: it is a filter, and only a filter.
+        assert!(
+            header.contains("#define MARS_LEVEL_NONE 6"),
+            "include/mars_xlog.h out of sync: `MARS_LEVEL_NONE` is 6"
+        );
+        let none: c_int = header
+            .lines()
+            .find_map(|line| line.strip_prefix("#define MARS_LEVEL_NONE "))
+            .expect("include/mars_xlog.h has no `MARS_LEVEL_NONE`")
+            .trim()
+            .parse()
+            .expect("`MARS_LEVEL_NONE` in include/mars_xlog.h is not an int");
+        assert_eq!(
+            to_log_level(none),
+            None,
+            "`MARS_LEVEL_NONE` must not produce a record"
+        );
     }
 
     #[test]
@@ -646,25 +865,68 @@ mod tests {
         assert_eq!(opt_string("tag").as_deref(), Some("tag"));
     }
 
+    /// The fields of `MarsXLogConfig` are the header's, in the header's order:
+    /// an aggregate initialiser on the C side — `{ .mode = 1, .log_dir = dir }`
+    /// — names them by position, so a Rust field that moved is a config a C
+    /// caller reads as one it never wrote.
+    ///
+    /// The offsets are the compiler's, and not numbers written down beside the
+    /// struct: it is the order they are in that is asserted, and an order
+    /// written twice is one that is checked against itself.
     #[test]
     fn config_layout_is_c_compatible() {
-        // The C header's field order (`mode`, `log_dir`, `name_prefix`,
-        // `pub_key`, `compress_mode`, `compress_level`, `cache_dir`,
-        // `cache_days`) is what `mars::xlog::XLogConfig` uses too, so a C
-        // caller's aggregate initialiser lands on the right fields.
-        let cfg = MarsXLogConfig {
-            mode: 1,
-            log_dir: std::ptr::null(),
-            name_prefix: std::ptr::null(),
-            pub_key: std::ptr::null(),
-            compress_mode: 0,
-            compress_level: 6,
-            cache_dir: std::ptr::null(),
-            cache_days: 3,
+        let header = header();
+        let fields = header_config_fields(&header);
+        let offsets: Vec<(&str, usize)> = vec![
+            ("mode", offset_of!(MarsXLogConfig, mode)),
+            ("log_dir", offset_of!(MarsXLogConfig, log_dir)),
+            ("name_prefix", offset_of!(MarsXLogConfig, name_prefix)),
+            ("pub_key", offset_of!(MarsXLogConfig, pub_key)),
+            ("compress_mode", offset_of!(MarsXLogConfig, compress_mode)),
+            ("compress_level", offset_of!(MarsXLogConfig, compress_level)),
+            ("cache_dir", offset_of!(MarsXLogConfig, cache_dir)),
+            ("cache_days", offset_of!(MarsXLogConfig, cache_days)),
+        ];
+        let mine: Vec<&str> = {
+            let mut mine: Vec<(&str, usize)> = offsets.clone();
+            mine.sort_by_key(|(_, offset)| *offset);
+            mine.into_iter().map(|(name, _)| name).collect()
         };
-        assert_eq!(cfg.mode, MarsAppenderMode::Sync as c_int);
-        assert_eq!(cfg.compress_mode, MarsCompressMode::Zlib as c_int);
-        assert_eq!(cfg.cache_days, 3);
+        assert_eq!(
+            mine, fields,
+            "include/mars_xlog.h and src/abi.rs lay MarsXLogConfig out differently"
+        );
+        // One field, one offset: a struct the compiler padded into the same
+        // place twice is one the C side reads as a shorter config.
+        let unique: std::collections::BTreeSet<usize> =
+            offsets.iter().map(|(_, offset)| *offset).collect();
+        assert_eq!(
+            unique.len(),
+            offsets.len(),
+            "two fields of MarsXLogConfig are at the same offset"
+        );
+    }
+
+    #[test]
+    fn a_prefix_that_is_not_utf8_stays_a_prefix() {
+        let log_dir = c"/tmp/xlog";
+        let name_prefix = c"app\xffname";
+        let cfg = MarsXLogConfig {
+            mode: MarsAppenderMode::Async as c_int,
+            log_dir: log_dir.as_ptr(),
+            name_prefix: name_prefix.as_ptr(),
+            pub_key: std::ptr::null(),
+            compress_mode: MarsCompressMode::Zlib as c_int,
+            compress_level: 0,
+            cache_dir: std::ptr::null(),
+            cache_days: 0,
+        };
+        // SAFETY: every pointer of `cfg` is null or a NUL-terminated string
+        // that outlives this call.
+        let config = unsafe { to_xlog_config(&cfg) }.unwrap();
+        // Not `""`: the appender refuses an empty prefix, so a name that
+        // failed to decode would have opened nothing at all.
+        assert_eq!(config.nameprefix, "app\u{fffd}name");
     }
 
     #[test]

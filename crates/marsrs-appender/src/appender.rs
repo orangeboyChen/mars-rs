@@ -58,7 +58,7 @@
 //!   to rather than trusting a lock that locks nobody.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
@@ -72,8 +72,9 @@ use marsrs_core::{local_time, AutoBuffer, PtrBuffer};
 use crate::config::{AppenderMode, LogLevel, XLogConfig, XLoggerInfo};
 use crate::console::console_log;
 use crate::file_util::{
-    append_file, del_timeout_file, format_local_timestamp, make_log_file_name, monotonic_millis,
-    move_old_files, now_secs, LOG_EXT, MMAP_EXT, SECONDS_PER_DAY,
+    append_file, create_private_dir, del_timeout_file, format_local_timestamp, is_name_prefix,
+    make_log_file_name, monotonic_millis, move_old_files, now_secs, private_file, LOG_EXT,
+    MMAP_EXT, SECONDS_PER_DAY,
 };
 use crate::formater::log_formater;
 use crate::sys;
@@ -305,14 +306,62 @@ fn map_region(file: &File) -> std::io::Result<memmap2::MmapMut> {
 ///
 /// Only needed when there is no mapping: with one, `LogBuffer::flush` and
 /// `close()` clear the bytes in place, and the file follows the mapping.
-fn clear_cache_file(path: &Path) {
-    // Truncate to zero and *keep* it at zero: `set_len` back to the block size
-    // would build the same sparse hole that the pre-allocation below exists to
-    // prevent, and a zero-length file re-arms that pre-allocation on the next
-    // open.
-    if let Ok(mut file) = OpenOptions::new().write(true).truncate(true).open(path) {
-        let _ = file.flush();
-    }
+/// Empties a cache file, through the handle that owns it and not through a
+/// second open of its path.
+///
+/// A slot is held under an exclusive lock for as long as the appender lives, and
+/// on Windows that lock is mandatory: a second open of the path is refused a
+/// share of the very bytes it locked, so a clear made through one is a clear
+/// that never happens — and the block it was meant to drop stays in the file
+/// for the next start to append a second time, once per start, forever.
+///
+/// Truncated to zero and *kept* at zero: `set_len` back to the block size would
+/// build the same sparse hole that the pre-allocation below exists to prevent,
+/// and a zero-length file re-arms that pre-allocation on the next open.
+fn clear_cache_file(file: &mut File) {
+    let _ = file.set_len(0);
+    let _ = file.flush();
+}
+
+/// Whether the whole region reads as zeros: a hole `set_len` made, with no
+/// record stored through the mapping yet.
+///
+/// `st_blocks` cannot answer this, though it looks like it should. It counts
+/// what the disk has given the file, and a file written the only way this one
+/// is written to — through a mapping — is not promised blocks before
+/// writeback: a cache file holding a crashed run's records measures as sparse
+/// on a filesystem that allocates late (ext4's delayed allocation) or
+/// compresses (f2fs, btrfs), and accounts nothing at all on one that does not
+/// implement it (FUSE, a card's sdcardfs). Taking that at its word and
+/// pre-allocating over such a file writes a block of zeros over records no
+/// log holds a copy of, and the "begin of mmap" recovery never fires. What is
+/// asked instead is the one thing a hole cannot be: a byte that is not zero.
+///
+/// A read that fails is answered as `false`: a file this process cannot read
+/// is one the mapping is not going to take either, and zeroing bytes nobody
+/// could inspect first is the wrong way round to be careful.
+fn is_unwritten(file: &mut File) -> bool {
+    let mut buffer = vec![0u8; BUFFER_BLOCK_LENGTH];
+    file.seek(SeekFrom::Start(0))
+        .and_then(|_| file.read_exact(&mut buffer))
+        .map(|()| buffer.iter().all(|byte| *byte == 0))
+        .unwrap_or(false)
+}
+
+/// Whether the block of zeros has to be written over a file that measures
+/// `entry_len`, whose bytes are what `unwritten` asks.
+///
+/// A file shorter than a block has never been written through, so its length
+/// alone says it; one that measures the block is asked what its bytes are.
+/// `unwritten` is asked lazily, because reading the file is what answers it
+/// and a file the length has already answered for is not read at all.
+///
+/// What the caller does with a `true` is a write of zeros over a file that
+/// reads as zeros, which is a file no caller can tell from one that was left
+/// alone — so the decision is a function of its own: it is the part of the
+/// two that a test can ask about.
+fn needs_preallocation(entry_len: u64, unwritten: impl FnOnce() -> bool) -> bool {
+    entry_len < BUFFER_BLOCK_LENGTH as u64 || unwritten()
 }
 
 /// Opens (creating if needed) and maps the claimed cache file; falls back to a
@@ -327,12 +376,29 @@ fn open_region(file: &mut File, path: &Path) -> (Region, bool) {
     // turns that store into SIGBUS, killing the host. `mars/comm/mmap_util.cc`
     // pre-allocates by writing zeros and falls back to the heap path if that
     // write fails; do the same.
-    let needs_preallocation = file
-        .metadata()
-        .map(|meta| meta.len() < BUFFER_BLOCK_LENGTH as u64)
-        .unwrap_or(true);
+    // A file shorter than a block has never been written to, and length alone
+    // says so. A file that measures a block is asked what its bytes are: a
+    // build before this one — and the C++ the port sits beside during a
+    // migration — made this file `BUFFER_BLOCK_LENGTH` long with `set_len` and
+    // wrote nothing into it, and that is a hole of exactly the length a later
+    // open would take for "already allocated". A hole reads as zeros, so a
+    // file that is all zeros is pre-allocated over whatever it measures, and
+    // a file with a single byte in it that is not is left as it is: it holds
+    // records, and the bytes of a record are the one thing this may not write
+    // over. See [`is_unwritten`] for why the block count is not what is asked.
+    //
+    // `entry_len` is also the length a failed pre-allocation puts the file back
+    // to.
+    let entry_len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    let needs_preallocation = needs_preallocation(entry_len, || is_unwritten(file));
     if file.set_len(BUFFER_BLOCK_LENGTH as u64).is_err() {
-        return (Region::heap(), false);
+        // Nothing can be written through the file, but what it holds is still
+        // the only copy there is of a run that did not finish, so the heap
+        // region below reads it: those records reach the log on the next
+        // flush, and only then does `close()` empty the file. An empty heap
+        // region here would let `close()` truncate the file over records no
+        // log holds.
+        return (Region::heap_with_cache(path), false);
     }
     if needs_preallocation {
         let ok = file
@@ -341,7 +407,16 @@ fn open_region(file: &mut File, path: &Path) -> (Region, bool) {
             .and_then(|()| file.flush())
             .is_ok();
         if !ok {
-            return (Region::heap(), false);
+            // A failed pre-allocation is put back the way the file was found:
+            // what it leaves behind is a length the file does not hold, and
+            // the length of a cache file is what a reader of the cache
+            // directory — the heap fallback below, a decoder, or the C++
+            // still linked into the same app — takes for how much of it is
+            // real. A `set_len` that fails too is ignored: the region below
+            // reads what the file still holds, and that is bounded by the
+            // length either way.
+            let _ = file.set_len(entry_len);
+            return (Region::heap_with_cache(path), false);
         }
     }
 
@@ -373,8 +448,9 @@ pub(crate) fn cache_dir(config: &XLogConfig) -> &Path {
 /// directory's (see [`claim_cache_slot`]).
 ///
 /// Neither is inside anything the sweep or the log-file discovery look at:
-/// `del_timeout_file` only removes `.xlog` files and `YYYYMMDD` directories,
-/// and [`crate::file_util::get_file_paths_from_timeval`] only matches `.xlog`.
+/// `del_timeout_file` only removes `.xlog` files (no directory at all — see
+/// the comment at the end of its loop), and
+/// [`crate::file_util::get_file_paths_from_timeval`] only matches `.xlog`.
 pub(crate) fn dir_lock_path(dir: &Path, prefix: &str) -> PathBuf {
     dir.join(format!("{prefix}.lock"))
 }
@@ -422,10 +498,11 @@ pub(crate) const MAX_CACHE_SLOTS: usize = 8;
 /// * `O_EXCL` decides who owns a slot — atomic across processes and across
 ///   copies of this crate in one process, which is the case the C++ cannot
 ///   tell apart either;
-/// * the lock held on it for the appender's lifetime is what a later
-///   the recovery path that drains a dead process's cache reads to tell a slot a *dead* process
-///   left behind from one a live writer is still using. Nothing else can: a
-///   process that was killed leaves exactly the file a running one has.
+/// * the lock held on it for the appender's lifetime is what the recovery
+///   path — the one that drains a dead process's cache — reads to tell a
+///   slot a *dead* process left behind from one a live writer is still
+///   using. Nothing else can: a process that was killed leaves exactly the
+///   file a running one has.
 struct CacheSlot {
     path: PathBuf,
     /// Held open for as long as the appender lives. Dropping it — including
@@ -448,13 +525,15 @@ struct CacheSlot {
 /// cache directory does not — or the other way round — is still protected.
 fn open_dir_lock(path: Option<&Path>) -> Option<File> {
     let path = path?;
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
-        .ok()
+    private_file(
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false),
+    )
+    .open(path)
+    .ok()
 }
 
 /// Claims the cache file no other writer holds, or `None` when every slot is
@@ -467,22 +546,21 @@ fn claim_cache_slot(dir: &Path, prefix: &str, locking: bool) -> Option<CacheSlot
         // only safe thing left is the C++'s single fixed name, shared exactly
         // as the C++ shares it.
         let path = cache_slot_path(dir, prefix, 0);
-        return File::options()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)
-            .ok()
-            .map(|file| CacheSlot { path, file });
+        return private_file(
+            File::options()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false),
+        )
+        .open(&path)
+        .ok()
+        .map(|file| CacheSlot { path, file });
     }
 
     for slot in 0..MAX_CACHE_SLOTS {
         let path = cache_slot_path(dir, prefix, slot);
-        let file = match File::options()
-            .read(true)
-            .write(true)
-            .create_new(true)
+        let file = match private_file(File::options().read(true).write(true).create_new(true))
             .open(&path)
         {
             // Whoever creates a slot owns it.
@@ -584,9 +662,7 @@ struct AppenderInner {
     /// refused a second time is given up on. The C++'s `FILE*` cannot hold a
     /// refused batch at all.
     pending_refused: bool,
-    /// `openfiletime_`
-    open_file_time: i64,
-    /// The local day [`Self::open_file_time`] falls on — the `filetm.tm_year ==
+    /// The local day the open file was opened on — the `filetm.tm_year ==
     /// tcur.tm_year && ...` of `XloggerAppender::__OpenLogFile`.
     ///
     /// Stamped once, when the file is opened, so that the per-record
@@ -669,6 +745,12 @@ impl AppenderInner {
     }
 
     /// The cache file this appender owns, if it claimed one.
+    ///
+    /// The slot an appender claimed is its own business for as long as it
+    /// lives, and nothing in the port reads the path back out of one, so this
+    /// is asked by the tests that prove two writers get two slots and nobody
+    /// else.
+    #[cfg(test)]
     fn cache_path(&self) -> Option<PathBuf> {
         self.cache.as_ref().map(|slot| slot.path.clone())
     }
@@ -844,10 +926,23 @@ impl AppenderInner {
         // fall through to the flush threshold: returning early would leave a
         // full region until the next fatal record or the 15 minute background
         // wake-up.
-        let _written = with_record(len, |data| {
+        let written = with_record(len, |data| {
             let region = self.region.as_mut_slice();
             self.buff.write(region, data)
         });
+        // ... and a record the region had no room for is not lost either,
+        // which is where the port leaves the C++: what filled the block is
+        // records that are in no file yet, so draining it writes them *and*
+        // makes room, and the record that did not fit opens the block that
+        // comes after. One attempt, and only when the drain reached a file —
+        // one that did not has left the region as it was, and a record that
+        // cannot be written is the only thing left to do with it.
+        if !written && self.drain_buffer(false) {
+            let _retried = with_record(len, |data| {
+                let region = self.region.as_mut_slice();
+                self.buff.write(region, data)
+            });
+        }
 
         if self.buff.len() >= BUFFER_BLOCK_LENGTH / 3 || level_fatal {
             self.notify();
@@ -949,9 +1044,10 @@ impl AppenderInner {
         // the buffer for a file that is not there.
         let mut write_success = self.write_file_record(data);
         if open_success && !self.is_sync() {
-            write_success |= self.closed_after_a_failed_write();
+            // The handle is given up, and the batch behind it is kept: see
+            // [`Self::closed_before_the_cache_directory`].
+            self.closed_before_the_cache_directory();
         }
-
         if !write_success {
             if open_success && self.is_sync() {
                 self.close_log_file();
@@ -1059,7 +1155,6 @@ impl AppenderInner {
             self.close_log_file();
         }
 
-        self.open_file_time = now_time;
         self.open_file_day = local_time(now_time).date;
         let logfilepath = match dir {
             OpenDir::Log => self.log_file_path(now_time),
@@ -1069,10 +1164,7 @@ impl AppenderInner {
         if wall_time < self.last_time {
             // The clock jumped backwards: keep using the previous file.
             let last_file_path = self.last_file_path.clone();
-            match OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .append(true)
+            match private_file(OpenOptions::new().create(true).truncate(false).append(true))
                 .open(&last_file_path)
             {
                 Ok(file) => {
@@ -1091,23 +1183,25 @@ impl AppenderInner {
                 }
             }
         } else {
-            let file = match OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .append(true)
-                .open(&logfilepath)
-            {
-                Ok(file) => file,
-                Err(err) => {
-                    self.write_tips2console(&format!(
-                        "open file error:{} {}, path:{}",
-                        err.raw_os_error().unwrap_or(0),
-                        err,
-                        logfilepath.display()
-                    ));
-                    return false;
-                }
-            };
+            // The day's log file, and the cache-directory copy of it: see
+            // [`private_file`] — a log holds everything an app wrote since it
+            // was installed, and `std` would create it readable by every uid
+            // on the device.
+            let file =
+                match private_file(OpenOptions::new().create(true).truncate(false).append(true))
+                    .open(&logfilepath)
+                {
+                    Ok(file) => file,
+                    Err(err) => {
+                        self.write_tips2console(&format!(
+                            "open file error:{} {}, path:{}",
+                            err.raw_os_error().unwrap_or(0),
+                            err,
+                            logfilepath.display()
+                        ));
+                        return false;
+                    }
+                };
             self.flushed_len = file.metadata().map_or(0, |meta| meta.len());
             self.log_file = Some(file);
 
@@ -1161,8 +1255,23 @@ impl AppenderInner {
         held && self.close_log_file()
     }
 
+    /// The close of a file the log directory would not write to, for the branch
+    /// that hands the batch to the cache directory next: the handle is dropped
+    /// and the batch is left in [`Self::pending`].
+    ///
+    /// [`Self::close_log_file`] is wrong for that branch, because it flushes
+    /// first — into the file that has just refused the batch, and as its one
+    /// remaining attempt: [`Self::pending_refused`] gives a batch up after the
+    /// second failure, so a second failure here clears `pending`, and the
+    /// fallback that opens the cache directory then finds no batch to write
+    /// and answers `false` for a record that has reached no file at all. Not
+    /// flushing leaves the attempt where it belongs — with the cache file the
+    /// batch is about to be written to — and a batch still gets exactly two.
+    fn closed_before_the_cache_directory(&mut self) {
+        self.forget_log_file();
+    }
+
     fn forget_log_file(&mut self) {
-        self.open_file_time = 0;
         self.open_file_day = NO_DAY;
         self.log_file = None;
         self.flushed_len = 0;
@@ -1267,7 +1376,11 @@ impl AppenderInner {
         // Rotation: the C++ only re-computes the split index when the file is
         // (re)opened, so a long-lived sync-mode file never splits. The port
         // closes the file as soon as it grows past the limit, which makes both
-        // modes behave the same.
+        // modes behave the same. Two places ask, because one number cannot:
+        // this one is this appender's own count of the bytes, which is the
+        // whole file for one writer and a floor of it for two, and
+        // [`Self::flush_pending_locked`] asks the file itself as each batch
+        // goes out.
         let len = self.flushed_len + self.pending.len() as u64;
         if self.max_file_size > 0 && len > self.max_file_size {
             // The answer is the flush's and not `true`: a rotation is a close,
@@ -1276,7 +1389,6 @@ impl AppenderInner {
             // and the batch in it is gone — while the record's writer was told
             // it was written.
             let closed = self.close_log_file();
-            self.open_file_time = 0;
             self.open_file_day = NO_DAY;
             return closed;
         }
@@ -1357,13 +1469,25 @@ impl Appender {
         if config.logdir.as_os_str().is_empty() {
             return Err(AppenderError("Appender::open: logdir is empty".to_owned()));
         }
+        // The prefix is put into a path and not only into a name: see
+        // [`crate::file_util::is_name_prefix`]. What is refused here is a
+        // prefix that would write, lock or map outside the two directories
+        // above, and not one that reads badly.
+        if !is_name_prefix(&config.nameprefix) {
+            return Err(AppenderError(format!(
+                "Appender::open: nameprefix `{}` is not one file name: a prefix goes into the \
+                 log file's, the lock's and the cache file's name, so a separator or an \
+                 absolute path in it writes outside the log directory",
+                config.nameprefix
+            )));
+        }
 
         let cachedir = config.cachedir.clone();
         if let Some(dir) = &cachedir {
-            fs::create_dir_all(dir)
+            create_private_dir(dir)
                 .map_err(|e| AppenderError(format!("create cache dir {}: {e}", dir.display())))?;
         }
-        fs::create_dir_all(&config.logdir).map_err(|e| {
+        create_private_dir(&config.logdir).map_err(|e| {
             AppenderError(format!("create log dir {}: {e}", config.logdir.display()))
         })?;
 
@@ -1395,10 +1519,10 @@ impl Appender {
                 sys::lock_exclusive(file);
             }
             if let Some(cache) = &cachedir {
-                del_timeout_file(cache, alive_time);
+                del_timeout_file(cache, alive_time, &config.nameprefix);
                 move_old_files(cache, &config.logdir, &config.nameprefix, config.cache_days);
             }
-            del_timeout_file(&config.logdir, alive_time);
+            del_timeout_file(&config.logdir, alive_time, &config.nameprefix);
             if let Some(file) = dir_lock.as_ref() {
                 sys::unlock(file);
             }
@@ -1432,7 +1556,6 @@ impl Appender {
             pending: Vec::with_capacity(PENDING_CAPACITY),
             flushed_len: 0,
             pending_refused: false,
-            open_file_time: 0,
             open_file_day: NO_DAY,
             last_time: 0,
             write_sec: None,
@@ -1476,9 +1599,7 @@ impl Appender {
                 guard.config.mode = AppenderMode::Sync;
                 let reached = guard.drain_leftover(leftover.as_slice());
                 drop(guard);
-                if reached {
-                    appender.clear_cache_file_if_heap();
-                }
+                appender.clear_cache_file_when_drained(reached);
                 return Err(err);
             }
         }
@@ -1506,10 +1627,18 @@ impl Appender {
             }
             // A slot with no mapping keeps its bytes, so once the records above
             // are in a log the file has to be emptied or the next start appends
-            // them a second time — once per start, forever. (With a mapping,
-            // `buffer_drained` zeroes it in place.) Clearing it while the write
-            // has not happened is what would lose them.
-            appender.clear_cache_file_if_heap();
+            // them a second time. (With a mapping, `buffer_drained` zeroes it in
+            // place.) A block that reached *no* log is the other case, and the
+            // file is then the only copy of it there is: what carries the
+            // records from here is `AppenderInner::pending`, which is memory,
+            // and a second refusal gives a batch up for good.
+            appender.clear_cache_file_when_drained(reached);
+        }
+
+        // What a configured `pub_key` does *not* buy, said in the file before
+        // anything else is written to it: see [`Appender::crypt_caveat`].
+        if let Some(caveat) = appender.crypt_caveat() {
+            appender.write_tips2file(caveat);
         }
 
         // `__DATE__` / `__TIME__` of the C++ banner: which build produced this
@@ -1601,6 +1730,24 @@ impl Appender {
 
         *self.thread_lock() = Some(handle);
         Ok(())
+    }
+
+    /// The writer thread, stopped and joined: the mode that asked for it is
+    /// over — see [`Self::set_mode`] — or the appender is closing.
+    ///
+    /// `Msg::Close` is a drain and an end of the loop and not just an end, so a
+    /// block still in the cache region reaches the file before the thread does.
+    fn stop_thread(&self) {
+        // Not under the lock, for the reason [`Self::close_sender`] gives: the
+        // channel holds one message, so this waits for the thread to take it,
+        // and the thread needs the lock to drain.
+        let tx = self.lock().tx.take();
+        if let Some(tx) = tx {
+            let _ = tx.send(Msg::Close);
+        }
+        if let Some(handle) = self.thread_lock().take() {
+            let _ = handle.join();
+        }
     }
 
     /// `thread_async_`.
@@ -1846,7 +1993,22 @@ impl Appender {
         // what `drain_buffer` did on its way through. What is *not* done is
         // giving the region up when the write failed: those records are still
         // only in the cache file, and the next start recovers them from it.
-        if drained {
+        self.clear_cache_file_when_drained(drained);
+    }
+
+    /// Empties this appender's own cache file when the block it held reached a
+    /// log — and leaves it alone when it did not.
+    ///
+    /// The file is emptied because a slot with no mapping keeps its bytes, so a
+    /// block that is already in a log would be appended again at the next
+    /// start. It is *not* emptied for a block that reached no log, because then
+    /// it is the only copy of that block there is: the batch is in
+    /// [`AppenderInner::pending`] until a later flush writes it, and a batch
+    /// [`AppenderInner::refuse_pending`] gives up is a batch no start can
+    /// recover. A duplicate is what a crash between the two costs; an empty
+    /// file is what it costs when the block is dropped with the batch.
+    fn clear_cache_file_when_drained(&self, reached: bool) {
+        if reached {
             self.clear_cache_file_if_heap();
         }
     }
@@ -1862,31 +2024,99 @@ impl Appender {
     /// Only for the writer that owns the file: a cache file left behind by
     /// another process is not this appender's to clear.
     fn clear_cache_file_if_heap(&self) {
-        let (use_mmap, path) = {
-            let guard = self.lock();
-            (guard.use_mmap, guard.cache_path())
-        };
-        if !use_mmap {
-            if let Some(path) = path {
-                clear_cache_file(&path);
-            }
+        let mut guard = self.lock();
+        if guard.use_mmap {
+            return;
         }
+        // Only for the writer that owns the file: a cache file left behind by
+        // another process is not this appender's to clear — and the handle it
+        // is cleared through is the one that owns it, which is also the one
+        // holding the lock.
+        if let Some(slot) = guard.cache.as_mut() {
+            clear_cache_file(&mut slot.file);
+        }
+    }
+
+    /// What a configured [`XLogConfig::pub_key`] does **not** give the caller:
+    /// the line the log says it in, or `None` when there is nothing to say.
+    ///
+    /// Two ways a `pub_key` encrypts nothing, and until now neither was said
+    /// anywhere:
+    ///
+    /// * `LogCrypt::new` leaves `is_crypt` false for a key that is not the 128
+    ///   hex characters of a valid secp256k1 point — it early-returns, the way
+    ///   the C++ does — and every record of the log then goes out with the
+    ///   NOCRYPT magics and a plaintext body;
+    /// * `LogCrypt::CryptSyncLog` stores a sync record's body in the clear
+    ///   whatever the key is: the C++ has the TEA loop commented out, the port
+    ///   kept that, and the record still carries the "crypt" magic.
+    ///
+    /// Both are written into the file and not answered to the caller, which is
+    /// what `xlog encode` does for the first (`--pubkey` that is not a key is
+    /// an error there): an app on a device cannot be rebuilt the moment its
+    /// key turns out to be bad, and an appender that refused to open would
+    /// cost it every record of the run, encryption or none. What nobody may
+    /// believe is that the log is encrypted when it is not, and the file is
+    /// where whoever reads that log — or ships it off the device — looks
+    /// first.
+    fn crypt_caveat(&self) -> Option<&'static str> {
+        let guard = self.lock();
+        if guard.config.pub_key.is_empty() {
+            return None;
+        }
+        if !guard.buff.is_crypt() {
+            return Some(
+                "[F][ the configured pub_key is not the 128 hex characters of a secp256k1 \
+                 public key, so no record of this log is encrypted\n",
+            );
+        }
+        if guard.config.mode == AppenderMode::Sync {
+            return Some(
+                "[F][ appender mode is sync: `LogCrypt::CryptSyncLog` stores a record's body \
+                 in the clear, so the configured pub_key encrypts nothing in this mode\n",
+            );
+        }
+        None
     }
 
     /// `XloggerAppender::SetMode`.
     pub(crate) fn set_mode(&self, mode: AppenderMode) -> Result<(), crate::config::AppenderError> {
-        let previous = self.lock().config.mode;
-        self.lock().config.mode = mode;
+        // One acquisition for the read-modify-write: two are a window in which
+        // another `set_mode` — or an `open` of the same prefix — writes the
+        // mode this one then overwrites, and the `previous` this one would roll
+        // back to is the mode *that* one chose.
+        let previous = {
+            let mut guard = self.lock();
+            let previous = guard.config.mode;
+            guard.config.mode = mode;
+            previous
+        };
         if mode == AppenderMode::Async {
             if let Err(err) = self.start_thread() {
                 // The thread could not be created: leaving the appender in
                 // async mode would buffer every record into a channel whose
                 // receiver is dropped, and neither `flush` nor `close` could
                 // recover them. Roll back to the mode that still works.
-                self.lock().config.mode = previous;
-                self.lock().tx = None;
+                let mut guard = self.lock();
+                guard.config.mode = previous;
+                guard.tx = None;
                 return Err(err);
             }
+        } else {
+            // Sync, so the thread an async mode started is one nothing writes
+            // through any more: every record from here on is handed to the file
+            // by the thread that logged it. Left running it would wake every
+            // quarter of an hour to drain a region nobody fills, and one of
+            // them would stay per mode switch an app made. `Msg::Close` drains
+            // the block that is still in the region before the thread ends, so
+            // the switch costs no record.
+            self.stop_thread();
+        }
+        // A mode the configured `pub_key` does nothing in is worth a line in
+        // the log as much as an open in that mode is: see
+        // [`Appender::crypt_caveat`].
+        if let Some(caveat) = self.crypt_caveat() {
+            self.write_tips2file(caveat);
         }
         self.lock().notify();
         Ok(())
@@ -1906,10 +2136,38 @@ impl Appender {
     }
 
     /// `XloggerAppender::SetMaxAliveDuration`.
-    pub(crate) fn set_max_alive_duration(&self, secs: u64) {
-        if secs as i64 >= MIN_LOG_ALIVE_TIME {
-            self.lock().max_alive_time = secs as i64;
+    ///
+    /// What a limit does is decide which files the sweep takes, and the sweep
+    /// is one `open` runs and not one a thread of the port's own runs later —
+    /// see the comment on it. So a limit set after the appender is open is
+    /// applied here and now: the files the new one already excludes are the
+    /// ones that go, under the same directory lock `open` prunes under. A
+    /// setter that only moved a field would be a setting nobody reads.
+    ///
+    /// A value below [`MIN_LOG_ALIVE_TIME`] is refused, the way `open` refuses
+    /// one: an app that asks to keep logs for less than a day keeps them for
+    /// the C++'s own ten. Whether `secs` was applied is what the answer says —
+    /// a caller that keeps it is one that can repeat to *its* caller what is
+    /// in force, and not what was asked for.
+    pub(crate) fn set_max_alive_duration(&self, secs: u64) -> bool {
+        // `try_from` and not `as`: a `u64` past `i64::MAX` cast that way comes
+        // out negative, and a negative limit is one the clamp never accepts.
+        let Ok(secs) = i64::try_from(secs) else {
+            return false;
+        };
+        if secs < MIN_LOG_ALIVE_TIME {
+            return false;
         }
+        let mut inner = self.lock();
+        inner.max_alive_time = secs;
+        inner.with_dir_lock(|me| {
+            let nameprefix = me.config.nameprefix.clone();
+            if let Some(cache) = me.config.cachedir.clone() {
+                del_timeout_file(&cache, secs, &nameprefix);
+            }
+            del_timeout_file(&me.config.logdir, secs, &nameprefix);
+        });
+        true
     }
 
     /// The prefix every file of this appender starts with.
@@ -1932,6 +2190,15 @@ impl Appender {
     ///
     /// Not to be confused with `AppenderInner::cache_file_path`, which is the
     /// day's log file *inside the cache directory*.
+    ///
+    /// Which slot an instance got is not a function of its config — another
+    /// process can hold slot 0 — so the path is read back from the appender
+    /// and not worked out from the prefix. Nothing in the port asks it of a
+    /// live instance: the registry used to keep a copy of every instance's
+    /// path to hand to a recovery that was never written, and the copy was the
+    /// only thing that ever read it. What is left is the question the slot
+    /// tests ask.
+    #[cfg(test)]
     pub(crate) fn claimed_cache_path(&self) -> Option<PathBuf> {
         self.lock().cache_path()
     }
@@ -2625,6 +2892,44 @@ mod tests {
         assert!(text.contains("t3-i24"), "{text}");
     }
 
+    /// A nameprefix is joined onto a directory and not only written into a
+    /// name, so what it may be is one file name: a prefix of `../escaped`
+    /// writes, locks and maps in the directory *behind* the one the app gave.
+    #[test]
+    fn a_prefix_that_is_not_one_file_name_is_refused() {
+        // A log directory of its own inside a directory of its own: what a
+        // prefix that escapes is asked to escape *into* has to be somewhere
+        // this test can look, and not the machine's own temporary directory.
+        let outside = tempfile::tempdir().unwrap();
+        let tmp = outside.path().join("log");
+        fs::create_dir(&tmp).expect("the log directory");
+        for prefix in ["../escaped", "/escaped", "a/b", "..", "."] {
+            let mut cfg = config(&tmp, AppenderMode::Sync);
+            cfg.nameprefix = prefix.to_string();
+            let Err(err) = Appender::open(cfg, 0, 0) else {
+                panic!("`{prefix}` was accepted")
+            };
+            assert!(
+                err.to_string().contains("is not one file name"),
+                "`{prefix}`: {err}"
+            );
+        }
+
+        // Nothing of it landed outside the directory the app gave.
+        let outside: Vec<_> = fs::read_dir(outside.path())
+            .expect("read the parent")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("escaped"))
+            .collect();
+        assert!(outside.is_empty(), "the prefix wrote outside: {outside:?}");
+
+        // And a prefix that is one name opens as before.
+        let mut cfg = config(&tmp, AppenderMode::Sync);
+        cfg.nameprefix = "Mars".to_string();
+        Appender::open(cfg, 0, 0).expect("a normal prefix opens");
+    }
+
     #[test]
     fn cachedir_without_cache_days_writes_to_the_log_dir() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2894,6 +3199,49 @@ mod tests {
         assert!(names.len() > 1, "{names:?}");
     }
 
+    /// A switch to sync mode takes the writer thread back with it: from then
+    /// on every record is handed to the file by the thread that logged it, so
+    /// a thread left running would be one that wakes on a timer to drain a
+    /// region nobody fills — one per switch an app made, for the life of the
+    /// process.
+    #[test]
+    fn a_switch_to_sync_takes_the_writer_thread_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Async), 0, 0).unwrap();
+        appender.write(Some(&info(LogLevel::Info)), "written while async");
+        assert!(appender.thread_lock().is_some(), "async mode runs a thread");
+
+        appender.set_mode(AppenderMode::Sync).unwrap();
+        assert!(
+            appender.thread_lock().is_none(),
+            "the thread outlived the mode that asked for it"
+        );
+
+        // `Msg::Close` is a drain and not only an end, so the block the region
+        // was still holding is in the file and not lost with the thread. It is
+        // a compressed block, which is why what is asserted is that the file
+        // grew and not that the record can be read out of it in the clear.
+        let drained = fs::metadata(today_name(tmp.path())).map_or(0, |meta| meta.len());
+        assert!(
+            drained > 0,
+            "the record written while async reached the file"
+        );
+
+        // Sync from here: the record is filed by the thread that logged it, and
+        // a second switch back finds no thread in the way of the one it starts.
+        appender.write(Some(&info(LogLevel::Info)), "written after the switch");
+        appender.set_mode(AppenderMode::Async).unwrap();
+        assert!(
+            appender.thread_lock().is_some(),
+            "the thread is started again"
+        );
+        appender.close();
+
+        let log = String::from_utf8_lossy(&fs::read(today_name(tmp.path())).unwrap()).into_owned();
+        assert!(log.contains("written after the switch"), "{log}");
+        assert!(fs::metadata(today_name(tmp.path())).map_or(0, |meta| meta.len()) > drained);
+    }
+
     /// Leaves a cache file with one record in it behind, the way a process that
     /// died does: opens an async appender, writes, then drops it without
     /// `close()`. Answers the `<prefix>.mmap3` path.
@@ -2929,6 +3277,228 @@ mod tests {
         let path = dir.join("Mars.mmap3");
         fs::write(&path, &region).unwrap();
         path
+    }
+
+    /// A file whose blocks could not be reserved must be left **short**.
+    ///
+    /// The length `set_len` records and the blocks the zero-fill reserves are
+    /// two different things, and only the second is what a mapping needs: a
+    /// file that is `BUFFER_BLOCK_LENGTH` long with a hole where the zeros
+    /// should be is a file the next `open` skips the pre-allocation for — it
+    /// measures the length, not the blocks — and maps, and the first record
+    /// stored into the hole raises SIGBUS on a disk that is still full. That is
+    /// the crash the pre-allocation exists to prevent, handed to the next
+    /// start.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_cache_file_whose_blocks_were_not_reserved_is_left_short() {
+        // The one file a test can hold that takes the `set_len` and refuses
+        // the write: see `sys::unwritable_file`.
+        let Some(mut file) = crate::sys::unwritable_file() else {
+            return;
+        };
+        assert_eq!(file.metadata().unwrap().len(), 0);
+
+        let (region, use_mmap) = open_region(&mut file, Path::new("marsrs-unwritable"));
+        assert!(!use_mmap);
+        assert!(matches!(region, Region::Heap(_)), "heap, and not a mapping");
+        assert_eq!(
+            file.metadata().unwrap().len(),
+            0,
+            "the file is a {BUFFER_BLOCK_LENGTH} byte hole otherwise, and the next open \
+             maps it instead of pre-allocating it again"
+        );
+    }
+
+    /// The other half of the same hole: a file that already measures the
+    /// block, which is what `set_len` of a build before this one left behind.
+    /// The length is what the file claims and the zeros are what say nothing
+    /// was stored, so one that measures the whole block and reads as nothing
+    /// is pre-allocated like any other and not taken at its word.
+    ///
+    /// What is asked is the decision, and not what [`open_region`] does with
+    /// it: a file that already measures the block is left measuring it whether
+    /// the block was written over it or not, and a write of zeros over a file
+    /// that reads as zeros is a write no caller can see the difference between
+    /// — so the file is not what this test looks at afterwards.
+    #[test]
+    fn a_cache_file_that_measures_the_block_but_reads_as_zeros_is_filled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("Mars.mmap3");
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        file.set_len(BUFFER_BLOCK_LENGTH as u64).unwrap();
+        assert!(
+            is_unwritten(&mut file),
+            "a hole the length of the block reads as zeros"
+        );
+
+        let block = BUFFER_BLOCK_LENGTH as u64;
+        assert_eq!(file.metadata().unwrap().len(), block);
+        assert!(
+            needs_preallocation(block, || is_unwritten(&mut file)),
+            "a file that measures the block and reads as zeros is filled, and not taken \
+             at its word"
+        );
+        // ... and the length is what is asked first, so a file that is short
+        // of the block is filled without the file being read at all
+        assert!(
+            needs_preallocation(0, || panic!("the length answered this one already")),
+            "a file shorter than the block has never been written through"
+        );
+    }
+
+    /// The way round that costs records: a file that measures the block *and*
+    /// holds a crashed run's undrained ones. That is exactly the file a block
+    /// count calls sparse on a filesystem that allocates late or compresses,
+    /// and pre-allocating over it would write a block of zeros over the only
+    /// copy of those records there is — the "begin of mmap" recovery of the
+    /// next open would find nothing to recover. What decides is what is in
+    /// the file, and not what the disk says it gave it.
+    #[test]
+    fn a_cache_file_that_holds_records_is_not_written_over() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("Mars.mmap3");
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        file.set_len(BUFFER_BLOCK_LENGTH as u64).unwrap();
+        // One byte of a record: `st_blocks` cannot tell this file from a hole
+        // of the same length, and the length cannot either.
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.write_all(&[1u8]).unwrap();
+        file.flush().unwrap();
+        assert!(!is_unwritten(&mut file), "the file holds a record");
+
+        let (region, _use_mmap) = open_region(&mut file, &path);
+        drop(region);
+
+        let mut first = [0u8; 1];
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.read_exact(&mut first).unwrap();
+        assert_eq!(
+            first,
+            [1u8],
+            "the record the appender has not drained yet is still in the file"
+        );
+    }
+
+    /// The other way a cache file ends up on the heap: one whose `set_len`
+    /// failed, which is the same fallback by a different door.
+    ///
+    /// `close()` empties the cache file whenever there is no mapping (see
+    /// [`clear_cache_file_if_heap`]), and that is only right because the
+    /// records were drained out of the region first. A region seeded with
+    /// nothing drains nothing, and the file is then truncated over the only
+    /// copy of a crashed run's records that exists.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_cache_file_that_could_not_be_grown_is_still_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = records_in_cache(tmp.path());
+        let cached = fs::read(&path).unwrap();
+        // The way a test can read a file whose `set_len` refuses: `ftruncate`
+        // asks for a descriptor that is open for writing.
+        let mut file = OpenOptions::new().read(true).open(&path).unwrap();
+        assert!(
+            file.set_len(BUFFER_BLOCK_LENGTH as u64).is_err(),
+            "this test needs a `set_len` that fails"
+        );
+
+        let (region, use_mmap) = open_region(&mut file, &path);
+        assert!(!use_mmap);
+        let Region::Heap(bytes) = region else {
+            panic!("heap, and not a mapping");
+        };
+        assert!(
+            cached.iter().any(|byte| *byte != 0),
+            "the fixture leaves a record behind, and not a hole of zeros"
+        );
+        assert_eq!(
+            &bytes[..8],
+            &cached[..8],
+            "the record of the file is in the region, so `close()` may empty the file"
+        );
+    }
+
+    /// What the cache file of `appender` holds, read through the handle the
+    /// appender owns.
+    ///
+    /// Not `fs::read` of its path: the slot is locked exclusively for as long as
+    /// the appender lives, and on Windows that lock is mandatory, so a second
+    /// open of the path is refused the bytes it locked. `verbose_file_reads`
+    /// names `fs::read` as the shorter spelling of this, and a path is exactly
+    /// what this one cannot be given.
+    #[allow(clippy::verbose_file_reads)]
+    fn read_slot(appender: &Appender) -> Vec<u8> {
+        let mut guard = appender.lock();
+        let file = &mut guard
+            .cache
+            .as_mut()
+            .expect("the appender claimed a slot")
+            .file;
+        file.seek(SeekFrom::Start(0)).unwrap();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        bytes
+    }
+
+    /// The one case in which emptying the cache file is a loss: the block it
+    /// held was copied out and then reached no log.
+    ///
+    /// With a mapping, `buffer_drained` zeroes the region in place and the file
+    /// follows it, so what is left of the block is `pending` — memory. Without
+    /// one, the file is a second copy, and it is the copy a later start would
+    /// recover the records from: emptying it over a batch `pending` has not
+    /// written yet is what loses a crashed run's records.
+    #[test]
+    fn a_cache_file_is_emptied_only_once_its_block_reached_a_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let appender = Appender::open(config(tmp.path(), AppenderMode::Sync), 0, 0).unwrap();
+        let path = {
+            let mut guard = appender.lock();
+            // The heap path, where the file is a copy of the region and not the
+            // region itself: the one in which emptying it is a loss. The
+            // mapping is given up before the file is touched — truncating a
+            // file a live mapping covers is a SIGBUS on the next touch of it.
+            guard.region = Region::heap();
+            guard.use_mmap = false;
+            // A block no log has taken, written through the handle the appender
+            // owns and not through `fs::write` of the path: the slot is locked
+            // exclusively for as long as the appender lives, and on Windows
+            // that lock is mandatory, so a second open of the path is refused
+            // the very bytes it locked.
+            let slot = guard.cache.as_mut().expect("the appender claimed a slot");
+            slot.file.seek(SeekFrom::Start(0)).unwrap();
+            slot.file
+                .write_all(&vec![7u8; BUFFER_BLOCK_LENGTH])
+                .unwrap();
+            slot.file.flush().unwrap();
+            slot.path.clone()
+        };
+
+        appender.clear_cache_file_when_drained(false);
+        assert!(
+            read_slot(&appender).iter().any(|byte| *byte != 0),
+            "the file was emptied over a block no log holds"
+        );
+
+        appender.clear_cache_file_when_drained(true);
+        assert_eq!(
+            fs::metadata(&path).unwrap().len(),
+            0,
+            "the block is in a log now, so the next start must not append it again"
+        );
+        appender.close();
     }
 
     #[test]

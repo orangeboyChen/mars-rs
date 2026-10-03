@@ -8,9 +8,15 @@
 //! `MessageTitle_t`, `Message`, `MessageTiming`, `RunLoop`) and the rules
 //! that matter:
 //!
-//! * a handler with `seq == 0` is a **broadcast** handler and receives
-//!   every message of its queue, including the ones addressed to another
-//!   handler;
+//! * a message addressed to the handler whose `seq` is `0` is a
+//!   **broadcast**: it runs on every handler of the queue that was
+//!   installed with `recv_broadcast`, and on none of the handlers the
+//!   other messages are addressed to. That handler is
+//!   [`MessageHandler::default`], and [`install_message_handler`] hands it
+//!   out only for a queue that is not there — installed onto a destroyed
+//!   or a never-created id, what an app gets is a handler every post to it
+//!   broadcasts. The seq of a handler of a queue that *is* there starts at
+//!   1;
 //! * `post_message` returns a `MessagePost` that can be cancelled — by
 //!   post, by handler, or by handler + title;
 //! * `after`/`period` messages only run once their time has come;
@@ -32,6 +38,21 @@ use crate::tickcount::gettickcount;
 pub type MessageQueueId = u64;
 /// `MessageQueue::KInvalidQueueID`, spelled the way Rust spells a constant.
 pub const INVALID_QUEUE_ID: MessageQueueId = 0;
+
+/// A thousand years: the deadline a message is given when the one it asked
+/// for is farther out than an [`Instant`] can hold. `now + duration` past
+/// that ceiling panics, and a message queue is not the place for a panic
+/// over a delay nobody outlives.
+const UNREACHABLE_WAIT: Duration = Duration::from_secs(60 * 60 * 24 * 365 * 1000);
+
+/// An [`Instant`] `duration` from now, or as far out as the clock can hold
+/// when it cannot hold that: a deadline that is missed by a thousand years
+/// is one that is never missed, which is the same wait the caller asked for.
+fn deadline_after(duration: Duration) -> Instant {
+    Instant::now()
+        .checked_add(duration)
+        .unwrap_or_else(|| Instant::now() + UNREACHABLE_WAIT)
+}
 
 /// `MessageQueue::KDefQueueID` — the queue messages are posted to when no
 /// queue is named.
@@ -251,6 +272,39 @@ impl QueueState {
             running_posts: Vec::new(),
         }
     }
+
+    /// The sequence number of the next post, which is never 0 and never
+    /// one that is still out.
+    ///
+    /// Wrapping, and not `+= 1`: the number is a `u32` the way the C++'s
+    /// `MessagePost_t` is, so a queue that lives long enough runs it past
+    /// `u32::MAX` — a panic in a debug build, and in a release one a post
+    /// that is equal to an earlier post of the same handler, so
+    /// `cancel_message` and `found_message` answer for a message the
+    /// caller never asked about. 0 is skipped for the same reason: it is
+    /// the `seq` of [`NULL_POST`] and of a broadcast handler, which is to
+    /// say a post the queue never handed out.
+    fn next_post_seq(&mut self) -> u32 {
+        let seq = self.next_post_seq;
+        // `max(1)` is the skip: a wrap to 0 moves on to 1 instead
+        self.next_post_seq = seq.wrapping_add(1).max(1);
+        seq
+    }
+
+    /// The sequence number of the next handler, which is never 0.
+    ///
+    /// Wrapping, and not `+= 1`, for the reason [`Self::next_post_seq`]
+    /// gives and for one of its own: 0 is the `seq` of the handler a
+    /// broadcast is addressed to, so a handler that was handed 0 is one
+    /// that is installed as the broadcast handler instead of as itself —
+    /// dispatch runs it for every broadcast of the queue and never for a
+    /// message addressed to it, and `post_message` skips the check that
+    /// the handler is still installed.
+    fn next_handler_seq(&mut self) -> u32 {
+        let seq = self.next_handler_seq;
+        self.next_handler_seq = seq.wrapping_add(1).max(1);
+        seq
+    }
 }
 
 struct Queue {
@@ -372,8 +426,7 @@ where
         return MessageHandler::default();
     };
     let mut state = queue.lock();
-    let seq = state.next_handler_seq;
-    state.next_handler_seq += 1;
+    let seq = state.next_handler_seq();
     state.handlers.push(HandlerEntry {
         seq,
         handler: Arc::new(handler),
@@ -440,13 +493,18 @@ fn post(
     let Some(queue) = queue(handler.queue) else {
         return NULL_POST;
     };
-    if handler.seq != 0 && !queue.lock().handlers.iter().any(|it| it.seq == handler.seq) {
-        return NULL_POST;
-    }
     let (due, period) = first_due(&timing);
     let mut state = queue.lock();
-    let seq = state.next_post_seq;
-    state.next_post_seq += 1;
+    // The check and the insert are one step under the lock, and not the two
+    // they were: a handler uninstalled in between leaves a message in the
+    // queue whose handler is gone, and a dispatch of it collects no handlers
+    // at all and drops it — so what this answers with is a post no message
+    // will ever be delivered for, which is the answer `NULL_POST` is for.
+    // `singleton_message` gives the same reason for doing the same thing.
+    if handler.seq != 0 && !state.handlers.iter().any(|it| it.seq == handler.seq) {
+        return NULL_POST;
+    }
+    let seq = state.next_post_seq();
     let entry = PostedMessage {
         post: MessagePost { reg: *handler, seq },
         title: message.title,
@@ -469,37 +527,70 @@ fn post(
 /// pending one; otherwise the pending one wins and its post is returned.
 pub fn singleton_message(replace: bool, handler: &MessageHandler, message: Message) -> MessagePost {
     let title = message.title;
-    if let Some(queue) = queue(handler.queue) {
-        let mut state = queue.lock();
-        // The title is matched on the queue entry, and the payload is never
-        // locked: a periodic message is still in the queue while it runs —
-        // the dispatcher re-arms it before it calls the handlers and holds
-        // the message's lock for as long as they do — and a `Mutex` is not
-        // reentrant, so a handler asking for its own message would stop the
-        // queue thread for good.
-        if let Some(index) = state
-            .messages
-            .iter()
-            .position(|m| m.post.reg.seq == handler.seq && m.title == title)
-        {
-            if replace {
-                // A new `Message` behind a new `Arc`, which is what the C++
-                // does when it drops the pending wrapper and posts a fresh
-                // one: whatever the replacement was asked for is what the
-                // next dispatch hands to the handlers, and a dispatch that
-                // is already under way keeps the copy it took.
-                //
-                // Writing through the lock instead needs `try_lock` for the
-                // reason above, and a `try_lock` that fails drops the
-                // payload on the floor: a handler that replaced its own
-                // periodic message — the one case where the lock is always
-                // held — silently kept logging the old one.
-                state.messages[index].message = Arc::new(Mutex::new(message));
-            }
-            return state.messages[index].post;
-        }
+    let Some(queue) = queue(handler.queue) else {
+        return NULL_POST;
+    };
+    let mut state = queue.lock();
+    // An uninstalled handler has nothing left to deliver a message to, so a
+    // message carrying its `reg` could never run: `post_message` answers
+    // `NULL_POST` for the same reason, and matching a pending entry below
+    // would hand back a post that no dispatch will ever pick up.
+    if handler.seq != 0 && !state.handlers.iter().any(|it| it.seq == handler.seq) {
+        return NULL_POST;
     }
-    post_message(handler, message, MessageTiming::Immediate)
+    // Search and insertion are one step under the queue's lock, not two,
+    // which is what `faster_message` says it does and why: two threads
+    // asking for the same title when nothing is pending would each see an
+    // empty queue and post a copy of its own, and the handler would run
+    // twice — the one thing this call promises it does not do.
+    let post = if let Some(index) = state
+        .messages
+        .iter()
+        .position(|m| m.post.reg.seq == handler.seq && m.title == title)
+    {
+        if replace {
+            // A new `Message` behind a new `Arc`, which is what the C++
+            // does when it drops the pending wrapper and posts a fresh
+            // one: whatever the replacement was asked for is what the
+            // next dispatch hands to the handlers, and a dispatch that
+            // is already under way keeps the copy it took.
+            //
+            // Writing through the lock instead needs `try_lock` for the
+            // reason above, and a `try_lock` that fails drops the
+            // payload on the floor: a handler that replaced its own
+            // periodic message — the one case where the lock is always
+            // held — silently kept logging the old one.
+            //
+            // The title is matched on the queue entry, and the payload is
+            // never locked: a periodic message is still in the queue while
+            // it runs — the dispatcher re-arms it before it calls the
+            // handlers and holds the message's lock for as long as they
+            // do — and a `Mutex` is not reentrant, so a handler asking for
+            // its own message would stop the queue thread for good.
+            state.messages[index].message = Arc::new(Mutex::new(message));
+        }
+        state.messages[index].post
+    } else {
+        let post = MessagePost {
+            reg: *handler,
+            seq: state.next_post_seq(),
+        };
+        state.messages.push_back(PostedMessage {
+            post,
+            title,
+            due: None,
+            period: None,
+            message: Arc::new(Mutex::new(message)),
+        });
+        post
+    };
+    drop(state);
+    // `content.breaker->Notify(lock)` of the C++, which it does on the way
+    // out of every post: a thread sleeping on this queue until the next
+    // message is due is waiting for this title too, and what it will be
+    // handed is the payload a `replace` just swapped in.
+    queue.cond.notify_all();
+    post
 }
 
 /// `MessageQueue::BroadcastMessage(queue, message, timing)` — every
@@ -581,8 +672,7 @@ pub fn faster_message(handler: &MessageHandler, message: Message) -> MessagePost
     // calling it: the sequence number and the insertion have to happen
     // under the lock the search above took, and `MessageTiming::Immediate`
     // is what "faster" posts — a message that is due now.
-    let seq = state.next_post_seq;
-    state.next_post_seq += 1;
+    let seq = state.next_post_seq();
     state.messages.push_back(PostedMessage {
         post: MessagePost { reg: *handler, seq },
         title,
@@ -616,13 +706,20 @@ pub fn cancel_message(post: &MessagePost) -> bool {
 /// `MessageQueue::CancelMessage(handler)`.
 pub fn cancel_message_by_handler(handler: &MessageHandler) {
     if let Some(queue) = queue(handler.queue) {
-        let before = {
+        let cancelled = {
             let mut state = queue.lock();
             let before = state.messages.len();
             state.messages.retain(|m| m.post.reg.seq != handler.seq);
-            before
+            state.messages.len() != before
         };
-        if queue.lock().messages.len() != before {
+        if cancelled {
+            // What [cancel_message] notifies for: a `wait_message` on one of
+            // these posts is waiting for exactly this, and on a queue nothing
+            // is dispatching nothing else wakes it. Whether it is cancelled
+            // is read under the lock that took the message off and not under
+            // a second one: two lengths read under two locks are not the
+            // before and after of one retain, and a queue another thread has
+            // posted to in between answers the length it had.
             queue.cond.notify_all();
         }
     }
@@ -637,15 +734,17 @@ pub fn cancel_message_by_handler_title(handler: &MessageHandler, title: MessageT
     // `m.message.lock()`: a handler cancelling its own periodic
     // message runs while the dispatcher holds that lock, and a `Mutex`
     // is not reentrant.
-    let before = {
+    let cancelled = {
         let mut state = queue.lock();
         let before = state.messages.len();
         state
             .messages
             .retain(|m| !(m.post.reg.seq == handler.seq && m.title == title));
-        before
+        state.messages.len() != before
     };
-    if queue.lock().messages.len() != before {
+    // As in [cancel_message_by_handler]: the length the comparison reads is
+    // the one the retain left behind, under the lock that took it.
+    if cancelled {
         queue.cond.notify_all();
     }
 }
@@ -678,8 +777,9 @@ pub fn wait_message(post: &MessagePost, timeout_ms: i64) -> bool {
     let Some(queue) = queue(post.reg.queue) else {
         return false;
     };
-    let deadline =
-        (timeout_ms >= 0).then(|| Instant::now() + Duration::from_millis(timeout_ms as u64));
+    let deadline = (timeout_ms >= 0)
+        .then(|| Duration::from_millis(timeout_ms as u64))
+        .map(deadline_after);
     let mut state = queue.lock();
     loop {
         if !state.messages.iter().any(|m| m.post == *post) && !state.running_posts.contains(post) {
@@ -764,7 +864,7 @@ impl RunLoop {
         // the end of the wait: only the deadline or a due message is,
         // otherwise a spurious wake-up reports "nothing to do" before an
         // `After` message is due.
-        let deadline = timeout.map(|timeout| Instant::now() + timeout);
+        let deadline = timeout.map(deadline_after);
         // The post this dispatch is running, which is taken out of
         // `running_posts` once its handlers are done.
         let post;
@@ -811,7 +911,7 @@ impl RunLoop {
             let addressed = entry.post.reg.seq;
             let is_broadcast = addressed == 0;
             if let Some(period) = entry.period {
-                entry.due = Some(Instant::now() + period);
+                entry.due = Some(deadline_after(period));
                 state.messages.push_back(entry.clone_for_next_run());
             }
             let handlers: Vec<Arc<HandlerFn>> = state
@@ -833,25 +933,233 @@ impl RunLoop {
         };
 
         {
-            let mut message = message.lock().unwrap();
+            // A handler that unwinds is a dispatch that is over, so the post
+            // it was running is out of `running_posts` either way: a post left
+            // in there is a [`found_message`] that answers `true` for good and
+            // a [`wait_message`] that never answers at all. The C++ has no
+            // unwinding to guard against and takes it out where the loop ends.
+            let _running = RunningPost { queue, post };
+            // The message is the app's to hold, and poisoning the mutex a
+            // handler panicked behind would only fail the next dispatch of a
+            // periodic one: what the panic wrote is the message's own, and
+            // the next run of this message starts from the record it is given.
+            let mut message = message
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             message.execute_time = gettickcount();
             for handler in handlers {
                 handler(&mut message);
             }
         }
-
-        queue.clear_running(post);
         true
+    }
+}
+
+/// Takes a post out of the running ones when the dispatch of it ends, whichever
+/// way it ends; see [`RunLoop::dispatch`].
+struct RunningPost<'a> {
+    queue: &'a Arc<Queue>,
+    post: MessagePost,
+}
+
+impl Drop for RunningPost<'_> {
+    fn drop(&mut self) {
+        self.queue.clear_running(self.post);
     }
 }
 
 fn first_due(timing: &MessageTiming) -> (Option<Instant>, Option<Duration>) {
     match *timing {
         MessageTiming::Immediate => (None, None),
-        MessageTiming::After(after) => (Some(Instant::now() + Duration::from_millis(after)), None),
+        MessageTiming::After(after) => (Some(deadline_after(Duration::from_millis(after))), None),
         MessageTiming::Period { after, period } => (
-            Some(Instant::now() + Duration::from_millis(after)),
+            Some(deadline_after(Duration::from_millis(after))),
             Some(Duration::from_millis(period)),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// A queue does not run out of sequence numbers at the top of a `u32`:
+    /// the count wraps, and the wrap skips 0, which is the `seq` of
+    /// [`NULL_POST`] and of a broadcast handler — a post the queue never
+    /// hands out.
+    ///
+    /// It is tested here and not in `tests/`, because the counter is a
+    /// field of [`QueueState`]: reaching `u32::MAX` from outside would take
+    /// four thousand million posts.
+    #[test]
+    fn the_sequence_number_of_a_post_wraps_past_the_top_of_a_u32() {
+        let mut state = QueueState::new();
+        state.next_post_seq = u32::MAX - 1;
+        assert_eq!(state.next_post_seq(), u32::MAX - 1);
+        assert_eq!(state.next_post_seq(), u32::MAX);
+        assert_eq!(
+            state.next_post_seq(),
+            1,
+            "it wrapped to 0, which is no post"
+        );
+    }
+
+    /// The same for a handler, and for one reason more: the number a
+    /// handler wraps to would be 0, which is the `seq` of the handler a
+    /// broadcast is addressed to — a handler installed with it is run for
+    /// every broadcast of the queue and never for a message of its own.
+    #[test]
+    fn the_sequence_number_of_a_handler_wraps_past_the_top_of_a_u32() {
+        let mut state = QueueState::new();
+        state.next_handler_seq = u32::MAX - 1;
+        assert_eq!(state.next_handler_seq(), u32::MAX - 1);
+        assert_eq!(state.next_handler_seq(), u32::MAX);
+        assert_eq!(
+            state.next_handler_seq(),
+            1,
+            "it wrapped to 0, which is the broadcast handler"
+        );
+    }
+
+    /// A handler that unwinds is a dispatch that is over, and the post it was
+    /// running is out of the running ones either way: left in there, it is a
+    /// [`found_message`] that answers `true` for good and a [`wait_message`]
+    /// that never answers at all. The C++ has no unwinding, so nothing there
+    /// says what a message a handler never returned from leaves behind.
+    #[test]
+    fn a_handler_that_unwinds_is_a_dispatch_that_is_over() {
+        let id = create_message_queue();
+        let handler = install_message_handler(
+            |_: &mut Message| panic!("the app's handler unwound"),
+            false,
+            id,
+        );
+        let post = post_message(
+            &handler,
+            Message::new(MessageTitle(7), "unwinds"),
+            MessageTiming::Immediate,
+        );
+
+        // The panic is the point of the test and not its output.
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let ran = std::panic::catch_unwind(|| RunLoop::dispatch_timeout(id, Duration::ZERO));
+        std::panic::set_hook(hook);
+
+        assert!(ran.is_err(), "the handler was asked and did not unwind");
+        assert!(!found_message(&post), "the post is still running");
+        assert!(
+            wait_message(&post, 100),
+            "the post is running for good, so the wait never ends"
+        );
+        destroy_message_queue(id);
+    }
+
+    /// An `Instant` has a ceiling, and `now + duration` past it panics rather
+    /// than overflowing: a delay that far out is one nothing outlives, so the
+    /// message is put where the clock can hold it and waits there, which is
+    /// the wait the caller asked for.
+    ///
+    /// How much fits depends on the platform — a `u64::MAX` of milliseconds
+    /// is inside an `Instant` of seconds and well outside one of nanoseconds,
+    /// which is what Apple's is — so what this pins is the wait and not the
+    /// panic.
+    #[test]
+    fn a_message_posted_farther_out_than_the_clock_holds_waits_there() {
+        let id = create_message_queue();
+        let handler = install_message_handler(|_: &mut Message| {}, false, id);
+
+        let far = post_message(
+            &handler,
+            Message::new(MessageTitle(7), "far"),
+            MessageTiming::After(u64::MAX),
+        );
+        assert!(found_message(&far), "the post is there, and not due");
+        assert!(
+            !RunLoop::dispatch_timeout(id, Duration::ZERO),
+            "nothing ran: the message is a thousand years out"
+        );
+        assert!(cancel_message(&far), "and it is the caller's to take back");
+
+        // a periodic one runs at once and is armed again for `period` after
+        // that, which is the other addition a `u64::MAX` used to overflow
+        let periodic = post_message(
+            &handler,
+            Message::new(MessageTitle(8), "periodic"),
+            MessageTiming::Period {
+                after: 0,
+                period: u64::MAX,
+            },
+        );
+        assert!(
+            RunLoop::dispatch_timeout(id, Duration::from_millis(100)),
+            "the first run is due now"
+        );
+        assert!(found_message(&periodic), "re-armed, and not due again");
+        assert!(cancel_message(&periodic));
+        destroy_message_queue(id);
+    }
+
+    /// A cancel wakes the wait it ends, and on a queue nothing is dispatching
+    /// nothing else does: no post, no answer and no other cancel is there to
+    /// notify the condition, so a wait with no timeout of its own is over when
+    /// the cancel wakes it and never otherwise — the post it is waiting for is
+    /// gone, and it is asleep on a condition that has already come true.
+    #[test]
+    fn a_cancel_by_handler_wakes_the_wait_it_ends() {
+        let id = create_message_queue();
+        let handler = install_message_handler(|_: &mut Message| {}, false, id);
+
+        // A helper, because the two cancels are one question asked twice: a
+        // wait that was not woken is a thread parked for the rest of the
+        // process, so what is asserted is the flag it sets on the way out and
+        // not the value it returns — a wait that ends when *its* timeout runs
+        // out answers `true` for a post that was taken off an hour ago.
+        let wait_forever = |post: MessagePost| {
+            let ended = Arc::new(AtomicBool::new(false));
+            let waiting = {
+                let ended = Arc::clone(&ended);
+                std::thread::spawn(move || {
+                    wait_message(&post, -1);
+                    ended.store(true, Ordering::SeqCst);
+                })
+            };
+            // Long enough for that thread to be asleep on the condition and
+            // not merely on its way there: a wait that has not parked yet
+            // reads the queue after the cancel and is over anyway.
+            std::thread::sleep(Duration::from_millis(50));
+            (waiting, ended)
+        };
+
+        // An hour out, so that the only thing that takes either post off the
+        // queue is the cancel and not a dispatch: a post a dispatch ran is a
+        // wait that ended for another reason entirely.
+        let (waiting, ended) = wait_forever(post_message(
+            &handler,
+            Message::new(MessageTitle(9), "waited on"),
+            MessageTiming::After(3_600_000),
+        ));
+        cancel_message_by_handler(&handler);
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            ended.load(Ordering::SeqCst),
+            "the cancel by handler did not wake the wait it ended"
+        );
+        let _ = waiting.join();
+
+        let (waiting, ended) = wait_forever(post_message(
+            &handler,
+            Message::new(MessageTitle(10), "waited on"),
+            MessageTiming::After(3_600_000),
+        ));
+        cancel_message_by_handler_title(&handler, MessageTitle(10));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            ended.load(Ordering::SeqCst),
+            "the cancel by title did not wake the wait it ended"
+        );
+        let _ = waiting.join();
+        destroy_message_queue(id);
     }
 }

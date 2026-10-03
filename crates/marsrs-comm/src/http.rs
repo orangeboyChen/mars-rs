@@ -34,15 +34,24 @@ pub const CRLF: &str = "\r\n";
 /// What ends the head: an empty line.
 const CRLF_CRLF: &str = "\r\n\r\n";
 
-/// How long a first line may grow before the C++ gives up on it:
-/// `8 * 1024`.
+/// How long a first line may be before the C++ gives up on it:
+/// `8 * 1024`. The port refuses one over it whether or not it ends, so the
+/// bytes a peer writes in one `write` are not a line of any length.
 pub const MAX_FIRST_LINE: usize = 8 * 1024;
-/// How long the head may grow before the C++ gives up on it: `128 * 1024`.
+/// How long the head may be before the C++ gives up on it: `128 * 1024`.
+/// The same, of the fields behind the first line.
 pub const MAX_HEADER_FIELDS: usize = 128 * 1024;
 /// `kMaxContentLength` — how big a body may be: 4g.
 pub const MAX_CONTENT_LENGTH: u64 = 4 * 1024 * 1024 * 1024;
 /// `kMaxChunkLength` — how big one chunk may be: 4g.
 pub const MAX_CHUNK_LENGTH: u64 = 4 * 1024 * 1024 * 1024;
+/// How long the line a chunk's size is written on may grow: the same
+/// [`MAX_FIRST_LINE`], which is the other line a peer writes before it writes
+/// bytes this parser keeps. It is a line of hexadecimal digits and of whatever
+/// `;`-extensions follow them, so nothing a server writes comes near it — but
+/// without a number here the wait for the `CRLF` that ends it is the one wait
+/// in the parser a peer can keep unsatisfied for as long as it writes.
+const MAX_CHUNK_SIZE_LINE: usize = MAX_FIRST_LINE;
 /// `KDefaultKeepAliveTimeout` — what a keep-alive without a timeout of its
 /// own gets: five seconds.
 pub const DEFAULT_KEEP_ALIVE_TIMEOUT: u32 = 5;
@@ -389,6 +398,12 @@ impl HeaderFields {
     /// the C++'s `std::map` would hold it, and one that is there keeps its name
     /// — and so its place — and gets the new value.
     pub fn set(&mut self, name: &str, value: &str) {
+        // a field that would end the line it is written on is not one that
+        // goes in: what it would write is another line, and the head is not
+        // the caller's to add lines to
+        if !is_writable(name) || !is_writable(value) {
+            return;
+        }
         match self
             .headers
             .binary_search_by(|header| compare_names(&header.name, name))
@@ -514,6 +529,15 @@ impl HeaderFields {
         self.get(CONTENT_LENGTH).map(to_u64).unwrap_or(0)
     }
 
+    /// Whether the peer said how long the body is at all.
+    ///
+    /// Not [`Self::content_length`] being `0`, which is the two things a
+    /// parser has to tell apart: an absent field is a body whose length is
+    /// the socket, and `Content-Length: 0` is a body that is already over.
+    pub fn has_content_length(&self) -> bool {
+        self.get(CONTENT_LENGTH).is_some()
+    }
+
     /// `KeepAliveTimeout()` — how long the peer will keep the socket, in
     /// seconds; [`DEFAULT_KEEP_ALIVE_TIMEOUT`] when it did not say, or when
     /// what it said is not a timeout between nothing and a minute.
@@ -564,8 +588,10 @@ impl HeaderFields {
         Self::content_range_of(self.get(CONTENT_RANGE)?)
     }
 
-    /// `ContentRange(line, start, end, total)` — the same, of a line that
-    /// did not come out of a head: `Content-Range: bytes 0-102400/102399`.
+    /// `ContentRange(line, start, end, total)` — the same, of a value that
+    /// did not come out of a head: the `bytes 0-102400/102399` a
+    /// `Content-Range: bytes 0-102400/102399` names, which is the value
+    /// and not the field.
     pub fn content_range_of(line: &str) -> Option<ContentRange> {
         let bytes = strutil::trim(line.strip_prefix("bytes ")?);
         let (from, rest) = bytes.split_once('-')?;
@@ -716,7 +742,14 @@ impl Builder {
             CsMode::Request => self.request.to_string(),
             CsMode::Respond => self.status.to_string(),
         };
-        if first_line.is_empty() || self.fields.is_empty() {
+        // `None` is what the C++ answers `false` for, and a first line that
+        // would write more than one is not a line there is anything to say
+        // about: no head is written rather than one that says two things
+        let writable = match self.mode {
+            CsMode::Request => is_writable(&self.request.url),
+            CsMode::Respond => is_writable(&self.status.reason_phrase),
+        };
+        if first_line.is_empty() || self.fields.is_empty() || !writable {
             return None;
         }
         let mut buffer = first_line.into_bytes();
@@ -839,12 +872,22 @@ impl Parser {
     /// which is the whole call: what is not used yet stays for the
     /// next one.
     ///
-    /// A read of nothing is the peer hanging up, which is how a body with
-    /// no `Content-Length` — the answer of a `Connection: close` — comes to
-    /// an end.
+    /// A read of nothing is the peer hanging up, which is how the body of a
+    /// `Connection: close` answer comes to an end — the one no
+    /// `Content-Length` was named for above all, since nothing else ends
+    /// that one — and how one that named a length and was cut short ends as
+    /// well.
     pub fn recv(&mut self, bytes: &[u8]) -> RecvStatus {
         if bytes.is_empty() {
             self.peer_hung_up();
+            return self.status;
+        }
+        // A parser that is done is handed no more bytes. `run` cannot use
+        // them — every state past the body answers its status and stops —
+        // so they would sit in `buffered()` and grow for as long as a caller
+        // that is still reading the socket hands them over, which is what a
+        // peer that did not close it lets it do.
+        if self.status.is_error() || self.status.is_end() {
             return self.status;
         }
         self.buffer.extend_from_slice(bytes);
@@ -854,13 +897,23 @@ impl Parser {
     /// `Recv(buffer, length, nullptr, true)` — the same, stopping as soon
     /// as the head is whole.
     ///
-    /// A read of nothing ends it too: `only_parse_header` decides how much
-    /// of an answer is parsed and not whether the peer hanging up is one,
-    /// which is why the C++ answers `kEnd` out of the same branch whatever
-    /// it was asked for (`http.cc:714`).
+    /// A read of nothing is the peer hanging up here as it is there, and ends
+    /// the answer on the same terms: `only_parse_header` decides how much of
+    /// an answer is parsed and not whether the peer hanging up is one, which
+    /// is why the C++ answers `kEnd` out of the same branch whatever it was
+    /// asked for (`http.cc:714`).
+    ///
+    /// The status a whole head answers is [`RecvStatus::Body`] and not
+    /// [`RecvStatus::End`], with the bytes after it still in `buffered()`: the
+    /// head is what stops the parse, and the body is a parse of its own that a
+    /// caller still asks for.
     pub fn recv_header_only(&mut self, bytes: &[u8]) -> RecvStatus {
         if bytes.is_empty() {
             self.peer_hung_up();
+            return self.status;
+        }
+        // as [`Parser::recv`]
+        if self.status.is_error() || self.status.is_end() {
             return self.status;
         }
         self.buffer.extend_from_slice(bytes);
@@ -869,8 +922,14 @@ impl Parser {
 
     /// A read of nothing on a `Connection: close` whose body is being read
     /// is the end of the answer: the body is however many bytes came in
-    /// before the peer hung up, and there is no `Content-Length` to say
-    /// when it stops otherwise.
+    /// before the peer hung up, and anything the head said about the length
+    /// is beside the point — one that named five bytes and was cut short at
+    /// three ends too, with the three it got and nothing said about the two
+    /// it did not.
+    ///
+    /// Which is what the C++ does (`http.cc:714`): it asks whether the
+    /// connection closes and whether a body is being read, and not whether a
+    /// length was ever named.
     fn peer_hung_up(&mut self) {
         if self.fields.is_connection_close() && self.status == RecvStatus::Body {
             self.status = RecvStatus::End;
@@ -989,6 +1048,14 @@ impl Parser {
             };
             return true;
         };
+        // The bound is on the line and not only on the wait for its end:
+        // the same bytes that arrive in two reads run out of patience here,
+        // so a peer that writes a million-byte request line in one `write`
+        // is not answered with a request line the parser accepts.
+        if end > MAX_FIRST_LINE {
+            self.status = RecvStatus::FirstLineError;
+            return true;
+        }
 
         let line_len = end + CRLF.len();
         let line = String::from_utf8_lossy(&self.buffer[..line_len]);
@@ -1032,6 +1099,12 @@ impl Parser {
             }
             return true;
         };
+        // As [`Self::first_line`] bounds its own line: a head that arrived
+        // whole is not a head of any length.
+        if end > MAX_HEADER_FIELDS {
+            self.status = RecvStatus::HeaderFieldsError;
+            return true;
+        }
 
         let header_len = end + CRLF_CRLF.len();
         let block = String::from_utf8_lossy(&self.buffer[..header_len]).to_string();
@@ -1056,6 +1129,15 @@ impl Parser {
 
     fn chunked_body(&mut self) -> bool {
         let Some(size_end) = find(&self.buffer, CRLF) else {
+            // `first_line`, `header_fields` and the trailer wait below all
+            // refuse a line that never ends, and `recv` extends `buffer` on
+            // every read without asking how long it is: this one needs the
+            // same bound, or a peer that answers
+            // `Transfer-Encoding: chunked` and then writes a stream with no
+            // `CRLF` in it grows it for as long as it writes.
+            if self.buffer.len() > MAX_CHUNK_SIZE_LINE {
+                self.status = RecvStatus::BodyError;
+            }
             return true;
         };
         // the size of a chunk is hexadecimal
@@ -1069,9 +1151,34 @@ impl Parser {
         }
 
         if size != 0 {
+            // The cap is on the body and not on the chunk: `size` is under
+            // `MAX_CHUNK_LENGTH` for every chunk there is, so a peer that
+            // announces one after another of them is waved through by the
+            // check above, and `body` is then as long as it cares to write.
+            if (self.body.len() as u64).saturating_add(size) > MAX_CONTENT_LENGTH {
+                self.status = RecvStatus::BodyError;
+                return true;
+            }
             let begin = size_end + CRLF.len();
-            let end = begin + size as usize;
-            if self.buffer.len() < end + CRLF.len() {
+            // The size has to fit in a `usize` before it is an offset into
+            // this buffer, and adding it to `begin` must not wrap: on a
+            // 32-bit target — `armv7` is one this repository builds —
+            // `MAX_CHUNK_LENGTH` is exactly the value `as usize` truncates
+            // to 0, and an offset of `begin` then reads the chunk's own
+            // bytes as the `CRLF` that ends it.
+            let Some(end) = usize::try_from(size)
+                .ok()
+                .and_then(|length| begin.checked_add(length))
+            else {
+                self.status = RecvStatus::BodyError;
+                return true;
+            };
+            // Asked without the sum: `end` can be within `CRLF.len()` of
+            // `usize::MAX` — the size is capped at a value one past what a
+            // `u32` holds — and `end + CRLF.len()` then wraps to a length the
+            // buffer is longer than, so the two indexes below are taken and
+            // the parser panics on a chunk-size line a peer chose.
+            if self.buffer.len().saturating_sub(CRLF.len()) < end {
                 return true;
             }
             if self.buffer[end] != b'\r' || self.buffer[end + 1] != b'\n' {
@@ -1085,13 +1192,40 @@ impl Parser {
 
         // the last chunk: a size of nothing, and then the trailer
         let trailer_begin = size_end + CRLF.len();
-        if self.buffer.len() < trailer_begin + CRLF.len() {
-            return true;
-        }
-        let Some(trailer_end) = find(&self.buffer[trailer_begin..], CRLF) else {
-            return true;
+        // The trailer ends where the head did, with an empty line, and not
+        // with the first `CRLF` in it: a response that carries trailer
+        // fields (`0\r\nTrailer-Field: v\r\n\r\n`) left the second `CRLF`
+        // in the buffer, and the next response of this keep-alive
+        // connection then began with it and failed `first_line`. What is
+        // consumed is therefore the whole trailer section, and a single
+        // `CRLF` only when there are no fields in it — `0\r\n\r\n`, which
+        // is `CHUNK_EOF` and the common case.
+        let consumed = if self.buffer[trailer_begin..].starts_with(CRLF.as_bytes()) {
+            CRLF.len()
+        } else {
+            // Searched in the rest of the buffer and not inside a window:
+            // the bound below is on how long the parser waits for a
+            // terminator that has not come, and not on how much of a
+            // trailer that arrived whole it is willing to look at — see
+            // below.
+            let Some(trailer_end) = find(&self.buffer[trailer_begin..], CRLF_CRLF) else {
+                // The bound is on how long the parser waits for a terminator
+                // that has not come, and not on how much of the trailer it
+                // is willing to look at: a trailer section that arrived
+                // whole is taken whole, however long it is. Over the bound
+                // it is an error, the way a head that never ends is one, and
+                // not a wait.
+                if self.buffer.len() - trailer_begin > MAX_HEADER_FIELDS {
+                    self.status = RecvStatus::BodyError;
+                }
+                return true;
+            };
+            trailer_end + CRLF_CRLF.len()
         };
-        self.consume(trailer_begin + trailer_end + CRLF.len());
+        // nothing is consumed until the terminator has been found: a
+        // trailer that is still coming must stay in the buffer for the
+        // bytes that finish it
+        self.consume(trailer_begin + consumed);
         self.status = RecvStatus::End;
         true
     }
@@ -1105,7 +1239,13 @@ impl Parser {
 
         let buffered = self.buffer.len() as u64;
         let have = self.body.len() as u64;
-        let append = if self.fields.is_connection_close() && content_length == 0 {
+        // a body the peer closes the socket at the end of has no length — and
+        // no *field*, which is not the same as a field saying `0`: an answer
+        // that names its length as zero is over at its head, and one that
+        // names none at all is the body the socket is the length of.
+        let close_terminated =
+            self.fields.is_connection_close() && !self.fields.has_content_length();
+        let append = if close_terminated {
             // a body the peer closes the socket at the end of has no length
             buffered
         } else if buffered + have <= content_length {
@@ -1118,14 +1258,40 @@ impl Parser {
         } else {
             content_length - have
         };
-        if append > MAX_CONTENT_LENGTH {
+        // The cap is on the body the parser holds, and not on what one read
+        // adds: a peer that writes for ever into a `Connection: close` with
+        // no `Content-Length` adds a bufferful at a time, and every one of
+        // them is under the limit on its own.
+        if have.saturating_add(append) > MAX_CONTENT_LENGTH {
             self.status = RecvStatus::BodyError;
             return true;
         }
+        // A length that is under the limit can still be one this buffer
+        // cannot hold: on a 32-bit target `MAX_CONTENT_LENGTH` is exactly
+        // the value `as usize` truncates to 0, and a parser that appends
+        // nothing never reaches the end of the body it is reading.
+        let Ok(append) = usize::try_from(append) else {
+            self.status = RecvStatus::BodyError;
+            return true;
+        };
 
-        self.body.extend_from_slice(&self.buffer[..append as usize]);
-        self.consume(append as usize);
-        if have + append == content_length {
+        self.body.extend_from_slice(&self.buffer[..append]);
+        self.consume(append);
+        // A body the peer closes the socket at the end of has no length for
+        // the bytes so far to satisfy: no field said how long, so
+        // `have + append` is 0 the moment the head is whole and nothing else
+        // came with it — which is every head that arrives in a read of its
+        // own, and that is how a socket hands one over. Ending there is an
+        // empty answer with the body stranded in the buffer, and what can
+        // end such an answer — [`Parser::peer_hung_up`] — never runs. The
+        // socket is the length, so this waits for bytes like any other body.
+        //
+        // A length of `0` the peer *did* name does not reach here: it is an
+        // answer that is over at its head, however the socket behaves.
+        if close_terminated {
+            return self.buffer.is_empty();
+        }
+        if have + append as u64 == content_length {
             self.status = RecvStatus::End;
             return true;
         }
@@ -1135,6 +1301,18 @@ impl Parser {
     fn consume(&mut self, len: usize) {
         self.buffer.drain(..len);
     }
+}
+
+/// Whether a piece of a head is one that may be written into one.
+///
+/// `CRLF` is what ends a line, so a url, a reason, a name or a value that
+/// carries one does not go into the head as one line: it comes out as the
+/// line it was, then another one — a field the caller never asked for, or a
+/// head that ends early and a second request on a socket that is being kept.
+/// `NUL` goes with them, which is where the C++'s own `strlen` would have
+/// ended the string.
+fn is_writable(part: &str) -> bool {
+    !part.contains(['\r', '\n', '\0'])
 }
 
 /// `less` — how the C++'s `std::map` orders two names, which is `strcasecmp`:
@@ -1696,6 +1874,31 @@ mod tests {
     }
 
     #[test]
+    fn a_first_line_or_a_head_that_is_whole_is_the_length_it_may_be() {
+        // the same two lines, ended this time: the cap is on the line and
+        // not only on how long the parser waits for its end
+        let mut line = Parser::new();
+        let long = format!("GET /{}\r\n", "X".repeat(MAX_FIRST_LINE + 1));
+        assert_eq!(line.recv(long.as_bytes()), RecvStatus::FirstLineError);
+
+        let mut head = Parser::new();
+        head.recv(b"HTTP/1.1 200 OK\r\n");
+        let fields = format!("X: {}\r\n\r\n", "X".repeat(MAX_HEADER_FIELDS + 1));
+        assert_eq!(head.recv(fields.as_bytes()), RecvStatus::HeaderFieldsError);
+
+        // and one under it is a head the parser takes, in one `write`: an
+        // answer with no body in it ends at its head
+        let mut whole = Parser::new();
+        let head = format!("HTTP/1.1 200 OK\r\nX: {}\r\n\r\n", "X".repeat(64 * 1024));
+        assert_eq!(whole.recv(head.as_bytes()), RecvStatus::End);
+        assert_eq!(
+            whole.header_len(),
+            64 * 1024 + "X: ".len() + CRLF_CRLF.len(),
+            "the whole head was read"
+        );
+    }
+
+    #[test]
     fn a_first_line_or_a_head_that_never_ends_is_an_error() {
         let mut parser = Parser::new();
         assert_eq!(parser.recv(b"nonsense\r\n"), RecvStatus::FirstLineError);
@@ -1709,6 +1912,26 @@ mod tests {
         head.recv(b"HTTP/1.1 200 OK\r\n");
         let fields = "X".repeat(MAX_HEADER_FIELDS + 1);
         assert_eq!(head.recv(fields.as_bytes()), RecvStatus::HeaderFieldsError);
+    }
+
+    #[test]
+    fn a_chunk_size_line_that_never_ends_is_an_error() {
+        let mut parser = Parser::new();
+        assert_eq!(
+            parser.recv(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"),
+            RecvStatus::Body
+        );
+        // a size line is what the parser is waiting for, so a peer that never
+        // ends one is the peer the cap is for: nothing here may keep the bytes
+        let line = "X".repeat(MAX_CHUNK_SIZE_LINE + 1);
+        assert_eq!(parser.recv(line.as_bytes()), RecvStatus::BodyError);
+        assert!(parser.is_error());
+
+        // and a stream of them: `recv` of a parser that has failed takes no
+        // more bytes, which is what keeps `buffer` where it was
+        let before = parser.buffered().len();
+        assert_eq!(parser.recv(line.as_bytes()), RecvStatus::BodyError);
+        assert_eq!(parser.buffered().len(), before);
     }
 
     #[test]
@@ -1767,8 +1990,10 @@ mod tests {
         parser.recv_header_only(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello");
         parser.fields_mut().set_content_length(0);
 
-        // a body of no bytes is a whole answer
-        assert_eq!(parser.recv(b""), RecvStatus::Body);
+        // A body of no bytes is a whole answer, so the five the peer wrote
+        // are not its body: what the caller set is what the body is read
+        // by, and what is left over is the next answer of this connection.
+        assert_eq!(parser.recv(b"hello"), RecvStatus::End);
         assert!(parser.body().is_empty());
     }
 }

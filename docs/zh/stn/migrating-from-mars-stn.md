@@ -6,7 +6,7 @@ App 从 C++ 项目的任务链路迁过来，要挪的有两样东西：发起�
 
 | 你用的那一块 | 这里拿什么 | 写在哪一页 |
 |---|---|---|
-| `mars/stn` | crates.io 和 JitPack 上的 `marsrs`，共享 Kotlin 模块的 `marsrs-kmp`，Apple 上的 `MarsRSNet` | [快速开始](/zh/stn/getting-started) |
+| `mars/stn` | JitPack 上的 `marsrs` 和同名的 crate（crates.io 还没发布），共享 Kotlin 模块的 `marsrs-kmp`，Apple 上的 `MarsRSNet` | [快速开始](/zh/stn/getting-started) |
 | `mars/xlog` | `xlog` —— 日志，在自己的一个包里 | [从 mars-xlog 迁移](/zh/xlog/migrating-from-mars-xlog) |
 | `mars/sdt` | 同一个 `marsrs`，和链路在同一个包里 | [从 mars-sdt 迁移](/zh/sdt/migrating-from-mars-sdt) |
 
@@ -14,7 +14,7 @@ App 从 C++ 项目的任务链路迁过来，要挪的有两样东西：发起�
 
 **队列是靠一次调用排空的，不是靠一个线程。** C++ 用自己的一个 message-queue 线程跑
 队列；这个移植里没有线程，所以本该是一个线程的地方，是宿主的一次调用 ——
-`run_pending()`，以及 `due_time()`，告诉它这一趟最多还能等多久。一个循环就是全部：
+`run_pending()`，以及 `due_delay()`，告诉它这一趟最多还能等多久。一个循环就是全部：
 
 ::: code-group
 
@@ -50,8 +50,9 @@ while (due != null) {
 `usleep(due * 1000)`。
 
 在 Rust 里一个调用就能起一个：`Driver::spawn(stn)` 起这个 crate 的一个线程排空
-队列 —— 到点了 `run_pending()`，其间睡 `due_delay()` —— `Driver` 被 drop 的时候把它
-join 掉。要 await 一个任务又没有自己循环的 App 用它；有循环的 App 留着那个循环，
+队列 —— 每 20 ms 一片，片尾 `run_pending()`，然后睡满这一片；这个睡眠不是
+`due_delay()` 回答的那个延迟，后者是宿主的数字、不是线程的数字 —— `Driver` 被 drop
+的时候把它 join 掉，除非这次 drop 自己正握着线程要的那把锁。要 await 一个任务又没有自己循环的 App 用它；有循环的 App 留着那个循环，
 因为一趟把某个任务跑完的时候，await 它的人会被唤醒。
 
 一个发起了却一直没排空的任务会一直待在它的队列里 —— `has_task` 对一个哪儿也去不了
@@ -72,7 +73,7 @@ C++ 里 `net_channel_factory.cc` 那两个钩子。Kotlin、Swift 和 C 的绑�
 | `mars::stn::StopTask` | `stn.stop_task(id)` | `StnLogic.stopTask(id)` | `MarsStn.stop(taskID:)` | `mars_stn_stop_task(id)` |
 | `mars::stn::HasTask` | `stn.has_task(id)` | `StnLogic.hasTask(id)` | `MarsStn.hasTask(id)` | `mars_stn_has_task(id)` |
 | `mars::stn::SetCallback` | `stn.set_callback(app)` | `StnLogic.setCallBack(cb)` | `MarsStn.setApp { … }` | `mars_stn_set_app(ctx, ask)` |
-| `mars::stn::MakesureLonglinkConnected` | `stn.make_sure_long_link_connected("default")` | `StnLogic.makesureLongLinkConnected()` | `MarsStn.makeSureLongLinkConnected()` | `mars_stn_makesure_longlink_connected()` |
+| `mars::stn::MakesureLonglinkConnected` | `stn.make_sure_default_long_link_connected()` | `StnLogic.makesureLongLinkConnected()` | `MarsStn.makeSureLongLinkConnected()` | `mars_stn_makesure_longlink_connected()` |
 | `mars::stn::CreateLonglink_ext` | `stn.create_long_link(config)` | `StnLogic.createLonglink(config)` | `MarsStn.createLongLink(config)` | `mars_stn_create_longlink(&config)` |
 | `mars::stn::DestroyLonglink_ext` | `stn.destroy_long_link(name)` | `StnLogic.destroyLonglink(name)` | `MarsStn.destroyLongLink(name)` | `mars_stn_destroy_longlink(name)` |
 | `mars::stn::MarkMainLonglink_ext` | `stn.mark_main_longlink(name)` | `StnLogic.markMainLonglink(name)` | `MarsStn.markMainLongLink(name)` | `mars_stn_mark_main_longlink(name)` |

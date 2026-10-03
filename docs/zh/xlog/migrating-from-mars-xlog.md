@@ -8,7 +8,7 @@ C++ 写出来的那个文件 —— 同样的帧结构、同样的压缩、同�
 
 | 你在用的 | 这里用什么 | 写在哪一页 |
 |---|---|---|
-| `mars/xlog` | `xlog`：crates.io 上的 `marsrs-xlog`、JitPack 上的 `xlog`、共享 Kotlin 模块的 `xlog-kmp`、Apple 上的 `MarsRSXlog` | [快速开始](/zh/xlog/getting-started) |
+| `mars/xlog` | `xlog`：`marsrs-xlog` 这个 crate（crates.io 还没发布）、JitPack 上的 `xlog`、共享 Kotlin 模块的 `xlog-kmp`、Apple 上的 `MarsRSXlog` | [快速开始](/zh/xlog/getting-started) |
 
 Rust 的 crate、JitPack 和共享 Kotlin 模块做的是这个切分：一个包只有日志库，另一个包是
 整个移植，而整个移植里带着的是同一个日志库 —— 只有名字不同。Apple 是切成三份的：

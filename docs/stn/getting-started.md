@@ -44,16 +44,18 @@ code and carries it across to the Dart or the JS itself.
    returns at once. In Rust `stn.send(task, body)` starts one and hands back the
    answer of it, to await.
 3. **Drive the queue.** What would have been a thread is a pair of calls the app
-   makes — `run_pending()`, and `due_time()` to know how long it may wait before
-   making it. In Rust one call runs that pair for you: `Driver::spawn(stn)`
-   drains the queues on a thread of this crate's until the `Driver` is dropped.
-   On every platform, a task that is started and never drained stays in its
-   queue.
+   makes — `run_pending()`, and `due_delay()` to know how long it may wait
+   before making it. In Rust one call runs that pair for you:
+   `Driver::spawn(stn)` drains the queues on a thread of this crate's until the
+   `Driver` is dropped. On every platform, a task that is started and never
+   drained stays in its queue.
 
 ## Rust
 
 ```bash
-cargo add marsrs          # the whole port: xlog, stn and sdt
+# The crate is not on crates.io yet — publication is pending — so a Rust app
+# takes it off the tag: `cargo add marsrs` on its own resolves nothing.
+cargo add marsrs --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
 ```
 
 ```rust
@@ -181,7 +183,7 @@ the end.
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
+.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0-alpha.3")
 
 // and, in the target that takes it:
 .product(name: "MarsRSNet", package: "mars-rs")   // or MarsRS, for both halves
@@ -196,7 +198,7 @@ MarsStn.setApp { question in
     case .req2Buf:  return .encoded(try! encode(question.task!))
     case .buf2Resp: handle(question.body); return .decoded(errorCode: 0, handle: .normal)
     case .onTaskEnd: return .ended(errorCode: 0)
-    default:        return .nothing
+    default:        return .nothing()
     }
 }
 
@@ -270,7 +272,7 @@ the short link and the long one, because Objective-C has no set of flags.
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")   // xlog alone has none of it
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0-alpha.3")   // xlog alone has none of it
 ```
 
 ```kotlin
@@ -324,7 +326,7 @@ defaults, so the object is the app's to finish.
 
 ```kotlin
 // build.gradle.kts of the shared module
-implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")   // not xlog-kmp
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0-alpha.3")   // not xlog-kmp
 ```
 
 ```kotlin

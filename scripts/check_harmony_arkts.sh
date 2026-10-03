@@ -102,8 +102,25 @@ JSON
 # `--pretty false`: a red box of colour escapes is not what a run log wants.
 "$tsc" --pretty false -p "$work/tsconfig.json"
 
-# What the run above actually read, and not what the directory holds:
-# `hvigorfile.ts` is excluded above, so counting it would claim a file the
-# compiler was told to leave alone.
-echo "type-checked $(find "$work" -name '*.ts' -not -name 'napi_shim.ts' -not -name 'hvigorfile.ts' |
-    wc -l | tr -d ' ') ArkTS file(s) of $types as TypeScript"
+# Counted as the program counts them and not as the directory holds them: the
+# six `.ets` of the package — `Index.ets` and the five under
+# `src/main/ets/xlog/` — plus the `index.d.ts` of the NAPI module, which is the
+# file the shim above is written out of. Left out are the two that are not in
+# the program: `napi_shim.ts`, which this script wrote, and `hvigorfile.ts`,
+# which tsconfig excludes — hvigor's own build script, whose import of
+# `@ohos/hvigor-ohos-plugin` a runner does not have. Both are `.ts` in the same
+# tree, so a `find` for the extension counts nine files for a program of
+# seven.
+#
+# And the seven are asserted and not only printed: `find` answers 0 for a tree
+# with nothing in it and so does `wc`, so a program of no files at all would be
+# a script that passed — and `tsc` cannot catch it, because this script's own
+# `napi_shim.ts` is a `.ts` in the very tree the tsconfig includes, so `tsc`
+# always has an input. A `.ets` renamed or moved out of `find`'s reach is a
+# gate over the half of the package no compiler sees quietly checking nothing.
+count="$(find "$work" -name '*.ts' -not -name 'napi_shim.ts' -not -name 'hvigorfile.ts' | wc -l | tr -d ' ')"
+test "$count" -ge 7 || {
+    echo "::error::only $count ArkTS file(s) in the program, and not 7"
+    exit 1
+}
+echo "type-checked $count ArkTS file(s) of $types as TypeScript"

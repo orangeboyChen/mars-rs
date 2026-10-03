@@ -48,6 +48,8 @@ import io.github.orangeboychen.marsrs.net.ffi.mars_stn_stop_signalling
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_stop_task
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_touch_tasks
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_trig_nooping
+import kotlin.concurrent.atomics.AtomicInt
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.CPointer
@@ -85,23 +87,47 @@ import kotlinx.cinterop.toKString
  * another [StnLogic] — and it must be asked on a thread that is not the one
  * inside an ask, which is what the C ABI promises too.
  */
-@OptIn(ExperimentalForeignApi::class)
+@OptIn(ExperimentalForeignApi::class, ExperimentalAtomicApi::class)
 public actual object StnLogic {
     /**
      * The app that is installed, which is the only thing the C ABI does not give
      * back: `setApp` remembers it so that the next app releases it.
+     *
+     * Read and written under [swap], because `setApp` is three steps and not
+     * one — remember the new app, hand it to the C ABI, release the old one —
+     * and two threads left to run them in any order leave the C ABI holding
+     * the context of a box the other one has already released. Making the
+     * field atomic is not enough: it is the install and the release that have
+     * to be one step, and not only the write of the field.
      */
     private var installed: StableRef<AppBox>? = null
 
+    /**
+     * The lock `setApp` holds over those three steps, and the only one in this
+     * file: a question is asked with the logic held, so nothing else here can
+     * wait for a thread that is inside one.
+     *
+     * A spin and not a mutex, which is what `kotlin.concurrent.atomics` gives
+     * on every target this module builds, and an app is installed once — a
+     * thread that waits is one that waits microseconds.
+     */
+    private val swap = AtomicInt(0)
+
     public actual fun setApp(ask: ((Question) -> Answer)?) {
+        val reference = if (ask == null) null else StableRef.create(AppBox(ask))
+        while (!swap.compareAndSet(0, 1)) {
+            // another `setApp` is between two of its steps
+        }
         val previous = installed
-        installed = null
-        if (ask == null) {
-            mars_stn_set_app(null, null)
-        } else {
-            val reference = StableRef.create(AppBox(ask))
-            mars_stn_set_app(reference.asCPointer(), staticCFunction(::asked))
+        try {
+            if (reference == null) {
+                mars_stn_set_app(null, null)
+            } else {
+                mars_stn_set_app(reference.asCPointer(), staticCFunction(::asked))
+            }
             installed = reference
+        } finally {
+            swap.value = 0
         }
         // The box of the app before this one is held until the swap is over, and
         // not released by the assignment that replaces it: a question can be in
@@ -109,8 +135,18 @@ public actual object StnLogic {
         // pointer it was handed, so a box freed before `mars_stn_set_app` has put
         // the new context in its place is a question that dereferences a freed
         // one. Both are locals of this call, so the old box dies here at the
-        // earliest — after the swap.
-        previous?.dispose()
+        // earliest — after the swap, which is what the C ABI asks for: `ctx`
+        // has to stay alive until another `mars_stn_set_app` takes its place.
+        //
+        // Released twice, because there are two things to release: `dispose` of
+        // the reference is the reference, and the copies a box holds are its
+        // own — they are `nativeHeap` allocations, which nothing frees but
+        // [AppBox.dispose], and a box the collector takes is one that leaks
+        // them.
+        previous?.let {
+            it.get().dispose()
+            it.dispose()
+        }
     }
 
     public actual fun reset() {
@@ -151,16 +187,25 @@ public actual object StnLogic {
     }
 
     public actual fun startTask(task: Task) {
+        // A negative id names no task here, the way the JNI `actual` reads one:
+        // `-1` is `0xFFFF_FFFF` on the C side, which is the noop's own id — the
+        // one the long link keeps itself alive with — and a task started under
+        // it is one a noop of the link's would answer for.
+        if (task.taskID < 0) return
         memScoped {
             mars_stn_start_task(task.native(this).ptr)
         }
     }
 
     public actual fun stopTask(taskID: Int) {
+        // As in [startTask]: `-1` is the noop's id and not a task the app named,
+        // and a `stopTask` of it would stop what the link's own heartbeat is.
+        if (taskID < 0) return
         mars_stn_stop_task(taskID.toUInt())
     }
 
-    public actual fun hasTask(taskID: Int): Boolean = mars_stn_has_task(taskID.toUInt()) != 0
+    // The same reading of a negative: no task has it, so none is in the queues.
+    public actual fun hasTask(taskID: Int): Boolean = taskID >= 0 && mars_stn_has_task(taskID.toUInt()) > 0
 
     public actual fun redoTask() {
         mars_stn_redo_tasks()
@@ -197,10 +242,10 @@ public actual object StnLogic {
         }
     }
 
-    public actual fun longLinkIsConnected(): Boolean = mars_stn_longlink_is_connected() != 0
+    public actual fun longLinkIsConnected(): Boolean = mars_stn_longlink_is_connected() > 0
 
     public actual fun longLinkIsConnectedExt(name: String): Boolean =
-        memScoped { mars_stn_longlink_is_connected_ext(name) != 0 }
+        memScoped { mars_stn_longlink_is_connected_ext(name) > 0 }
 
     public actual fun disableLongLink() {
         mars_stn_disable_longlink()
@@ -212,9 +257,15 @@ public actual object StnLogic {
         mars_stn_create_longlink(config.native(this).ptr) == 0
     }
 
-    public actual fun destroyLonglink(name: String?): Boolean = mars_stn_destroy_longlink(name) != 0
+    // The five asks of this object that read a `1` or a `0` are `> 0` and not
+    // `!= 0`: the C ABI answers `1` for yes, `0` for no and `MARS_STN_ERR_PANIC`
+    // — which is `-1` — for a panic it caught inside the call, and `!= 0` reads
+    // that panic as a yes: a link that is up, a link that is gone, when the call
+    // never reached the net core. `0` is what the JNI `actual` answers for the
+    // same question, so the two agree on either side of the seam.
+    public actual fun destroyLonglink(name: String?): Boolean = mars_stn_destroy_longlink(name) > 0
 
-    public actual fun markMainLonglink(name: String?): Boolean = mars_stn_mark_main_longlink(name) != 0
+    public actual fun markMainLonglink(name: String?): Boolean = mars_stn_mark_main_longlink(name) > 0
 
     public actual fun setSignallingStrategy(period: Long, keepTime: Long) {
         mars_stn_set_signalling_strategy(period, keepTime)
@@ -229,7 +280,11 @@ public actual object StnLogic {
     }
 
     public actual fun setClientVersion(version: Int) {
-        mars_stn_set_client_version(version.toUInt())
+        // `0` and not `0xFFFF_FFFF`, which is what a `-1` would read as: the
+        // version goes out in every long-link package, and the JNI `actual`
+        // clamps it the same way rather than hand the link a number of four
+        // billion.
+        mars_stn_set_client_version(version.coerceAtLeast(0).toUInt())
     }
 
     public actual fun genTaskID(): Int = mars_stn_gen_task_id().toInt()
@@ -270,7 +325,31 @@ internal class AppBox(private val ask: (Question) -> Answer) {
         // the next one is asked, which is what the header says and the only time
         // a copy is known to be dead.
         held.clear()
-        write(ask(question.toQuestion()), out)
+        // An exception that escapes this function escapes into C, and the
+        // frame this one is called from is a `staticCFunction`: there is
+        // nothing above it to catch it, and Kotlin/Native ends the process
+        // on an uncaught one. A question an app answered badly then costs
+        // the app its process, which is the one thing a callback the app
+        // cannot see must not do. What is answered instead is the same
+        // thing the Android actual answers: the question is printed, and
+        // the pipeline is told nothing was answered at all.
+        val answered = try {
+            ask(question.toQuestion())
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            Answer.None
+        }
+        try {
+            write(answered, out)
+        } catch (e: Throwable) {
+            // The half that allocates is this one, and what it catches is a
+            // `Throwable` and not an `Exception`: `held.strings` and
+            // `held.bytes` take `nativeHeap.allocArray`, and what that throws
+            // when there is nothing left to give is an `OutOfMemoryError`,
+            // which is an `Error`. What the struct holds then is what `write`
+            // put into it first, which is nothing answered at all.
+            e.printStackTrace()
+        }
     }
 
     fun dispose() {

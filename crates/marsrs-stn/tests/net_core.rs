@@ -12,6 +12,7 @@
 //! two queues' loops, hand the answers back, and drain what the queues asked
 //! for ([`NetCore::run_pending`] is the C++'s message queue thread).
 
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use marsrs_stn::longlink_task_manager::Response as LongAnswer;
@@ -828,21 +829,93 @@ fn the_setters_reach_the_pieces_they_are_for() {
         .core
         .disconnect_long_link_by_taskid(7, DisconnectInternalCode::Reset));
 
+    // a task that is still out on the long link, which is what a redo below
+    // has to have something to cancel
+    app.start(8);
+
+    // the short link's own host, and not one the core keeps for itself
     app.core.set_debug_host(SHORT_HOST);
-    app.core.forbid_longlink_tls_host(&[SHORT_HOST.to_string()]);
+    assert_eq!(app.core.shortlink().debug_host(), SHORT_HOST);
+
+    // a host the C++'s `__ForbidUseTls` takes a long-link one for, which is
+    // what the name it is given has to have in it
+    app.core.forbid_longlink_tls_host(&[MAIN.to_string()]);
+    assert!(app.core.longlink().forbid_tls(&[MAIN.to_string()]));
+
+    // the net source's, and not a pair the core keeps: the net source keeps
+    // no reading of them a host can ask for, so what they do to a list is
+    // `tests/simple_ipport_sort.rs`'s to say, and here they are the calls
+    // the core forwards
     app.core.add_server_ban("1.2.3.4");
     app.core.init_history_to_banned_list();
+
     app.core.set_ip_connect_timeout(1000, 2000);
+    assert_eq!(app.core.net_source().ip_connect_timeout(), (1000, 2000));
+
     app.core.set_packer_encoder(3, "encoder");
     assert_eq!(app.core.packer_encoder_version(), 3);
     assert_eq!(app.core.packer_encoder_name(), "encoder");
 
+    // `ActiveLogic::SignalActive` is a flag the two gates read and not one
+    // the core keeps to itself: the speed the funnel drains at is the one
+    // thing that says which way the app went
+    let inactive = app.core.anti_avalanche().flow_limit().funnel_speed();
     app.core.set_active(true);
+    assert_ne!(
+        app.core.anti_avalanche().flow_limit().funnel_speed(),
+        inactive,
+        "the funnel drains at the speed of an app that never went active"
+    );
+
+    // `MakeSureLongLinkConnected` is the link's own question and not one the
+    // core answers: what the core has to do is reach the link the name is
+    // for, and what reaching it does is start a run on it. A link that is
+    // up answers "connected" and starts nothing, so the question is put to
+    // one that is not. A second run is not started while one is in flight,
+    // so the default link's turn is told apart by the scene a disconnect
+    // left on it, which a new run clears.
+    let link = Arc::clone(app.core.long_link(MAIN).expect("the default link"));
+    link.lock()
+        .unwrap()
+        .set_status(LongLinkStatus::DisConnected);
+    assert!(!link.lock().unwrap().is_running());
     app.core.make_sure_long_link_connected(MAIN);
+    assert!(link.lock().unwrap().is_running());
+    {
+        let mut link = link.lock().unwrap();
+        link.disconnect(DisconnectInternalCode::Reset);
+        link.end_run();
+        assert!(link.disconnect_code().is_set());
+    }
     app.core.make_sure_default_long_link_connected();
+    assert_eq!(
+        link.lock().unwrap().disconnect_code(),
+        DisconnectInternalCode::None,
+        "the default link was not asked"
+    );
+
+    // `KeepSignal()` — the first buffer goes out at once, which is the one
+    // thing a keeper nobody touched does not do
     app.core.keep_signal_at(START);
+    assert_eq!(app.keeper().sent(), 1);
+
+    // `StopSignal()` ends a keeper that has a post waiting, which is what the
+    // link's own data gave it, and not one that was only ever touched
+    app.keeper().on_network_data_changed_at(START);
     app.core.stop_signal();
+    assert!(!app.keeper().is_keeping(), "the app is waiting for nothing");
+
+    // `RedoTasks` cancels every run that is out and the queue starts it
+    // again, so what the app sees of one is a second send of the same task
+    let before = app.sent();
+    assert_eq!(before.iter().filter(|sent| sent.taskid == 8).count(), 1);
     app.core.redo_tasks_at(START + 100);
+    let after = app.sent();
+    assert_eq!(
+        after.iter().filter(|sent| sent.taskid == 8).count(),
+        2,
+        "a redo sent nothing again: {after:?}"
+    );
 
     // a core that is told not to use the long link puts everything on the
     // short one, and makes no more links
@@ -852,7 +925,7 @@ fn the_setters_reach_the_pieces_they_are_for() {
         .core
         .create_long_link(LonglinkConfig::new("second"))
         .is_none());
-    app.start(8);
+    app.start(9);
     assert_eq!(
         app.sent().last().map(|sent| sent.channel.as_str()),
         Some("short")
@@ -869,13 +942,109 @@ fn task_of(taskid: u32) -> Task {
     task
 }
 
+/// The channel the queue asks is the link the core made, and not one nobody
+/// wired. Every other sample here hands the queue a channel of its own, which
+/// is the app's right and hides what the core leaves it with: a task put on a
+/// long link sat in the queue until its own timeout ran out, and the link was
+/// never asked for it at all. What shows it is a core with no hooks of the
+/// app's — what a task goes out on is then the link's own queue, which is what
+/// the host's run writes off.
+#[test]
+fn a_task_goes_out_on_the_link_the_core_made_and_not_on_a_channel_nobody_wired() {
+    let mut core = NetCore::new_at(START);
+    core.set_net_info(|| NET_TYPE_WIFI);
+    core.set_clock(|| NOW_SECS);
+    core.longlink()
+        .set_req2buf(|task, _channel| Ok(task.cgi.clone().into_bytes()));
+
+    let link = Arc::clone(core.long_link(MAIN).expect("the default link"));
+    link.lock().unwrap().set_status(LongLinkStatus::Connected);
+
+    let mut task = Task::new(7, 12);
+    task.cgi = "/cgi-bin/7".to_string();
+    task.channel_select = Task::CHANNEL_LONG;
+    task.total_timeout = 10 * 60 * 1000;
+    assert!(core.start_task_at(START, task));
+
+    let queued: Vec<(u32, Vec<u8>)> = link
+        .lock()
+        .unwrap()
+        .queued()
+        .iter()
+        .map(|data| (data.task.taskid, data.buffer.clone()))
+        .collect();
+    assert_eq!(queued.len(), 1, "one task went out on the link");
+    assert_eq!(queued[0].0, 7);
+    assert!(
+        queued[0].1.ends_with(b"/cgi-bin/7"),
+        "and what it carries is the body the app wrote: {:?}",
+        queued[0].1
+    );
+    assert!(core.longlink().has_task(7), "the queue still waits on it");
+}
+
+/// `SetNeedUseLongLink` is one assignment in the C++ (`net_core.cc:1316`), and
+/// it is one here: a setter that re-wired the core to change the flag put the
+/// channel hooks of `wire_longlink_channels` back over the ones the host had
+/// installed on the queue itself, which is what that function's own comment
+/// promises it does not do.
+#[test]
+fn setting_the_flag_leaves_the_hooks_of_the_queue_alone() {
+    let mut core = NetCore::new_at(START);
+    core.set_net_info(|| NET_TYPE_WIFI);
+    core.set_clock(|| NOW_SECS);
+    core.longlink()
+        .set_req2buf(|task, _channel| Ok(task.cgi.clone().into_bytes()));
+
+    let asked = Arc::new(AtomicUsize::new(0));
+    let counting = Arc::clone(&asked);
+    core.longlink().set_make_sure_connected(move |_| {
+        counting.fetch_add(1, AtomicOrdering::SeqCst);
+        true
+    });
+
+    core.set_need_use_long_link(true);
+
+    let mut task = Task::new(7, 12);
+    task.cgi = "/cgi-bin/7".to_string();
+    task.channel_select = Task::CHANNEL_LONG;
+    task.total_timeout = 10 * 60 * 1000;
+    assert!(core.start_task_at(START, task));
+
+    assert_eq!(
+        asked.load(AtomicOrdering::SeqCst),
+        1,
+        "the queue asked the hook the app gave it, and not one a re-wire put back"
+    );
+}
+
 #[test]
 fn an_encoder_the_app_set_is_the_one_every_link_is_made_with() {
-    let mut core = NetCore::with_encoder_at(START, true, LongLinkEncoder::new());
+    // An encoder the app asked for, and not the one a link makes for itself:
+    // `0` is "the link decides", so an interval of its own is a difference
+    // every heartbeat after this one can be seen to carry.
+    let mut encoder = LongLinkEncoder::new();
+    encoder.noop_interval = 60_000;
+
+    let mut core = NetCore::with_encoder_at(START, true, encoder);
     let link = core.create_long_link(LonglinkConfig::new("second"));
     assert!(link.is_some());
     assert!(core.long_link_meta("second").is_some());
     assert_eq!(core.longlink().channels().len(), 2);
+
+    // … and both of the links the core made are made with it, the one the app
+    // named and the one it did not. A core that handed the default to the
+    // factory passes the three assertions above untouched.
+    for name in [MAIN, "second"] {
+        let link = Arc::clone(core.long_link(name).unwrap_or_else(|| {
+            panic!("the core made no link named {name}");
+        }));
+        let made = link.lock().unwrap_or_else(|p| p.into_inner()).encoder();
+        assert_eq!(
+            made, encoder,
+            "the link named {name} was made with {made:?} and not with {encoder:?}"
+        );
+    }
 }
 
 /// What the host drains is not the follow-ups alone. A task that answered

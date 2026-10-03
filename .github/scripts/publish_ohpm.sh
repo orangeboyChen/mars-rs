@@ -26,11 +26,20 @@
 #
 # Neither exists until somebody has an ohpm account, so the gate is the
 # credential and not the registry: with no publish code there is nothing to
-# publish with, and the release is not failed over it. Which is also why the
-# first version goes up by hand — an ohpm name is asked for once and kept, and
-# a package ohpm has never seen has no publisher and no publish code yet.
+# publish with, and the release is not failed over it. What it is not is green:
+# a missing credential is `::error::` and `published=false` now, because a
+# release that went out with five of its nine crates missing and said nothing
+# is what a warning buys. Which is also why the first version goes up by hand
+# — an ohpm name is asked for once and kept, and a package ohpm has never seen
+# has no publisher and no publish code yet.
 
 set -euo pipefail
+
+# Whether this script put the HAR on ohpm: what a Summary step of the job reads
+# before it names a version.
+published() {
+    printf 'published=%s\n' "$1" >> "${GITHUB_OUTPUT:-/dev/null}"
+}
 
 version="${1:-}"
 if [ -z "$version" ]; then
@@ -42,18 +51,28 @@ version="${version#v}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$root"
 
-har="$root/dist/marsrs-harmonyos-xlog-$version.har"
+# The name the archive is published under, read out of the module's own manifest
+# the way scripts/package_harmony.sh derives it, and not hardcoded: the two are
+# one name written in one place, and a rename of the package is a rename in the
+# manifest and not in this script.
+name="$(python3 -c 'import re,sys; print(re.search(r"\"name\": \"([^\"]*)\"", open(sys.argv[1]).read()).group(1))' \
+    "$root/platforms/harmonyos/marsrs-xlog/oh-package.json5")"
+test -n "$name" || { echo "::error::platforms/harmonyos/marsrs-xlog/oh-package.json5 names no package"; exit 1; }
+
+har="$root/dist/$name-$version.har"
 test -f "$har" || { echo "::error::no $har — run scripts/package_harmony.sh first"; exit 1; }
 
 # The publish code: OHOS_PUBLIC_TOKEN is the secret the repository carries, and
 # OHPM_PUBLISH_ID is the same number under the name it is documented by.
 publish_id="${OHOS_PUBLIC_TOKEN:-${OHPM_PUBLISH_ID:-}}"
 if [ -z "$publish_id" ]; then
-    echo "::warning::no OHOS_PUBLIC_TOKEN: $har is left unpublished. Publish its first version by hand (ohpm publish $har), then set OHOS_PUBLIC_TOKEN and OHPM_KEY"
+    echo "::error::no OHOS_PUBLIC_TOKEN: $har is left unpublished. Publish its first version by hand (ohpm publish $har), then set OHOS_PUBLIC_TOKEN and OHPM_KEY"
+    published false
     exit 0
 fi
 if ! command -v ohpm > /dev/null 2>&1; then
-    echo "::warning::ohpm is not on PATH — install the DevEco Command Line Tools, or publish $har by hand"
+    echo "::error::ohpm is not on PATH — install the DevEco Command Line Tools, or publish $har by hand"
+    published false
     exit 0
 fi
 
@@ -68,7 +87,8 @@ if [ -z "$key_path" ] && [ -n "${OHPM_KEY:-}" ]; then
     trap 'rm -f "$key_path"' EXIT
 fi
 if [ -z "$key_path" ]; then
-    echo "::warning::no OHPM_KEY_PATH or OHPM_KEY: $har is left unpublished"
+    echo "::error::no OHPM_KEY_PATH or OHPM_KEY: $har is left unpublished"
+    published false
     exit 0
 fi
 
@@ -78,3 +98,5 @@ echo "publishing $(basename "$har")"
 # refused by ohpm and not overwritten, so a re-run of a release that is already
 # up fails here rather than silently publishing a second copy.
 ohpm publish "$har" --publish_id "$publish_id" --key_path "$key_path"
+
+published true

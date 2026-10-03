@@ -4,14 +4,17 @@
 //! hosts and ports the app set, the debug ip that overrides dns for one host
 //! or one cgi, the backup ips a host falls back to, and the history that says
 //! which pairs failed ([`SimpleIpPortSort`]). What it answers a caller is a
-//! [`Vec`] of [`IpPortItem`] — at most [`NUM_MAKE_COUNT`] ip/port pairs, in the
-//! order they should be tried in.
+//! [`Vec`] of [`IpPortItem`] — [`NUM_MAKE_COUNT`] ip/port pairs, or one more
+//! than that when a single host answered all of them, in the order they should
+//! be tried in.
 //!
 //! Two things decide the whole list: a host with a debug ip never reaches dns
 //! at all, and a pair that came from dns is sorted and filtered by its history
 //! while a pair that came from the backup list is only shuffled. The count
 //! each host is allowed to add is [`NUM_MAKE_COUNT`] while the app is in the
-//! foreground, and one fewer spread over the hosts while it is not.
+//! foreground — and [`NUM_MAKE_COUNT`] `+ 1` once one host has answered all of
+//! them by itself, which is how a list of that kind still gets a second kind
+//! of pair — and one fewer spread over the hosts while it is not.
 //!
 //! The dns, the network, and whether the app is in the foreground are three
 //! callbacks here ([`NewDns`], [`Dns`], [`NetInfo`], [`IsActive`]) — the port
@@ -462,15 +465,17 @@ impl NetSource {
         config: &LonglinkConfig,
         extra: &ExtraInfo,
     ) -> Vec<IpPortItem> {
-        if let Some(items) = self.longlink_debug_ip_port(config) {
-            return items;
-        }
-
         let hosts: Vec<String> = if config.host_list.is_empty() {
             self.longlink_hosts.clone()
         } else {
             config.host_list.clone()
         };
+        // the same list the caller would resolve, and not the one the app set
+        // on the link: the debug ip of a host that came with the config is a
+        // debug ip too, and a link tried on it never reaches dns
+        if let Some(items) = self.longlink_debug_ip_port(config, &hosts) {
+            return items;
+        }
         if hosts.is_empty() {
             return Vec::new();
         }
@@ -737,12 +742,16 @@ impl NetSource {
     /// debug ip but no ports gets a link with no pairs at all, not a dns
     /// lookup.
     ///
-    /// The host debug ip of any of the hosts the app set wins, one item per
-    /// long-link port. After that it is the link's own debug ip: the long-link
-    /// one for `Task::CHANNEL_LONG` and the minor-long one for
+    /// The host debug ip of any of the hosts the link would be tried on wins,
+    /// one item per long-link port. After that it is the link's own debug ip:
+    /// the long-link one for `Task::CHANNEL_LONG` and the minor-long one for
     /// `Task::CHANNEL_MINOR_LONG`, with the first host of the list as the host.
-    fn longlink_debug_ip_port(&self, config: &LonglinkConfig) -> Option<Vec<IpPortItem>> {
-        for host in &self.longlink_hosts {
+    fn longlink_debug_ip_port(
+        &self,
+        config: &LonglinkConfig,
+        hosts: &[String],
+    ) -> Option<Vec<IpPortItem>> {
+        for host in hosts {
             if let Some(ip) = self.host_debugip.get(host) {
                 return Some(debug_items(ip, host, &self.longlink_ports));
             }
@@ -750,18 +759,26 @@ impl NetSource {
 
         // the C++ reads `front()` of a list it never checked: an app that set a
         // debug ip but no host gets the empty host here, not a crash
-        let (ip, host) = match config.link_type {
-            Task::CHANNEL_LONG if !self.longlink_debugip.is_empty() => (
-                self.longlink_debugip.clone(),
-                self.longlink_hosts.first().cloned().unwrap_or_default(),
-            ),
-            Task::CHANNEL_MINOR_LONG if !self.minorlong_debugip.is_empty() => (
-                self.minorlong_debugip.clone(),
-                config.host_list.first().cloned().unwrap_or_default(),
-            ),
-            _ => return None,
-        };
-        Some(debug_items(&ip, &host, &self.longlink_ports))
+        let host = hosts.first().cloned().unwrap_or_default();
+        match config.link_type {
+            Task::CHANNEL_LONG if !self.longlink_debugip.is_empty() => Some(debug_items(
+                &self.longlink_debugip,
+                &host,
+                &self.longlink_ports,
+            )),
+            // The minor-long pair is the pair it was set as, and not the long
+            // link's ip on the long link's ports: its port came in with its
+            // ip, and an app that set one but no long-link ports got a link
+            // with no pairs at all out of the ports it never set.
+            Task::CHANNEL_MINOR_LONG if !self.minorlong_debugip.is_empty() => {
+                Some(vec![debug_item(
+                    &self.minorlong_debugip,
+                    self.minorlong_port,
+                    &host,
+                )])
+            }
+            _ => None,
+        }
     }
 
     /// `__GetShortlinkDebugIPPort(_hostlist, _ipport_items, _cgi)`.
@@ -863,7 +880,14 @@ impl NetSource {
             items.extend(made.unwrap_or_default());
         }
         for host in host_list {
-            if count >= NUM_MAKE_COUNT {
+            // What the C++ asks is the length of the list, and not the count
+            // the pass above was aiming at: that one is a target, this one is
+            // what is in there, and a host that answered nothing leaves it
+            // short of the target. Guarding on the target kept the loop going
+            // for every host whatever the list held, which is a fallback dns
+            // question — and a `host_backup_ips` entry — for hosts upstream
+            // never asks.
+            if items.len() >= NUM_MAKE_COUNT {
                 break;
             }
             let made = self.make_ip_ports_at(
@@ -1016,9 +1040,11 @@ impl NetSource {
             // is already longer than the count — and a `needcount` that is not
             // a length keeps every pair
             let need = count.checked_sub(so_far.len()).unwrap_or(usize::MAX);
+            // `CanUseIPv6()`, and not a `true` the C++ cannot say: what the app
+            // forbade is not offered first
             made = self
                 .ipport_strategy
-                .sort_and_filter_at(now, made, need, true);
+                .sort_and_filter_at(now, made, need, self.ipv6_enabled);
         }
 
         Some(made)
@@ -1150,18 +1176,67 @@ mod tests {
         assert_eq!(ips(&items), vec!["7.7.7.7".to_string()]);
         assert_eq!(items[0].source_type, IpSourceType::Debug);
 
-        // a minor long link has one of its own
+        // a minor long link has one of its own, and it is the pair it was
+        // given: one item on the port that came in with the ip, and not one
+        // per long-link port
         let mut source = a_source();
-        source.set_minorlong_debug_ip("8.8.8.8", 0);
+        source.set_minorlong_debug_ip("8.8.8.8", 5223);
         let mut config = LonglinkConfig::new("minor");
         config.link_type = Task::CHANNEL_MINOR_LONG;
         config.host_list = vec!["minor.example".to_string()];
         let items = source.get_longlink_items(&config);
-        assert_eq!(
-            ips(&items),
-            vec!["8.8.8.8".to_string(), "8.8.8.8".to_string()]
-        );
+        assert_eq!(ips(&items), vec!["8.8.8.8".to_string()], "one pair");
+        assert_eq!(items[0].port, 5223, "the port that came with the ip");
         assert_eq!(items[0].host, "minor.example");
+        assert_eq!(items[0].source_type, IpSourceType::Debug);
+    }
+
+    /// The backup pass stops at the list, the way the C++ does — and not at
+    /// the count the pass before it was aiming at, which is a number no host
+    /// ever moved: every host got a fallback dns question and an entry in the
+    /// backup map whether the list was full or not.
+    #[test]
+    fn the_backup_pass_stops_when_the_list_is_full() {
+        use std::sync::{Arc, Mutex};
+
+        let asked: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let mut source = NetSource::new_at(0);
+        source.set_longlink(
+            vec!["long.example".to_string(), "long2.example".to_string()],
+            vec![80],
+            "",
+        );
+        source.set_is_active(|| false);
+        source.set_net_info(|| 1);
+        source.set_random(|_| 0);
+        // no `new_dns`: the first pass answers nothing, so the backup pass is
+        // the only thing that asks
+        let recorder = Arc::clone(&asked);
+        source.set_dns(move |host| {
+            recorder.lock().unwrap().push(host.to_string());
+            vec![
+                "1.1.1.1".to_string(),
+                "1.1.1.2".to_string(),
+                "1.1.1.3".to_string(),
+                "1.1.1.4".to_string(),
+                "1.1.1.5".to_string(),
+            ]
+        });
+
+        let items = source.get_longlink_items(&LonglinkConfig::new("main"));
+        assert_eq!(items.len(), NUM_MAKE_COUNT, "the list is full");
+        // the first pass asks both hosts — there is no `new_dns`, so its own
+        // fallback does — and the backup pass asks only the one that fills
+        // the list
+        assert_eq!(
+            *asked.lock().unwrap(),
+            vec![
+                "long.example".to_string(),
+                "long2.example".to_string(),
+                "long.example".to_string()
+            ],
+            "a second host is not asked once the first filled the list"
+        );
     }
 
     #[test]
@@ -1170,6 +1245,70 @@ mod tests {
         source.set_new_dns(|_, _, _| vec!["1.1.1.1".to_string()]);
         let items = source.get_longlink_items(&LonglinkConfig::new("main"));
         assert!(items.is_empty(), "no host, and nothing resolved");
+    }
+
+    /// One long-link host, one port, and a dns that answers a v4 address first
+    /// and a v6 one after it: what the two sorts do with the same two pairs is
+    /// the only thing that tells `CanUseIPv6()` apart.
+    fn a_source_with_both_families() -> NetSource {
+        let mut source = NetSource::new_at(0);
+        source.set_longlink(vec!["long.example".to_string()], vec![80], "");
+        source.set_is_active(|| true);
+        source.set_net_info(|| 1);
+        source.set_new_dns(|_, _, _| vec!["1.1.1.1".to_string(), "2001:db8::1".to_string()]);
+        source.set_random(|_| 0);
+        source
+    }
+
+    #[test]
+    fn a_host_of_the_config_with_a_debug_ip_never_reaches_dns() {
+        // what the debug scan looks at is the hosts the link would be tried
+        // on, which are the config's: a debug ip for one of those is a debug
+        // ip too, and the host it is labelled with is that host
+        let mut source = a_source();
+        source.set_debug_ip("other.example", "9.9.9.9");
+        let mut config = LonglinkConfig::new("main");
+        config.host_list = vec!["other.example".to_string()];
+        let items = source.get_longlink_items(&config);
+        assert_eq!(
+            ips(&items),
+            vec!["9.9.9.9".to_string(), "9.9.9.9".to_string()],
+            "one item per long-link port, and dns was not asked"
+        );
+        assert!(items.iter().all(|item| item.host == "other.example"));
+
+        // ... and the link's own debug ip is labelled with the host of the
+        // same list, and not with one the app set on the link and never asked
+        // about here
+        let mut source = a_source();
+        source.set_longlink(vec!["long.example".to_string()], vec![80], "7.7.7.7");
+        let items = source.get_longlink_items(&config);
+        assert_eq!(ips(&items), vec!["7.7.7.7".to_string()]);
+        assert_eq!(items[0].host, "other.example");
+    }
+
+    #[test]
+    fn the_family_the_app_forbade_is_not_the_one_offered_first() {
+        // `CanUseIPv6()`: with it on, one of each family in turn, and the v6
+        // pair is the first of them
+        let mut source = a_source_with_both_families();
+        let items = source.get_longlink_items(&LonglinkConfig::new("main"));
+        assert_eq!(
+            ips(&items),
+            vec!["2001:db8::1".to_string(), "1.1.1.1".to_string()]
+        );
+
+        // `DisableIPv6()` — and the pairs come out in the order the dns
+        // answered them in, v6 or no v6, instead of being offered ahead of
+        // everything on a network the app said it had no use for
+        let mut source = a_source_with_both_families();
+        source.disable_ipv6();
+        assert!(!source.can_use_ipv6());
+        let items = source.get_longlink_items(&LonglinkConfig::new("main"));
+        assert_eq!(
+            ips(&items),
+            vec!["1.1.1.1".to_string(), "2001:db8::1".to_string()]
+        );
     }
 
     #[test]
@@ -1321,6 +1460,31 @@ mod tests {
                 .any(|item| item.ip == "5.5.5.5" && item.source_type == IpSourceType::Backup),
             "{:?}",
             items
+        );
+    }
+
+    #[test]
+    fn one_host_that_answered_all_five_by_itself_still_gets_a_sixth() {
+        // the `merge_type_count` ladder: a host that filled the list on its
+        // own has the count raised by one, so the list still gets a pair of a
+        // second kind — which is the sixth the module's own words promise
+        let mut source = NetSource::new_at(0);
+        source.set_longlink(vec!["long.example".to_string()], vec![80], "");
+        source.set_is_active(|| true);
+        source.set_net_info(|| 1);
+        source.set_new_dns(|_, _, _| {
+            ["1.1.1.1", "1.1.1.2", "1.1.1.3", "1.1.1.4", "1.1.1.5"]
+                .map(str::to_string)
+                .to_vec()
+        });
+        source.set_backup_ips("long.example", vec!["5.5.5.5".to_string()]);
+        source.set_random(|_| 0);
+
+        let items = source.get_longlink_items(&LonglinkConfig::new("main"));
+        assert_eq!(items.len(), NUM_MAKE_COUNT + 1, "{:?}", ips(&items));
+        assert_eq!(
+            items.last().map(|item| item.source_type),
+            Some(IpSourceType::Backup)
         );
     }
 
@@ -1548,6 +1712,7 @@ mod tests {
         assert!(source.ipport_strategy().ban_list().is_empty());
 
         source.init_history_to_banned_list();
-        assert!(format!("{source:?}").contains("NetSource"));
+        assert!(format!("{source:?}").contains("\"other.example\""));
+        assert!(format!("{source:?}").contains("ipv6_enabled: false"));
     }
 }

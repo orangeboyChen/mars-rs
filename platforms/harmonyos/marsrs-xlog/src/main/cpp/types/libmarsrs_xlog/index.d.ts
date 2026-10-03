@@ -47,7 +47,8 @@ export const setConsoleLogEnabled: (namePrefix: string, enabled: boolean) => voi
 /** `mars_xlog_set_max_file_size_instance`; `0` never splits. */
 export const setMaxFileSize: (namePrefix: string, bytes: number) => void;
 
-/** `mars_xlog_set_max_alive_duration_instance`; `0` is ten days. */
+/** `mars_xlog_set_max_alive_duration_instance`; a lifetime below a day — `0`
+ * among them — is refused, and the appender keeps the one it has. */
 export const setMaxAliveTime: (namePrefix: string, seconds: number) => void;
 
 /** `mars_xlog_is_enabled_for`: whether a record at `level` would be written. */
@@ -79,5 +80,5 @@ export const logFiles: (namePrefix: string, daysAgo: number) => string[];
  * `daysAgo` days ago, whether or not they are there yet. */
 export const logFileNames: (namePrefix: string, daysAgo: number) => string[];
 
-/** `mars_xlog_release_instance`: closes the appender `open` made. */
+/** `mars_xlog_release_instance_of`: closes the appender `open` made. */
 export const close: (namePrefix: string) => void;

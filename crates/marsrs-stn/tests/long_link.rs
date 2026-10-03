@@ -539,6 +539,44 @@ fn the_answer_of_a_noop_the_app_asked_for_is_what_the_heartbeat_before_it_report
 }
 
 #[test]
+fn a_heartbeat_the_app_asked_for_and_did_not_send_leaves_the_one_out_alone() {
+    let (mut link, _) = a_connected_longlink();
+
+    // the heartbeat of the interval: on the queue, waiting for the host's run
+    // to write it, and with eight seconds to answer in
+    assert!(link.send_heartbeat_at(1_000, false, false));
+    assert!(link.is_nooping());
+    assert_eq!(link.noop_timeout_due(), Some(1_000 + 8 * 1000));
+
+    // `TrigNoop` while that one is still on the queue: a noop goes out only
+    // when there is nothing waiting to be written, so nothing goes out — and
+    // the heartbeat that is out is still out, with the watchdog it was given
+    link.trig_noop_at(1_100);
+    assert_eq!(link.queued().len(), 1, "nothing was put on the queue");
+    assert_eq!(link.queued()[0].task.taskid, Task::NOOP_TASK_ID);
+    assert!(link.is_nooping(), "the heartbeat is still out");
+    assert_eq!(
+        link.noop_timeout_due(),
+        Some(1_000 + 8 * 1000),
+        "the watchdog of the heartbeat that is out, and not one restarted"
+    );
+
+    // so an answer that does not come is a timeout that ends the run
+    assert!(!link.is_noop_timed_out());
+    assert!(link.on_noop_alarm_at(1_000 + 8 * 1000, true));
+    assert!(link.is_noop_timed_out());
+
+    // ... and an answer that does, though late, still ends the heartbeat
+    assert!(link.noop_resp_at(
+        1_000 + 8 * 1000 + 100,
+        marsrs_stn::longlink::NOOP_CMDID,
+        Task::NOOP_TASK_ID,
+        &[]
+    ));
+    assert!(!link.is_nooping());
+}
+
+#[test]
 fn the_heartbeat_the_app_asks_for_is_not_the_one_the_interval_asked_for() {
     let (mut link, _) = a_connected_longlink();
     let said: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
@@ -630,7 +668,7 @@ fn a_run_writes_a_task_reads_its_answer_and_ends_with_the_profile() {
     );
 
     assert_eq!(
-        link.read_at(2_100, socket).unwrap(),
+        link.read_at(2_100, socket).answers,
         vec![Answer::Task {
             cmdid: 12,
             taskid: 7,
@@ -659,7 +697,10 @@ fn a_run_the_peer_hung_up_on_is_over_and_says_so() {
     });
 
     // a read of nothing is the peer hanging up
-    assert_eq!(link.read_at(2_000, SocketFd(3)), Err(RunEnd::shutdown()));
+    assert_eq!(
+        link.read_at(2_000, SocketFd(3)).end,
+        Some(RunEnd::shutdown())
+    );
     assert!(link.is_server_triggered_off());
     link.finish_run_at(2_000, SocketFd(3), RunEnd::shutdown());
 
@@ -689,10 +730,10 @@ fn what_the_link_read_stays_until_it_is_a_whole_package() {
     link.make_sure_connected();
     let socket = link.run_at(1_000).unwrap();
 
-    assert_eq!(link.read_at(2_000, socket).unwrap(), vec![]);
+    assert_eq!(link.read_at(2_000, socket).answers, vec![]);
     assert_eq!(link.recv_len(), packed.len() / 2, "half of it is here");
     assert_eq!(
-        link.read_at(2_100, socket).unwrap(),
+        link.read_at(2_100, socket).answers,
         vec![Answer::Task {
             cmdid: 12,
             taskid: 7,

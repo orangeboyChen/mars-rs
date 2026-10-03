@@ -174,6 +174,8 @@ pub fn hex2str(bytes: &[u8]) -> String {
 ///
 /// The C++ bails out above 1024 input characters (512 bytes of output), which
 /// is kept as a documented limit: `None` is returned instead of an assert.
+/// So is a pair of characters that is not two hex digits of either case —
+/// the C++ reads the two as two nibbles, and has no sign to read.
 pub fn str2hex(s: &str) -> Option<Vec<u8>> {
     let bytes = s.as_bytes();
     if bytes.len() > 1024 {
@@ -184,9 +186,21 @@ pub fn str2hex(s: &str) -> Option<Vec<u8>> {
         if pair.len() != 2 {
             break;
         }
-        out.push(u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?);
+        // Two characters are two nibbles, and anything that is not a hex
+        // digit is not one: `from_str_radix` reads a leading `+` as a
+        // sign, so `"+8"` was the byte 8 where the C++ has no byte at all.
+        let (Some(high), Some(low)) = (hex_nibble(pair[0]), hex_nibble(pair[1])) else {
+            return None;
+        };
+        out.push((high << 4) | low);
     }
     Some(out)
+}
+
+/// What one character of a hex pair stands for: `None` for anything that is
+/// not a hex digit of either case, and never a sign or a space.
+fn hex_nibble(byte: u8) -> Option<u8> {
+    u8::try_from(char::from(byte).to_digit(16)?).ok()
 }
 
 /// `strutil::ReplaceChar`.
@@ -283,6 +297,9 @@ pub unsafe fn cstr_cmp_safe(a: *const c_char, b: *const c_char) -> bool {
 /// `"abc"` is `0`, not `default_num` — the fallback is reserved for a null
 /// pointer, which is what the "safe" in the C++ name buys.
 ///
+/// Not like `atoi` in one way: a number past `int` saturates, where the
+/// C++'s `(int)strtol` wraps.
+///
 /// # Safety
 ///
 /// See [`cstr_to_string_safe`].
@@ -299,7 +316,10 @@ pub unsafe fn cstr_to_i32_safe(ptr: *const c_char, default_num: i32) -> i32 {
     if digits.is_empty() {
         return 0;
     }
-    // `atoi` has no range: it saturates the way a cast does.
+    // The C++'s `atoi` is `(int)strtol`, so a number past `int` comes out of
+    // it wrapped and not clamped. The port clamps: a caller that wrote
+    // `99999999999999` is asking for a number it did not write otherwise,
+    // and what "safe" buys here is the same thing it buys for the pointer.
     (sign * digits.parse::<i64>().unwrap_or(i64::MAX)).clamp(i32::MIN as i64, i32::MAX as i64)
         as i32
 }
@@ -339,7 +359,9 @@ where
     out
 }
 
-/// `strutil::join_to_string_for_log` — `{a,b,c}`.
+/// `strutil::join_to_string_for_log` — `{a,b,c,}` of `["a", "b", "c"]`, the
+/// trailing comma and all: the separator goes after every item, so what
+/// closes the list is the postfix behind it.
 pub fn join_to_string_for_log<I, T>(items: I) -> String
 where
     I: IntoIterator<Item = T>,

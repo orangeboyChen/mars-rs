@@ -21,9 +21,10 @@ import java.io.ByteArrayOutputStream
  * function pointer of the C ABI. Five of the eighteen never reach the app here,
  * because the bridge answers them itself; see [Question.Kind].
  *
- * The two `actual`s differ in one more place: [CgiProfile] carries the nine ticks
- * and the two integers `marsrs-jni` fills in, and not the two readings only the C
- * ABI has, so a profile an app reads on Android answers `0` and `""` for them.
+ * The two `actual`s differ in one more place: [CgiProfile] carries the ten ticks
+ * and the rtt, and the two integers `marsrs-jni` fills in, and not the two
+ * readings only the C ABI has, so a profile an app reads on Android answers `0`
+ * and `""` for them.
  */
 public actual object StnLogic {
     init {
@@ -33,6 +34,7 @@ public actual object StnLogic {
     }
 
     /** The app STN asks, which is the one [setApp] was handed. */
+    @Volatile
     private var app: ((Question) -> Answer)? = null
 
     public actual fun setApp(ask: ((Question) -> Answer)?) {
@@ -122,6 +124,7 @@ public actual object StnLogic {
     @JvmStatic
     public actual external fun noopTaskID(): Int
 
+    @JvmStatic
     public actual external fun createLonglink(config: LonglinkConfig): Boolean
 
     @JvmStatic
@@ -153,30 +156,43 @@ public actual object StnLogic {
 
     // The thirteen the bridge calls back: one [Question] each, and the [Answer]
     // the app answered read for the kind it asked. An app that answered nothing —
-    // or that was never handed over — gets the answer the C++ takes when the app
-    // said nothing, which is what the AAR's own forwards do.
+    // or that was never handed over — gets the answer STN takes when the app said
+    // nothing, which is the one `marsrs-stn`'s `App` answers and the one the C
+    // ABI gives a host with no app: the same answers on both `actual`s, because a
+    // shared module that answers a task differently on Android than it does on
+    // iOS is a module with two behaviours to reason about.
 
     @JvmStatic
     private fun makesureAuthed(host: String?): Boolean =
         when (val answer = ask(Question.Kind.MakesureAuthed) { this.host = host.orEmpty() }) {
             is Answer.Yes -> answer.yes
-            else -> false
+
+            // An app that did not answer is logged in, which is what the port
+            // answers on every other platform.
+            else -> true
         }
 
     @JvmStatic
-    private fun trafficData(send: Int, recv: Int) {
+    private fun trafficData(send: Long, recv: Long) {
         ask(Question.Kind.TrafficData) {
-            this.sent = send.toLong()
-            this.received = recv.toLong()
+            this.sent = send
+            this.received = recv
         }
     }
 
     @JvmStatic
-    private fun onNewDns(host: String?): Array<String>? =
-        when (val answer = ask(Question.Kind.OnNewDns) { this.host = host.orEmpty() }) {
+    private fun onNewDns(host: String?, isLongLinkHost: Boolean): Array<String>? {
+        val answer = ask(Question.Kind.OnNewDns) {
+            this.host = host.orEmpty()
+            // What the bridge was asked and Kotlin/Native is told: a shared
+            // module that branches on this reads one thing on either target.
+            this.isLongLinkHost = isLongLinkHost
+        }
+        return when (answer) {
             is Answer.Addresses -> answer.addresses.toTypedArray()
             else -> null
         }
+    }
 
     @JvmStatic
     private fun onPush(channelID: String?, cmdid: Int, taskid: Int, data: ByteArray?) {
@@ -249,9 +265,11 @@ public actual object StnLogic {
                 answer.handle.value
             }
 
-            // `kTaskFailHandleTaskEnd`: what the AAR answers for an app that has
-            // none, which is the task over and the app not told.
-            else -> FailHandle.TaskEnd.value
+            // An answer nobody read is a good one, which is what the port
+            // answers on every other platform: `Err` is what a task that
+            // could not be decoded ends with, and an app that said nothing
+            // is not an app that read the answer and refused it.
+            else -> FailHandle.Normal.value
         }
     }
 
@@ -296,9 +314,11 @@ public actual object StnLogic {
                 answer.mode.value
             }
 
-            // `ECHECK_NEVER`: what the AAR answers for an app that has none,
-            // which stops STN asking until the next connect.
-            else -> IdentifyMode.Never.value
+            // Asked again on the next connect, which is what the port answers
+            // on every other platform. `Never` would mark this connection
+            // checked and stop STN asking for good, which is an answer an app
+            // that said nothing did not give.
+            else -> IdentifyMode.NextConnect.value
         }
     }
 
@@ -332,7 +352,10 @@ public actual object StnLogic {
         ask(Question.Kind.ReportTaskProfile) { this.profileJSON = taskString }
     }
 
-    /** What `marsrs-jni` hands [onTaskEnd]: the nine ticks and the two integers its `cgi_profile` fills in. */
+    /**
+     * What `marsrs-jni` hands [onTaskEnd]: the ten ticks and the rtt, and the two integers its
+     * `cgi_profile` fills in.
+     */
     internal class CgiProfile {
         @JvmField
         var taskStartTime: Long = 0

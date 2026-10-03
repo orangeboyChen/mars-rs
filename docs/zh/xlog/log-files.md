@@ -198,8 +198,8 @@ App 也做了。
 | 旋钮 | 作用 | 默认值 |
 |---|---|---|
 | `maxFileSizeBytes` | 文件到这个字节数就关闭、开新文件 | `0` —— 永不切分 |
-| `maxAliveTimeSeconds` | 文件超过这个秒数就删掉 | `0` —— 留着（C++ 自己保留十天） |
-| `cacheDays` | 异步缓存文件超过这个天数就删掉 | `0` —— 都留着 |
+| `maxAliveTimeSeconds` | 文件超过这个秒数就删掉 | `0` —— 十天；不足一天的值会被拒绝，原来生效的那个继续算 |
+| `cacheDays` | 在缓存目录里暂存的文件等几天再挪进日志目录 | `0` —— 不暂存：当天的文件直接写在日志目录里 |
 
 ## 把文件读回来
 
@@ -209,8 +209,9 @@ App 也做了。
 ::: code-group
 
 ```bash [命令行]
-cargo install marsrs-xlog          # `xlog` 装到 $PATH 上；每个 release 里
-                                   # 也有同一个命令的压缩包
+# 这个 crate 还没上 crates.io —— 发布还在进行中 —— 所以这里是 tag；每个
+# release 里也有同一个命令的压缩包。
+cargo install --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3 marsrs-xlog
 xlog decode --privkey=<hex> marsrs_20260927.xlog --out=marsrs.plain
 ```
 

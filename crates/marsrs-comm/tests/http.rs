@@ -8,6 +8,7 @@
 
 use marsrs_comm::http::{
     Body, Builder, CsMode, Method, Parser, RecvStatus, RequestLine, StatusLine, Version,
+    MAX_HEADER_FIELDS,
 };
 
 /// `shortlink_pack` — the fields the C++ sets, which is not the order they
@@ -179,6 +180,220 @@ fn a_number_that_does_not_fit_is_the_longest_body_there_can_be() {
     );
 }
 
+/// The last chunk is a size of nothing, then the trailer section, then an
+/// empty line — `0\r\nTrailer-Field: v\r\n\r\n`. Looking for a single
+/// `CRLF` in the trailer took the end of the first field for the end of
+/// the whole body and left the empty line in the buffer.
+#[test]
+fn a_chunked_answer_with_trailer_fields_ends_at_the_empty_line() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\nTrailer-Field: v\r\n\r\n"
+        ),
+        RecvStatus::End
+    );
+    assert_eq!(parser.body(), b"hello");
+    assert_eq!(
+        parser.buffered(),
+        b"",
+        "the empty line that ends the trailer was left in the buffer"
+    );
+}
+
+/// What that stray `CRLF` did to the answer that came next on the same
+/// connection: handed to a parser — which is what a keep-alive connection
+/// does with the bytes that are left — it is not a first line at all.
+#[test]
+fn the_answer_after_a_chunked_one_is_read_off_the_same_connection() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\nTrailer-Field: v\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"
+        ),
+        RecvStatus::End
+    );
+    assert_eq!(parser.body(), b"hello");
+
+    let mut next = Parser::new();
+    assert_eq!(next.recv(parser.buffered()), RecvStatus::End);
+    assert_eq!(next.body(), b"hi");
+}
+
+/// The trailer a peer never ends: what is left to find the empty line in
+/// grows with every byte that arrives, so the wait is bounded the way the
+/// head's own fields are, and a trailer over that bound is an error rather
+/// than a buffer that grows for as long as the peer keeps writing.
+#[test]
+fn a_trailer_that_never_ends_is_an_error() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n"),
+        RecvStatus::Body
+    );
+    // a field with no empty line after it, and more than the bound of them
+    let field = "Trailer-Field: v\r\n".repeat(MAX_HEADER_FIELDS / 16 + 1);
+    assert_eq!(parser.recv(field.as_bytes()), RecvStatus::BodyError);
+}
+
+/// The head of a `Connection: close` answer and its body are two reads, and
+/// that is the ordinary case on a socket. The parser used to end the answer
+/// at the head — a `Content-Length` of nothing is satisfied by no bytes — and
+/// the body that came after it stayed in the buffer for ever, so the caller
+/// was handed an empty answer.
+#[test]
+fn a_close_terminated_answer_ends_at_the_socket_and_not_at_its_head() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n"),
+        RecvStatus::Body,
+        "the head alone is not the answer"
+    );
+    assert_eq!(parser.recv(b"hello"), RecvStatus::Body);
+    assert_eq!(parser.recv(b""), RecvStatus::End, "the peer hung up");
+    assert_eq!(parser.body(), b"hello");
+    assert!(parser.is_success());
+}
+
+/// An answer that *names* its length as zero is over at its head, whether or
+/// not the peer means to close the socket. The length being nothing is not
+/// the same thing as no length being named: the parser used to read
+/// `Content-Length: 0` as "the socket is the length", so an empty answer on a
+/// `Connection: close` socket sat in `Body` until the peer hung up — and for
+/// good, if it never did.
+#[test]
+fn a_length_of_zero_the_peer_named_ends_the_answer_at_its_head() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"),
+        RecvStatus::End
+    );
+    assert_eq!(parser.body(), b"");
+    assert!(parser.is_success());
+}
+
+/// The hang-up ends the answer the head was still waiting for: one that named
+/// five bytes and was cut short at three is over as well, and it is over with
+/// the three it got. Nothing is said about the two that did not come — the
+/// answer is not failed, and it is not left in `Body` for a socket that will
+/// never write again.
+///
+/// Which is what the C++ answers (`http.cc:714`): it asks whether the
+/// connection closes and whether a body is being read, and not whether the
+/// length it was waiting for is the one it got. The two readings are pinned
+/// apart in `scripts/compat/comm.sh`, which asks this row of both.
+#[test]
+fn an_answer_the_head_named_a_length_for_ends_at_the_hang_up_too() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5\r\n\r\n"),
+        RecvStatus::Body,
+        "the head alone is not the answer"
+    );
+    assert_eq!(parser.recv(b"hel"), RecvStatus::Body, "three of the five");
+    assert_eq!(parser.recv(b""), RecvStatus::End, "the peer hung up");
+    assert_eq!(parser.body(), b"hel");
+    assert!(parser.is_success());
+    // and it is an answer and not a failure: a caller that waits for the
+    // length to be met would wait for ever
+    assert!(parser.is_body_ready());
+    assert!(parser.is_fields_ready());
+}
+
+/// A parser that is done takes no more bytes: `run` has no state left that
+/// could use them, so what it was given would sit in `buffered()` and grow
+/// for as long as the caller kept handing over what the socket gave it.
+#[test]
+fn an_answer_that_is_whole_buffers_nothing_more() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"),
+        RecvStatus::End
+    );
+    for _ in 0..8 {
+        assert_eq!(parser.recv(&[b'x'; 8 * 1024]), RecvStatus::End);
+    }
+    assert!(
+        parser.buffered().is_empty(),
+        "{} bytes of an answer that was already whole",
+        parser.buffered().len()
+    );
+    assert_eq!(parser.body(), b"hello");
+}
+
+/// The same for a parser that failed: what a peer writes after a first line
+/// that is not one is not an answer either, and the line that failed is what
+/// stays in the buffer and not that as well.
+#[test]
+fn an_answer_that_failed_buffers_nothing_more() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"not a first line at all\r\n"),
+        RecvStatus::FirstLineError
+    );
+    let buffered = parser.buffered().len();
+    assert_eq!(parser.recv(&[b'x'; 8 * 1024]), RecvStatus::FirstLineError);
+    assert_eq!(
+        parser.buffered().len(),
+        buffered,
+        "nothing was added to what the failed line left"
+    );
+}
+
+/// The bound is on the wait for a trailer and not on the trailer: one that
+/// came in whole is taken whole, however many fields it carries — a peer is
+/// entitled to a trailer longer than the head's own bound, and a parser that
+/// refuses it loses the answer that came with it.
+#[test]
+fn a_trailer_longer_than_the_bound_is_read_when_it_is_whole() {
+    let mut parser = Parser::new();
+    assert_eq!(
+        parser.recv(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n"),
+        RecvStatus::Body
+    );
+    // a field past the bound, and the empty line that ends the section
+    let mut trailer = "Trailer-Field: ".to_string();
+    trailer.push_str(&"v".repeat(MAX_HEADER_FIELDS + 1));
+    trailer.push_str("\r\n\r\n");
+    assert_eq!(parser.recv(trailer.as_bytes()), RecvStatus::End);
+    assert_eq!(parser.body(), b"hello");
+}
+
+/// `MAX_CHUNK_LENGTH` is 4g, and a chunk that big is one this parser does
+/// not read: on a 32-bit target — `armv7` is one this repository builds —
+/// `size as usize` truncated it to 0, and `begin + size` either wrapped or
+/// read the chunk's own bytes as the `CRLF` that ends it.
+#[test]
+fn a_chunk_of_the_biggest_size_there_is_is_not_read_as_one_of_nothing() {
+    // `100000000` is the limit itself, and `ffffffff` one byte below it
+    for size in ["100000000", "ffffffff"] {
+        let mut parser = Parser::new();
+        let status = parser.recv(
+            format!("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{size}\r\nabc")
+                .as_bytes(),
+        );
+        // A body that is not read, and no overflow on the way there: which
+        // of the two it is depends on how wide a `usize` is. On a 64-bit
+        // target the size fits and the chunk it announced is still not in
+        // the buffer, so the parser waits for bytes that may yet come; on a
+        // 32-bit one it does not fit at all, and the answer is one whose
+        // body is not the one the head said.
+        //
+        // Named, and not asked as `!parser.is_success()`: that is
+        // `BodyReady()`, which is `End` and nothing else, so a parser that
+        // never got as far as the body — a first line that failed, a head
+        // that failed — is a pass of this test as well.
+        let expected = if cfg!(target_pointer_width = "64") {
+            RecvStatus::Body
+        } else {
+            RecvStatus::BodyError
+        };
+        assert_eq!(status, expected, "{size} of chunk");
+        assert!(parser.is_fields_ready(), "{size} of chunk: {status:?}");
+        assert!(parser.body().is_empty(), "{size} of chunk was read as none");
+    }
+}
+
 #[test]
 fn the_size_of_a_chunk_is_hexadecimal() {
     // `strtoull(_, 16)` reads the `0x` in front of it, which a parse of the
@@ -189,4 +404,53 @@ fn the_size_of_a_chunk_is_hexadecimal() {
         RecvStatus::End
     );
     assert_eq!(parser.body(), b"hi");
+}
+
+/// `CRLF` is what ends a line of a head, so a value that carries one is two
+/// lines when it is written out: the field the caller asked for, and then a
+/// field of its own. Neither goes in.
+#[test]
+fn a_field_that_would_end_its_own_line_is_not_one_that_goes_in() {
+    let mut builder = a_request();
+    let fields = builder.fields_mut();
+    fields.set("X-Injected", "v\r\nX-Other: 1");
+    fields.set("X-Name\r\nX-Other: 2", "v");
+    fields.set("X-Nul\0", "v");
+    assert!(
+        fields.get("X-Injected").is_none(),
+        "a value that ended the line"
+    );
+    assert!(
+        fields.get("X-Other").is_none(),
+        "the line it would have written"
+    );
+    // by the name it was given as well, and not only by the one the C++
+    // would have cut it to: a field that is refused is not one kept under
+    // another name
+    assert!(
+        fields.get("X-Nul\0").is_none(),
+        "a name the C++ would have cut"
+    );
+    assert_eq!(fields.len(), 5, "the head is the five of its own");
+
+    let head = String::from_utf8_lossy(&a_request().header_to_buffer().unwrap()).to_string();
+    assert!(!head.contains("X-Other"), "the line it would have written");
+}
+
+/// The url is written into the first line, which is what the head hangs off
+/// of: one that carries a `CRLF` ends the head early and starts another
+/// request on the socket it went out on. There is no head to write.
+#[test]
+fn a_url_that_would_end_the_first_line_writes_no_head_at_all() {
+    let mut builder = Builder::new(CsMode::Request);
+    *builder.request_mut() = RequestLine::new(Method::Post, "/cgi HTTP/1.1\r\n\r\n", Version::V1_1);
+    builder.fields_mut().set_accept_all();
+    assert_eq!(builder.header_to_buffer(), None);
+    assert_eq!(builder.to_buffer(), None);
+
+    // an answer's reason, which is the other first line
+    let mut builder = Builder::new(CsMode::Respond);
+    *builder.status_mut() = StatusLine::new(Version::V1_1, 200, "OK\r\nX-Injected: 1");
+    builder.fields_mut().set_accept_all();
+    assert_eq!(builder.header_to_buffer(), None);
 }

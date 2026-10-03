@@ -196,8 +196,8 @@ impl LongLinkMetaData {
     /// run says that data moved from inside a lock the host holds, and this is
     /// what a host starts and stops from the outside
     /// ([`crate::NetCore::keep_signal`]). The keeper sends over the link it
-    /// shares, so the link's lock is never taken while the keeper's is held —
-    /// and the other way round is what
+    /// shares, so the link's lock *is* taken while the keeper's is held — and
+    /// the way round that would deadlock is the one
     /// [`LongLinkMetaData::take_network_data_changed`] is for: what the link
     /// has to say about its data is a reading, and not a call into the
     /// keeper.
@@ -441,10 +441,11 @@ mod tests {
     fn the_metadata_is_the_link_and_the_config_it_was_made_with() {
         let meta = meta();
         assert!(format!("{meta:?}").contains("long.weixin.qq.com"));
-        assert_eq!(
-            meta.channel().lock().unwrap().config().name,
-            meta.config().name
-        );
+        // the whole config, and not its name alone: what the metadata keeps
+        // is a copy of the one the link was made with, and every field of it
+        // is a question a task asks the link — the group and the link type
+        // among them, which a name says nothing about
+        assert_eq!(meta.channel().lock().unwrap().config(), meta.config());
     }
 
     #[test]

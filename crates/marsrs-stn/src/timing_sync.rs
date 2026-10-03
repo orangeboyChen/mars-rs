@@ -434,6 +434,9 @@ mod tests {
         sync.on_network_change();
         sync.on_longlink_status_changed(LongLinkStatus::Connected);
         assert_eq!(sync.due_time(), None);
-        assert!(format!("{sync:?}").contains("TimingSync"));
+        assert_eq!(
+            format!("{sync:?}"),
+            "TimingSync { due: None, has_request_sync: false }"
+        );
     }
 }

@@ -1077,6 +1077,6 @@ mod tests {
     #[test]
     fn the_default_test_is_one_with_nothing_to_do_it_with() {
         let test = ProxyTest::default();
-        assert!(format!("{test:?}").contains("ProxyTest"));
+        assert_eq!(format!("{test:?}"), "ProxyTest { operator: false }");
     }
 }

@@ -56,6 +56,23 @@ impl Compressor {
         }
     }
 
+    /// The most bytes a stream of `mode` can make of `srclen` bytes of input,
+    /// which is the size a caller has to have room for if it wants the whole
+    /// record written and not the part that fits: a compressor that is handed
+    /// a `dst` it can fill stops there, and what it has not emitted yet is in
+    /// its own window and not in any file — and the stream is dropped at the
+    /// next [`LogBuffer::drained`](crate::LogBuffer::drained).
+    ///
+    /// Deflate falls back to stored blocks for bytes it cannot compress, five
+    /// bytes a block of at most 64 KiB, and ends a run with a `Z_SYNC_FLUSH`
+    /// marker; zstd's own `ZSTD_COMPRESSBOUND` is the same kind of number.
+    pub fn worst_case(mode: CompressMode, srclen: usize) -> usize {
+        match mode {
+            CompressMode::Zlib => srclen + 5 * (srclen / 65_535 + 1) + 6,
+            CompressMode::Zstd => srclen + srclen / 256 + 64,
+        }
+    }
+
     /// `Compress(src, inLen, dst, outLen)` — compresses `src` into `dst`,
     /// flushing the stream afterwards (`Z_SYNC_FLUSH` / `ZSTD_e_flush`), and
     /// returns the number of bytes written to `dst`.
@@ -64,17 +81,32 @@ impl Compressor {
     /// `(size_t)-1`.
     ///
     /// Note that, exactly like the C++, input that does not fit in `dst` is
-    /// dropped rather than buffered.
+    /// dropped rather than buffered — and that the port reports that rather
+    /// than passing it off as a write: `None` is what a `dst` that filled
+    /// before every byte of `src` was in the stream answers, and so is
+    /// `Some(0)`, which is "no room" and not "no work" — a flush that could
+    /// put nothing in `dst` left the bytes of `src` in the stream's own window
+    /// and wrote no record. Neither is a record anybody can read, which is why
+    /// [`LogBuffer::write`](crate::LogBuffer::write) answers `false` for both
+    /// instead of reporting a record it had cut.
     pub fn compress(&mut self, src: &[u8], dst: &mut [u8]) -> Option<usize> {
         match self {
             Self::Zlib(stream) => {
-                let before = stream.total_out();
+                let before_out = stream.total_out();
+                let before_in = stream.total_in();
                 let status = stream
                     .compress(src, dst, flate2::FlushCompress::Sync)
                     .ok()?;
                 match status {
                     flate2::Status::Ok | flate2::Status::StreamEnd => {
-                        Some((stream.total_out() - before) as usize)
+                        let written = (stream.total_out() - before_out) as usize;
+                        // What the stream did not take is gone: deflate keeps
+                        // nothing of an input it did not consume, so the tail
+                        // of `src` is in no window and no file. A `dst` that
+                        // filled is the only reason, and a write that lost
+                        // half a record is one the caller has to hear about.
+                        let took = (stream.total_in() - before_in) as usize;
+                        (took == src.len()).then_some(written)
                     }
                     flate2::Status::BufError => None,
                 }
@@ -125,7 +157,9 @@ fn zstd_compress(
         }
     }
 
-    Some(written)
+    // The same accounting as the zlib arm: a `dst` that filled stopped `run`
+    // part of the way through `src`, and what it did not take is gone.
+    (input.pos() == src.len()).then_some(written)
 }
 
 #[cfg(test)]

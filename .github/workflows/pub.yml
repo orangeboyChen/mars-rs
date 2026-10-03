@@ -81,7 +81,11 @@ jobs:
           if ! gh release view "$TAG" > /dev/null 2>&1; then
             nothing "$TAG has no release"
           fi
-          gh release download "$TAG" --pattern 'marsrs-flutter-*.tar.gz' --dir dist
+          # An asset no release carries is the message below and not a failure
+          # of `gh`: it exits 1 when the pattern matches nothing, and under
+          # `set -e` that ends the step before the guard that says what is
+          # missing.
+          gh release download "$TAG" --pattern 'marsrs-flutter-*.tar.gz' --dir dist || true
           if [ -z "$(find dist -name '*.tar.gz' -print -quit)" ]; then
             nothing "$TAG released no Flutter plugin"
           fi

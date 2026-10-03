@@ -55,7 +55,12 @@ internal final class ProbeBox {
 
         case .tcp:
             answer.kind = MarsSdtTcp
-            answer.error_code = result.errorCode
+            // No `error_code` here, though the four besides it write one: a
+            // tcp profile's is the diagnosis's own, taken from `sent`,
+            // `received` and `is_noop_resp` — `kSndRcvErr` for a noop that
+            // did not go out or that nothing came back from, `kTcpRespErr`
+            // for an answer that was not the noop's — and what a probe
+            // answers for itself is not read.
             answer.rtt = result.rtt
             answer.sent = result.noop?.sent ?? 0
             answer.received = result.noop?.received ?? 0

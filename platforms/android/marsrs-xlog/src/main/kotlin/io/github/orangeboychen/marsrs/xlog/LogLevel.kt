@@ -61,8 +61,14 @@ enum class LogLevel(internal val native: Int) {
 
     /**
      * Whether an appender sitting at this level writes a record of [level].
+     *
+     * A record of [NONE] is the one exception: it is not a severity a record
+     * can have, so no appender writes one whatever it is sitting at, and
+     * `native <= level.native` — which is the rule for every other level —
+     * answers `true` for it. An app that asks before it builds a message and
+     * is told `true` spends the cost of building one and gets silence.
      */
-    fun isEnabledFor(level: LogLevel): Boolean = native <= level.native
+    fun isEnabledFor(level: LogLevel): Boolean = level != NONE && native <= level.native
 
     companion object {
         /**

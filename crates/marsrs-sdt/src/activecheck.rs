@@ -19,7 +19,7 @@
 use crate::checkimpl::{Answer, Ask, Query};
 use crate::constants::{
     DEFAULT_DNS_TIMEOUT, DEFAULT_HTTP_HOST, DEFAULT_PING_COUNT, DEFAULT_PING_HOST,
-    DEFAULT_TCP_CONN_TIMEOUT, UNUSE_TIMEOUT,
+    DEFAULT_TCP_CONN_TIMEOUT, HTTP_DEFAULT_TIMEOUT, UNUSE_TIMEOUT,
 };
 use crate::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
 use crate::sdt::{CheckIPPorts, CheckStatus, NetCheckType, TcpErrCode};
@@ -148,9 +148,10 @@ impl Check {
                 domain: domain.clone(),
                 timeout_ms,
             });
-            let (error_code, rtt, ips) = answer.dns();
+            let (error_code, rtt, local_dns, ips) = answer.dns();
             profile.error_code = error_code;
             profile.rtt = rtt;
+            profile.local_dns = local_dns.to_owned();
 
             // the C++'s `if (0 == ret)`, and its `ipinfo.size` inside it: a
             // resolve that failed takes no address from the answer, not even
@@ -221,7 +222,7 @@ impl Check {
                     port: port.port,
                     timeout_ms,
                 });
-                let (sent, received, is_noop_resp, rtt) = answer.tcp();
+                let (sent, received, is_noop_resp, conntime, rtt) = answer.tcp();
 
                 // `kSndRcvErr` for a noop that did not go out or that nothing
                 // came back from, `kTcpRespErr` for an answer that was not the
@@ -236,6 +237,7 @@ impl Check {
                     (0, rtt)
                 };
                 profile.error_code = error_code;
+                profile.conntime = conntime;
                 profile.rtt = rtt;
 
                 request.checkresult_profiles.push(profile);
@@ -313,14 +315,18 @@ impl Check {
                 }
                 profile.url = url.clone();
 
-                // `SendHttpQuery` gets the timeout as the request has it,
-                // default and all: the C++ hands `_check_request.total_timeout`
-                // over without a fallback of its own.
+                // `SendHttpQuery` gets the timeout the way every other probe
+                // does — the request's, and the default of its kind when the
+                // request has none. Handing it `total_timeout` itself is what
+                // asked an app's HTTP probe for `UNUSE_TIMEOUT`, twenty-four
+                // days, on a run started with no timeout at all, and for `0`
+                // on one whose budget a probe before it had spent.
                 let answer = ask.ask(Query::Http {
                     url,
-                    timeout_ms: self.remaining,
+                    timeout_ms: self.probe_timeout(HTTP_DEFAULT_TIMEOUT),
                 });
                 let (error_code, status_code, rtt) = answer.http();
+                profile.error_code = error_code;
                 profile.status_code = status_code;
                 profile.rtt = rtt;
 
@@ -382,7 +388,10 @@ impl Check {
                     profile.network_type = network_type;
                 }
 
-                // the C++'s `UNUSE_TIMEOUT == total_timeout ? 0 : total_timeout / 1000`
+                // the C++'s `UNUSE_TIMEOUT == total_timeout ? 0 : total_timeout / 1000`,
+                // and `0` is what a ping reads as no timeout: a budget that
+                // is spent leaves this one alone, which is the C++'s own
+                // answer for a run that was started without one
                 let timeout_s = if self.remaining == UNUSE_TIMEOUT {
                     0
                 } else {
@@ -411,8 +420,28 @@ impl Check {
                 // the C++'s `if (0 == ret) { GetPingStatus(); snprintf(...) }`
                 if let Some(status) = status.filter(|_| error_code == 0) {
                     // `snprintf(loss_rate, 16, "%f", ...)` — six decimals, like `%f`
-                    profile.loss_rate = format!("{:.6}", status.loss_rate);
-                    profile.rtt_str = format!("{:.6}", status.avgrtt);
+                    //
+                    // A float that is not a number is left out: an average
+                    // taken over no probe that came back is `NaN`, and one
+                    // the host summed past `f32::MAX` is `inf`, and neither
+                    // is a JSON number — the report this goes into is one
+                    // document the app parses, and a `NaN` in the middle of
+                    // it is a report the app cannot read at all. The field a
+                    // measurement was not written into is the one a check
+                    // that measured nothing has.
+                    if status.loss_rate.is_finite() {
+                        profile.loss_rate = format!("{:.6}", status.loss_rate);
+                    }
+                    if status.avgrtt.is_finite() {
+                        profile.rtt_str = format!("{:.6}", status.avgrtt);
+                        // `rtt_str` is this number as a string, so the field
+                        // the report prints beside it carries it too.
+                        // `avgrtt` is an average of floats and the field is
+                        // an integer, so the cast truncates: the report
+                        // reads `"rtt":12` next to `"rttStr":"12.500000"`,
+                        // and not `0` next to it.
+                        profile.rtt = status.avgrtt as u64;
+                    }
                 }
 
                 request.checkresult_profiles.push(profile);
@@ -432,8 +461,15 @@ impl Check {
 
     /// The timeout one probe gets: the C++'s
     /// `UNUSE_TIMEOUT == total_timeout ? <the default> : total_timeout`.
+    ///
+    /// A budget that is spent is one as well. The C++'s `uint32_t`
+    /// subtraction wraps there, to four billion milliseconds, so the probes
+    /// it asks for after the walk spent its budget are as good as unlimited;
+    /// [`Check::spend`] saturates instead, and `0` milliseconds is not a
+    /// probe that is given no time at all — it is one that cannot answer,
+    /// which the check then files as the network being down.
     fn probe_timeout(&self, default_ms: u32) -> u32 {
-        if self.remaining == UNUSE_TIMEOUT {
+        if self.remaining == UNUSE_TIMEOUT || self.remaining == 0 {
             default_ms
         } else {
             self.remaining

@@ -13,7 +13,7 @@
 # have a handler on both platform halves, and the two packages must ask for the
 # same set, because they are one package under two names.
 
-set -uo pipefail
+set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -95,10 +95,13 @@ for entry in "${packages[@]}"; do
     echo "$name: $(echo "$dart" | wc -l | tr -d ' ') methods in Dart, $(echo "$kotlin" | wc -l | tr -d ' ') in Kotlin, $(echo "$objc" | wc -l | tr -d ' ') in Objective-C"
 
     for method in "${required[@]}"; do
-        if ! echo "$dart" | grep -qx "$method" &&
-            ! echo "$kotlin" | grep -qx "$method" &&
-            ! echo "$objc" | grep -qx "$method"; then
-            echo "::error::$name: '$method' is gone from all three halves of the channel"
+        # The Dart one is asked first and on its own: a method that left all
+        # three halves is a rename, and one that left the Dart only is a
+        # member an app called going away — which the reverse loop below
+        # notices and does not fail on, because a handler a Dart member does
+        # not ask for is a method of the channel's own and not a missing one.
+        if ! echo "$dart" | grep -qx "$method"; then
+            echo "::error::$name: '$method' is gone from lib/*.dart"
             status=1
         elif ! echo "$kotlin" | grep -qx "$method"; then
             echo "::error::$name: the Kotlin half has no arm for '$method'"

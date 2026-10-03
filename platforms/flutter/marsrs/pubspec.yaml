@@ -1,5 +1,5 @@
 # The Flutter plugin of the whole port: the one an app takes when it wants more
-# than logging. Today more than logging is nothing — the C ABI is 16
+# than logging. Today more than logging is nothing — the C ABI is 17
 # `mars_xlog_*` symbols and nothing else, and `scripts/build_xcframework.sh`
 # fails the day it is not — so this plugin and `marsrs_xlog` are the same
 # package under two names, and `Xlog` is the class both of them hand out, the
@@ -34,7 +34,7 @@ name: marsrs
 description: >-
   Flutter plugin for mars-rs, a Rust implementation of Tencent/mars: the whole
   port, xlog today.
-version: 0.1.0-alpha.2
+version: 0.1.0-alpha.3
 homepage: https://github.com/orangeboyChen/mars-rs
 repository: https://github.com/orangeboyChen/mars-rs
 issue_tracker: https://github.com/orangeboyChen/mars-rs/issues

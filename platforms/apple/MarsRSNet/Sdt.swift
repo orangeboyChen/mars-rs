@@ -107,6 +107,34 @@ public final class MarsSdt: NSObject {
         case reqBuf = 6
     }
 
+    /// The `NET_CHECK_*` bits a diagnosis is started with, as a set — which is
+    /// what the bits are: `[.basic, .long]` is a run of three checks, and `[]`
+    /// is a run of none at all, which is the one `MARS_SDT_ERR_BAD_ARG`
+    /// answers for.
+    ///
+    /// `rawValue` is the integer the C ABI asks for, so a caller that names
+    /// its own — `1 | 2` — reaches the same entry point with it.
+    public struct Mode: OptionSet {
+        /// `NET_CHECK_BASIC` — the ping and the DNS check.
+        public static let basic = Self(rawValue: NET_CHECK_BASIC)
+        /// `NET_CHECK_LONG` — the TCP check, against the long link's hosts.
+        public static let long = Self(rawValue: NET_CHECK_LONG)
+        /// `NET_CHECK_SHORT` — the HTTP check, against the net-check CGI and the
+        /// short link's hosts.
+        public static let short = Self(rawValue: NET_CHECK_SHORT)
+        /// Every check there is: the three of them together.
+        public static let all = Self(rawValue: NET_CHECK_BASIC | NET_CHECK_LONG | NET_CHECK_SHORT)
+
+        /// The bits of one mode, in the integer the C ABI takes.
+        public let rawValue: Int32
+
+        /// The only way in: a set of the three above, or an integer of a
+        /// caller's own.
+        public init(rawValue: Int32) {
+            self.rawValue = rawValue
+        }
+    }
+
     /// Which probe is being asked: the four of `mars/sdt/src/checkimpl/`, plus
     /// `nothing` for a probe nobody answered.
     ///
@@ -219,6 +247,12 @@ public final class MarsSdt: NSObject {
         /// the check behind it.
         @objc public var probe: Probe = .nothing
         /// The probe's return value; `0` and above is one that worked.
+        ///
+        /// A `tcp` answer is the one that does not carry it: the error code of
+        /// a tcp profile is the diagnosis's own, read off `sent`, `received`
+        /// and `isNoopResponse` and not off this — what the C++ records there
+        /// is never the socket's own error — so a `tcp` probe that names one
+        /// names a number nothing reads.
         @objc public var errorCode: Int32 = 0
         /// How long the probe took.
         @objc public var rtt: UInt64 = 0
@@ -329,8 +363,37 @@ public final class MarsSdt: NSObject {
 
     /// `StartActiveCheck` — a diagnosis of the two links' hosts.
     ///
+    /// The Swift way in: a [`Mode`] rather than the integer the C ABI asks for,
+    /// which is what the overload below takes and what Objective-C reaches.
+    ///
     /// - Returns: `MARS_SDT_OK`, or `MARS_SDT_ERR_BUSY` when a check is already
-    ///   in flight, or `MARS_SDT_ERR_PANIC`.
+    ///   in flight, or `MARS_SDT_ERR_BAD_ARG` when the mode names no check at
+    ///   all — the set a `Mode` starts out as, and the answer the C ABI gives
+    ///   for a mode with no `NET_CHECK_*` bit in it — or `MARS_SDT_ERR_PANIC`.
+    @discardableResult
+    public static func startActiveCheck(
+        longLink: [Link],
+        shortLink: [Link],
+        mode: Mode,
+        timeout: UInt32
+    ) -> Int32 {
+        startActiveCheck(
+            longLink: longLink,
+            shortLink: shortLink,
+            mode: mode.rawValue,
+            timeout: timeout
+        )
+    }
+
+    /// `StartActiveCheck` — the same diagnosis, with the mode as the integer
+    /// the C ABI asks for: the one Objective-C reaches, because a set of
+    /// [`Mode`] has no Objective-C type, and the one a caller that spells its
+    /// own bits — `NET_CHECK_BASIC | NET_CHECK_LONG` — takes.
+    ///
+    /// - Returns: `MARS_SDT_OK`, or `MARS_SDT_ERR_BUSY` when a check is already
+    ///   in flight, or `MARS_SDT_ERR_BAD_ARG` when these arguments cannot start
+    ///   a check — a mode of no checks at all among them — or
+    ///   `MARS_SDT_ERR_PANIC`.
     @objc
     @discardableResult
     public static func startActiveCheck(
@@ -436,7 +499,13 @@ public final class MarsSdt: NSObject {
             var buffer = [CChar](repeating: 0, count: size)
             let written = mars_sdt_take_report(&buffer, UInt32(size))
             if written >= 0 {
-                return String(cString: buffer)
+                let report = String(cString: buffer)
+                // `noResults` is what the C ABI hands over when there was
+                // nothing to take: `report_json` of no checks at all. The ABI
+                // has no answer but a document for it — no count comes with
+                // one — and a diagnosis of nothing is the `nil` this promises
+                // and not a report an app has to parse to find out.
+                return report == noResults ? nil : report
             }
             // The C ABI answers "no room" and not the size it needs, so the only
             // way to ask for more is to ask again with more. It keeps the
@@ -472,4 +541,8 @@ public final class MarsSdt: NSObject {
     /// Where it stops: a diagnosis that reports more than a megabyte is not one
     /// an app parses.
     private static let reportBufferLimit = 1_048_576
+
+    /// The document `report_json` writes for no results: `{"details":[]}`, and
+    /// nothing else — the one the C ABI answers when there was nothing to take.
+    private static let noResults = "{\"details\":[]}"
 }

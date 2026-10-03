@@ -115,7 +115,11 @@ jobs:
           TAG: ${{ needs.resolve.outputs.tag }}
         run: |
           set -euo pipefail
-          gh release download "$TAG" --pattern 'marsrs-react-native-*.tgz' --dir dist
+          # An asset no release carries is the message below and not a failure
+          # of `gh`: it exits 1 when the pattern matches nothing, and under
+          # `set -e` that ends the step before the guard that says what is
+          # missing.
+          gh release download "$TAG" --pattern 'marsrs-react-native-*.tgz' --dir dist || true
           if [ -z "$(find dist -name '*.tgz' -print -quit)" ]; then
             echo "::error::$TAG released no React Native module, and there is nothing to publish"
             exit 1
@@ -184,8 +188,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Publish the nine crates
+        id: publish
         run: .github/scripts/publish_crates.sh "${{ needs.resolve.outputs.version }}"
+      # Gated the way the one in release.yml is: a summary that hands the reader
+      # a coordinate crates.io does not have is what `published=false` is about.
       - name: Summary
+        if: steps.publish.outputs.published == 'true'
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
         run: |
@@ -201,7 +209,7 @@ jobs:
   # GitHub Packages: `marsrs-kmp` and `xlog-kmp`, one publication per module.
   # This is the one job that builds, because a Kotlin Multiplatform publication
   # is one artifact per Kotlin target of one module — the module metadata names
-  # all fourteen, so a publication that left one out is one Gradle cannot
+  # all thirteen, so a publication that left one out is one Gradle cannot
   # resolve for the platform it forgot — and macOS is where all of them can be
   # built. What it does not build is the natives: those are the release's own,
   # `marsrs-kmp-native.zip`, so there is no Rust and no NDK in this job.
@@ -280,7 +288,17 @@ jobs:
           # of that directory and not of the one above it.
           mkdir -p platforms/kmp/native
           unzip -q -o "dist/$KMP_NATIVE_ZIP" -d platforms/kmp/native
-          find platforms/kmp/native -name '*.a' -o -name '*.so' | sort
+          # `find` answers 0 for a tree with no archive in it and so does
+          # `sort`, so a release whose zip carried none — or an asset that was
+          # never uploaded — is a step that passed, and what follows publishes
+          # a module whose every klib links nothing. What says they are there
+          # is the list and not the exit of either.
+          archives="$(find platforms/kmp/native -name '*.a' -o -name '*.so' | sort)"
+          [ -n "$archives" ] || {
+            echo "::error::no .a or .so under platforms/kmp/native"
+            exit 1
+          }
+          printf '%s\n' "$archives"
       - name: Publish to GitHub Packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -7,8 +7,11 @@
 //! One difference is worth knowing: `CLOCK_BOOTTIME` keeps counting while the
 //! device sleeps, while `Instant` on Linux is `CLOCK_MONOTONIC` and does not.
 //! Code that measures durations across a suspend (which is what
-//! `marsrs_comm::FrequencyLimit` guards against) should therefore treat a smaller reading
-//! as "the clock was changed", exactly like the C++ does.
+//! `marsrs_comm::FrequencyLimit` guards against) can therefore see a reading
+//! smaller than one it took earlier, which is what the C++ calls "the clock
+//! was changed" and amends its history for. What it amends is the case a
+//! suspend leaves behind and not every reading out of order: a reading
+//! behind the newest but ahead of the oldest is one it takes as it stands.
 
 use std::sync::OnceLock;
 use std::time::Instant;

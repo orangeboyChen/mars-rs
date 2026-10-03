@@ -1,6 +1,11 @@
-//! The fields of `XLoggerInfo` that the C++ filled in from `xlogger_pid()` and
-//! friends, so that a record written through the FFI names the process and the
-//! thread it came from the way the C++ would have.
+//! The one field of `XLoggerInfo` a record written through the FFI does not
+//! get from the appender: the timeval, which the C++ filled in from
+//! `gettimeofday` and friends.
+//!
+//! `pid`, `tid` and `maintid` are named here too, but the ABI does not ask for
+//! them: it hands `-1` for all three and [`marsrs_appender`] reads them off
+//! the OS, which is the same answer `xlogger_pid()` and friends would have
+//! given and one the appender has to give anyway for the records Rust writes.
 //!
 //! The **level filter** is not here: it lives in the instance the handle
 //! names ([`marsrs_appender::set_level`]), which is also what answers

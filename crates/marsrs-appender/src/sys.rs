@@ -15,6 +15,8 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::OnceLock;
 
+use crate::file_util::private_file;
+
 /// The OS thread id of the calling thread.
 ///
 /// The C++ stamps the real OS tid into every `XLoggerInfo`; the port used to
@@ -108,12 +110,15 @@ fn os_thread_id() -> i64 {
     }
 }
 
-/// `xlogger_maintid()` — the id of the thread that first called this, i.e. the
-/// process main thread for every realistic caller.
+/// `xlogger_maintid()` — the value a record's `maintid` is filled in with,
+/// captured once so that a record written on a worker thread reports the same
+/// one for the lifetime of the process (`XloggerAppender` marks records whose
+/// `tid == maintid` with a `*`).
 ///
-/// Captured once so that a record written on a worker thread still reports the
-/// real main thread id (`XloggerAppender` marks records whose `tid == maintid`
-/// with a `*`).
+/// What that value *is* is `os_main_thread_id`'s answer: the real main
+/// thread on Apple, and the process id everywhere else — which is what the
+/// C++'s own `getpid()` gives too. It is a main *thread* id only on the one
+/// platform that has an api for asking.
 pub fn main_thread_id() -> i64 {
     static MAIN: OnceLock<i64> = OnceLock::new();
     *MAIN.get_or_init(os_main_thread_id)
@@ -218,11 +223,15 @@ pub fn available_space(path: &Path) -> Option<u64> {
 
 /// Takes the exclusive advisory lock on `file`, waiting for it.
 ///
-/// `false` when this platform has no advisory locking at all. The lock is
-/// released when `file` is dropped — including when the process dies, which is
-/// the property the appender relies on: a lock no longer held is how the next
-/// start tells a cache file some *other* process is still writing through from
-/// one a dead process left behind.
+/// `false` when this platform has no advisory locking at all, and — on
+/// Windows, where the wait is a poll with a give-up — when a holder inside
+/// this process did not let go in time. Either way the section the caller
+/// wanted to lock runs unlocked, which is what the C++ does anyway.
+///
+/// The lock is released when `file` is dropped — and by the kernel when the
+/// process dies, which is the property the appender relies on: a lock no
+/// longer held is how a later start tells a cache file some *other* process
+/// is still writing through from one a dead process left behind.
 pub fn lock_exclusive(file: &File) -> bool {
     lock(file, false)
 }
@@ -295,6 +304,55 @@ pub fn unlock(file: &File) -> bool {
     }
 }
 
+/// A file a test can hold whose `ftruncate` succeeds and whose every `write`
+/// fails — the pair a cache file on a full disk presents, which is the one
+/// `open_region` has to survive.
+///
+/// No ordinary file gives that pair: a filesystem that refuses the `write`
+/// refuses the `ftruncate` in front of it as well, and one that takes the
+/// `ftruncate` takes the write. A `memfd_create` file sealed with
+/// `F_SEAL_WRITE` does: the seal denies writes to the buffer (`EPERM`) and
+/// leaves `ftruncate` alone, which is exactly what a disk with no space left
+/// looks like from the appender — a length recorded with no blocks behind it,
+/// and the write that would reserve them failing.
+///
+/// `None` where the file cannot be made: not Linux, no `memfd_create`, or a
+/// kernel that will not take the seal. A test that gets `None` passes rather
+/// than fails — what it asserts is what the appender does with such a file,
+/// and there is no way to ask without one.
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn unwritable_file() -> Option<File> {
+    use std::os::unix::io::FromRawFd;
+
+    /// `MFD_ALLOW_SEALING`, which `libc` exports for android and not for the
+    /// gnu and musl targets this crate is built for.
+    const MFD_ALLOW_SEALING: libc::c_uint = 0x0002;
+    /// `MFD_CLOEXEC`, for the same reason: the tests re-execute this binary to
+    /// get a second process, and a descriptor that outlives the one that made
+    /// it would be one the child cannot account for.
+    const MFD_CLOEXEC: libc::c_uint = 0x0001;
+
+    let name = b"marsrs-unwritable\0";
+    // SAFETY: `memfd_create` returns a descriptor of its own or -1, and the
+    // name is a live NUL-terminated buffer.
+    let fd = unsafe {
+        libc::memfd_create(
+            name.as_ptr().cast::<libc::c_char>(),
+            MFD_ALLOW_SEALING | MFD_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return None;
+    }
+    // SAFETY: `fd` is the descriptor created above and nothing else owns it,
+    // so the `File` — which closes it — is its only owner from here.
+    let file = unsafe { File::from_raw_fd(fd) };
+    // SAFETY: `fcntl` over a descriptor this function owns; the third argument
+    // is a flag and not a pointer, so there is nothing for it to outlive.
+    let sealed = unsafe { libc::fcntl(fd, libc::F_ADD_SEALS, libc::F_SEAL_WRITE) };
+    (sealed == 0).then_some(file)
+}
+
 /// Whether two handles of `path` opened independently really exclude each
 /// other here.
 ///
@@ -324,11 +382,14 @@ pub fn unlock(file: &File) -> bool {
 /// probe of that name, and removed again on the way out.
 pub fn lock_excludes(path: &Path) -> bool {
     let probe = probe_path(path);
-    let Ok(first) = File::options()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(&probe)
+    // Created the way every other file of the port's is — [`private_file`] —
+    // and not with the process default: a probe is a file in the directory the
+    // logs are in, and `create_private_dir` only sets the mode of a directory
+    // it makes. One an app made before this port was linked, or one it hands
+    // over with a mode of its own, is a directory the probe would otherwise
+    // come out readable by every uid on the device.
+    let Ok(first) =
+        private_file(File::options().read(true).write(true).create_new(true)).open(&probe)
     else {
         return false;
     };
@@ -438,16 +499,25 @@ fn lock(file: &File, non_blocking: bool) -> bool {
             event: 0,
         };
 
-        // `LockFileEx` does not make a process wait for itself: a request that
-        // overlaps a lock this process already holds — through another handle,
-        // which is what a second appender of one prefix has — fails at once
-        // with ERROR_LOCK_VIOLATION, whether LOCKFILE_FAIL_IMMEDIATELY is set
-        // or not. Two copies of this crate in one process are a case the port
-        // supports, so the waiting is done here instead: immediate requests,
-        // retried until the lock is free. The give-up is what keeps a writer
-        // that never lets go from stalling the process — it is orders of
-        // magnitude more than a section below takes.
+        // A blocking request is what `flock(fd, LOCK_EX)` does on unix, and it
+        // is the one that takes a lock another *process* is holding: the moment
+        // that one lets go, this one has it. What it cannot do is wait for this
+        // process: a request that overlaps a lock this process already holds —
+        // through another handle, which is what a second appender of one prefix
+        // has — fails at once with ERROR_LOCK_VIOLATION, whether
+        // LOCKFILE_FAIL_IMMEDIATELY is set or not. Two copies of this crate in
+        // one process are a case the port supports, so *that* one is waited for
+        // below, and a request that fails here for any other reason is retried
+        // there too: what the failure costs is five seconds, and what the
+        // alternative costs is a section that runs with no lock at all.
         if !non_blocking {
+            // SAFETY: as below.
+            let taken =
+                unsafe { LockFileEx(file.as_raw_handle(), EXCLUSIVE, 0, 1, 0, &mut overlapped) };
+            if taken != 0 {
+                return true;
+            }
+
             use std::time::{Duration, Instant};
 
             /// Five seconds: a cache-file move is milliseconds.
@@ -468,6 +538,11 @@ fn lock(file: &File, non_blocking: bool) -> bool {
                 if taken != 0 {
                     return true;
                 }
+                // The give-up is what keeps a writer of this process that never
+                // lets go from stalling it forever. Giving up is answered
+                // `false`, and the caller then runs its section unprotected —
+                // the way the C++ runs it, and the only answer left that does
+                // not drop the records the section was going to write.
                 if Instant::now() >= deadline {
                     return false;
                 }

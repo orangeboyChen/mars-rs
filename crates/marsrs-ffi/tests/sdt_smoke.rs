@@ -19,9 +19,9 @@ use mars_ffi::sdt::{
     mars_sdt_cancel_active_check, mars_sdt_http_netcheck_cgi, mars_sdt_is_checking, mars_sdt_plan,
     mars_sdt_reset, mars_sdt_run_checks, mars_sdt_set_http_netcheck_cgi,
     mars_sdt_start_active_check, mars_sdt_take_report, MarsSdtAnswer, MarsSdtCheck, MarsSdtHosts,
-    MarsSdtIpPort, MarsSdtKind, MarsSdtQuery, MARS_SDT_ERR_BUSY, MARS_SDT_ERR_NO_CHECK,
-    MARS_SDT_ERR_NO_PROBE, MARS_SDT_ERR_NO_SPACE, MARS_SDT_ERR_NULL_OUT, MARS_SDT_ERR_PANIC,
-    MARS_SDT_OK,
+    MarsSdtIpPort, MarsSdtKind, MarsSdtQuery, MARS_SDT_ERR_BAD_ARG, MARS_SDT_ERR_BUSY,
+    MARS_SDT_ERR_NO_CHECK, MARS_SDT_ERR_NO_PROBE, MARS_SDT_ERR_NO_SPACE, MARS_SDT_ERR_NULL_OUT,
+    MARS_SDT_ERR_PANIC, MARS_SDT_OK,
 };
 
 /// `NET_CHECK_BASIC | NET_CHECK_LONG | NET_CHECK_SHORT` of
@@ -309,8 +309,9 @@ fn a_diagnosis_runs_over_the_probe_and_reports_what_it_found() {
         assert!(json.contains(field), "{field} is missing from {json}");
     }
 
-    // Taking the report empties it, the way one `reportSignalDetectResults`
-    // hands over what a run found and no more.
+    // Taking the report empties it: a take hands over everything recorded
+    // since the last one, and not only the results of the run that just
+    // finished.
     // SAFETY: a valid buffer of 4096 bytes.
     let written = unsafe { mars_sdt_take_report(report.as_mut_ptr(), report.len() as c_uint) };
     assert!(written > 0);
@@ -376,8 +377,62 @@ fn a_null_probe_is_reported() {
         unsafe { mars_sdt_run_checks(std::ptr::null_mut(), None, NET_WIFI) },
         MARS_SDT_ERR_NO_PROBE
     );
-    // The request is still there: nothing ran, so nothing was refused.
-    assert_eq!(mars_sdt_is_checking(), 1);
+    // Nothing ran, and the request is not left in flight behind the run that
+    // could not ask anything: `MARS_SDT_ERR_NO_PROBE` is not a code a caller
+    // retries — it has no probe to retry with — so a request left `Checking`
+    // would answer `MARS_SDT_ERR_BUSY` to every start after it, for the life
+    // of the process.
+    assert_eq!(mars_sdt_is_checking(), 0);
+    // SAFETY: the hosts of `start` are alive for the call.
+    assert_eq!(unsafe { start(NET_CHECK_ALL) }, MARS_SDT_OK);
+}
+
+/// `MARS_SDT_ERR_BUSY` is the one code a caller retries — "a check is already
+/// in flight, ask again" — so it must not be the answer to arguments that can
+/// never start a check at all. Retrying those never ends.
+#[test]
+fn a_request_that_can_never_start_is_not_reported_as_busy() {
+    let _guard = lock();
+    mars_sdt_reset();
+
+    // A count that promises hosts behind a null pointer: `hosts_from_c` would
+    // read nothing and the request would start with a link it has no hosts
+    // for.
+    // SAFETY: a null array with a non-zero count is what the contract forbids,
+    // and the call answers instead of reading through the pointer.
+    assert_eq!(
+        unsafe {
+            mars_sdt_start_active_check(
+                std::ptr::null(),
+                1,
+                std::ptr::null(),
+                1,
+                NET_CHECK_ALL,
+                5_000,
+            )
+        },
+        MARS_SDT_ERR_BAD_ARG
+    );
+    // A mode that asks for no check: three bits are the whole vocabulary, and
+    // a request with an empty plan runs nothing and reports nothing.
+    // SAFETY: the hosts of `start` are alive for the call.
+    assert_eq!(unsafe { start(0) }, MARS_SDT_ERR_BAD_ARG);
+    assert_eq!(
+        unsafe { start(8) },
+        MARS_SDT_ERR_BAD_ARG,
+        "a bit nobody named"
+    );
+
+    // None of them started a request, so there is nothing in flight.
+    assert_eq!(mars_sdt_is_checking(), 0);
+
+    // A real one still starts, and is still refused with BUSY while it is in
+    // flight — which is the answer a caller retries, and the only one.
+    // SAFETY: the hosts of `start` are alive for the call.
+    assert_eq!(unsafe { start(NET_CHECK_ALL) }, MARS_SDT_OK);
+    assert_eq!(unsafe { start(NET_CHECK_ALL) }, MARS_SDT_ERR_BUSY);
+
+    mars_sdt_reset();
 }
 
 /// A run that is cancelled *while it is asking probes* stops early.

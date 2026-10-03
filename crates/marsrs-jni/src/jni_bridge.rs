@@ -7,7 +7,7 @@
 //! coverage measurement.
 
 use jni::objects::{
-    JByteArray, JClass, JIntArray, JObject, JObjectArray, JString, JValue, JValueOwned,
+    Global, JByteArray, JClass, JIntArray, JObject, JObjectArray, JString, JValue, JValueOwned,
 };
 use jni::signature::MethodSignature;
 use jni::strings::{JNIStr, MUTF8Chars};
@@ -22,6 +22,7 @@ use marsrs_stn::{CgiProfile, LonglinkConfig, Task};
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::sync::OnceLock;
 
 use crate::stn_c2java::{Answer, Question};
@@ -41,6 +42,7 @@ use crate::sdt::{
     cancel_active_check_impl, get_load_libraries_impl as sdt_libraries, http_netcheck_cgi_impl,
     is_checking_impl, plan_impl, report_json_impl, reset_impl as sdt_reset_impl,
     run_checks_java_impl, set_http_netcheck_cgi_impl, start_active_check_impl, take_reported_impl,
+    untake_reported_impl,
 };
 use crate::stn::{
     clear_task_impl, create_longlink_impl, destroy_longlink_impl, disable_longlink_impl,
@@ -56,9 +58,9 @@ use crate::stn::{
 
 use crate::{
     current_log_path_impl, flush_now_impl, get_level_impl, guard, level_from_java,
-    log_file_names_impl, log_files_impl, new_instance_impl, release_instance_impl,
-    request_flush_impl, set_appender_mode_impl, set_console_log_open_impl, set_level_impl,
-    set_max_alive_time_impl, set_max_file_size_impl, write_impl,
+    log_file_names_impl, log_files_impl, new_instance_impl, release_instance_by_prefix_impl,
+    release_instance_impl, request_flush_impl, set_appender_mode_impl, set_console_log_open_impl,
+    set_level_impl, set_max_alive_time_impl, set_max_file_size_impl, write_impl,
 };
 
 /// Runs `f` with an [`Env`], which is what an entry point has to go through
@@ -93,6 +95,48 @@ where
 /// is where this is set.
 static VM: OnceLock<JavaVM> = OnceLock::new();
 
+/// A global reference to one of [`Classes`].
+type CachedClass = Global<JClass<'static>>;
+
+/// The classes of this library the bridge calls into.
+///
+/// `FindClass` resolves a name against the class loader of the code that is
+/// running, and a thread Rust attached itself has no Java frame to take one
+/// from: what it resolves against is the *system* loader, which on Android
+/// knows none of an app's classes, so a lookup made from a task thread answers
+/// `ClassNotFoundException` for every class named here. `JNI_OnLoad` runs on
+/// the thread that called `System.loadLibrary`, and the loader there is the
+/// app's — so the five are found once, there, and what is kept is a reference
+/// any thread may use.
+///
+/// A class of the platform's own is not one of them: those are what a lookup
+/// from an attached thread does find, so `java.util.ArrayList` is still looked
+/// up where it is built.
+struct Classes {
+    /// [`STN_CALLBACK`].
+    stn_callback: CachedClass,
+    /// [`STN_CGI_PROFILE`] — the class of the object `onTaskEnd` is handed, and
+    /// a lookup of it that fails is an `onTaskEnd` that is never called: it is
+    /// asked for from the same attached thread every one of the thirteen is.
+    stn_cgi_profile: CachedClass,
+    /// [`APP_LOGIC`].
+    app_logic: CachedClass,
+    /// [`PLATFORM_COMM`].
+    platform_comm: CachedClass,
+    /// [`SDT_LOGIC`].
+    sdt_logic: CachedClass,
+}
+
+/// What [`JNI_OnLoad`] found: see [`Classes`]. `None` is a library a host
+/// linked rather than loaded from Java, which is a library with no VM and no
+/// one to ask either.
+static CLASSES: OnceLock<Classes> = OnceLock::new();
+
+/// One of [`CLASSES`], picked by the field the caller names.
+fn class_of(classes: fn(&Classes) -> &CachedClass) -> Option<&'static JClass<'static>> {
+    CLASSES.get().map(|cached| &**classes(cached))
+}
+
 /// `JNI_OnLoad` — `System.loadLibrary` calls it, and it is the only place the
 /// library can get hold of the VM.
 ///
@@ -103,13 +147,49 @@ static VM: OnceLock<JavaVM> = OnceLock::new();
 ///
 /// `vm` has to be the live VM the JVM hands `JNI_OnLoad`: nothing checks it
 /// here, and it is kept until the process goes away.
+///
+/// A version the JVM does not know is a library it refuses to load, which is
+/// the honest answer when setting the VM up did not happen — so `0` is what
+/// `guard` falls back to, and not the version a successful call returns.
 #[no_mangle]
 pub unsafe extern "system" fn JNI_OnLoad(
     vm: *mut jni::sys::JavaVM,
     _reserved: *mut std::ffi::c_void,
 ) -> jint {
-    let _ = VM.set(JavaVM::from_raw(vm));
-    JNI_VERSION_1_6 as jint
+    // `guard`, like every other entry point of this file: a panic unwinding
+    // into the JVM is undefined behaviour. Its fallback is `jint`'s default,
+    // which is the `0` a refused version is answered with above.
+    guard(|| {
+        // SAFETY: `vm` is the live VM the JVM handed this call, by the
+        // contract above.
+        let vm = unsafe { JavaVM::from_raw(vm) };
+        // Found here and nowhere else: this is the thread `System.loadLibrary`
+        // was called on, so its loader is the app's, which is the one that
+        // knows these classes — see [`CLASSES`]. A class the loader does not
+        // have means the bridge cannot answer callbacks safely, so reject the
+        // library load instead of returning success with partial initialization.
+        let classes = vm.attach_current_thread(|env| {
+            // One at a time: the lookup borrows `env` for itself, and the
+            // global reference is taken from what it answered.
+            let mut cached = |name: &JNIStr| -> jni::errors::Result<CachedClass> {
+                let class = env.find_class(name)?;
+                env.new_global_ref(class)
+            };
+            Ok::<_, jni::errors::Error>(Classes {
+                stn_callback: cached(STN_CALLBACK)?,
+                stn_cgi_profile: cached(STN_CGI_PROFILE)?,
+                app_logic: cached(APP_LOGIC)?,
+                platform_comm: cached(PLATFORM_COMM)?,
+                sdt_logic: cached(SDT_LOGIC)?,
+            })
+        });
+        let Ok(classes) = classes else {
+            return 0;
+        };
+        let _ = CLASSES.set(classes);
+        let _ = VM.set(vm);
+        JNI_VERSION_1_6 as jint
+    })
 }
 
 /// `SdtLogic.reportSignalDetectResults(String)` — the C2Java call at the end of
@@ -118,6 +198,13 @@ pub unsafe extern "system" fn JNI_OnLoad(
 /// Without a VM (a unit test, or a host that linked the library instead of
 /// loading it from Java) there is nobody to tell, and the report stays where
 /// [`crate::sdt`] recorded it; nothing here panics into Rust either way.
+///
+/// A callback that threw is answered here and not by the next call — see
+/// `clear_pending`. This is the one C2Java call of the port that is a `V`
+/// and not a question: the app's handler gets the report and answers nothing,
+/// so there is no answer to read the failure out of, and the thread it runs
+/// on was attached by Rust, which discards a pending exception at detach
+/// without anybody ever seeing it.
 pub fn report_signal_detect_results(json: String) {
     guard(|| {
         let Some(vm) = VM.get() else {
@@ -126,14 +213,22 @@ pub fn report_signal_detect_results(json: String) {
         // Attaching lends the `Env` to a closure now rather than handing back
         // a guard, so the whole call moves inside it.
         let _ = vm.attach_current_thread(|env| {
-            let class = env.find_class(jni_str!("io/github/orangeboychen/marsrs/sdt/SdtLogic"))?;
-            let message = JObject::from(env.new_string(&json)?);
-            env.call_static_method(
+            // The class [`JNI_OnLoad`] found: see [`CLASSES`].
+            let Some(class) = class_of(|classes| &classes.sdt_logic) else {
+                return Ok(());
+            };
+            let message = env.new_string(&json);
+            let Ok(message) = clear_pending(env, message) else {
+                return Ok(());
+            };
+            let message = JObject::from(message);
+            let called = env.call_static_method(
                 class,
                 jni_str!("reportSignalDetectResults"),
                 jni_sig!("(Ljava/lang/String;)V"),
                 &[JValue::Object(&message)],
-            )?;
+            );
+            void_of(env, called);
             Ok::<_, jni::errors::Error>(())
         });
     })
@@ -141,7 +236,8 @@ pub fn report_signal_detect_results(json: String) {
 
 fn int_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> i32 {
     guard(|| {
-        env.get_field(obj, name, jni_sig!("I"))
+        let field = env.get_field(obj, name, jni_sig!("I"));
+        clear_pending(env, field)
             .and_then(|value| value.i())
             .unwrap_or(0)
     })
@@ -149,7 +245,8 @@ fn int_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> i32 {
 
 fn long_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> i64 {
     guard(|| {
-        env.get_field(obj, name, jni_sig!("J"))
+        let field = env.get_field(obj, name, jni_sig!("J"));
+        clear_pending(env, field)
             .and_then(|value| value.j())
             .unwrap_or(0)
     })
@@ -183,7 +280,8 @@ fn borrowed_str<'a>(java_str: Option<&'a MUTF8Chars<'a, &JString<'a>>>) -> Cow<'
 
 fn string_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> String {
     guard(|| {
-        let Ok(field) = env.get_field(obj, name, jni_sig!("Ljava/lang/String;")) else {
+        let field = env.get_field(obj, name, jni_sig!("Ljava/lang/String;"));
+        let Ok(field) = clear_pending(env, field) else {
             return String::new();
         };
         let Ok(object) = field.l() else {
@@ -200,7 +298,7 @@ fn string_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> String {
     })
 }
 
-/// Reads `io.github.orangeboychen.marsrs.xlog.Xlog$XLogConfig`.
+/// Reads `io.github.orangeboychen.marsrs.xlog.XLogConfigJni`.
 fn config_from_java(env: &mut Env<'_>, config: &JObject<'_>) -> Option<(XLogConfig, LogLevel)> {
     if config.is_null() {
         return None;
@@ -221,6 +319,7 @@ fn config_from_java(env: &mut Env<'_>, config: &JObject<'_>) -> Option<(XLogConf
         return None;
     }
     let cachedir = string_field(env, config, jni_str!("cachedir"));
+    let compress_level = int_field(env, config, jni_str!("compresslevel"));
 
     Some((
         XLogConfig {
@@ -229,7 +328,17 @@ fn config_from_java(env: &mut Env<'_>, config: &JObject<'_>) -> Option<(XLogConf
             nameprefix: string_field(env, config, jni_str!("nameprefix")),
             pub_key: string_field(env, config, jni_str!("pubkey")),
             compress_mode,
-            compress_level: int_field(env, config, jni_str!("compresslevel")),
+            // `<= 0` is "keep the appender's own", the way `mars_xlog.h` reads
+            // the field and the way `marsrs-ffi` reads it: `0` is what a
+            // Kotlin `XlogConfig` no app has touched carries, and handing that
+            // `0` to the buffer is not the same thing — zstd reads it as its
+            // own default of 3, so an Android log in zstd came out at 3 while
+            // the same config through the C ABI came out at 6.
+            compress_level: if compress_level > 0 {
+                compress_level
+            } else {
+                XLogConfig::default().compress_level
+            },
             cachedir: if cachedir.is_empty() {
                 None
             } else {
@@ -293,7 +402,28 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_newXlogInst
     })
 }
 
-/// `Xlog.releaseXlogInstance`.
+/// `Xlog.releaseXlogInstanceOf`.
+#[no_mangle]
+pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_releaseXlogInstanceOf<
+    'local,
+>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    nameprefix: JString<'local>,
+    instance: jlong,
+) {
+    guard_env(&mut env, |env| {
+        let prefix = nameprefix
+            .mutf8_chars(env)
+            .map(|value| value.to_str().into_owned())
+            .unwrap_or_default();
+        release_instance_impl(&prefix, instance as u64);
+    })
+}
+
+/// Legacy `Xlog.releaseXlogInstance` entry point kept for older platform
+/// artifacts. New platform code calls `releaseXlogInstanceOf` so a stale close
+/// cannot release a logger reopened under the same prefix.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_releaseXlogInstance<'local>(
     mut env: EnvUnowned<'local>,
@@ -305,7 +435,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_releaseXlog
             .mutf8_chars(env)
             .map(|value| value.to_str().into_owned())
             .unwrap_or_default();
-        release_instance_impl(&prefix);
+        release_instance_by_prefix_impl(&prefix);
     })
 }
 
@@ -326,10 +456,15 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_xlog_Xlog_write<'loca
     log: JString<'local>,
 ) {
     guard_env(&mut env, |env| {
-        let log = log
-            .mutf8_chars(env)
-            .map(|value| value.to_str().into_owned())
-            .unwrap_or_default();
+        let borrowed = log.mutf8_chars(env);
+        // A record whose text the JVM would not lend is not written at all:
+        // `""` in its place is a line in the log file that reads like one the
+        // app wrote and carries none of what it was given, and a reader of
+        // the file cannot tell the two apart.
+        let Ok(log) = clear_pending(env, borrowed) else {
+            return;
+        };
+        let log = log.to_str().into_owned();
         // Borrowed from the JVM: a `String` per record is an allocation
         // `Java2C_Xlog.cc` never makes.
         let tag = java_string_handle(env, tag.as_ref());
@@ -539,20 +674,19 @@ fn string_list(env: &mut Env<'_>, list: &JObject<'_>) -> Vec<String> {
     if list.is_null() {
         return Vec::new();
     }
-    let Ok(len) = env
-        .call_method(list, jni_str!("size"), jni_sig!("()I"), &[])
-        .and_then(|value| value.i())
-    else {
+    let called = env.call_method(list, jni_str!("size"), jni_sig!("()I"), &[]);
+    let Ok(len) = clear_pending(env, called).and_then(|value| value.i()) else {
         return Vec::new();
     };
     let mut values = Vec::new();
     for index in 0..len {
-        let Ok(element) = env.call_method(
+        let called = env.call_method(
             list,
             jni_str!("get"),
             jni_sig!("(I)Ljava/lang/Object;"),
             &[JValue::Int(index)],
-        ) else {
+        );
+        let Ok(element) = clear_pending(env, called) else {
             continue;
         };
         let Ok(element) = element.l() else {
@@ -573,66 +707,67 @@ fn string_map(env: &mut Env<'_>, map: &JObject<'_>) -> BTreeMap<String, String> 
     if map.is_null() {
         return out;
     }
-    let Ok(entries) = env.call_method(
+    let called = env.call_method(
         map,
         jni_str!("entrySet"),
         jni_sig!("()Ljava/util/Set;"),
         &[],
-    ) else {
+    );
+    let Ok(entries) = clear_pending(env, called) else {
         return out;
     };
     let Ok(entries) = entries.l() else {
         return out;
     };
-    let Ok(iterator) = env.call_method(
+    let called = env.call_method(
         &entries,
         jni_str!("iterator"),
         jni_sig!("()Ljava/util/Iterator;"),
         &[],
-    ) else {
+    );
+    let Ok(iterator) = clear_pending(env, called) else {
         return out;
     };
     let Ok(iterator) = iterator.l() else {
         return out;
     };
     loop {
-        let Ok(has_next) = env
-            .call_method(&iterator, jni_str!("hasNext"), jni_sig!("()Z"), &[])
-            .and_then(|value| value.z())
-        else {
+        let called = env.call_method(&iterator, jni_str!("hasNext"), jni_sig!("()Z"), &[]);
+        let Ok(has_next) = clear_pending(env, called).and_then(|value| value.z()) else {
             return out;
         };
         if !has_next {
             return out;
         }
-        let Ok(entry) = env.call_method(
+        let called = env.call_method(
             &iterator,
             jni_str!("next"),
             jni_sig!("()Ljava/lang/Object;"),
             &[],
-        ) else {
+        );
+        let Ok(entry) = clear_pending(env, called) else {
             return out;
         };
         let Ok(entry) = entry.l() else {
             return out;
         };
-        let key = env
-            .call_method(
-                &entry,
-                jni_str!("getKey"),
-                jni_sig!("()Ljava/lang/Object;"),
-                &[],
-            )
+        let called = env.call_method(
+            &entry,
+            jni_str!("getKey"),
+            jni_sig!("()Ljava/lang/Object;"),
+            &[],
+        );
+        let key = clear_pending(env, called)
             .and_then(|value| value.l())
             .map(|key| java_string(env, &key))
             .unwrap_or_default();
-        let value = env
-            .call_method(
-                &entry,
-                jni_str!("getValue"),
-                jni_sig!("()Ljava/lang/Object;"),
-                &[],
-            )
+        let called = env.call_method(
+            &entry,
+            jni_str!("getValue"),
+            jni_sig!("()Ljava/lang/Object;"),
+            &[],
+        );
+        let value = clear_pending(env, called)
             .and_then(|value| value.l())
             .map(|value| java_string(env, &value))
             .unwrap_or_default();
@@ -702,14 +837,14 @@ fn longlink_config_from_java(env: &mut Env<'_>, config: &JObject<'_>) -> Option<
         return None;
     }
     let mut parsed = LonglinkConfig::new(string_field(env, config, jni_str!("name")));
-    parsed.host_list =
-        match env.get_field(config, jni_str!("hostList"), jni_sig!("Ljava/util/List;")) {
-            Ok(field) => field
-                .l()
-                .map(|list| string_list(env, &list))
-                .unwrap_or_default(),
-            Err(_) => Vec::new(),
-        };
+    let field = env.get_field(config, jni_str!("hostList"), jni_sig!("Ljava/util/List;"));
+    parsed.host_list = match clear_pending(env, field) {
+        Ok(field) => field
+            .l()
+            .map(|list| string_list(env, &list))
+            .unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
     parsed.is_keep_alive = bool_field(env, config, jni_str!("isKeepAlive"));
     let group = string_field(env, config, jni_str!("group"));
     if !group.is_empty() {
@@ -726,7 +861,8 @@ fn longlink_config_from_java(env: &mut Env<'_>, config: &JObject<'_>) -> Option<
 
 fn bool_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> bool {
     guard(|| {
-        env.get_field(obj, name, jni_sig!("Z"))
+        let field = env.get_field(obj, name, jni_sig!("Z"));
+        clear_pending(env, field)
             .and_then(|value| value.z())
             .unwrap_or(false)
     })
@@ -741,15 +877,24 @@ fn string_array_list(env: &mut Env<'_>, values: &[String]) -> jobject {
         return std::ptr::null_mut();
     };
     for value in values {
+        // A string the JVM would not make is a list the call answers `null`
+        // for, and not one that goes on without it: a caller cannot tell a
+        // short list from a whole one, and this one names the libraries the
+        // port is made of. What a failed call left pending is left for Java
+        // to throw at the return — this runs on the thread the app called
+        // in on, where an exception has somewhere to go.
         let Ok(text) = env.new_string(value) else {
-            continue;
+            return std::ptr::null_mut();
         };
-        let _ = env.call_method(
+        let added = env.call_method(
             &list,
             jni_str!("add"),
             jni_sig!("(Ljava/lang/Object;)Z"),
             &[JValue::Object(&JObject::from(text))],
         );
+        if added.is_err() {
+            return std::ptr::null_mut();
+        }
     }
     list.into_raw()
 }
@@ -878,6 +1023,12 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_startTas
 }
 
 /// `StnLogic.stopTask`.
+///
+/// A negative id names no task: the noop's is `0xFFFF_FFFF` in the port and
+/// `-1` as a `jint`, and an id the app did not like is a sentinel of its own.
+/// Clamping one to `0` would stop — and cancel the await of — a task the app
+/// *did* name `0`, which is an id nothing here hands out but nothing refuses
+/// either.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_stopTask<'local>(
     _env: EnvUnowned<'local>,
@@ -885,7 +1036,9 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_stopTask
     taskid: jint,
 ) {
     guard(|| {
-        stop_task_impl(taskid.max(0) as u32);
+        if taskid >= 0 {
+            stop_task_impl(taskid as u32);
+        }
     })
 }
 
@@ -896,7 +1049,7 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_stn_StnLogic_hasTask<
     _class: JClass<'local>,
     taskid: jint,
 ) -> jboolean {
-    guard(|| has_task_impl(taskid.max(0) as u32))
+    guard(|| taskid >= 0 && has_task_impl(taskid as u32))
 }
 
 /// `StnLogic.redoTask`.
@@ -1193,16 +1346,18 @@ pub(crate) fn ask_java(question: Question) -> Answer {
             return Answer::Nothing;
         };
         vm.attach_current_thread(|env| -> jni::errors::Result<Answer> {
-            let Ok(class) = env.find_class(STN_CALLBACK) else {
+            let Some(class) = class_of(|classes| &classes.stn_callback) else {
                 return Ok(Answer::Nothing);
             };
-            Ok(ask_stn(env, class, question))
+            let answer = ask_stn(env, class, question);
+            clear_what_is_pending(env);
+            Ok(answer)
         })
         .unwrap_or(Answer::Nothing)
     })
 }
 
-fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answer {
+fn ask_stn<'a>(env: &mut Env<'a>, class: &JClass<'_>, question: Question) -> Answer {
     match question {
         Question::MakesureAuthed { host } => {
             let Ok(host) = env.new_string(&host) else {
@@ -1215,18 +1370,22 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
                 jni_sig!("(Ljava/lang/String;)Z"),
                 &[JValue::Object(&host)],
             );
-            Answer::Yes(bool_of(called))
+            Answer::Yes(bool_of(env, called))
         }
         Question::TrafficData { send, recv } => {
-            let _ = env.call_static_method(
+            let called = env.call_static_method(
                 class,
                 jni_str!("trafficData"),
-                jni_sig!("(II)V"),
-                &[JValue::Int(send as jint), JValue::Int(recv as jint)],
+                jni_sig!("(JJ)V"),
+                &[JValue::Long(send), JValue::Long(recv)],
             );
+            void_of(env, called);
             Answer::Nothing
         }
-        Question::OnNewDns { host } => {
+        Question::OnNewDns {
+            host,
+            longlink_host,
+        } => {
             let Ok(host) = env.new_string(&host) else {
                 return Answer::Nothing;
             };
@@ -1234,8 +1393,8 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
             let called = env.call_static_method(
                 class,
                 jni_str!("onNewDns"),
-                jni_sig!("(Ljava/lang/String;)[Ljava/lang/String;"),
-                &[JValue::Object(&host)],
+                jni_sig!("(Ljava/lang/String;Z)[Ljava/lang/String;"),
+                &[JValue::Object(&host), JValue::Bool(longlink_host)],
             );
             Answer::Ips(strings_of(env, called))
         }
@@ -1250,7 +1409,7 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
             };
             let channel_id = JObject::from(channel_id);
             let body = bytes_argument(env, &body);
-            let _ = env.call_static_method(
+            let called = env.call_static_method(
                 class,
                 jni_str!("onPush"),
                 jni_sig!("(Ljava/lang/String;II[B)V"),
@@ -1261,6 +1420,7 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
                     JValue::Object(&body),
                 ],
             );
+            void_of(env, called);
             Answer::Nothing
         }
         Question::Req2Buf {
@@ -1294,7 +1454,7 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
                     JValue::Int(sequence as jint),
                 ],
             );
-            if !bool_of(called) {
+            if !bool_of(env, called) {
                 return Answer::Encoded(Err(int_at(env, &errcode, 0)));
             }
             Answer::Encoded(Ok(bytes_of(env, &stream)))
@@ -1325,8 +1485,12 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
                 ],
             );
             Answer::Decoded {
-                handle: int_of(called),
+                handle: int_of(env, called),
                 err_code: int_at(env, &errcode, 0),
+                // What the app wrote into `serverSequenceId[0]`, which is the
+                // one thing the array is handed over for: without the read, a
+                // write to it is dropped on the floor.
+                sequence: int_at(env, &sequence, 0),
             }
         }
         Question::OnTaskEnd {
@@ -1350,15 +1514,16 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
                     JValue::Object(&profile),
                 ],
             );
-            Answer::Ended(int_of(called))
+            Answer::Ended(int_of(env, called))
         }
         Question::ReportConnectStatus { all, longlink } => {
-            let _ = env.call_static_method(
+            let called = env.call_static_method(
                 class,
                 jni_str!("reportConnectStatus"),
                 jni_sig!("(II)V"),
                 &[JValue::Int(all as jint), JValue::Int(longlink as jint)],
             );
+            void_of(env, called);
             Answer::Nothing
         }
         Question::IdentifyCheckBuffer { channel_id } => {
@@ -1386,7 +1551,7 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
                 ],
             );
             Answer::Identified {
-                mode: int_of(called),
+                mode: int_of(env, called),
                 buffer: bytes_of(env, buffer_argument),
                 hash: bytes_of(env, hash_argument),
                 cmdid: int_at(env, &cmdids, 0).max(0) as u32,
@@ -1413,10 +1578,12 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
                     JValue::Object(&hash),
                 ],
             );
-            Answer::Yes(bool_of(called))
+            Answer::Yes(bool_of(env, called))
         }
         Question::RequestSync => {
-            let _ = env.call_static_method(class, jni_str!("requestDoSync"), jni_sig!("()V"), &[]);
+            let called =
+                env.call_static_method(class, jni_str!("requestDoSync"), jni_sig!("()V"), &[]);
+            void_of(env, called);
             Answer::Nothing
         }
         Question::NetCheckShortLinkHosts => {
@@ -1433,38 +1600,95 @@ fn ask_stn<'a>(env: &mut Env<'a>, class: JClass<'a>, question: Question) -> Answ
                 return Answer::Nothing;
             };
             let json = JObject::from(json);
-            let _ = env.call_static_method(
+            let called = env.call_static_method(
                 class,
                 jni_str!("reportTaskProfile"),
                 jni_sig!("(Ljava/lang/String;)V"),
                 &[JValue::Object(&json)],
             );
+            void_of(env, called);
             Answer::Nothing
         }
     }
 }
 
+/// Clears the exception a Java call left pending, and says so.
+///
+/// JNI forbids every call but `ExceptionOccurred` and `ExceptionClear` while
+/// an exception is pending, and ART with CheckJNI aborts the process for
+/// making any other — so a callback that threw has to be answered where it
+/// threw, and not by the next call, which here is one that reads the
+/// arguments of the call that failed. Nothing else clears it: the Kotlin
+/// forwarders catch `Exception`, and an `Error` — or a `Throwable` of the
+/// app's own — is one they let through, and the thread this runs on was
+/// attached by Rust, so the exception is discarded at detach without
+/// anybody ever seeing it.
+fn clear_pending<T>(env: &Env<'_>, called: jni::errors::Result<T>) -> jni::errors::Result<T> {
+    if matches!(called, Err(jni::errors::Error::JavaException)) {
+        clear_what_is_pending(env);
+    }
+    called
+}
+
+/// Clears the exception that is pending, and says so.
+///
+/// [`clear_pending`] answers one call that failed, and there are ways a
+/// question asked here leaves one behind that it cannot see: the `return` of
+/// an arm that made the call and then read nothing out of it, a `new_string`
+/// that answered nothing, a helper that answers out of the value rather than
+/// out of the call. So every question clears again when it is over — a thread
+/// Rust attached discards what is pending at detach, and until then every
+/// call made on it is one JNI skips.
+fn clear_what_is_pending(env: &Env<'_>) {
+    if !env.exception_check() {
+        return;
+    }
+    env.exception_clear();
+    let _ = writeln!(
+        std::io::stderr(),
+        "marsrsxlog: a Java call left an exception pending"
+    );
+}
+
 /// A `Z` Java answered with — `false` for a call that could not be made.
-fn bool_of(called: jni::errors::Result<JValueOwned>) -> bool {
-    called.and_then(|value| value.z()).unwrap_or(false)
+fn bool_of(env: &Env<'_>, called: jni::errors::Result<JValueOwned>) -> bool {
+    clear_pending(env, called)
+        .and_then(|value| value.z())
+        .unwrap_or(false)
 }
 
 /// An `I` Java answered with — `0` for a call that could not be made.
-fn int_of(called: jni::errors::Result<JValueOwned>) -> i32 {
-    called.and_then(|value| value.i()).unwrap_or(0)
+fn int_of(env: &Env<'_>, called: jni::errors::Result<JValueOwned>) -> i32 {
+    clear_pending(env, called)
+        .and_then(|value| value.i())
+        .unwrap_or(0)
+}
+
+/// A `V` Java was asked — the answer is nothing either way, but what a call
+/// that threw left pending is not: the questions the app answers with nothing
+/// (`onPush`, `trafficData`, `requestDoSync`, `reportConnectStatus`,
+/// `reportTaskProfile`) come back to JNI calls of their own, and the next one
+/// is the call CheckJNI aborts on. See [`clear_pending`].
+fn void_of(env: &Env<'_>, called: jni::errors::Result<JValueOwned>) {
+    let _ = clear_pending(env, called);
 }
 
 /// An `L` Java answered with — nothing for a call that could not be made, or
 /// for one that answered `null`, which is the C++'s own `NULL` check.
-fn object_of<'a>(called: jni::errors::Result<JValueOwned<'a>>) -> Option<JObject<'a>> {
-    let object = called.and_then(|value| value.l()).ok()?;
+fn object_of<'a>(
+    env: &Env<'_>,
+    called: jni::errors::Result<JValueOwned<'a>>,
+) -> Option<JObject<'a>> {
+    let object = clear_pending(env, called)
+        .and_then(|value| value.l())
+        .ok()?;
     (!object.is_null()).then_some(object)
 }
 
 /// A `String` Java answered with — empty for a call that could not be made, or
 /// for one that answered `null`, which is the C++'s `""` too.
 fn string_of(env: &mut Env<'_>, called: jni::errors::Result<JValueOwned>) -> String {
-    let Some(object) = object_of(called) else {
+    let Some(object) = object_of(env, called) else {
         return String::new();
     };
     let jstring = unsafe { JString::from_raw(env, object.as_raw()) };
@@ -1474,9 +1698,11 @@ fn string_of(env: &mut Env<'_>, called: jni::errors::Result<JValueOwned>) -> Str
     java.to_str().into_owned()
 }
 
-/// A `String[]` Java answered with.
+/// A `String[]` Java answered with — empty for a call that could not be made,
+/// or for one that answered `null`, which is [`object_of`]'s own answer to
+/// both, pending exception cleared and all.
 fn strings_of(env: &mut Env<'_>, called: jni::errors::Result<JValueOwned>) -> Vec<String> {
-    let Ok(array) = called.and_then(|value| value.l()) else {
+    let Some(array) = object_of(env, called) else {
         return Vec::new();
     };
     string_array(env, &array)
@@ -1521,7 +1747,8 @@ fn byte_stream<'a>(env: &mut Env<'a>) -> Option<JObject<'a>> {
 /// `toByteArray()` of one — empty for a stream Java never wrote to, which is
 /// what the C++ ends up with too.
 fn bytes_of(env: &mut Env<'_>, stream: &JObject<'_>) -> Vec<u8> {
-    let Ok(bytes) = env.call_method(stream, jni_str!("toByteArray"), jni_sig!("()[B"), &[]) else {
+    let called = env.call_method(stream, jni_str!("toByteArray"), jni_sig!("()[B"), &[]);
+    let Ok(bytes) = clear_pending(env, called) else {
         return Vec::new();
     };
     let Ok(bytes) = bytes.l() else {
@@ -1539,10 +1766,14 @@ fn bytes_of(env: &mut Env<'_>, stream: &JObject<'_>) -> Vec<u8> {
 /// the port writes one. Nor is the connect's `nettype`, which the Java class
 /// has no field for.
 fn cgi_profile<'a>(env: &mut Env<'a>, profile: &CgiProfile) -> Option<JObject<'a>> {
-    let Ok(class) = env.find_class(STN_CGI_PROFILE) else {
-        return None;
-    };
-    let Ok(object) = env.new_object(class, jni_sig!("()V"), &[]) else {
+    // The class [`JNI_OnLoad`] found, and not a lookup of it here: this runs
+    // under `attach_current_thread` of [`ask_java`], which is a thread with no
+    // Java frame behind it — see [`CLASSES`]. A `FindClass` of an app's own
+    // class made from one answers `ClassNotFoundException`, and a profile
+    // there is no class for is an `onTaskEnd` the app is never called on.
+    let class = class_of(|classes| &classes.stn_cgi_profile)?;
+    let created = env.new_object(class, jni_sig!("()V"), &[]);
+    let Ok(object) = clear_pending(env, created) else {
         return None;
     };
     for (name, value) in [
@@ -1585,13 +1816,23 @@ fn cgi_profile<'a>(env: &mut Env<'a>, profile: &CgiProfile) -> Option<JObject<'a
         ),
         (jni_str!("rtt"), profile.rtt as i64),
     ] {
-        let _ = env.set_field(&object, name, jni_sig!("J"), JValue::Long(value));
+        // A field that could not be set leaves its exception pending, and
+        // JNI answers every call behind it — the next field, and then
+        // `onTaskEnd` itself — with `JavaException` without making it: the
+        // app would be told nothing at all about a task that ended, and the
+        // exception would die at detach with nobody reading it. What failed
+        // is cleared and said on stderr, and the profile is filled in as far
+        // as it got; a field that was never reached keeps the `0` Java gave
+        // it, which is the answer of a stage that never ran.
+        let set = env.set_field(&object, name, jni_sig!("J"), JValue::Long(value));
+        clear_pending(env, set).ok();
     }
     for (name, value) in [
         (jni_str!("channelType"), profile.channel_type),
         (jni_str!("protocolType"), profile.transport_protocol),
     ] {
-        let _ = env.set_field(&object, name, jni_sig!("I"), JValue::Int(value));
+        let set = env.set_field(&object, name, jni_sig!("I"), JValue::Int(value));
+        clear_pending(env, set).ok();
     }
     Some(object)
 }
@@ -1619,16 +1860,18 @@ pub(crate) fn ask_app_logic(question: AppQuestion) -> AppAnswer {
             return AppAnswer::Nothing;
         };
         vm.attach_current_thread(|env| -> jni::errors::Result<AppAnswer> {
-            let Ok(class) = env.find_class(APP_LOGIC) else {
+            let Some(class) = class_of(|classes| &classes.app_logic) else {
                 return Ok(AppAnswer::Nothing);
             };
-            Ok(ask_app(env, class, question))
+            let answer = ask_app(env, class, question);
+            clear_what_is_pending(env);
+            Ok(answer)
         })
         .unwrap_or(AppAnswer::Nothing)
     })
 }
 
-fn ask_app<'a>(env: &mut Env<'a>, class: JClass<'a>, question: AppQuestion) -> AppAnswer {
+fn ask_app<'a>(env: &mut Env<'a>, class: &JClass<'_>, question: AppQuestion) -> AppAnswer {
     match question {
         AppQuestion::AppFilePath => {
             let called = env.call_static_method(
@@ -1647,7 +1890,7 @@ fn ask_app<'a>(env: &mut Env<'a>, class: JClass<'a>, question: AppQuestion) -> A
                 jni_sig!("()Lio/github/orangeboychen/marsrs/app/AppLogic$AccountInfo;"),
                 &[],
             );
-            let Some(account) = object_of(called) else {
+            let Some(account) = object_of(env, called) else {
                 return AppAnswer::Nothing;
             };
             AppAnswer::Account(AccountInfo::new(
@@ -1658,7 +1901,7 @@ fn ask_app<'a>(env: &mut Env<'a>, class: JClass<'a>, question: AppQuestion) -> A
         AppQuestion::ClientVersion => {
             let called =
                 env.call_static_method(class, jni_str!("getClientVersion"), jni_sig!("()I"), &[]);
-            AppAnswer::Version(int_of(called))
+            AppAnswer::Version(int_of(env, called))
         }
         AppQuestion::DeviceInfo => {
             // `AppLogic$DeviceInfo` — `devicename` and `devicetype`.
@@ -1668,7 +1911,7 @@ fn ask_app<'a>(env: &mut Env<'a>, class: JClass<'a>, question: AppQuestion) -> A
                 jni_sig!("()Lio/github/orangeboychen/marsrs/app/AppLogic$DeviceInfo;"),
                 &[],
             );
-            let Some(device) = object_of(called) else {
+            let Some(device) = object_of(env, called) else {
                 return AppAnswer::Nothing;
             };
             AppAnswer::Device(DeviceInfo::new(
@@ -1701,10 +1944,12 @@ pub(crate) fn ask_platform_comm(question: PlatformQuestion) -> PlatformAnswer {
             return PlatformAnswer::Nothing;
         };
         vm.attach_current_thread(|env| -> jni::errors::Result<PlatformAnswer> {
-            let Ok(class) = env.find_class(PLATFORM_COMM) else {
+            let Some(class) = class_of(|classes| &classes.platform_comm) else {
                 return Ok(PlatformAnswer::Nothing);
             };
-            Ok(ask_platform(env, class, question))
+            let answer = ask_platform(env, class, question);
+            clear_what_is_pending(env);
+            Ok(answer)
         })
         .unwrap_or(PlatformAnswer::Nothing)
     })
@@ -1712,14 +1957,14 @@ pub(crate) fn ask_platform_comm(question: PlatformQuestion) -> PlatformAnswer {
 
 fn ask_platform<'a>(
     env: &mut Env<'a>,
-    class: JClass<'a>,
+    class: &JClass<'_>,
     question: PlatformQuestion,
 ) -> PlatformAnswer {
     match question {
         PlatformQuestion::NetInfo => {
             let called =
                 env.call_static_method(class, jni_str!("getNetInfo"), jni_sig!("()I"), &[]);
-            PlatformAnswer::NetInfo(NetInfo::of(int_of(called)))
+            PlatformAnswer::NetInfo(NetInfo::of(int_of(env, called)))
         }
         PlatformQuestion::StatisticsNetType => {
             let called = env.call_static_method(
@@ -1728,7 +1973,7 @@ fn ask_platform<'a>(
                 jni_sig!("()I"),
                 &[],
             );
-            PlatformAnswer::StatisticsNetType(NetType::of(int_of(called)))
+            PlatformAnswer::StatisticsNetType(NetType::of(int_of(env, called)))
         }
         PlatformQuestion::ProxyInfo => {
             // the host comes back in the buffer Java was handed, the port in
@@ -1743,7 +1988,7 @@ fn ask_platform<'a>(
                 jni_sig!("(Ljava/lang/StringBuffer;)I"),
                 &[argument],
             );
-            let port = int_of(called);
+            let port = int_of(env, called);
             let called = env.call_method(
                 &buffer,
                 jni_str!("toString"),
@@ -1763,7 +2008,7 @@ fn ask_platform<'a>(
                 jni_sig!("()Lio/github/orangeboychen/marsrs/comm/PlatformComm$WifiInfo;"),
                 &[],
             );
-            let Some(wifi) = object_of(called) else {
+            let Some(wifi) = object_of(env, called) else {
                 return PlatformAnswer::Nothing;
             };
             PlatformAnswer::Wifi(Some(WifiInfo {
@@ -1780,7 +2025,7 @@ fn ask_platform<'a>(
                 jni_sig!("()Lio/github/orangeboychen/marsrs/comm/PlatformComm$SIMInfo;"),
                 &[],
             );
-            let Some(sim) = object_of(called) else {
+            let Some(sim) = object_of(env, called) else {
                 return PlatformAnswer::Nothing;
             };
             PlatformAnswer::Sim(Some(SimInfo {
@@ -1796,7 +2041,7 @@ fn ask_platform<'a>(
                 jni_sig!("()Lio/github/orangeboychen/marsrs/comm/PlatformComm$APNInfo;"),
                 &[],
             );
-            let Some(apn) = object_of(called) else {
+            let Some(apn) = object_of(env, called) else {
                 return PlatformAnswer::Nothing;
             };
             PlatformAnswer::Apn(Some(ApnInfo {
@@ -1812,7 +2057,7 @@ fn ask_platform<'a>(
                 jni_sig!("()I"),
                 &[],
             );
-            PlatformAnswer::RadioAccessNetwork(int_of(called))
+            PlatformAnswer::RadioAccessNetwork(int_of(env, called))
         }
         PlatformQuestion::Signal { wifi } => {
             let called = env.call_static_method(
@@ -1821,12 +2066,12 @@ fn ask_platform<'a>(
                 jni_sig!("(Z)J"),
                 &[JValue::Bool(wifi)],
             );
-            PlatformAnswer::Signal(long_of(called))
+            PlatformAnswer::Signal(long_of(env, called))
         }
         PlatformQuestion::NetworkConnected => {
             let called =
                 env.call_static_method(class, jni_str!("isNetworkConnected"), jni_sig!("()Z"), &[]);
-            PlatformAnswer::Connected(bool_of(called))
+            PlatformAnswer::Connected(bool_of(env, called))
         }
     }
 }
@@ -1842,8 +2087,10 @@ fn string_buffer<'a>(env: &mut Env<'a>) -> Option<JObject<'a>> {
 }
 
 /// A `J` Java answered with — `0` for a call that could not be made.
-fn long_of(called: jni::errors::Result<JValueOwned>) -> i64 {
-    called.and_then(|value| value.j()).unwrap_or(0)
+fn long_of(env: &Env<'_>, called: jni::errors::Result<JValueOwned>) -> i64 {
+    clear_pending(env, called)
+        .and_then(|value| value.j())
+        .unwrap_or(0)
 }
 
 // #################### io.github.orangeboychen.marsrs.BaseEvent ####################
@@ -1902,7 +2149,9 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onNetworkCh
 }
 
 /// `BaseEvent.onSingalCrash` — the signal number is not the port's to handle,
-/// so it is not read; what the crash does is close the appender.
+/// so it is not read, and what the signal reached upstream — closing the
+/// process-wide appender — is nothing here: an appender is the app's own, and
+/// one it closed is one it closes.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_BaseEvent_onSingalCrash<'local>(
     _env: EnvUnowned<'local>,
@@ -1972,6 +2221,11 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_startAct
             &longlink_items,
             &shortlink_items,
             mode,
+            // A timeout below zero is one that was not given: `0` is what the
+            // run reads as `UNUSE_TIMEOUT`, which is every probe on the
+            // default of its own kind and nothing to break the plan off. The
+            // C++ hands the negative straight to its probes instead, which is
+            // a run that stops after the first one.
             u32::try_from(timeout).unwrap_or(0),
         ) as jboolean
     })
@@ -2023,9 +2277,10 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_plan<'lo
 /// back until every probe of every planned check has answered, and it holds the
 /// process-wide diagnosis for as long.
 ///
-/// `false` when there was no check in flight, or when the one there was got
-/// cancelled before its first check — which is what `MARS_SDT_ERR_NO_CHECK` is
-/// in the C ABI.
+/// `false` when no check recorded anything: there was no check in flight, the
+/// one there was got cancelled before its first check, or the checks it planned
+/// had nothing to check — which is what `MARS_SDT_ERR_NO_CHECK` is in the C
+/// ABI.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_nativeRunChecks<'local>(
     _env: EnvUnowned<'local>,
@@ -2035,10 +2290,14 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_nativeRu
     guard(|| run_checks_java_impl(network_type)) as jboolean
 }
 
-/// `SdtLogic.takeReport` — the JSON of everything the checks have reported
-/// since the last call, which is the same document
-/// `SdtLogic.ICallBack.reportSignalDetectResults` was handed; taking it empties
-/// it. `null` when there was nothing to take.
+/// `SdtLogic.takeReport` — one JSON document of everything the checks have
+/// reported since the last call; taking it empties it. `null` when there was
+/// nothing to take.
+///
+/// Not the document `SdtLogic.ICallBack.reportSignalDetectResults` was handed:
+/// that one is the report of one run, and this is one document for every run
+/// since the last call — two runs are two entries of its `details`, and not
+/// either of the two documents the callback was given.
 #[no_mangle]
 pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_takeReport<'local>(
     mut env: EnvUnowned<'local>,
@@ -2050,9 +2309,17 @@ pub extern "system" fn Java_io_github_orangeboychen_marsrs_sdt_SdtLogic_takeRepo
             return std::ptr::null_mut();
         }
         let json = report_json_impl(&reported);
+        // The take emptied the sink and the vec it handed over is the only
+        // copy of the report, so a document that cannot be made is one the
+        // results are put back for: `null` here is the answer of a call that
+        // failed and not of a diagnosis that reported nothing, and the app
+        // that asks again is answered with the report it was owed.
         match env.new_string(&json) {
             Ok(text) => JObject::from(text).into_raw(),
-            Err(_) => std::ptr::null_mut(),
+            Err(_) => {
+                untake_reported_impl(reported);
+                std::ptr::null_mut()
+            }
         }
     })
 }
@@ -2132,16 +2399,18 @@ pub(crate) fn ask_probe(query: ProbeQuery) -> ProbeAnswer {
             return ProbeAnswer::Nothing;
         };
         vm.attach_current_thread(|env| -> jni::errors::Result<ProbeAnswer> {
-            let Ok(class) = env.find_class(SDT_LOGIC) else {
+            let Some(class) = class_of(|classes| &classes.sdt_logic) else {
                 return Ok(ProbeAnswer::Nothing);
             };
-            Ok(ask_probe_of(env, class, query))
+            let answer = ask_probe_of(env, class, query);
+            clear_what_is_pending(env);
+            Ok(answer)
         })
         .unwrap_or(ProbeAnswer::Nothing)
     })
 }
 
-fn ask_probe_of<'a>(env: &mut Env<'a>, class: JClass<'a>, query: ProbeQuery) -> ProbeAnswer {
+fn ask_probe_of<'a>(env: &mut Env<'a>, class: &JClass<'_>, query: ProbeQuery) -> ProbeAnswer {
     match query {
         ProbeQuery::Dns { domain, timeout_ms } => {
             let Ok(host) = env.new_string(&domain) else {
@@ -2154,7 +2423,7 @@ fn ask_probe_of<'a>(env: &mut Env<'a>, class: JClass<'a>, query: ProbeQuery) -> 
                 ASK_HOST_SIG,
                 &[JValue::Object(&host), JValue::Int(timeout_ms as jint)],
             );
-            probe_answer(env, object_of(called))
+            probe_answer(env, object_of(env, called))
         }
         ProbeQuery::Tcp {
             ip,
@@ -2175,7 +2444,7 @@ fn ask_probe_of<'a>(env: &mut Env<'a>, class: JClass<'a>, query: ProbeQuery) -> 
                     JValue::Int(timeout_ms as jint),
                 ],
             );
-            probe_answer(env, object_of(called))
+            probe_answer(env, object_of(env, called))
         }
         ProbeQuery::Http { url, timeout_ms } => {
             let Ok(url) = env.new_string(&url) else {
@@ -2188,7 +2457,7 @@ fn ask_probe_of<'a>(env: &mut Env<'a>, class: JClass<'a>, query: ProbeQuery) -> 
                 ASK_HOST_SIG,
                 &[JValue::Object(&url), JValue::Int(timeout_ms as jint)],
             );
-            probe_answer(env, object_of(called))
+            probe_answer(env, object_of(env, called))
         }
         ProbeQuery::Ping { host, timeout_s } => {
             let Ok(host) = env.new_string(&host) else {
@@ -2201,7 +2470,7 @@ fn ask_probe_of<'a>(env: &mut Env<'a>, class: JClass<'a>, query: ProbeQuery) -> 
                 ASK_HOST_SIG,
                 &[JValue::Object(&host), JValue::Int(timeout_s as jint)],
             );
-            probe_answer(env, object_of(called))
+            probe_answer(env, object_of(env, called))
         }
     }
 }
@@ -2224,12 +2493,16 @@ fn probe_answer(env: &mut Env<'_>, answer: Option<JObject<'_>>) -> ProbeAnswer {
         PROBE_DNS => ProbeAnswer::Dns {
             error_code: int_field(env, &answer, jni_str!("errorCode")),
             rtt,
+            // the Java `Answer` carries no resolver and no connect time, so
+            // a probe on this seam answers the two profiles keep as empty.
+            local_dns: String::new(),
             ips: string_array_field(env, &answer, jni_str!("ips")),
         },
         PROBE_TCP => ProbeAnswer::Tcp {
             sent: int_field(env, &answer, jni_str!("sent")),
             received: int_field(env, &answer, jni_str!("received")),
             is_noop_resp: bool_field(env, &answer, jni_str!("isNoopResponse")),
+            conntime: 0,
             rtt,
         },
         PROBE_HTTP => ProbeAnswer::Http {
@@ -2272,7 +2545,8 @@ fn hosts_from_java(env: &mut Env<'_>, array: &JObject<'_>) -> CheckIPPorts {
         }
         let name = string_field(env, &link, jni_str!("name"));
         let hosts = string_array_field(env, &link, jni_str!("hosts"));
-        let ports = match env.get_field(&link, jni_str!("ports"), jni_sig!("[I")) {
+        let field = env.get_field(&link, jni_str!("ports"), jni_sig!("[I"));
+        let ports = match clear_pending(env, field) {
             Ok(field) => field
                 .l()
                 .map(|ports| int_array(env, &ports))
@@ -2297,7 +2571,8 @@ fn hosts_from_java(env: &mut Env<'_>, array: &JObject<'_>) -> CheckIPPorts {
 /// A `String[]` field of `obj`, which is the addresses a resolve found.
 fn string_array_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> Vec<String> {
     guard(|| {
-        let Ok(field) = env.get_field(obj, name, jni_sig!("[Ljava/lang/String;")) else {
+        let field = env.get_field(obj, name, jni_sig!("[Ljava/lang/String;"));
+        let Ok(field) = clear_pending(env, field) else {
             return Vec::new();
         };
         let Ok(array) = field.l() else {
@@ -2311,7 +2586,8 @@ fn string_array_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> Ve
 /// ping, which no other kind of field in the tree carries.
 fn float_field(env: &mut Env<'_>, obj: &JObject<'_>, name: &JNIStr) -> f32 {
     guard(|| {
-        env.get_field(obj, name, jni_sig!("F"))
+        let field = env.get_field(obj, name, jni_sig!("F"));
+        clear_pending(env, field)
             .and_then(|value| value.f())
             .unwrap_or(0.0)
     })

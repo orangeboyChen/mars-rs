@@ -37,7 +37,11 @@ cargo build --manifest-path "$REPO/Cargo.toml" -p marsrs-compat --release
 RUST=$REPO/target/release/stn-compat
 CPP=$OUT/upstream_stn
 
-if [ ! -x "$CPP" ]; then
+# … or older than the harness it was built out of: an edit to
+# `upstream_stn.cpp` is otherwise a binary that keeps answering for a source
+# it no longer matches, and the C++ column of the table below is then not
+# the C++ of this tree.
+if [ ! -x "$CPP" ] || [ "$REPO/scripts/compat/upstream_stn.cpp" -nt "$CPP" ]; then
     MARS_SRC="$REPO/scripts/compat/upstream_stn.cpp" \
     MARS_SRCS="$UP/mars/comm/autobuffer.cc \
                $UP/mars/comm/unix/xlogger_threadinfo.cc \
@@ -154,7 +158,9 @@ open(path, "wb").write(data[:len(data) - cut])' "$CPP_FILE" "$cut"
         else
             BYTES=FAILED
             FAILED=$((FAILED + 1))
-            cmp "$RUST_FILE" "$CPP_FILE" || true
+            # A diagnostic on stdout lands between two rows of the table
+            # this script prints, which is why it goes to stderr.
+            cmp "$RUST_FILE" "$CPP_FILE" >&2 || true
         fi
     else
         RUST_FILE="$WORK/$name.bin"

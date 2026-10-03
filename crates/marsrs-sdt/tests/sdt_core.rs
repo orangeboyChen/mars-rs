@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use marsrs_sdt::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
 use marsrs_sdt::sdt_core::{CancelHandle, SdtCore};
 use marsrs_sdt::{
-    CheckIPPort, CheckIPPorts, CheckStatus, NetCheckType, NET_CHECK_BASIC, NET_CHECK_LONG,
-    NET_CHECK_SHORT, UNUSE_TIMEOUT,
+    CheckIPPort, CheckIPPorts, CheckStatus, NetCheckStatus, NetCheckType, NET_CHECK_BASIC,
+    NET_CHECK_LONG, NET_CHECK_SHORT, UNUSE_TIMEOUT,
 };
 
 fn hosts(names: &[&str]) -> CheckIPPorts {
@@ -215,6 +215,80 @@ fn a_running_check_can_be_cancelled_from_the_outside() {
 }
 
 #[test]
+fn a_probe_that_panics_does_not_leave_the_core_checking() {
+    let longlink = hosts(&["long.weixin.qq.com"]);
+
+    let mut core = SdtCore::new();
+    core.start_check(
+        &longlink,
+        &CheckIPPorts::new(),
+        NET_CHECK_BASIC,
+        UNUSE_TIMEOUT,
+    );
+
+    // The panic is the host's — it came out of the probe the host handed in —
+    // and `__RunOn` does not catch it, so there is nothing to assert about the
+    // run but that the core was given back on the way out.
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        core.run_on(|_, _| panic!("a probe that fell over"));
+    }));
+    assert!(panicked.is_err(), "the panic is not swallowed");
+
+    // `checking_` is cleared by the guard and not by the end of `__RunOn`,
+    // which a panic unwinds past: a core that kept it would answer `false` to
+    // every `start_check` after this one
+    assert!(!core.is_checking());
+    assert_eq!(core.status(), NetCheckStatus::CheckEnd);
+    assert!(core.start_check(
+        &longlink,
+        &CheckIPPorts::new(),
+        NET_CHECK_BASIC,
+        UNUSE_TIMEOUT
+    ));
+    assert_eq!(core.run_on(record).len(), 2);
+}
+
+/// The rest of what a run leaves behind: not just `checking_`, but the
+/// request it was running. `SdtLogic::run` takes no request of its own, so
+/// what a run that unwinds leaves in the core is what the next one starts
+/// from — a request already [`CheckStatus::CheckFinish`] stops it before its
+/// first check, and the results it did not record are the ones it answers
+/// with.
+#[test]
+fn a_run_that_panicked_leaves_no_request_behind() {
+    let longlink = hosts(&["long.weixin.qq.com"]);
+
+    let mut core = SdtCore::new();
+    core.start_check(
+        &longlink,
+        &CheckIPPorts::new(),
+        NET_CHECK_BASIC,
+        UNUSE_TIMEOUT,
+    );
+
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        core.run_on(|_, request| {
+            request
+                .checkresult_profiles
+                .push(CheckResultProfile::of(NetCheckType::PingCheck));
+            request.check_status = CheckStatus::CheckFinish;
+            panic!("a probe that fell over after finishing");
+        })
+    }));
+    assert!(panicked.is_err(), "the panic is not swallowed");
+
+    assert!(
+        core.request().checkresult_profiles.is_empty(),
+        "the results of the run that panicked are still there"
+    );
+    assert_ne!(
+        core.request().check_status,
+        CheckStatus::CheckFinish,
+        "the request the next run would start from is already finished"
+    );
+}
+
+#[test]
 fn a_cancel_handle_stays_usable_after_a_run() {
     let longlink = hosts(&["long.weixin.qq.com"]);
     let shortlink = hosts(&["short.weixin.qq.com"]);
@@ -236,6 +310,7 @@ fn a_cancel_handle_stays_usable_after_a_run() {
 #[test]
 fn a_default_core_is_a_fresh_one() {
     let core = SdtCore::default();
+    assert_eq!(core.status(), NetCheckStatus::None);
     assert!(!core.is_checking());
     assert!(!core.is_cancelled());
     assert!(core.plan().is_empty());

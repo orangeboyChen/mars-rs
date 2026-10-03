@@ -12,20 +12,26 @@ turned into a plan you can read before anything is probed.
 | dns against another server, to compare with | `NetCheckType::NewDnsCheck` | `.newDns` | `Check.NewDns` | `2` | `MarsSdtCheckNewDns` |
 | tcp | `NetCheckType::TcpCheck` | `.tcp` | `Check.Tcp` | `3` | `MarsSdtCheckTcp` |
 | http | `NetCheckType::HttpCheck` | `.http` | `Check.Http` | `4` | `MarsSdtCheckHttp` |
-| traceroute — planned, no probe asked for it yet | `NetCheckType::TracerouteCheck` | `.traceroute` | `Check.Traceroute` | `5` | `MarsSdtCheckTraceroute` |
-| the request's own buffer — same | `NetCheckType::ReqBufCheck` | `.reqBuf` | `Check.ReqBuf` | `6` | `MarsSdtCheckReqBuf` |
+| traceroute — planned, no probe asked for it yet | `NetCheckType::TracerouteCheck` | `.traceroute` | `Check.Traceroute` | — | `MarsSdtCheckTraceroute` |
+| the request's own buffer — same | `NetCheckType::ReqBufCheck` | `.reqBuf` | `Check.ReqBuf` | — | `MarsSdtCheckReqBuf` |
 
 ## The bits the mode is made of
 
-| the bit | Rust | shared Kotlin, Android | Swift, C | what it puts in the plan |
-|---|---|---|---|---|
-| `NET_CHECK_BASIC` | `NET_CHECK_BASIC` | `CheckMode.K_BASIC` | `1` | a ping and a dns check — the two the C++ starts with |
-| `NET_CHECK_LONG` | `NET_CHECK_LONG` | `K_LONG` | `2` | a tcp check: a noop out to the long link's hosts |
-| `NET_CHECK_SHORT` | `NET_CHECK_SHORT` | `K_SHORT` | `4` | an http check: the net-check CGI, and the short link's hosts |
+| the bit | Rust | shared Kotlin, Android | Swift | C | what it puts in the plan |
+|---|---|---|---|---|---|
+| `NET_CHECK_BASIC` | `NET_CHECK_BASIC` | `CheckMode.K_BASIC` | `.basic` | `NET_CHECK_BASIC` | a ping and a dns check — the two the C++ starts with |
+| `NET_CHECK_LONG` | `NET_CHECK_LONG` | `K_LONG` | `.long` | `NET_CHECK_LONG` | a tcp check: a noop out to the long link's hosts |
+| `NET_CHECK_SHORT` | `NET_CHECK_SHORT` | `K_SHORT` | `.short` | `NET_CHECK_SHORT` | an http check: the net-check CGI, and the short link's hosts |
 
 They OR together — `NET_CHECK_BASIC | NET_CHECK_LONG` is a run of three checks —
-and `0` is **no checks at all**: the plan is empty, the run asks no probe and the
-report is `{"details":[]}`. It is not "run everything", which is `1 | 2 | 4`.
+and `0` is **no checks at all**, and no seam runs it: a mode with none of the
+three bits in it is refused everywhere — Rust and the shared Kotlin answer
+`false`, Android through the same call, the C ABI `MARS_SDT_ERR_BAD_ARG`. What an
+app gets for `0` is a start that did not happen and no report at all, and not an
+empty one. It is not "run everything", which is `1 | 2 | 4` — `Mode.all` in Swift.
+
+Swift takes them as a set, `mode: [.basic, .long]`, and Objective-C keeps the
+integer: `mode: NET_CHECK_BASIC | NET_CHECK_LONG`.
 
 `NET_CHECK_SHORT` is the one that needs its hosts: that bit with a `shortLink` of
 nothing is a plan of an http check with nothing to check, and a run whose report

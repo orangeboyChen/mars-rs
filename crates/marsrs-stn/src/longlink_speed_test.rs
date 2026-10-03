@@ -327,10 +327,13 @@ pub struct Fastest {
 /// pair and one [`Socket`] per item.
 pub struct LongLinkSpeedTest {
     items: Vec<SpeedTestItem>,
-    sockets: Vec<Socket>,
+    /// One slot per candidate, and [`None`] is a slot whose socket is not
+    /// open: a race that has been run before closed the sockets of the pairs
+    /// that lost, and a slot is what keeps the one a pair is stepped on from
+    /// being another pair's.
+    sockets: Vec<Option<Socket>>,
     open: Option<Box<Open>>,
     select: Option<Box<Select>>,
-    retries: usize,
 }
 
 impl Default for LongLinkSpeedTest {
@@ -357,7 +360,6 @@ impl LongLinkSpeedTest {
             sockets: Vec::new(),
             open: None,
             select: None,
-            retries: 0,
         }
     }
 
@@ -390,7 +392,7 @@ impl LongLinkSpeedTest {
     /// How many sockets are still open. The C++ closes the ones that lost, so
     /// after a race this is one at most.
     pub fn open_sockets(&self) -> usize {
-        self.sockets.len()
+        self.sockets.iter().flatten().count()
     }
 
     /// `GetFastestSocket` — runs the race, reading the clock again after every
@@ -410,23 +412,37 @@ impl LongLinkSpeedTest {
     }
 
     fn race(&mut self, mut clock: impl FnMut() -> u64) -> Option<Fastest> {
-        while self.sockets.len() < self.items.len() {
+        // One race's count of the `EINTR`s it sat through, and not the test's
+        // across every race it has run: the C++ keeps it inside the run, so a
+        // race started again on the same test is a race with its three again.
+        // Kept on the value it is a ceiling a race that has not started yet
+        // has already spent, which is a race that gives up on its first
+        // `EINTR`.
+        let mut retries = 0;
+        // one slot for every candidate, and then a socket for every slot that
+        // has none: an open socket is the one the pair in that slot was made
+        // for, and not one an earlier race left in a shorter list
+        self.sockets.resize_with(self.items.len(), || None);
+        for index in 0..self.items.len() {
+            if self.sockets[index].is_some() {
+                continue;
+            }
             let Some(open) = self.open.as_mut() else {
                 break;
             };
             let (ip, port) = {
-                let item = &self.items[self.sockets.len()];
+                let item = &self.items[index];
                 (item.pair.ip.clone(), item.pair.port)
             };
-            self.sockets.push(open(&ip, port));
+            self.sockets[index] = Some(open(&ip, port));
         }
 
         loop {
             let events = match self.select() {
                 Ok(events) => events,
                 // `EINTR` is sat through, but not for ever
-                Err(Stop::Interrupted) if self.retries < MAX_RETRIES => {
-                    self.retries += 1;
+                Err(Stop::Interrupted) if retries < MAX_RETRIES => {
+                    retries += 1;
                     continue;
                 }
                 Err(_) => break,
@@ -451,6 +467,20 @@ impl LongLinkSpeedTest {
             {
                 break;
             }
+            // `Select(kTimeout)` answering `0` is what ends the race in the
+            // C++: nothing was ready inside the timeout. A host that says the
+            // same thing with an `Ok` full of `SocketEvent::Nothing` is one
+            // this loop would otherwise sit in for ever, so a round nothing
+            // was ready in is read the way the C++ reads a `0`.
+            //
+            // Not a round that changed no state, which is the other way of
+            // asking "was anything ready": an answer that is still arriving
+            // in pieces is moved from `Resp` to `Resp` by a read that did
+            // bring bytes in, and ending there drops a pair that would have
+            // answered on the next one.
+            if events.iter().all(|event| *event == SocketEvent::Nothing) {
+                break;
+            }
         }
 
         self.winner()
@@ -470,14 +500,14 @@ impl LongLinkSpeedTest {
                 Need::Nothing => need,
                 Need::Write => {
                     let bytes = item.pending().to_vec();
-                    let written = match self.sockets.get_mut(index) {
+                    let written = match self.sockets.get_mut(index).and_then(Option::as_mut) {
                         Some(socket) => (socket.send)(&bytes),
                         None => -1,
                     };
                     item.on_sent(written)
                 }
                 Need::Read => {
-                    let bytes = match self.sockets.get_mut(index) {
+                    let bytes = match self.sockets.get_mut(index).and_then(Option::as_mut) {
                         Some(socket) => (socket.recv)(),
                         None => Vec::new(),
                     };
@@ -514,13 +544,14 @@ impl LongLinkSpeedTest {
             .items
             .iter()
             .position(|item| item.state() == SpeedTestState::Suc);
-        let mut sockets = std::mem::take(&mut self.sockets);
-        self.sockets = socket
-            .filter(|index| *index < sockets.len())
-            .map(|index| sockets.remove(index))
-            .into_iter()
-            .collect();
-        drop(sockets);
+        // every slot but the winner's is emptied, which is what closes those
+        // sockets: what stays open is the pair that was answered, in the slot
+        // it was made for
+        for (index, slot) in self.sockets.iter_mut().enumerate() {
+            if Some(index) != socket {
+                *slot = None;
+            }
+        }
 
         socket.map(|index| Fastest {
             pair: self.items[index].pair().clone(),
@@ -534,8 +565,7 @@ impl std::fmt::Debug for LongLinkSpeedTest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LongLinkSpeedTest")
             .field("items", &self.items)
-            .field("open_sockets", &self.sockets.len())
-            .field("retries", &self.retries)
+            .field("open_sockets", &self.open_sockets())
             .finish_non_exhaustive()
     }
 }
@@ -594,6 +624,28 @@ mod tests {
                     } else {
                         Vec::new()
                     }
+                },
+            )
+        }
+    }
+
+    /// A host that writes everything it is given, and whose `recv` is one
+    /// `read()` at a time: the answer to the noop goes out in two halves.
+    fn split_host() -> impl FnMut(&str, u16) -> Socket + Send + 'static {
+        let left = Arc::new(Mutex::new((noop_answer(), 0usize)));
+        move |_ip, _port| {
+            let left = Arc::clone(&left);
+            Socket::new(
+                |bytes| bytes.len() as isize,
+                move || {
+                    let (answer, taken) = &mut *left.lock().unwrap_or_else(|p| p.into_inner());
+                    if *taken >= answer.len() {
+                        return Vec::new();
+                    }
+                    let end = (*taken + answer.len().div_ceil(2)).min(answer.len());
+                    let piece = answer[*taken..end].to_vec();
+                    *taken = end;
+                    piece
                 },
             )
         }
@@ -757,6 +809,44 @@ mod tests {
         );
     }
 
+    /// A race that is run again opens the socket of the pair that lost it, and
+    /// not the winner's a second time: a slot is a candidate's, so the socket a
+    /// pair is stepped on is the one that was opened for that pair — and not
+    /// one a shorter list moved into its place.
+    #[test]
+    fn a_race_run_again_opens_the_socket_of_the_pair_that_lost() {
+        let _guard = crate::test_lock();
+        let mut test = LongLinkSpeedTest::new_at(0, [pair("1.1.1.1", 80), pair("2.2.2.2", 80)]);
+        test.set_select(select(vec![
+            vec![SocketEvent::Writable, SocketEvent::Writable],
+            vec![SocketEvent::Nothing, SocketEvent::Readable],
+        ]));
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        let recording = Arc::clone(&opened);
+        let mut answering = host(|index| index == 1);
+        test.set_open(move |ip, port| {
+            recording
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(ip.to_string());
+            answering(ip, port)
+        });
+
+        let fastest = test.fastest_at(0).expect("the second pair answers");
+        assert_eq!(fastest.socket, 1);
+        assert_eq!(*opened.lock().unwrap(), vec!["1.1.1.1", "2.2.2.2"]);
+
+        // the winner kept its slot and the loser's is empty, so the second run
+        // opens one socket — and it is the first pair's
+        let again = test.fastest_at(0).expect("the second pair answered");
+        assert_eq!(again.pair.ip, "2.2.2.2");
+        assert_eq!(
+            *opened.lock().unwrap(),
+            vec!["1.1.1.1", "2.2.2.2", "1.1.1.1"],
+            "a pair is stepped on the socket that was opened for it"
+        );
+    }
+
     /// The round ends at the pair that was answered: the C++ breaks out of the
     /// per-item loop there, so the candidates behind the winner are never given
     /// their `HandleFDISSet` — no read on a socket that has already lost, and a
@@ -779,6 +869,62 @@ mod tests {
             vec![SpeedTestState::Suc, SpeedTestState::Resp],
             "the pair behind the winner is not read again"
         );
+    }
+
+    /// An answer that comes in two reads is still an answer: the round the
+    /// second half arrives in moves the pair from `Resp` to `Suc`, and the one
+    /// before it moved it from `Resp` to `Resp` — a round that reads is not a
+    /// round nothing was ready in, and a race that ends on "no state changed"
+    /// loses a pair whose answer was half way through arriving.
+    #[test]
+    fn an_answer_that_arrives_in_two_reads_is_an_answer() {
+        let _guard = crate::test_lock();
+        let mut test = LongLinkSpeedTest::new_at(0, [pair("1.1.1.1", 80)]);
+        test.set_select(select(vec![
+            vec![SocketEvent::Writable],
+            vec![SocketEvent::Readable],
+            vec![SocketEvent::Readable],
+        ]));
+        test.set_open(split_host());
+
+        let fastest = test.fastest_at(0).expect("the pair answers");
+        assert_eq!(fastest.pair.ip, "1.1.1.1");
+        assert_eq!(fastest.socket, 0);
+        assert_eq!(
+            test.open_sockets(),
+            1,
+            "the pair that answered keeps its socket"
+        );
+    }
+
+    /// `Select(kTimeout)` answering `0` — nothing was ready anywhere inside
+    /// the timeout — is what ends the race in the C++, and a host that says
+    /// the same thing with an `Ok` full of `SocketEvent::Nothing` is one this
+    /// loop sat in for ever: no pair succeeded, none failed, and nothing was
+    /// going to arrive. The select below is asked once, and a second round is
+    /// a loop that did not end.
+    #[test]
+    fn a_round_nothing_was_ready_in_ends_the_race() {
+        let _guard = crate::test_lock();
+        let mut test = LongLinkSpeedTest::new_at(0, [pair("1.1.1.1", 80)]);
+        let rounds = Arc::new(Mutex::new(0usize));
+        let count = Arc::clone(&rounds);
+        test.set_select(move |items| {
+            let mut rounds = count.lock().unwrap_or_else(|p| p.into_inner());
+            *rounds += 1;
+            assert!(
+                *rounds <= 1,
+                "a round nothing was ready in ends the race, and not a second one"
+            );
+            Ok(vec![SocketEvent::Nothing; items.len()])
+        });
+
+        assert_eq!(
+            test.fastest_at(0),
+            None,
+            "a race nothing was ready for has no winner"
+        );
+        assert_eq!(*rounds.lock().unwrap(), 1);
     }
 
     #[test]
@@ -820,6 +966,14 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
             MAX_RETRIES + 1
         );
+        // and a race started again is a race with its three again
+        assert_eq!(test.fastest_at(0), None);
+        assert_eq!(
+            *rounds
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            2 * (MAX_RETRIES + 1)
+        );
 
         // and an exception or a woken breaker ends it at once
         for stop in [Stop::Exception, Stop::Broken] {
@@ -840,6 +994,7 @@ mod tests {
         let mut test = LongLinkSpeedTest::new([pair("1.1.1.1", 80)]);
         assert_eq!(test.fastest(), None);
         assert_eq!(test.round(&[SocketEvent::Writable], 0), vec![Need::Nothing]);
-        assert!(format!("{test:?}").contains("LongLinkSpeedTest"));
+        // one candidate, and no host to open a socket for it
+        assert!(format!("{test:?}").contains("open_sockets: 0"));
     }
 }

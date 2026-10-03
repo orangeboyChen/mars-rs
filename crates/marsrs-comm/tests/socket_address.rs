@@ -71,6 +71,15 @@ fn what_a_client_may_connect_to() {
     }
     // ... and an ip that did not parse is not a server either
     assert!(!SocketAddress::new("not an ip", 80).valid_server_address(true, true));
+    // A NAT64 address is not a v4-mapped one, so what answers for it is the
+    // `// TODO` the C++ leaves behind: `true`, and the v4 address under the
+    // prefix is not looked at — even when it is the loopback, which is what
+    // the branch above refuses.
+    let nat64 = SocketAddress::from_v6(in6_set_addr_nat64([127, 0, 0, 1]), 80);
+    assert!(
+        nat64.valid_server_address(false, false),
+        "a nat64 address is taken as it is, whatever it carries behind the prefix"
+    );
 }
 
 #[test]

@@ -136,7 +136,8 @@ public class Question internal constructor() {
     /**
      * `reportTaskLimited` — what that gate weighed it against: how long ago the
      * same body went out, or how many bytes the funnel would not take. What the
-     * app answers is this number, changed or not.
+     * app answers is this number, changed or not — and that answer is a report
+     * and not an override, so a task the gates refused stays refused.
      */
     public var limit: Int = 0
         internal set

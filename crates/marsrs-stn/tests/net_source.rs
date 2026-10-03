@@ -279,5 +279,5 @@ fn without_anything_set_nothing_is_answered() {
     config.link_type = Task::CHANNEL_MINOR_LONG;
     config.host_list = vec!["minor.example".to_string()];
     assert!(source.get_longlink_items(&config).is_empty());
-    assert!(format!("{source:?}").contains("NetSource"));
+    assert!(format!("{source:?}").contains("ipv6_enabled: true"));
 }

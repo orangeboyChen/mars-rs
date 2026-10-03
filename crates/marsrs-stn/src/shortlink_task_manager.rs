@@ -42,6 +42,7 @@ use marsrs_comm::tickcount::gettickcount;
 
 use crate::config::{DYN_TIME_TASK_FAILED_PKG_LEN, MOBILE_PACKAGE_INTERVAL, WIFI_PACKAGE_INTERVAL};
 use crate::dynamic_timeout::{DynamicTimeout, DynamicTimeoutStatus, NetworkKind};
+use crate::hook::Hook;
 use crate::long_link::{ECT_SOCKET_MAKE_SOCKET_PREPARED, ECT_SOCKET_SHUTDOWN};
 use crate::shortlink::is_keep_alive;
 use crate::simple_ipport_sort::IpPortItem;
@@ -391,6 +392,12 @@ impl ShortLinkTaskManager {
         self.tasks.iter().any(|p| p.task.taskid == taskid)
     }
 
+    /// The ids of every task in the queue, which is what a caller that empties
+    /// it has to know: a task no queue holds is one no pass is going to end.
+    pub fn task_ids(&self) -> Vec<u32> {
+        self.tasks.iter().map(|p| p.task.taskid).collect()
+    }
+
     /// `ClearTasks()`.
     pub fn clear_tasks(&mut self) {
         for at in 0..self.tasks.len() {
@@ -478,7 +485,14 @@ impl ShortLinkTaskManager {
     }
 
     /// The same, with the reading handed in.
+    ///
+    /// The sockets are cleaned before the queue asks whether it has anything
+    /// to do, and not inside `run_on_timeout_at`: what a run cached
+    /// outlives the run, so a queue without a task still holds a keep-alive
+    /// socket, and one whose five seconds are up is a connection the pool is
+    /// holding open for nobody.
     pub fn run_loop_at(&mut self, now: u64) {
+        self.socket_pool.clean_timeout_at(now);
         if self.tasks.is_empty() {
             return;
         }
@@ -630,10 +644,23 @@ impl ShortLinkTaskManager {
         match handle {
             TaskFailHandleType::Normal => {
                 let network = self.network();
-                let cost = now.saturating_sub(self.tasks[at].transfer_profile.start_send_time);
+                let sent_at = self.tasks[at].transfer_profile.start_send_time;
                 let total = self.tasks[at].transfer_profile.send_data_size + body_len;
-                self.dynamic_timeout
-                    .record_at(network, total as u32, cost, now);
+                // What the queue's own timeouts are read off, and what the
+                // window `NetCore` hands to both of its queues is not: a
+                // `start_send_time` of `0` is a request the host never said
+                // went out, and `now` minus nothing is the age of the process.
+                // One such answer in the shared window is a network both
+                // queues then read as slow, which is why [`deadlines`] asks
+                // the same field before it counts a timeout.
+                if sent_at != 0 {
+                    self.dynamic_timeout.record_at(
+                        network,
+                        total as u32,
+                        now.saturating_sub(sent_at),
+                        now,
+                    );
+                }
                 let ended = self.single_resp_handle_at(
                     now,
                     at,
@@ -666,11 +693,22 @@ impl ShortLinkTaskManager {
                 );
                 Some(handle_of(ended))
             }
-            // `kTaskFailHandleDefault` and anything the app made up: the
-            // C++'s `default:`
-            TaskFailHandleType::Default
-            | TaskFailHandleType::SlientTaskEnd
-            | TaskFailHandleType::TaskTimeout => {
+            TaskFailHandleType::SlientTaskEnd => {
+                // over, and the app is not told: what the app asked for is a
+                // task that goes away without a word, which is not a task the
+                // queue tries again and not one it reports. The long link's
+                // `__SingleRespHandle` answers the same handle the same way,
+                // and its run is over like every other task's that left the
+                // queue.
+                let _ = self.stop_run_at(at);
+                self.tasks.remove(at);
+                Some(RespHandle::Ended)
+            }
+            // `kTaskFailHandleDefault` and `kTaskFailHandleTaskTimeout`: the
+            // C++'s `default:`. Both fail the try and hand the code the
+            // decoder read to `__SingleRespHandle`, and they report different
+            // things to the app.
+            TaskFailHandleType::Default | TaskFailHandleType::TaskTimeout => {
                 let ended = self.single_resp_handle_at(
                     now,
                     at,
@@ -679,7 +717,16 @@ impl ShortLinkTaskManager {
                     handle,
                     profile.clone(),
                 );
-                self.notify_network_err(ErrCmdType::EnDecode, handle as i32, &profile);
+                let reported = match handle {
+                    // `fun_notify_network_err_(..., err_code, ...)`: what the
+                    // app's own decoder read out of the body, which a host
+                    // reads the reason off. `-1` is not a reason, and the
+                    // long link reports the code for the same handle
+                    TaskFailHandleType::Default => err_code,
+                    // a handle with no code of its own names itself
+                    made_up => made_up as i32,
+                };
+                self.notify_network_err(ErrCmdType::EnDecode, reported, &profile);
                 Some(handle_of(ended))
             }
         }
@@ -955,13 +1002,32 @@ impl ShortLinkTaskManager {
     }
 
     /// `closefunc` — what a socket the queue is done with is closed with.
+    ///
+    /// The pool closes sockets of its own accord too — one whose five seconds
+    /// ran out, and every one of them when the network changes — so the
+    /// closure is the pool's as well: a pool with no `closefunc` of its own
+    /// drops them instead, and a dropped fd is one the host never gets back.
     pub fn set_close_socket(&mut self, close: impl FnMut(SocketFd) + Send + 'static) {
-        self.close = Some(Box::new(close));
+        // One `closefunc` for the two of them, and out of its cell while the
+        // app is called: a close that comes back into the queue closes a
+        // socket from inside this one, and a mutex taken twice on one thread
+        // never lets go. A close that panicked is put back, and a poisoned
+        // cell is recovered — an fd the port never closes again is one the
+        // host does not get back.
+        let shared: Hook<CloseSocket> = Hook::default();
+        shared.set(Box::new(close));
+        let pooled = shared.clone();
+        self.socket_pool.set_close(move |socket| {
+            let _ = pooled.run(|close| close(socket));
+        });
+        let queue = shared.clone();
+        self.close = Some(Box::new(move |socket| {
+            let _ = queue.run(|close| close(socket));
+        }));
     }
 
     /// `__RunOnTimeout` — the tasks that answered nothing.
     fn run_on_timeout_at(&mut self, now: u64) {
-        self.socket_pool.clean_timeout_at(now);
         let network = self.network();
 
         // The C++ walks its list once, and so does this: a task that is tried
@@ -1081,12 +1147,19 @@ impl ShortLinkTaskManager {
 
             // `first->task.client_sequence_id = …GenSequenceId()` — one per
             // try, and before `Req2Buf`, which is what the app is handed the
-            // request to write with: a retry goes out under a new one
-            let sequence_id = self.sequence_id();
-            self.tasks[i].task.client_sequence_id = sequence_id;
-            // what the C++ makes the worker from is the task it just drew on,
-            // not a copy one number behind it
-            task.client_sequence_id = sequence_id;
+            // request to write with: a retry goes out under a new one. One per
+            // *try* and not one per pass of the loop, which is what
+            // `antiavalanche_checked` is — a task that was weighed once is not
+            // weighed again, and the number that ties it to the server's own
+            // report does not change under a host that runs the loop often.
+            let checked = self.tasks[i].antiavalanche_checked;
+            if !checked {
+                let sequence_id = self.sequence_id();
+                self.tasks[i].task.client_sequence_id = sequence_id;
+                // what the C++ makes the worker from is the task it just drew
+                // on, not a copy one number behind it
+                task.client_sequence_id = sequence_id;
+            }
 
             // `begin_req2buf_time` and `end_req2buf_time` — the app has the
             // task to write its request now, and this is what
@@ -1117,7 +1190,14 @@ impl ShortLinkTaskManager {
                 }
             };
 
-            if !self.allowed(&task, &body) {
+            // The two gates of `mars/stn/src/anti_avalanche.cc`, which are
+            // what the flag is named for: once, and for the try and not for
+            // the pass. `__AntiAvalancheCheck` charges the body it is given —
+            // the mobile funnel is filled by it, and the table of one body's
+            // sends is counted up by it — so a task that waits through many
+            // passes for a run it never got filled the funnel with one body
+            // per pass, and the tasks behind it were then refused their own.
+            if !checked && !self.allowed(&task, &body) {
                 let ended = self.single_resp_handle_at(
                     now,
                     i,
@@ -1131,6 +1211,7 @@ impl ShortLinkTaskManager {
                 }
                 continue;
             }
+            self.tasks[i].antiavalanche_checked = true;
 
             // a cgi that was answered already: the C++ asks here too, and
             // what it asks answers `false` whatever it has, so nothing comes
@@ -1166,8 +1247,11 @@ impl ShortLinkTaskManager {
                 status,
                 mobile,
             );
-            let read_write = if task.long_polling {
-                read_write_timeout(task.long_polling_timeout.max(0) as u64, mobile)
+            // a long-polling task that named no timeout is one that waits for
+            // its first package like any other: a wait of nothing is not what
+            // an app asking for long polling meant
+            let read_write = if task.long_polling && task.long_polling_timeout > 0 {
+                read_write_timeout(task.long_polling_timeout as u64, mobile)
             } else {
                 read_write_timeout(first_pkg, mobile)
             };
@@ -1249,7 +1333,10 @@ impl ShortLinkTaskManager {
                     err_code,
                     fail_handle,
                     &task,
-                    cost as u32,
+                    // `u32` is what the app is handed, as in the C++: a cost
+                    // past 49.7 days is the largest one there is rather than
+                    // one that wrapped into a small one.
+                    u32::try_from(cost).unwrap_or(u32::MAX),
                     &reported,
                 )
             });
@@ -1308,6 +1395,11 @@ impl ShortLinkTaskManager {
 
         let profile = &mut self.tasks[at];
         profile.init_send_param_at(now);
+        // and the try to come is weighed again: it draws a sequence id of its
+        // own and it goes through the two gates, which is what a retry of the
+        // short link is — a whole new request, unlike a long-link task's, whose
+        // one body is put on the wire again under the id it was given
+        profile.antiavalanche_checked = false;
         profile.retry_start_time = if fail_handle == TaskFailHandleType::SessionTimeout {
             0
         } else {
@@ -1502,7 +1594,19 @@ impl ShortLinkTaskManager {
             return;
         }
 
-        let Some(item) = profile.ip_items.get(profile.ip_index as usize) else {
+        // `ip_index` is the host's own `SocketProfile::index`, and a host that
+        // answers `-1` for "none" is out of the list: a socket that cannot be
+        // named for a pair is not one the pool can hand out again, so it is
+        // closed and reported the way the branch above reports one
+        let indexed = usize::try_from(profile.ip_index)
+            .ok()
+            .and_then(|index| profile.ip_items.get(index));
+        let Some(item) = indexed else {
+            if let Some(close) = self.close.as_mut() {
+                close(socket);
+            }
+            self.socket_pool
+                .report_at(now, profile.is_reused_fd, false, false);
             return;
         };
         self.socket_pool.add_cache(CachedSocket::new_at(
@@ -1590,10 +1694,11 @@ fn deadlines(profile: &TaskProfile, network: NetworkKind) -> [Option<(Timeout, u
             Timeout::ReadWrite,
             sent.saturating_add(profile.transfer_profile.read_write_timeout),
         )),
-        (running && long_polling && sent > 0 && pkg == 0).then_some((
-            Timeout::LongPolling,
-            sent.saturating_add(profile.task.long_polling_timeout.max(0) as u64),
-        )),
+        (running && long_polling && sent > 0 && pkg == 0 && profile.task.long_polling_timeout > 0)
+            .then_some((
+                Timeout::LongPolling,
+                sent.saturating_add(profile.task.long_polling_timeout as u64),
+            )),
         (running && !long_polling && sent > 0 && pkg == 0).then_some((
             Timeout::FirstPkg,
             sent.saturating_add(profile.transfer_profile.first_pkg_timeout),
@@ -1626,6 +1731,7 @@ fn timed_out(profile: &TaskProfile, now: u64, network: NetworkKind) -> Option<Ti
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use crate::long_link::ECT_SOCKET_SHUTDOWN;
@@ -1752,8 +1858,13 @@ mod tests {
         assert_eq!(Timeout::PkgPkg.err_code(), HTTP_PKG_PKG_TIMEOUT);
     }
 
+    /// `RespHandle` is the answer of one response and not a queue of them:
+    /// what the three say is whether the task is over, which is what
+    /// [`handle_of`] answers for the four places that ask. The queue itself —
+    /// an ended task leaving it and a retried one staying — is what the tests
+    /// around this one run.
     #[test]
-    fn only_an_ended_task_left_the_queue() {
+    fn each_handle_says_whether_the_task_is_over() {
         assert!(RespHandle::Ended.is_ended());
         assert!(!RespHandle::Retried.is_ended());
         assert!(!RespHandle::Deferred.is_ended());
@@ -1841,6 +1952,34 @@ mod tests {
         assert_eq!(
             timed_out(profile, 400_000, NetworkKind::Wifi),
             Some(Timeout::LongPolling)
+        );
+    }
+
+    /// `long_polling_timeout` is `-1` until an app says otherwise — the C++'s
+    /// own "the caller did not say", which is one millisecond short of the
+    /// margin and not the whole of it — and a wait of nothing is not a wait:
+    /// a long-polling task that named no timeout used to run into one the
+    /// moment it was sent, and was failed with `HTTP_LONG_POLLING_TIMEOUT`
+    /// without ever having been waited on.
+    #[test]
+    fn a_long_polling_task_that_named_no_timeout_waits_like_any_other() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        let mut task = task(7);
+        task.long_polling = true;
+        manager.start_task_at(100_000, task, prepare());
+        assert!(manager.on_send_at(100_000, RunId(7)));
+
+        let profile = &manager.tasks()[0];
+        assert_eq!(
+            next_deadline(profile, NetworkKind::Wifi),
+            Some((Timeout::Task, 104_999)),
+            "the task's own 4 999, and not a long poll that ran out as it was sent"
+        );
+        assert_eq!(
+            timed_out(profile, 100_000, NetworkKind::Wifi),
+            None,
+            "the task was sent at 100_000 and is not out of time yet"
         );
     }
 
@@ -2016,6 +2155,187 @@ mod tests {
         );
         assert!(manager.is_empty());
         assert_eq!(manager.tasks_continuous_fail_count(), 1);
+    }
+
+    /// `kTaskSlientHandleTaskEnd` — a task the app wanted gone without a word.
+    /// It is not retried and it is not reported: neither the app's callback nor
+    /// its network-error report is asked about it, and the run that was out is
+    /// dropped like every other task's that left the queue.
+    #[test]
+    fn a_task_the_app_asked_to_end_without_a_word_leaves_and_is_told_to_nobody() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        let ended = endings(&mut manager);
+        let reported: PairEnded = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&reported);
+        manager.set_notify_network_err(move |err_type, err_code, ip, _host, port| {
+            recorder
+                .lock()
+                .unwrap()
+                .push((err_type, err_code, ip.to_string(), port));
+        });
+        let dropped: Arc<Mutex<Vec<RunId>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&dropped);
+        manager.set_destroy_run(move |run| recorder.lock().unwrap().push(run));
+        manager.set_buf2resp(|_task, _body, _channel| (0, TaskFailHandleType::SlientTaskEnd));
+
+        manager.start_task_at(100_000, task(7), prepare());
+        assert_eq!(
+            manager.on_response_at(100_500, RunId(7), answered(b"hello")),
+            Some(RespHandle::Ended)
+        );
+
+        assert!(manager.is_empty(), "not one try is left in the queue");
+        assert!(ended.lock().unwrap().is_empty(), "the app is told nothing");
+        assert!(
+            reported.lock().unwrap().is_empty(),
+            "and its error report is not asked either"
+        );
+        assert_eq!(*dropped.lock().unwrap(), vec![RunId(7)]);
+    }
+
+    /// `kTaskFailHandleDefault` is the ordinary "try me again" answer, and the
+    /// code it carries is the one the app's own decoder read out of the body.
+    /// What the app is told about the network is that code and not the handle,
+    /// which says only "try me again" — the long link reports the same pair for
+    /// the same handle.
+    #[test]
+    fn a_task_the_app_said_to_try_again_is_reported_with_the_code_its_decoder_read() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        let reported: PairEnded = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&reported);
+        manager.set_notify_network_err(move |err_type, err_code, ip, _host, port| {
+            recorder
+                .lock()
+                .unwrap()
+                .push((err_type, err_code, ip.to_string(), port));
+        });
+        manager.set_buf2resp(|_task, _body, _channel| (-500, TaskFailHandleType::Default));
+
+        manager.start_task_at(100_000, task(7), prepare());
+        manager.on_response_at(100_500, RunId(7), answered(b"hello"));
+
+        assert_eq!(
+            *reported.lock().unwrap(),
+            vec![(ErrCmdType::EnDecode, -500, String::new(), 0)],
+            "and not the -1 that only says the task is to be tried again"
+        );
+    }
+
+    /// A task whose run never begins waits in the queue, and a host that runs
+    /// the loop often asks about it often. What is one try's and not one
+    /// pass's is the number the server ties the request to and the one weighing
+    /// of the body: the encoder is handed the same sequence id every pass, and
+    /// the two gates are asked once — a funnel filled with one body per pass
+    /// is a funnel the tasks behind this one are refused out of.
+    #[test]
+    fn a_task_that_waits_for_a_run_is_weighed_once_and_not_once_a_pass() {
+        let mut manager = ShortLinkTaskManager::new();
+        // a host with no socket operator: the run is never begun
+        manager.set_start_run(|_task, _request| None);
+        let mut next: u16 = 0;
+        manager.set_gen_sequence_id(move || {
+            next += 1;
+            next
+        });
+
+        let encoded: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&encoded);
+        manager.set_req2buf(move |task, _channel| {
+            recorder.lock().unwrap().push(task.client_sequence_id);
+            Ok(b"body".to_vec())
+        });
+        let weighed: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&weighed);
+        manager.set_anti_avalanche_check(move |_task, body| {
+            recorder.lock().unwrap().push(body.to_vec());
+            true
+        });
+
+        manager.start_task_at(100_000, task(7), prepare());
+        manager.run_loop_at(100_100);
+        manager.run_loop_at(100_200);
+
+        assert!(manager.has_task(7), "the task is still waiting for a run");
+        assert_eq!(
+            *encoded.lock().unwrap(),
+            vec![1, 1, 1],
+            "one number for the try, and not a new one for every pass"
+        );
+        assert_eq!(
+            *weighed.lock().unwrap(),
+            vec![b"body".to_vec()],
+            "and the gates were asked about the body once"
+        );
+    }
+
+    /// A retry is a whole new request, so it is weighed again and it goes out
+    /// under a number of its own — which is the one thing the short link does
+    /// differently from the long link, whose one body goes on the wire again
+    /// under the number it was first given.
+    #[test]
+    fn a_task_that_is_tried_again_is_weighed_again_and_under_a_new_number() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        let mut next: u16 = 0;
+        manager.set_gen_sequence_id(move || {
+            next += 1;
+            next
+        });
+        let weighed: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+        let recorder = Arc::clone(&weighed);
+        manager.set_anti_avalanche_check(move |_task, _body| {
+            *recorder.lock().unwrap() += 1;
+            true
+        });
+        manager.set_buf2resp(|_task, _body, _channel| (-500, TaskFailHandleType::Default));
+
+        manager.start_task_at(100_000, task(7), prepare());
+        assert_eq!(manager.tasks()[0].task.client_sequence_id, 1);
+        manager.on_response_at(100_500, RunId(7), answered(b"hello"));
+
+        assert!(manager.has_task(7), "the task is tried again");
+        // the pass the retry goes out on, once its wait is up
+        manager.run_loop_at(110_000);
+        assert_eq!(*weighed.lock().unwrap(), 2, "once for each try");
+        assert!(
+            manager.tasks()[0].task.client_sequence_id > 1,
+            "and the try to come goes out under a number of its own"
+        );
+    }
+
+    /// The window both queues are handed is one reading of the network, so
+    /// what goes into it is one wait and not a tick count: `start_send_time`
+    /// is `0` until the host says the request went out, and `now` minus
+    /// nothing is how long the process has been up.
+    #[test]
+    fn an_answer_whose_send_the_host_never_reported_is_not_a_reading_of_the_network() {
+        let mut manager = ShortLinkTaskManager::new();
+        runs(&mut manager);
+        let window = DynamicTimeout::new();
+        manager.set_dynamic_timeout(window.clone());
+        manager.set_buf2resp(|_task, _body, _channel| (0, TaskFailHandleType::Normal));
+
+        manager.start_task_at(100_000, task(7), prepare());
+        assert!(manager.on_send_at(100_000, RunId(7)));
+        manager.on_response_at(100_001, RunId(7), answered(b"hello"));
+        let good = window.continuous_good_count();
+        assert!(
+            good > 0,
+            "an answer inside its budget is one the window counts"
+        );
+
+        // and one that came back without the host ever saying the request went
+        // out
+        manager.start_task_at(100_000, task(8), prepare());
+        manager.on_response_at(100_001, RunId(8), answered(b"hello"));
+
+        assert_eq!(
+            window.continuous_good_count(),
+            good,
+            "a cost of nothing is not a package that missed its budget"
+        );
     }
 
     #[test]
@@ -2307,6 +2627,77 @@ mod tests {
             manager.due_time(),
             Some(101_500),
             "the retry of the cancelled task"
+        );
+    }
+
+    #[test]
+    fn an_idle_queue_lets_the_socket_it_kept_time_out() {
+        // a socket outlives the run that put it in, so the cleaning is not a
+        // pass only a queue with a task in it makes: one that is idle held a
+        // keep-alive socket until a network change or a drop, and what the
+        // other end saw was a connection open for nobody
+        let mut manager = ShortLinkTaskManager::new();
+        let closed: Arc<Mutex<Vec<SocketFd>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = closed.clone();
+        manager.set_close_socket(move |socket| recorder.lock().unwrap().push(socket));
+        manager.socket_pool().add_cache(CachedSocket::new_at(
+            0,
+            IpPortItem::new("1.1.1.1", 80),
+            SocketFd(3),
+            5,
+        ));
+
+        // five seconds — which the item counts in seconds — and not yet
+        manager.run_loop_at(4_999);
+        assert_eq!(manager.socket_pool().len(), 1);
+
+        manager.run_loop_at(5_000);
+        assert_eq!(manager.socket_pool().len(), 0);
+        assert_eq!(*closed.lock().unwrap(), vec![SocketFd(3)]);
+    }
+
+    #[cfg(panic = "unwind")]
+    #[test]
+    fn a_socket_is_closed_again_after_the_close_the_app_gave_panicked() {
+        // An fd the port never closes again is one the host does not get
+        // back, and the close the app gave is its own code: what it panicked
+        // in is a cell the port recovers, and a callback it put back, so the
+        // socket after it is closed like the socket before it.
+        let mut manager = ShortLinkTaskManager::new();
+        let closed: Arc<Mutex<Vec<SocketFd>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = closed.clone();
+        let closes = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&closes);
+        manager.set_close_socket(move |socket| {
+            let so_far = count.fetch_add(1, Ordering::SeqCst);
+            assert!(
+                so_far > 0,
+                "the app's own close panicked on the first socket"
+            );
+            recorder
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(socket);
+        });
+        manager.socket_pool().add_cache(CachedSocket::new_at(
+            0,
+            IpPortItem::new("1.1.1.1", 80),
+            SocketFd(3),
+            5,
+        ));
+
+        let panicked =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| manager.run_loop_at(5_000)));
+        assert!(panicked.is_err(), "the close the app gave panicked");
+
+        // the socket is still there — the clean it panicked in never took it
+        // out — so the next pass closes it, through the same close as before
+        manager.run_loop_at(5_000);
+        assert_eq!(manager.socket_pool().len(), 0);
+        assert_eq!(
+            *closed.lock().unwrap_or_else(|e| e.into_inner()),
+            vec![SocketFd(3)],
+            "the socket after the panic is closed the way the one in it was not"
         );
     }
 

@@ -6,13 +6,13 @@
 | 作用 | Rust | Swift | Android | Kotlin Multiplatform | Flutter / React Native | C | C++ | HarmonyOS | 默认值 |
 |---|---|---|---|---|---|---|---|---|---|
 | `.xlog` 文件写到哪；目录不存在会创建 | `logdir` | `logDirectory` | `logDir` | `logDir` | `logDir` | `log_dir` | `logDir` | `logDir` | **必填**（Rust 里是 `./log`） |
-| 每个文件名的开头，也是这个 appender 的名字 | `nameprefix` | `namePrefix` | `namePrefix` | `namePrefix` | `namePrefix` | `name_prefix` | `namePrefix` | `namePrefix` | `xlog` |
+| 每个文件名的开头，也是这个 appender 的名字 | `nameprefix` | `namePrefix` | `namePrefix` | `namePrefix` | `namePrefix` | `name_prefix` | `namePrefix` | `namePrefix` | `xlog`（C++ 也是 `xlog`；C 没有默认值 —— `name_prefix` 原样使用，空的就是空的） |
 | 记录要达到的级别 | 见[级别](#级别) | `level` | `level` | `level` | `level` | `mars_xlog_new_instance(&config, level)` | `level` | `level` | `info` |
 | 写入是否等落盘 | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | `mode` | 异步 |
 | 异步缓存文件放哪 | `cachedir` | `cacheDirectory` | `cacheDir` | `cacheDir` | `cacheDir` | `cache_dir` | `cacheDir` | `cacheDir` | 和日志文件同一个目录 |
-| 缓存文件保留几天 | `cache_days` | `cacheDays` | `cacheDays` | `cacheDays` | `cacheDays` | `cache_days` | `cacheDays` | `cacheDays` | `0` —— 都留着 |
+| 在缓存目录里暂存的文件等几天再挪进日志目录 | `cache_days` | `cacheDays` | `cacheDays` | `cacheDays` | `cacheDays` | `cache_days` | `cacheDays` | `cacheDays` | `0` —— 不暂存：当天的文件直接写在日志目录里 |
 | 关闭的文件用什么压缩 | `compress_mode` | `compression` | `compressMode` | `compressMode` | `compressMode` | `compress_mode` | `compressMode` | `compressMode` | zlib |
-| 压缩到什么程度 | `compress_level` | `compressionLevel` | `compressLevel` | `compressLevel` | `compressLevel` | `compress_level` | `compressLevel` | `compressLevel` | `0` —— 用压缩器自己的（zlib 是 6） |
+| 压缩到什么程度 | `compress_level` | `compressionLevel` | `compressLevel` | `compressLevel` | `compressLevel` | `compress_level` | `compressLevel` | `compressLevel` | `0` —— 用 appender 自己的级别 `6`，也就是 `mars_xlog.h` 里 `0` 的意思；zlib 不看这个级别，一律按 9 压；Rust 是 `6` |
 | 加密用的公钥 | `pub_key` | `publicKey` | `pubKey` | `pubKey` | `pubKey` | `pub_key` | `pubKey` | `pubKey` | 空 —— 不加密 |
 
 appender 接受不了的配置，在构造它的地方就被拒绝，而不是被库悄悄吞掉：
@@ -93,22 +93,35 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 | 换来什么 | `write` 系统调用不在打日志的线程上 | 打日志的线程要等文件 |
 | 你要做什么 | 读文件或上传前 `flushNow()`；App 退出时什么都不用做（见[日志文件](/zh/xlog/log-files)） | 进程可能被杀之前 `close()` 或 `flushNow()` —— 还攒着的那截会跟着进程一起走 |
 
+这页写的是 `main` 上的树。最新的 release —— `v0.1.0-alpha.3` —— 比它旧，排空只有
+一个写法：Kotlin 和 Swift 是 `flush(sync = true)`，C 是
+`mars_xlog_flush_instance(h, 1)`，Rust 是 `appender_flush_sync()`。上面那个
+`flushNow()` 是 `main` 的；在下一个 tag 之前只有树上有它 —— Cargo 依赖去掉 `--tag`
+就能取到。
+
 默认是异步，因为文件比一条记录慢；同步用在一条记录等不了写线程的地方 ——
 崩溃日志，或者退出前的最后几行。
 
-两种模式都不是每条记录都进内核：都先攒着，攒到大约 4 KiB，或者 `close()` /
+两种模式都不是每条记录都进内核：同步先攒到大约 4 KiB；异步攒到它那个缓存块的三分之
+一 —— 150 KiB 的 mmap 里的 50 KiB —— 或者来了一条 `fatal`，或者到 `close()` /
 `flushNow()` 的时候才交给系统。异步攒着不丢东西 —— 记录同时在内核手里那份
 缓存文件里；同步后面什么都没有，进程被杀时攒着的那截就丢了。退出前要调的那一下，
 就是为这一截。
 
 ## 压缩与加密
 
-默认 `zlib`，`zstd` 压得更紧；两者都是按文件、在文件关闭时生效。级别是压缩器自己的旋钮：
-`0` 用默认值（zlib 是 6），zlib 的上限是 `9`，zstd 是 `22`。
+默认 `zlib`，`zstd` 压得更紧；两者都是按文件、在文件关闭时生效。级别是 zstd 那个
+后端的旋钮，上限是 `22`；但 `0` 不是 zstd 自己的默认值（3），而是 appender 的 `6` ——
+这正是 `mars_xlog.h` 要 `0` 表达的意思，除 Rust 之外每个平台都会先把 `0` 换成
+appender 自己的那个级别，压缩器看到之前就换好了。zlib 不看它，一律按 9 压，和 C++ 一样。
+只有 Rust 调用方自己往 config 里写 `0` 才会碰到 zstd 自己的默认值 —— config 到编码器之
+间没有任何东西改写它 —— 而 Rust 自己的默认是 `6`。
 
-给了 `pubKey`，每条记录的正文会用 ECDH + TEA 加密 —— 也就是 C++ 实现用的那个算法，
-密钥由写方和读方协商出来。这里填的是**公**钥，
-读日志用的私钥是它的另一半；留空则写出的文件任何 mars 日志读取工具都能打开。
+给了 `pubKey`，每条**异步**记录的正文会用 ECDH + TEA 加密 —— 也就是 C++ 实现用的那个
+算法，密钥由写方和读方协商出来。同步记录的正文不管有没有这把钥匙都是明文存着的，
+C++ 也是这样：`pubKey` 加密的是异步记录，所以同步模式写出的文件不给钥匙也能读。
+这里填的是**公**钥，读日志用的私钥是它的另一半；留空则写出的文件任何 mars 日志
+读取工具都能打开。
 
 ## 打开之后
 
@@ -126,7 +139,9 @@ if (xlog.isLoggable(LogLevel.Debug)) {
 
 它给出的是**目录**而不是文件，也就是 C++ 的 `GetCurrentLogPath` 交回来的那个；当天的文件在下面一行。
 
-大小和时间的 `0` 都表示“不限制”：文件永不切分、永不删除 —— C++ 那边自己保留十天。
+大小的 `0` 是“不限制”：文件永不切分。时间的 `0` 不是 —— 不到一天的值一律被忽略，
+`0` 也在内，于是 appender 保留它已有的那个期限：打开时的那十天，或者上次给它的那个
+不少于一天的值。C++ 那边的默认也是这十天。
 
 ## 控制台那一副本去哪
 

@@ -144,6 +144,16 @@ jobs:
     # the commit touched, and what is skipped is every step of it: three
     # runners that check out nothing, install nothing and compile nothing.
     runs-on: ${{ matrix.os }}
+    # Not UTC, which is what every runner here is by default and the one thing
+    # in this workflow that cares: `marsrs-core`'s localtime is what stamps
+    # every record's hour and calendar day, and a test that compares it against
+    # the machine's own `Local` cannot tell local time from UTC on a host whose
+    # zone is UTC — a `lookup` that had been changed to answer UTC passes the
+    # whole suite on those. Windows reads its zone out of the OS and ignores
+    # `TZ`, so that leg gets nothing from this; the fixed-offset test is the
+    # one that holds there.
+    env:
+      TZ: Asia/Shanghai
     strategy:
       fail-fast: false
       matrix:
@@ -161,7 +171,13 @@ jobs:
         if: needs.changes.outputs.needed == 'true'
       - name: Install cargo-llvm-cov
         if: needs.changes.outputs.needed == 'true' && matrix.os == 'ubuntu-latest'
-        uses: taiki-e/install-action@cargo-llvm-cov
+        # `v2` and a `tool`, and not the `cargo-llvm-cov` tag, which is what
+        # this used to name: that one moves with the tool and carries no
+        # version, so Dependabot — which updates every other `uses:` here
+        # weekly — has nothing to update it to.
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
       - name: cargo test
         if: needs.changes.outputs.needed == 'true'
         run: cargo test --workspace --all-targets
@@ -285,8 +301,13 @@ jobs:
           # same two crates, so what a matrix of two bought was a second
           # check-out, a second toolchain, a second NDK install and a second
           # cold cache — for one command each.
-          for entry in aarch64-linux-android:aarch64-linux-android24-clang \
-                       armv7-linux-androideabi:armv7a-linux-androideabi24-clang; do
+          # 21 and not 24, which is what this used to build: every module an
+          # app takes declares `minSdk 21`, so the `.so` an AAR carries is
+          # loaded on an API 21 device, and a library linked against a newer
+          # platform may name a symbol that device's libc does not have — a
+          # `dlopen` that fails on the oldest device the manifest promised.
+          for entry in aarch64-linux-android:aarch64-linux-android21-clang \
+                       armv7-linux-androideabi:armv7a-linux-androideabi21-clang; do
             target="${entry%%:*}"
             clang="$ndk_bin/${entry##*:}"
             test -x "$clang"
@@ -339,7 +360,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: scripts/build_harmony.sh dist/harmony
       - name: The three libraries a HarmonyOS module carries
-        run: ls -l dist/harmony/*/libmars_ffi.so
+        # Named and not globbed: `dist/harmony/*/libmars_ffi.so` lists as few
+        # as one without failing, and a port that stopped building an ABI is
+        # a port that would ship a HAR no device of that ABI can load.
+        run: ls -l dist/harmony/{arm64-v8a,armeabi-v7a,x86_64}/libmars_ffi.so
       # The package's own natives: the same crate, with `napi_init.cpp` — the
       # one C file in the port, and the one nothing else compiles — linked
       # around it. A link that only ever ran at release time is a link nobody
@@ -347,7 +371,7 @@ jobs:
       # downloaded and the Rust this job has already built.
       - run: scripts/build_harmony_napi.sh dist/harmony-napi
       - name: The three libraries the HAR carries
-        run: ls -l dist/harmony-napi/*/libmarsrs_xlog.so
+        run: ls -l dist/harmony-napi/{arm64-v8a,armeabi-v7a,x86_64}/libmarsrs_xlog.so
       # And the package itself: the HAR is a tree and a tar, so what this proves
       # is the staging and the version stamp — which is the part a release would
       # otherwise find out. `0.0.0` is not a release; the number is stamped at

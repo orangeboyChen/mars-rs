@@ -18,6 +18,60 @@ fn header() -> String {
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
 }
 
+/// Whether `header` declares `symbol` — the whole name, and in a line that is
+/// not a comment.
+///
+/// A plain `contains` took the `mars_stn_reset` of
+/// `mars_stn_reset_and_init_encoder_version` for it, so a symbol the header
+/// never declared passed as long as a longer one began with it; and a mention
+/// in a doc comment is not a declaration either, which is what the comment
+/// lines are skipped for.
+fn declares(header: &str, symbol: &str) -> bool {
+    let needle = format!(" {symbol}(");
+    header.lines().any(|line| {
+        let trimmed = line.trim_start();
+        !trimmed.starts_with('*')
+            && !trimmed.starts_with("/*")
+            && !trimmed.starts_with("//")
+            && line.contains(&needle)
+    })
+}
+
+/// Whether `header` declares the type `ty`: the `} MarsStnAnswer;` a struct or
+/// an enum ends with, or the `(*MarsStnAsk)` of a function pointer. A whole
+/// name either way, which a plain `contains` did not ask for: `MarsStnQuestion`
+/// passed on the strength of `MarsStnQuestionKind` being there.
+fn declares_type(header: &str, ty: &str) -> bool {
+    header.contains(&format!("}} {ty};")) || header.contains(&format!("(*{ty})"))
+}
+
+/// Whether `header` declares the field `field`, `;` and all: the space in front
+/// of it is what keeps `name;` from matching `channel_name;`.
+fn declares_field(header: &str, field: &str) -> bool {
+    header.contains(&format!(" {field}"))
+}
+
+/// The guard rail is not itself vacuous: `mars_stn_reset` is the beginning of
+/// `mars_stn_reset_and_init_encoder_version`, and is not declared by a header
+/// that declares the longer one — nor `MarsStnQuestion` by one that declares
+/// `MarsStnQuestionKind`.
+#[test]
+fn a_name_that_starts_another_is_not_a_declaration() {
+    assert!(declares(
+        "void mars_stn_reset_and_init_encoder_version(int version, const char* name);",
+        "mars_stn_reset_and_init_encoder_version"
+    ));
+    assert!(!declares(
+        "void mars_stn_reset_and_init_encoder_version(int version, const char* name);",
+        "mars_stn_reset"
+    ));
+    assert!(declares_type(
+        "} MarsStnQuestionKind;",
+        "MarsStnQuestionKind"
+    ));
+    assert!(!declares_type("} MarsStnQuestionKind;", "MarsStnQuestion"));
+}
+
 #[test]
 fn header_declares_every_exported_symbol() {
     let header = header();
@@ -57,7 +111,7 @@ fn header_declares_every_exported_symbol() {
         "mars_stn_on_network_change",
     ] {
         assert!(
-            header.contains(symbol),
+            declares(&header, symbol),
             "include/mars_stn.h is missing `{symbol}`"
         );
     }
@@ -79,7 +133,10 @@ fn header_declares_the_types_and_their_fields() {
         "MarsStnAnswer",
         "MarsStnAsk",
     ] {
-        assert!(header.contains(ty), "include/mars_stn.h is missing `{ty}`");
+        assert!(
+            declares_type(&header, ty),
+            "include/mars_stn.h is missing `{ty}`"
+        );
     }
     // The app, the task and what a run leaves behind.
     for field in [
@@ -147,7 +204,7 @@ fn header_declares_the_types_and_their_fields() {
         "group;",
     ] {
         assert!(
-            header.contains(field),
+            declares_field(&header, field),
             "include/mars_stn.h is missing the `{field}` field"
         );
     }
@@ -187,7 +244,7 @@ fn header_declares_the_types_and_their_fields() {
         "limit;",
     ] {
         assert!(
-            header.contains(field),
+            declares_field(&header, field),
             "include/mars_stn.h is missing the `{field}` field"
         );
     }

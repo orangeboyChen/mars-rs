@@ -37,7 +37,8 @@ use crate::long_link::{
 };
 use crate::net_source::TimeoutSource;
 use crate::shortlink::{
-    answer, is_keep_alive, keep_alive, pack, request_headers, request_url, Answer, KeepAlive,
+    answer, default_packer, is_keep_alive, keep_alive, request_headers, request_url, Answer,
+    KeepAlive, Packer,
 };
 use crate::socket_operator::{SocketFd, SocketOperator, SocketProfile};
 use crate::{ConnectProfile, ErrCmdType, IpPortItem, IpSourceType, Task};
@@ -313,6 +314,10 @@ pub struct ShortLink {
     /// `recv_pos` — how much of the answer has come in, which is the "total" of
     /// `OnRecv`.
     received: usize,
+    /// `shortlink_pack` — the request this link writes, and the seam an app
+    /// replaces it with: [`default_packer`] until [`ShortLink::set_packer`]
+    /// hands it another.
+    packer: Box<Packer>,
 
     operator: Option<Box<dyn SocketOperator>>,
     items: Option<Box<ShortLinkItems>>,
@@ -363,6 +368,7 @@ impl ShortLink {
             v6_connect_timeout_ms: DEFAULT_CONNECT_TIMEOUT_MS,
             answer: Parser::new(),
             received: 0,
+            packer: default_packer(),
             operator: None,
             items: None,
             proxy: None,
@@ -458,6 +464,14 @@ impl ShortLink {
     /// lets an http proxy in.
     pub fn set_debug_ip(&mut self, debug_ip: impl FnMut() -> String + Send + 'static) {
         self.debug_ip = Some(Box::new(debug_ip));
+    }
+
+    /// `shortlink_pack` — the request this link writes. The C++'s is a weak
+    /// symbol an app overrides by linking its own, which a Rust crate cannot
+    /// be; what stands in for it is the link's own, handed over here, and
+    /// what it starts out as is [`default_packer`].
+    pub fn set_packer(&mut self, packer: Box<Packer>) {
+        self.packer = packer;
     }
 
     /// `NetSource::GetShortLinkPort` — unset answers `0`.
@@ -570,8 +584,10 @@ impl ShortLink {
         self.quic_rw_timeout = Some(Box::new(timeout));
     }
 
-    /// `mars::comm::getNetTypeForStatistics` — unset leaves the profile's
-    /// `nettype_for_report` where it is.
+    /// `mars::comm::getNetTypeForStatistics` — unset answers [`K_WIFI`], so a
+    /// run on a host that never gave one is counted as a wifi one. The `-1`
+    /// the profile starts at is what a reader sees before the connect writes
+    /// this over it, and not what an unset host answers.
     pub fn set_net_type_for_report(&mut self, net_type: impl FnMut() -> i32 + Send + 'static) {
         self.net_type_for_report = Some(Box::new(net_type));
     }
@@ -618,15 +634,32 @@ impl ShortLink {
             return Err(ConnectFail::NoAddress);
         }
 
-        // a debug ip is where the link goes, so there is no proxy to speak of
+        // a debug pair is where the link goes, so there is no proxy to speak
+        // of
+        //
+        // What is asked here is the *pair*, and not the debug ip: a pair whose
+        // source is [`IpSourceType::Debug`] is one the net source put on the
+        // list for the host or for the cgi, and the debug ip the app set for
+        // the host is only one of the ways a pair like that gets there.
+        //
+        // An http proxy is the one a link both dials at the proxy's own
+        // address and writes its request for — [`crate::shortlink::request_url`]
+        // answers `http://host/cgi` for [`IpSourceType::Proxy`] and nothing
+        // else — so the two halves are one decision, and it is taken here: a
+        // link that dialled the proxy but wrote the pair behind it would put
+        // a request no proxy can route on a socket that goes to one. A tunnel
+        // or a socks5 one is dialled *through* and keeps the request, so a
+        // debug ip takes no proxy away from those.
+        let debug_ip = self.debug_ip();
         let use_proxy = proxy.is_address_valid()
             && self
                 .profile
                 .ip_items
                 .first()
-                .is_some_and(|item| item.source_type != IpSourceType::Debug);
+                .is_some_and(|item| item.source_type != IpSourceType::Debug)
+            && !(proxy.kind == ProxyType::Http && !debug_ip.is_empty());
 
-        if use_proxy && proxy.kind == ProxyType::Http && self.debug_ip().is_empty() {
+        if use_proxy && proxy.kind == ProxyType::Http {
             self.profile.ip = proxy.ip.clone();
             self.profile.port = proxy.port;
             self.profile.ip_type = IpSourceType::Proxy;
@@ -729,10 +762,9 @@ impl ShortLink {
                 })
                 .collect()
         };
-        if addresses.is_empty() {
-            self.run_response_error(ErrCmdType::Dns, ECT_DNS_MAKE_SOCKET_PREPARED, false);
-            return Err(ConnectFail::NoAddress);
-        }
+        // no `is_empty()` here: the items the list was built from were checked
+        // above, and an http proxy puts one address of its own on it, so a
+        // list of no addresses is one the early return already answered
 
         self.profile.nat64 = stack == LocalIpStack::IPv6;
         self.profile.dns_endtime = now;
@@ -788,7 +820,6 @@ impl ShortLink {
 
         let connected = self.operator_profile();
         self.profile.conn_rtt = connected.rtt;
-        self.profile.ip_index = connected.index;
         self.profile.conn_cost = u64::from(connected.total_cost);
         self.profile.is0rtt = connected.is_0rtt;
 
@@ -808,6 +839,13 @@ impl ShortLink {
                 error_code: connected.error_code,
             });
         }
+
+        // which pair won, and only now: a connect that came back with no
+        // socket has no winner, and `-1` is what
+        // [`crate::TaskOutcome::fail_step`] reads as "it was the connect that
+        // failed". A link that named a pair it never reached is one whose task
+        // is counted as having waited for a first packet instead.
+        self.profile.ip_index = connected.index;
 
         let index = usize::try_from(connected.index).unwrap_or(usize::MAX);
         // the pairs that lost: only the ones the host had *started* a connect
@@ -885,7 +923,10 @@ impl ShortLink {
 
         let url = request_url(&self.profile, &self.task.cgi);
         let headers = request_headers(&self.profile, &self.task);
-        let request = pack(&url, &headers, body);
+        // The link's own packer, which is [`default_packer`] until an app
+        // hands it another: the url and the head the connect decided, and
+        // the body this was handed.
+        let request = (self.packer)(&url, &headers, body);
 
         let (timeout, source) = if self.protocol() == Task::TRANSPORT_PROTOCOL_QUIC {
             let cgi = self.task.cgi.clone();
@@ -978,6 +1019,13 @@ impl ShortLink {
         // the C++ writes on the profile and says nothing about to anyone
         if self.is_broken() {
             self.profile.disconn_errtype = ErrCmdType::Canceld;
+            // no answer was read out of the socket, so it is not one the pool
+            // can hand out again — the reason [`ShortLink::run_at`] says the
+            // same thing for a break just after the write, and what
+            // [`ShortLink::end_run`] reads to close it. Keeping it would leave
+            // a socket open with an answer still in it, which is the next
+            // run's answer and not this one's.
+            self.keep_alive = false;
             return Read::Done(Err(RunFail::Canceld));
         }
 
@@ -999,8 +1047,15 @@ impl ShortLink {
                 // quic has no hang-up to speak of: nothing came, so read again
                 return Read::Again;
             }
-            // the peer hung up, which a socket the pool handed out is not
-            // reported for: the C++ has already had its turn with that one
+            // A `Connection: close` answer with no `Content-Length` is ended
+            // *by* the hang-up — its body is however many bytes came before
+            // it — so the parser is asked before the run is called a failure.
+            // `Parser::peer_hung_up` is the only thing that ends one, and a
+            // read of nothing is the only thing that asks it.
+            if self.answer.recv(&[]) == RecvStatus::End {
+                return self.answered(socket);
+            } // the peer hung up, which a socket the pool handed out is not
+              // reported for: the C++ has already had its turn with that one
             let report = !self.profile.is_reused_fd;
             return self.over(
                 RunFail::Socket {
@@ -1129,8 +1184,16 @@ impl ShortLink {
                     self.profile.socket_fd = socket;
                 }
                 // the server said close, so the task's own `Keep-Alive` is not
-                // one after all
-                KeepAlive::Closed => self.keep_alive = false,
+                // one after all — and the socket is the link's to close at the
+                // end of the run, not the pool's to keep: the queue decides
+                // what it may cache by whether the profile still names one, so
+                // a profile left holding this socket had it cached and closed
+                // a second time, by whoever was given the number next
+                KeepAlive::Closed => {
+                    self.keep_alive = false;
+                    self.profile.socket_fd = SocketFd::INVALID;
+                    self.profile.keepalive_timeout = 0;
+                }
             }
         }
 
@@ -1357,6 +1420,11 @@ impl ShortLink {
 
     /// `mars::comm::getNetTypeForStatistics` — the network for the report, which
     /// the C++ only asks for once, before the connect.
+    ///
+    /// Unset answers [`K_WIFI`], the one network a link that was never told
+    /// reports: what an app reads out of `nettype_for_report` after a connect
+    /// is therefore never the `-1` the profile starts at. See
+    /// [`ShortLink::set_net_type_for_report`].
     fn net_type_for_report(&mut self) -> i32 {
         match self.net_type_for_report.as_mut() {
             Some(net_type) => net_type(),
@@ -1462,6 +1530,8 @@ fn first_is_v6(addresses: &[SocketAddress]) -> bool {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
+    // what a link writes with until an app hands it another
+    use crate::shortlink::pack;
 
     use super::*;
     use crate::socket_operator::OpBreaker;
@@ -1804,6 +1874,10 @@ mod tests {
         );
         assert_eq!(link.profile().conn_errcode, 110);
         assert_eq!(
+            link.profile().ip_index, -1,
+            "no pair won, so the host's own 0 is not the profile's: a task that never connected is one that failed at the connect"
+        );
+        assert_eq!(
             seen.events.lock().unwrap().as_slice(),
             &[(false, 0, 0)],
             "the connect event is told it got no socket"
@@ -2144,11 +2218,40 @@ mod tests {
         link.connect_at(1000).unwrap();
         assert_eq!(link.profile().ip_type, IpSourceType::Dns);
         assert_eq!(link.profile().ip, "183.3.226.35");
+
+        // the connect goes to the pair dns named and not to the proxy, and the
+        // operator is told of no proxy at all
         let addresses = seen.addresses.lock().unwrap();
         assert_eq!(
             addresses[0][0].ip(),
-            "10.0.0.1",
-            "the debug ip keeps the proxy off the list, but the connect still goes to it"
+            "183.3.226.35",
+            "the debug ip keeps the proxy off the list and out of the connect"
+        );
+        assert_eq!(seen.proxies.lock().unwrap()[0].kind, ProxyType::None);
+
+        // … and that is the pair the request is written for: a link that
+        // dialled the proxy would have to ask it for the whole url, which is
+        // what `IpSourceType::Proxy` writes and what this one does not
+        assert_eq!(
+            crate::shortlink::request_url(link.profile(), "/cgi"),
+            "/cgi"
+        );
+    }
+
+    #[test]
+    fn an_http_proxy_is_dialled_and_written_a_request_for() {
+        let seen = Seen::default();
+        let mut link = proxy_link(&seen);
+        link.set_proxy(|_| ProxyInfo::new(ProxyType::Http, "", "10.0.0.1", 8080, "", ""));
+
+        link.connect_at(1000).unwrap();
+        assert_eq!(link.profile().ip_type, IpSourceType::Proxy);
+        let addresses = seen.addresses.lock().unwrap();
+        assert_eq!(addresses[0][0].ip(), "10.0.0.1");
+        assert_eq!(
+            crate::shortlink::request_url(link.profile(), "/cgi"),
+            "http://short.weixin.qq.com/cgi",
+            "a proxy is asked for the whole url and not for the path"
         );
     }
 
@@ -2375,6 +2478,25 @@ mod tests {
         );
     }
 
+    /// `shortlink_pack` — the C++ overrides the symbol by linking its own, and
+    /// what stands in for that here is the packer the app hands the link:
+    /// [`default_packer`] is what writes until then, and not after.
+    #[test]
+    fn the_packer_the_app_replaced_is_the_one_that_writes() {
+        let seen = Seen::default();
+        let (mut link, socket) = connected(&seen);
+        link.set_packer(Box::new(|url, _headers, body| {
+            format!("GET {url}\r\n\r\n{}", body.len()).into_bytes()
+        }));
+
+        let request = b"GET /cgi-bin/micromsg-bin/short\r\n\r\n5".to_vec();
+        assert_eq!(
+            link.write_at(1100, socket, b"hello").unwrap(),
+            request.len()
+        );
+        assert_eq!(seen.sent(), vec![request]);
+    }
+
     #[test]
     fn an_answer_of_two_hundred_is_the_body_of_it() {
         let seen = Seen::default();
@@ -2572,6 +2694,28 @@ mod tests {
             Read::Done(Err(RunFail::Socket {
                 err_code: ECT_SOCKET_READ_ONCE
             }))
+        );
+    }
+
+    #[test]
+    fn a_run_the_app_broke_off_during_the_reads_is_not_kept() {
+        let seen = Seen::default();
+        let mut link = link_for(&seen, kept_task(), false);
+        let socket = link.connect_at(1000).unwrap();
+        link.write_at(1100, socket, b"hello").unwrap();
+        let mut host = Host::new(seen.clone());
+        host.breaker.broken = true;
+        link.set_socket_operator(host);
+        assert!(link.is_keep_alive());
+
+        assert_eq!(
+            link.read_at(1200, socket, Ok(b"HTTP/1.1 200 OK\r\n")),
+            Read::Done(Err(RunFail::Canceld))
+        );
+        assert_eq!(link.profile().disconn_errtype, ErrCmdType::Canceld);
+        assert!(
+            !link.is_keep_alive(),
+            "a socket with an answer still in it is not one the pool may hand out"
         );
     }
 
@@ -2791,6 +2935,48 @@ mod tests {
         );
         assert_eq!(seen.closed(), Vec::new());
         assert!(reported.lock().unwrap().is_empty());
+    }
+
+    /// A `Connection: close` answer with no `Content-Length` — an HTTP/1.0
+    /// answer, and the one whose length is the socket. It ends at the hang-up
+    /// and not before: the head alone is not the answer, and a run that ended
+    /// there would strand the body in the parser and fail the task.
+    #[test]
+    fn a_close_terminated_answer_ends_at_the_hang_up() {
+        let seen = Seen::default();
+        let mut link = link(&seen);
+        let answer = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nhello";
+        let reads = vec![(Ok(answer.to_vec()), 1100u64), (Ok(Vec::new()), 1200u64)];
+
+        assert_eq!(
+            link.run_at(1000, b"hello", reads.into_iter()),
+            Some(Ok(b"hello".to_vec()))
+        );
+        assert_eq!(seen.closed().len(), 1, "the socket was not kept");
+    }
+
+    /// The queue reads `ConnectProfile::socket_fd` to decide what it may hand
+    /// to the pool, so a socket the server said to close has to leave the
+    /// profile: it is closed at the end of the run, and a pool that was given
+    /// it would close the number again — on whatever descriptor owns it by
+    /// then.
+    #[test]
+    fn a_socket_the_server_said_to_close_is_one_the_profile_does_not_name() {
+        let seen = Seen::default();
+        let (mut link, socket) = reused(&seen);
+        link.write_at(1100, socket, b"hello").unwrap();
+
+        let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
+        assert_eq!(
+            link.read_at(1200, socket, Ok(answer)),
+            Read::Done(Ok(b"hello".to_vec()))
+        );
+        assert!(!link.is_keep_alive(), "the server has the last word");
+        assert!(
+            !link.profile().socket_fd.is_valid(),
+            "the socket the pool would have been given"
+        );
+        assert_eq!(link.profile().keepalive_timeout, 0);
     }
 
     #[test]

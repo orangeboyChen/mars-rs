@@ -9,22 +9,24 @@ App 从来不需要它 —— app 里的 appender 写出的是同样的字节 �
 
 ::: code-group
 
-```bash [从 crates.io]
-cargo install marsrs-xlog      # 这个 crate 的 `xlog`，装到 $PATH 上
+```bash [从 tag]
+# 这个 crate 还没上 crates.io —— 发布还在进行中 —— 所以 `cargo install` 指向的是
+# tag。它把 `xlog` 装到 $PATH 上。
+cargo install --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3 marsrs-xlog
 xlog --version
 ```
 
 ```bash [从 release]
 # marsrs-xlog-cli-<version>-<host>.tar.gz，Windows 上是 .zip
-tar -xzf marsrs-xlog-cli-0.1.0-aarch64-apple-darwin.tar.gz
-./marsrs-xlog-cli-0.1.0-aarch64-apple-darwin/xlog --version
+tar -xzf marsrs-xlog-cli-0.1.0-alpha.3-aarch64-apple-darwin.tar.gz
+./marsrs-xlog-cli-0.1.0-alpha.3-aarch64-apple-darwin/xlog --version
 ```
 
 :::
 
 压缩包和 C ABI 的一样，为 Linux、macOS、Windows 三个 host 构建，里面只有这一条命令，
-别的什么都没有 —— 它是给没有 Rust 工具链的机器准备的。`cargo install` 和压缩包装到
-的是同一个 `xlog`。
+别的什么都没有 —— 它是给没有 Rust 工具链的机器准备的。从 tag 装和从压缩包取，是同
+一个 `xlog`。
 
 | 命令 | 做什么 |
 |---|---|
@@ -73,11 +75,16 @@ xlog decode --privkey=<hex> marsrs_20260927.xlog --out=marsrs.plain
 
 没有公钥写出来的文件，不需要任何选项就能读。碰到加密过的记录却没有私钥，那是一个
 点名到那条记录的错误，而不是悄悄跳过去：一个文件要么把记录还给你，要么说清楚为什么
-还不了。
+还不了。用**另一对**密钥去读也是一样 —— 每条记录都读不出来，那是“读了但什么都没读
+出来”的文件，命令会说清楚，而不是交给你一份全是标记物的日志。
 
 `INPUT` 是路径或 `-`；`--out` 是路径、`-`，或者不写 —— 所以
 `xlog decode a.xlog | less` 可以，
-`xlog decode < a.xlog > a.plain` 也可以。
+`xlog decode < a.xlog > a.plain` 也可以。空值和 `-` 是一个意思：`--in=` 是标准输入，
+`--out=` 是标准输出。
+
+`--` 结束选项，它后面不管以什么开头都是输入：`xlog encode -- -weird.xlog` 读的是这个
+名字的文件，而不是去找一个叫 `-w` 的选项。
 
 这跟上游的 `decode_mars_log_file.py` 跑在同一批字节上：C++ 实现写的 `.xlog` 这里能读，
 这里写的那边也能读。
@@ -98,7 +105,7 @@ xlog encode --pubkey=<hex> records.txt --out=marsrs_20260927.xlog
 | `-s, --sync=0\|1` | 一条记录一个块，而不是一个文件一个块 | `0` |
 | `-c, --compress=0\|1` | 压缩正文。async 正文无论如何都要成帧，所以 `--compress=0` 要配 `--sync=1` | `1` |
 | `-l, --level=N` | zstd 的压缩级别 | `6` |
-| `-r, --region=N` | 写一条记录所用的缓冲区大小 | `153600` |
+| `-r, --region=N` | 写一条记录所用的缓冲区大小 | `153600`，最大 `67108864` |
 
 它写出来的就是 C++ 实现写出来的那个文件 —— 同样的 magic、同样的帧结构、同样的压缩 ——
 这也是要写一个的理由：给读文件的程序做测试的 `.xlog`，或者给上传日志的构建做 fixture。

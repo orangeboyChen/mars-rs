@@ -7,7 +7,7 @@
 
 | 你用的那一块 | 这里拿什么 | 写在哪一页 |
 |---|---|---|
-| `mars/sdt` | crates.io 和 JitPack 上的 `marsrs`，共享 Kotlin 模块的 `marsrs-kmp`，Apple 上的 `MarsRSNet` | [快速开始](/zh/sdt/getting-started) |
+| `mars/sdt` | JitPack 上的 `marsrs` 和同名的 crate（crates.io 还没发布），共享 Kotlin 模块的 `marsrs-kmp`，Apple 上的 `MarsRSNet` | [快速开始](/zh/sdt/getting-started) |
 | `mars/xlog` | `xlog` —— 日志，在自己的一个包里 | [从 mars-xlog 迁移](/zh/xlog/migrating-from-mars-xlog) |
 | `mars/stn` | 同一个 `marsrs`，和诊断在同一个包里 | [从 mars-stn 迁移](/zh/stn/migrating-from-mars-stn) |
 
@@ -21,8 +21,10 @@
 | net-check 的 CGI | `SetHttpNetcheckCGI(cgi)` | `set_http_netcheck_cgi(cgi)` | `setHttpNetcheckCGI(cgi)` | `setHTTPNetCheckCGI(cgi)` | `mars_sdt_set_http_netcheck_cgi(cgi)` |
 | 报告 | `Callback::ReportNetCheckResult` | `report_json(&results)` | `takeReport()`，或那个回调 | `takeReport()` | `mars_sdt_take_report(buf, len)` |
 
-mode 是同一套 bit —— 先 ping 和 DNS，再 TCP，再 net-check CGI 的那次 HTTP —— `0`
-还是一项都不跑。在 Rust 里这些 bit 有了名字：`Mode::NONE`、`BASIC`、`LONG`、
+mode 是同一套 bit —— 先 ping 和 DNS，再 net-check CGI 的那次 HTTP，再 TCP —— `0`
+还是一项都不跑，也还是没有哪个接口会跑它：Rust 和 Android 回答 `false`，C ABI 回答
+`MARS_SDT_ERR_BAD_ARG`。
+在 Rust 里这些 bit 有了名字：`Mode::NONE`、`BASIC`、`LONG`、
 `SHORT` 和 `ALL`，用 `|` 拼起来，`mode.bits()` 交回上游那个调用要的 `i32`。见
 [检查项](/zh/sdt/checks)。
 

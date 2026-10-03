@@ -45,7 +45,10 @@ use std::path::Path;
 
 use marsrs_crypt::{magic, CLIENT_PUBKEY_LEN, HEADER_LEN, TAILER_LEN, TEA_BLOCK_LEN};
 
-/// The round count both halves of `LogCrypt::CryptSyncLog` loop over.
+/// The round count `LogCrypt::CryptAsyncLog` loops the blocks of a body
+/// through — the half of the cipher a sync record never gets: its body is
+/// copied verbatim, so this is the count the async one is decrypted with
+/// here and nothing else.
 const TEA_ROUNDS: u32 = 16;
 const TEA_DELTA: u32 = 0x9e37_79b9;
 
@@ -66,6 +69,35 @@ const ZSTD_MARKER: &str = "zstd decompress error";
 /// like the rest of them, so that a tool that greps the text for the markers
 /// finds the hole that no byte of the file mentions.
 const MISSING_SEQ_MARKER: &str = "[F]decode_log_file.py log seq:";
+
+/// The most one record's text may inflate to.
+///
+/// A record's body is at most the block it was written into — the appender's
+/// region, 150 KiB — so this is hundreds of times the largest record an
+/// appender can put in a file, and nothing one wrote is cut short. What it
+/// does cut short is the other thing a small body can ask for: a DEFLATE or
+/// zstd stream built to expand without bound, which is a bomb and not a
+/// record, and which `xlog decode` is handed by whoever pulled the file off a
+/// device. `decode_log_file.c` grows its output by doubling and stops when the
+/// decompressor stops, which is to say it never stops.
+///
+/// Per record, and not per file — which is why [`MAX_PLAIN_LEN`] is there: a
+/// cap on one record is no cap on the sum of them, and a file of records that
+/// each inflate to just under this is a bomb that walks straight through it.
+const MAX_INFLATED_LEN: usize = 64 * 1024 * 1024;
+
+/// The most one file's text may come to, however many records it holds.
+///
+/// Four times [`MAX_INFLATED_LEN`], which is not a number an appender's log
+/// comes near: a block is 150 KiB, so this is the text of some 1 700 of them,
+/// and a file that decodes to more is not a log one wrote. What it stops is a
+/// file built to make the decoder work — a bomb per record is a bomb per file
+/// too, and a file of damage is a marker per span, which is longer than the
+/// span it names — and what the walk does about it is stop and say so, keeping
+/// the text it read before the line was crossed: see
+/// [`DecodeError::recovered`]. Every arm that writes asks, and not only the one
+/// that writes a record's own text.
+const MAX_PLAIN_LEN: usize = 4 * MAX_INFLATED_LEN;
 
 /// `MAGIC_CRYPT_START` — the oldest record start `decode_log_file.c` reads, and
 /// one no appender writes: its body is the log text, XORed and nothing more.
@@ -146,6 +178,42 @@ impl std::fmt::Display for DecodeError {
 
 impl std::error::Error for DecodeError {}
 
+/// [`decode_records`], and how many of the file's records it read and did not.
+///
+/// The text alone is what a caller that reads a log wants, and it is all
+/// [`decode_records`] answers with. What it cannot say is whether the file
+/// read at all: a `--privkey` of the wrong pair leaves every record
+/// unreadable, and a text of nothing but markers is not one an operator can
+/// tell from a log that said so — the command answered well and read no log
+/// at all. [`decode_records_counted`] is the walk that says both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decoded {
+    /// The log text of the records that came out, in the order they stand in
+    /// the file, with a marker where a record's text did not.
+    pub text: Vec<u8>,
+    /// How many records the walk found, the ones whose text did not come out
+    /// included.
+    pub records: usize,
+    /// How many of [`Decoded::records`] whose text did not come out: a client
+    /// public key that is not a point, a private key no secret comes out of, a
+    /// stream that will not inflate. A span of damage is not a record, so it
+    /// is not counted here.
+    pub unreadable: usize,
+}
+
+impl Decoded {
+    /// Whether the walk read a record and no text came out of any of them: a
+    /// file that answers this is a file of markers and nothing else, which is
+    /// what a key of another pair reads.
+    ///
+    /// A file with no record in it at all is not this — it is a
+    /// [`DecodeError`], and the walk says so — so a file that answers here is
+    /// one that was read and gave nothing back.
+    pub fn nothing_came_out(&self) -> bool {
+        self.records > 0 && self.unreadable == self.records
+    }
+}
+
 /// Walks every record of `data` and concatenates the recovered log text, the
 /// way `decode_log_file.c` does over a buffer of its own.
 ///
@@ -157,10 +225,36 @@ impl std::error::Error for DecodeError {}
 /// file with no record in it at all, and an encrypted record met with no
 /// private key at all: [`DecodeError::recovered`] is what was read before
 /// either.
+///
+/// [`decode_records_counted`] is this walk and the two counts beside the text:
+/// take it when the caller has to say whether the file read at all.
 pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>, DecodeError> {
+    Ok(decode_records_counted(data, privkey)?.text)
+}
+
+/// [`decode_records`], and how many of the file's records the walk read and
+/// did not read: see [`Decoded`].
+pub fn decode_records_counted(
+    data: &[u8],
+    privkey: Option<&[u8; 32]>,
+) -> Result<Decoded, DecodeError> {
+    decode_records_within(data, privkey, MAX_PLAIN_LEN)
+}
+
+/// [`decode_records_counted`] with the ceiling the caller names instead of
+/// [`MAX_PLAIN_LEN`]: the ceiling is 256 MiB, and a file that reaches it is not
+/// one a test can build, so what a test asks about the ceiling it asks here.
+fn decode_records_within(
+    data: &[u8],
+    privkey: Option<&[u8; 32]>,
+    max_plain: usize,
+) -> Result<Decoded, DecodeError> {
     let mut plain = Vec::new();
     let mut offset = 0;
     let mut blocks = 0;
+    // How many of `blocks` the walk found and did not read: what a caller
+    // asking whether the file read at all is asking about.
+    let mut unreadable = 0;
     // `decode_log_file.c`'s file-static `int lastseq`, reset per file: a hole
     // is a hole in one file's own numbering, and not in the one read before it.
     let mut lastseq: u16 = 0;
@@ -171,22 +265,46 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
         }
         match record_text(data, offset, privkey) {
             Ok((text, next)) => {
-                mark_missing_seq(&mut plain, data, offset, &mut lastseq);
-                plain.extend_from_slice(&text);
+                // [`MAX_PLAIN_LEN`]: a record's own text is bounded, and the
+                // file's is too, or a file of records that each stop just
+                // short of that bound would be one the decoder grows into
+                // without end. The record that crossed the line is not
+                // written, and the reason is what ends the walk.
+                if !mark_missing_seq(&mut plain, data, offset, &mut lastseq, max_plain)
+                    || !push_plain(&mut plain, &text, max_plain)
+                {
+                    break Some(too_long(max_plain));
+                }
                 offset = next;
                 blocks += 1;
             }
             // `getLogStartPos(buffer + offset, …, 1)`, and the marker
             // `decodeBuffer` leaves for the span it skipped.
+            //
+            // The scan goes on from the damage and not from the top of the
+            // file, so a byte of it is examined once however much damage it
+            // holds: each scan starts where the record before it ended and
+            // stops at the start it found, and the one that finds none is the
+            // one that ends the walk — one pass over the file, and not one
+            // pass per span of damage.
             Err(Failure::Damaged(reason)) => match next_record_start(data, offset) {
                 Some(next) => {
                     let skipped = next - offset;
-                    plain.extend_from_slice(format!("{DAMAGE_MARKER}{skipped}\n").as_bytes());
+                    // A marker per span, and a span can be one byte: the cap
+                    // is asked here too, or a file of junk is a file that
+                    // grows the text several times over.
+                    if !push_plain(
+                        &mut plain,
+                        format!("{DAMAGE_MARKER}{skipped}\n").as_bytes(),
+                        max_plain,
+                    ) {
+                        break Some(too_long(max_plain));
+                    }
                     offset = next;
                 }
-                // Nothing past the damage is a record either, which is the one
-                // case the C's `parseFile` cannot go on from: the reason is
-                // what the caller is told.
+                // Nothing behind the damage is a record either, so the walk
+                // ends here — which is the one case the C's `parseFile` cannot
+                // go on from either, and the reason is what the caller is told.
                 None => break Some(reason),
             },
             // The record is whole, so the walk goes on at the one behind it —
@@ -197,18 +315,21 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
                 // The C reads the sequence and writes its marker before it
                 // tries the body, so a record whose text is not recoverable
                 // still names the hole standing in front of it.
-                mark_missing_seq(&mut plain, data, offset, &mut lastseq);
-                plain.extend_from_slice(marker.as_bytes());
-                plain.push(b'\n');
+                if !mark_missing_seq(&mut plain, data, offset, &mut lastseq, max_plain)
+                    || !push_plain(&mut plain, marker.as_bytes(), max_plain)
+                    || !push_plain(&mut plain, b"\n", max_plain)
+                {
+                    break Some(too_long(max_plain));
+                }
                 offset = next;
                 blocks += 1;
+                unreadable += 1;
             }
-            // The C reads the sequence and writes its marker before it tries
             // the body, so a record the walk ends on still names the hole
             // standing in front of it: what was read before the record that
             // ended it includes that marker.
             Err(Failure::Fatal(reason)) => {
-                mark_missing_seq(&mut plain, data, offset, &mut lastseq);
+                mark_missing_seq(&mut plain, data, offset, &mut lastseq, max_plain);
                 break Some(reason);
             }
         }
@@ -217,7 +338,11 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
     match stopped {
         // Every record decoded — or a tail too short to hold one, which is not
         // damage: a block the writer never finished is not in the file.
-        None if blocks > 0 => Ok(plain),
+        None if blocks > 0 => Ok(Decoded {
+            text: plain,
+            records: blocks,
+            unreadable,
+        }),
         None => Err(DecodeError {
             recovered: plain,
             reason: "no record found".into(),
@@ -227,6 +352,27 @@ pub fn decode_records(data: &[u8], privkey: Option<&[u8; 32]>) -> Result<Vec<u8>
             reason,
         }),
     }
+}
+
+/// What ends the walk when [`MAX_PLAIN_LEN`] is crossed: the text read before
+/// the line is kept, and this is the reason.
+fn too_long(max_plain: usize) -> String {
+    format!("more than {max_plain} bytes of text decoded")
+}
+
+/// Appends `bytes` to the text the walk has decoded, and answers `false`
+/// without appending when [`MAX_PLAIN_LEN`] is what it would cross.
+///
+/// Every arm that writes asks, and not only the one that writes a record's own
+/// text: a file of damage is mostly markers — one per span, and a span can be
+/// a single byte — so the markers a hostile file asks for are more text than
+/// the file itself holds, and a cap on records alone is no cap at all.
+fn push_plain(plain: &mut Vec<u8>, bytes: &[u8], max_plain: usize) -> bool {
+    if plain.len().saturating_add(bytes.len()) > max_plain {
+        return false;
+    }
+    plain.extend_from_slice(bytes);
+    true
 }
 
 /// Why the record at an offset produced no text, and what the walk does about
@@ -262,30 +408,44 @@ enum Failure {
 /// every sync record, and `1`, which is the first record of most files — the
 /// walk starts at `lastseq = 0`, and `seq != 1` is what keeps a file opening
 /// on 1 from being read as having lost everything before it.
-fn mark_missing_seq(out: &mut Vec<u8>, data: &[u8], offset: usize, lastseq: &mut u16) {
+///
+/// `false` when [`MAX_PLAIN_LEN`] is what the marker would cross, which is the
+/// one way this does not write: the caller ends the walk.
+fn mark_missing_seq(
+    out: &mut Vec<u8>,
+    data: &[u8],
+    offset: usize,
+    lastseq: &mut u16,
+    max_plain: usize,
+) -> bool {
     // A record with no sequence in its header takes no part in the numbering:
     // the two oldest magics are the length and nothing else, so there is no
     // hole for them to name.
     let Some(seq) = seq_at(data, offset) else {
-        return;
+        return true;
     };
     let previous = *lastseq;
     if seq != 0 {
         *lastseq = seq;
     }
     // Widened, so that the record behind a sequence of `u16::MAX` is compared
-    // against 65536 and not against a wrapped 0.
-    if seq == 0 || seq == 1 || previous == 0 || u32::from(seq) == u32::from(previous) + 1 {
-        return;
+    // against 65536 and not against a wrapped 0. `<=` and not `==`: a
+    // sequence that went *backwards* — a file whose records are not in the
+    // order they were written — is not a hole either, and `6-1 is missing`
+    // names nothing at all.
+    if seq == 0 || seq == 1 || previous == 0 || u32::from(seq) <= u32::from(previous) + 1 {
+        return true;
     }
-    out.extend_from_slice(
+    push_plain(
+        out,
         format!(
             "{MISSING_SEQ_MARKER}{}-{} is missing\n",
             u32::from(previous) + 1,
             u32::from(seq) - 1
         )
         .as_bytes(),
-    );
+        max_plain,
+    )
 }
 
 /// The text of the record at `offset`, and the offset of the record behind it.
@@ -410,6 +570,11 @@ fn record_text(
 /// One byte at a time, the way the C does it: the framing carries no length of
 /// its own to skip by, so a byte that looks like the start of a record is the
 /// only hint there is.
+///
+/// `from` is where the *last* scan stopped and not where the damage is — see
+/// [`decode_records`]. Everything before it has been looked at and rejected
+/// already, so scanning it again is work the walk would repeat once per span of
+/// damage, and a byte is worth one look and not one look per span.
 fn next_record_start(data: &[u8], from: usize) -> Option<usize> {
     (from + 1..data.len()).find(|offset| record_is_whole(data, *offset))
 }
@@ -508,10 +673,12 @@ fn xor(bytes: &[u8], key: u8) -> Vec<u8> {
 /// The body of a `NEW_MAGIC_COMPRESS_CRYPT_START1` record: `while (readPos <
 /// length)` over one `uint16_t singleLogLen` and its bytes per log line.
 ///
-/// A chunk whose declared length runs past the body ends the walk instead of
-/// being read. The C `memcpy`s those bytes out of the buffer all the same — an
-/// overread of whatever stands behind the record — and lands in the same place,
-/// because its `readPos += singleLogLen + 2` leaves the loop either way.
+/// A chunk whose declared length runs past the body ends the *chunking* and
+/// not the walk: the record yields the lines read up to it, and the records
+/// behind it are still read — which is what the C lands in as well, because
+/// its `readPos += singleLogLen + 2` leaves the loop either way. The C
+/// `memcpy`s those bytes out of the buffer all the same — an overread of
+/// whatever stands behind the record.
 fn unchunk(body: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut read = 0;
@@ -569,12 +736,13 @@ fn inflate(magic_start: u8, body: &[u8]) -> Result<Vec<u8>, String> {
 /// `zstdDecompress` — `ZSTD_decompressStream` in a loop, tolerating a frame
 /// that was never terminated.
 ///
-/// `LogZstdBuffer::Flush` ends the stream with `ZSTD_compressStream2(...,
-/// ZSTD_e_end)` against a *zero-sized* output buffer, so the frame epilogue is
-/// never written and the decompressor keeps the tail of the last block back.
-/// `decode_log_file.c` accepts that and returns what it got; so does this, and
-/// the same failure with nothing recovered yet is the one it answers with its
-/// marker.
+/// Flushing a zstd log ends the writes of one block with
+/// `ZSTD_compressStream2(..., ZSTD_e_flush)` and never with `ZSTD_e_end`, so
+/// the frame epilogue is never written; the last flush of a block is against
+/// a *zero-sized* output buffer, which is why the tail of it never leaves the
+/// stream either. `decode_log_file.c` accepts that and returns what it got; so
+/// does this, and the same failure with nothing recovered yet is the one it
+/// answers with its marker.
 fn inflate_zstd(body: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Read;
 
@@ -586,7 +754,17 @@ fn inflate_zstd(body: &[u8]) -> Result<Vec<u8>, String> {
     loop {
         match decoder.read(&mut chunk) {
             Ok(0) => break,
-            Ok(n) => out.extend_from_slice(&chunk[..n]),
+            Ok(n) => {
+                out.extend_from_slice(&chunk[..n]);
+                // A frame that expands without bound is not a record: see
+                // [`MAX_INFLATED_LEN`]. Stopped here rather than grown into,
+                // so that the record's marker is what lands in the output.
+                if out.len() > MAX_INFLATED_LEN {
+                    return Err(format!(
+                        "{ZSTD_MARKER}: over {MAX_INFLATED_LEN} bytes of output"
+                    ));
+                }
+            }
             // The frame a flush never ended is expected to fail here, and what
             // it produced before failing is the record.
             Err(_) if !out.is_empty() => break,
@@ -620,6 +798,12 @@ fn inflate_raw(body: &[u8]) -> Result<Vec<u8>, String> {
         output.extend_from_slice(&chunk[..produced]);
         consumed += advanced;
 
+        // A stream that expands without bound is not a record: see
+        // [`MAX_INFLATED_LEN`].
+        if output.len() > MAX_INFLATED_LEN {
+            return Err(format!("inflate: over {MAX_INFLATED_LEN} bytes of output"));
+        }
+
         // Keep calling after the input is exhausted: miniz_oxide holds the
         // rest of the output back when the chunk filled up.
         if (advanced == 0 && produced == 0) || matches!(status, Status::StreamEnd) {
@@ -650,8 +834,8 @@ fn tea_decrypt_all(body: &[u8], key: &[u32; 4]) -> Vec<u8> {
 
 /// Inverse of `__TeaEncrypt` / `teaDecrypt`.
 fn tea_decrypt(block: &mut [u32; 2], key: &[u32; 4]) -> [u32; 2] {
-    let (mut low, mut high) = (block[0], block[1]);
-    let (k0, k1, k2, k3) = (key[0], key[1], key[2], key[3]);
+    let [mut low, mut high] = *block;
+    let [k0, k1, k2, k3] = *key;
     let mut sum = TEA_DELTA.wrapping_mul(TEA_ROUNDS);
     for _ in 0..TEA_ROUNDS {
         high = high.wrapping_sub(
@@ -712,4 +896,57 @@ fn tea_key(
         *word = u32::from_le_bytes(le);
     }
     Ok(key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One record of the shortest kind there is — `MAGIC_CRYPT_START`, a
+    /// four-byte length of zero, and the tailer: six bytes that hold no text,
+    /// and the shortest record `decode_log_file.c` reads.
+    const EMPTY_RECORD: [u8; 6] = [MAGIC_CRYPT_START, 0, 0, 0, 0, marsrs_crypt::magic::END];
+
+    /// A file of damage is mostly markers: one per span the walk skipped, and a
+    /// span can be a single byte, so a marker per byte is several times more
+    /// text than the file that asked for it — which is why [`MAX_PLAIN_LEN`] is
+    /// asked on the way past the damage and not only on a record's own text.
+    #[test]
+    fn a_file_of_damage_does_not_grow_the_text_without_end() {
+        let mut file = Vec::new();
+        for _ in 0..32 {
+            file.extend_from_slice(&EMPTY_RECORD);
+            file.push(0x00);
+        }
+
+        let err = decode_records_within(&file, None, 64).expect_err("the ceiling was crossed");
+        assert_eq!(err.reason, "more than 64 bytes of text decoded");
+        assert!(
+            err.recovered.len() <= 64,
+            "nothing past the ceiling is written: {}",
+            err.recovered.len()
+        );
+        assert!(
+            !err.recovered.is_empty(),
+            "and the text read before the ceiling comes back"
+        );
+        // the marker is longer than the span it names, so what crossed the
+        // ceiling is the text of the damage and not of a record
+        assert!(String::from_utf8_lossy(&err.recovered).contains(DAMAGE_MARKER));
+    }
+
+    /// The ceiling is not a refusal to read: a file that stays under it is a
+    /// file that decodes, damage and all.
+    #[test]
+    fn a_file_under_the_ceiling_is_decoded_whole() {
+        // the junk byte is between two records: one at the end of the file is a
+        // tail too short to hold a record, and not a span to mark
+        let mut file = Vec::new();
+        file.extend_from_slice(&EMPTY_RECORD);
+        file.push(0x00);
+        file.extend_from_slice(&EMPTY_RECORD);
+
+        let plain = decode_records_within(&file, None, 1_024).expect("the walk went on");
+        assert!(String::from_utf8_lossy(&plain.text).contains(DAMAGE_MARKER));
+    }
 }

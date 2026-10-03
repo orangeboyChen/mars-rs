@@ -5,7 +5,7 @@
 //! it is asked for and found to be more than a minute old. A second answer for
 //! the same task replaces the first.
 
-use marsrs_stn::task_intercept::{TaskIntercept, TaskInterceptInfo, INTERCEPT_TIMEOUT};
+use marsrs_stn::task_intercept::{TaskIntercept, INTERCEPT_TIMEOUT};
 
 #[test]
 fn an_answer_is_not_handed_back_even_while_it_is_fresh() {
@@ -73,12 +73,9 @@ fn the_methods_that_take_no_reading_ask_the_clock_themselves() {
     intercept.add_intercept_task("task", b"the answer".to_vec());
     assert_eq!(intercept.intercept_task_info("task"), None);
     assert_eq!(intercept.intercept_task_info("other"), None);
-    assert!(format!("{intercept:?}").contains("TaskIntercept"));
-
-    let info = TaskInterceptInfo {
-        name: "task".to_string(),
-        intercept_time: 0,
-        data: b"the answer".to_vec(),
-    };
-    assert_eq!(info.name, "task");
+    assert!(format!("{intercept:?}").contains("name: \"task\""));
+    // ... and the reading it was written down with is the clock's own, two
+    // billion milliseconds and not `0`: an answer a minute old would have
+    // been forgotten on the way out
+    assert_eq!(intercept.len(), 1);
 }

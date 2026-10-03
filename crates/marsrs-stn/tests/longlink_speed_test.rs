@@ -244,7 +244,8 @@ fn without_a_host_there_is_no_race() {
     assert!(test.items().is_empty());
     assert_eq!(test.fastest(), None);
     assert!(test.results().next().is_none());
-    assert!(format!("{test:?}").contains("LongLinkSpeedTest"));
+    // no socket is open, because nothing here has a host to open one
+    assert!(format!("{test:?}").contains("open_sockets: 0"));
 
     // candidates but no select: the race cannot be run
     let mut test = LongLinkSpeedTest::new([pair("1.1.1.1", 80)]);

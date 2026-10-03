@@ -1,6 +1,6 @@
 # The C demo
 
-A binary over the C ABI — `mars_xlog.h`, the 16 `mars_xlog_*` symbols
+A binary over the C ABI — `mars_xlog.h`, the 17 `mars_xlog_*` symbols
 `crates/marsrs-ffi` exports. No Rust, and no Kotlin, Swift or Dart anywhere in
 the build: one `demo.c` linked against a static library.
 

@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use marsrs_sdt::checkimpl::Ask;
 use marsrs_sdt::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
 use marsrs_sdt::{
-    Callback, CheckIPPort, CheckIPPorts, Mode, NetCheckType, SdtLogic, NET_CHECK_BASIC,
-    NET_CHECK_LONG, NET_CHECK_SHORT, UNUSE_TIMEOUT,
+    Callback, CheckIPPort, CheckIPPorts, Mode, NetCheckStatus, NetCheckType, SdtLogic,
+    NET_CHECK_BASIC, NET_CHECK_LONG, NET_CHECK_SHORT, UNUSE_TIMEOUT,
 };
 
 fn hosts(names: &[&str]) -> CheckIPPorts {
@@ -60,6 +60,62 @@ fn start_and_cancel_drive_the_core() {
 
     logic.cancel_active_check();
     assert!(logic.run(record).is_empty());
+}
+
+/// A mode of no checks at all is a plan of nothing: taking the request would
+/// leave a diagnosis that runs nothing, reports nothing and still answers
+/// `is_checking()` — a caller that asked for one would be told it has one.
+/// Every seam has to say no to it alike, because a seam that says yes is a
+/// diagnosis that is over before it began.
+#[test]
+fn a_mode_that_names_no_check_starts_nothing() {
+    let longlink = hosts(&["long.weixin.qq.com"]);
+    let shortlink = hosts(&["short.weixin.qq.com"]);
+
+    let mut logic = SdtLogic::new();
+    assert!(
+        !logic.start_active_check(&longlink, &shortlink, 0, 3000),
+        "a mode of no bits is not a request"
+    );
+    assert!(!logic.is_checking());
+    assert!(logic.plan().is_empty());
+
+    // and it is not a check that was refused for being one too many: the core
+    // is still empty, so the next request is taken
+    assert!(logic.start_active_check(&longlink, &shortlink, NET_CHECK_LONG, 3000));
+    assert!(logic.is_checking());
+
+    // a bit that is not one of the three is no plan either
+    logic.cancel_active_check();
+    assert!(logic.run(record).is_empty());
+    assert!(!logic.start_active_check(&longlink, &shortlink, 1 << 7, 3000));
+    assert!(!logic.is_checking());
+}
+
+#[test]
+fn the_status_of_a_run_says_whether_it_ended_or_was_cut_short() {
+    let longlink = hosts(&["long.weixin.qq.com"]);
+    let shortlink = hosts(&["short.weixin.qq.com"]);
+
+    let mut logic = SdtLogic::new();
+    assert_eq!(logic.status(), NetCheckStatus::None);
+
+    // a run that ran to its end
+    assert!(logic.start_active_check(&longlink, &shortlink, NET_CHECK_BASIC, UNUSE_TIMEOUT));
+    assert_eq!(logic.status(), NetCheckStatus::Checking);
+    assert_eq!(logic.run(record).len(), 2);
+    assert_eq!(logic.status(), NetCheckStatus::CheckEnd);
+    assert!(!logic.is_cancelled(), "it ended on its own");
+
+    // the same run, cancelled before the first check: the results are the ones
+    // the checks before the cancel recorded, and that is all a listener has
+    // to tell the two apart
+    assert!(logic.start_active_check(&longlink, &shortlink, NET_CHECK_BASIC, UNUSE_TIMEOUT));
+    logic.cancel_active_check();
+    assert!(logic.run(record).is_empty());
+    assert_eq!(logic.status(), NetCheckStatus::CheckEnd);
+    assert!(logic.is_cancelled());
+    assert!(!logic.is_checking());
 }
 
 #[test]

@@ -237,8 +237,23 @@ impl StnLogic {
     /// `OnDestroy` — the net core is dropped, which is the C++'s
     /// `NetCore::__Release`. `false` when there was none, which is the C++'s
     /// "net core is nullptr. ignore destroy".
+    ///
+    /// The core takes every queue with it, so a task that was still out on one
+    /// is a task nothing will report: whoever awaited one is answered here.
     pub fn destroy(&mut self) -> bool {
-        self.core.take().is_some()
+        // Taken out and kept until this call is over, and not dropped where it
+        // is taken: dropping the core ends every task it still holds — with
+        // `kEctLocal` / `kEctLocalReset`, "the net core itself is gone" — and
+        // then answers them *before* the cancel below gets to them. Which is
+        // not a hang, but it is a different answer from the one a task broken
+        // off any other way gets, so the cancel comes first and the drop that
+        // ends this call finds nothing left to end.
+        let core = self.core.take();
+        let destroyed = core.is_some();
+        if destroyed {
+            self.cancel_all();
+        }
+        destroyed
     }
 
     /// `Reset` — a net core made again from nothing, which is what the C++ does
@@ -250,7 +265,9 @@ impl StnLogic {
 
     /// The same, with the reading handed in.
     pub fn reset_at(&mut self, now: u64) {
-        self.core = None;
+        // a reset is a destroy and a create, and what the destroy answers is
+        // every task the core it drops was still holding
+        self.destroy();
         self.create_at(now);
     }
 
@@ -274,12 +291,18 @@ impl StnLogic {
 
     /// `OnNetworkChange(pre_change)` — the host's own change first, then the
     /// net core's, which is the order the C++ binds them in. Neither runs when
-    /// there is no core, which is the C++'s `if (net_core_ && !released)`.
+    /// there is no core, which is the C++'s `if (net_core_ && !released)`:
+    /// a core that was let go of has no tasks and no links left in it, so a
+    /// change of network is not one it has anything to redo.
     pub fn on_network_change(&mut self, pre_change: impl FnOnce()) {
-        if let Some(core) = self.core.as_mut() {
-            pre_change();
-            core.on_network_change();
-        }
+        let Some(core) = self.core.as_mut().filter(|core| !core.is_released()) else {
+            return;
+        };
+        pre_change();
+        core.on_network_change();
+        // Like [`StnLogic::touch_tasks_at`]: a change drops the tasks of every
+        // link it took down, and the await of one of those is answered here.
+        self.flush();
     }
 
     /// `ActiveLogic` — whether the app is in the foreground, which is what the
@@ -402,11 +425,37 @@ impl StnLogic {
             .is_some_and(|core| core.start_task_at(now, task))
     }
 
-    /// `StopTask(_taskid)`.
+    /// `StopTask(_taskid)` — `true` is a task a queue had.
+    ///
+    /// The queue drops the task and says nothing about it, which is what the
+    /// C++ does, so what ends here is the await and not the task: no queue
+    /// holds it any more, no pass is ever going to report it, and a [`Sent`]
+    /// left waiting for one would stay
+    /// [`Pending`](std::task::Poll::Pending) for the life of the process.
     pub fn stop_task(&mut self, taskid: u32) -> bool {
-        self.core
+        let stopped = self
+            .core
             .as_mut()
-            .is_some_and(|core| core.stop_task(taskid))
+            .is_some_and(|core| core.stop_task(taskid));
+        if stopped {
+            self.cancel(taskid);
+        }
+        stopped
+    }
+
+    /// A task no queue is going to report again is answered as cancelled, and
+    /// whoever awaited it is woken.
+    fn cancel(&mut self, taskid: u32) {
+        locked(&self.ends).cancel(taskid);
+        self.flush();
+    }
+
+    /// The same, for every task still being awaited. The ends outlive the net
+    /// core, so what a core that throws its queues away drops is an id nothing
+    /// is going to answer.
+    fn cancel_all(&mut self) {
+        locked(&self.ends).cancel_all();
+        self.flush();
     }
 
     /// `HasTask(_taskid)`.
@@ -424,6 +473,7 @@ impl StnLogic {
     pub fn redo_tasks_at(&mut self, now: u64) {
         if let Some(core) = self.core.as_mut() {
             core.redo_tasks_at(now);
+            self.flush();
         }
     }
 
@@ -434,17 +484,53 @@ impl StnLogic {
     }
 
     /// The same, with the reading handed in.
+    ///
+    /// A pass that ends a task is the only thing that can answer a [`Sent`], and
+    /// this is a pass: a task it times out is one no later pass reports again,
+    /// so its await is answered here and not by the next
+    /// [`StnLogic::run_pending`] — which a host whose [`StnLogic::due_delay`]
+    /// came back `None` is not going to call at all.
     pub fn touch_tasks_at(&mut self, now: u64) {
         if let Some(core) = self.core.as_mut() {
             core.touch_tasks_at(now);
+            self.flush();
         }
     }
 
     /// `ClearTasks` — every task is thrown away, which is what the app asks for
     /// when it has moved to another account.
+    ///
+    /// What is cancelled is what the queues actually let go of, and not every
+    /// await there is: a core that was told not to use a long link keeps the
+    /// tasks it is still holding and still ends them, and the answer that end
+    /// carries is the true one — a task that is still going to succeed is not
+    /// one to answer as cancelled. What was thrown away is another matter: no
+    /// queue holds it any more, so no pass is ever going to end it, and an
+    /// await left alone here would stay `Pending` for the life of the process.
     pub fn clear_tasks(&mut self) {
-        if let Some(core) = self.core.as_mut() {
-            core.clear_tasks();
+        let Some(core) = self.core.as_mut() else {
+            return;
+        };
+        for taskid in core.clear_tasks() {
+            self.cancel(taskid);
+        }
+    }
+
+    /// `ReleaseNet` — the net core is let go of in place, which is what a host
+    /// that reached [`StnLogic::net_core`] asks for: the logic stays created,
+    /// and every call of it from then on finds a released core.
+    ///
+    /// The awaits of the tasks the core dropped are answered as cancelled, the
+    /// way [`StnLogic::clear_tasks`] answers them: nothing holds those tasks
+    /// any more, so nothing is going to end them. [`StnLogic::destroy`] takes
+    /// the core out instead, and answers every await there is and not just
+    /// those.
+    pub fn release(&mut self) {
+        let Some(core) = self.core.as_mut() else {
+            return;
+        };
+        for taskid in core.release() {
+            self.cancel(taskid);
         }
     }
 
@@ -527,17 +613,34 @@ impl StnLogic {
     }
 
     /// `DestroyLonglink_ext(_name)`.
+    ///
+    /// What the link takes with it is every task that was going out on it, and
+    /// those are ended inside this call — so whoever awaited one of them is
+    /// woken here, the way [`StnLogic::touch_tasks_at`] wakes them: a task no
+    /// queue holds any more is not one a later pass is going to report, and an
+    /// app whose executor waits to be woken would wait for a pass that never
+    /// comes.
     pub fn destroy_long_link(&mut self, name: &str) -> bool {
-        self.core
+        let destroyed = self
+            .core
             .as_mut()
-            .is_some_and(|core| core.destroy_long_link(name))
+            .is_some_and(|core| core.destroy_long_link(name));
+        if destroyed {
+            self.flush();
+        }
+        destroyed
     }
 
     /// The same, with the reading handed in.
     pub fn destroy_long_link_at(&mut self, now: u64, name: &str) -> bool {
-        self.core
+        let destroyed = self
+            .core
             .as_mut()
-            .is_some_and(|core| core.destroy_long_link_at(now, name))
+            .is_some_and(|core| core.destroy_long_link_at(now, name));
+        if destroyed {
+            self.flush();
+        }
+        destroyed
     }
 
     /// `MarkMainLonglink_ext(_name)` — the long link whose errors and status the
@@ -839,8 +942,11 @@ mod tests {
     use crate::longlink_identify_checker::IdentifyBuffer;
     use crate::task_profile::{ConnectProfile, TaskFailHandleType, TaskProfile};
     use crate::{CgiProfile, ErrCmdType, RespHandle, RunId, DEFAULT_LONGLINK_NAME};
+    use std::future::Future;
+    use std::pin::Pin;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
+    use std::task::{Context, Poll, Waker};
 
     /// An app that writes down what it was asked and answers the way a sample
     /// wants.
@@ -852,6 +958,15 @@ mod tests {
         fn makesure_authed(&mut self, host: &str, _user_id: &str) -> bool {
             self.asked.lock().unwrap().push(format!("authed {host}"));
             true
+        }
+
+        /// `TrafficData` — the one the logic hands over without a core, so it
+        /// is the one that says the bridge is wired to the app at all.
+        fn traffic_data(&mut self, send: i64, recv: i64) {
+            self.asked
+                .lock()
+                .unwrap()
+                .push(format!("traffic {send} {recv}"));
         }
 
         fn req2buf(
@@ -949,6 +1064,24 @@ mod tests {
         }
     }
 
+    /// One poll of an await, with a waker that wakes nobody: what a [`Sent`]
+    /// parks is collected by the ends and made after the pass.
+    fn poll(sent: &mut Sent) -> Poll<Result<sent::Answer, Failure>> {
+        let mut context = Context::from_waker(Waker::noop());
+        Future::poll(Pin::new(sent), &mut context)
+    }
+
+    /// A waker that counts: the poll of a [`Sent`] whose task has ended is
+    /// `Ready` whether or not anybody woke it, so what says an await was woken
+    /// is the wake and not the poll that follows it.
+    struct Counter(AtomicUsize);
+
+    impl std::task::Wake for Counter {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
     /// A logic with a core in it and an app that answers.
     fn logic() -> (StnLogic, Arc<Mutex<Vec<String>>>) {
         let asked = Arc::new(Mutex::new(Vec::new()));
@@ -962,6 +1095,57 @@ mod tests {
 
     fn asked_of(cell: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
         cell.lock().unwrap().clone()
+    }
+
+    /// An await is woken by the pass that ended its task, and `run_pending`
+    /// is not the only pass that ends one: a queue's own timeouts end them
+    /// too, and a host whose `due_delay` came back `None` — nothing is due,
+    /// nothing is out — never calls another pass at all.
+    #[test]
+    fn a_task_a_touch_ended_wakes_whoever_awaited_it() {
+        let (mut logic, _asked) = logic();
+        let mut sent = logic.send_at(1_000, Task::new(7, 12), b"body".to_vec());
+        let wakes = Arc::new(Counter(AtomicUsize::new(0)));
+        let waker = Waker::from(Arc::clone(&wakes));
+        let mut context = Context::from_waker(&waker);
+        assert!(
+            Future::poll(Pin::new(&mut sent), &mut context).is_pending(),
+            "the task is out, so nothing has ended it yet"
+        );
+
+        // Ten minutes later: past every timeout a task that answered nothing
+        // runs into.
+        logic.touch_tasks_at(1_000 + 600_000);
+        assert_eq!(
+            wakes.0.load(Ordering::SeqCst),
+            1,
+            "the await of a task this pass ended was never woken"
+        );
+        assert!(
+            Future::poll(Pin::new(&mut sent), &mut context).is_ready(),
+            "the task ended, so its await has an answer"
+        );
+    }
+
+    #[test]
+    fn a_core_that_was_let_go_of_is_not_one_a_network_change_reaches() {
+        let (mut logic, asked) = logic();
+        assert!(logic.start_task_at(1_000, Task::new(7, 12)));
+        logic.release();
+        assert!(logic.net_core().is_some_and(|core| core.is_released()));
+
+        let before = asked_of(&asked);
+        let mut pre = 0;
+        logic.on_network_change(|| pre += 1);
+        assert_eq!(
+            pre, 0,
+            "the host's own change is bound to the core's, and neither runs"
+        );
+        assert_eq!(
+            asked_of(&asked),
+            before,
+            "no task is encoded again for a core that let them all go"
+        );
     }
 
     #[test]
@@ -1210,9 +1394,14 @@ mod tests {
     #[test]
     fn a_sequence_id_is_a_different_one_every_time() {
         let _guard = crate::test_lock();
-        let first = gen_sequence_id();
-        let second = gen_sequence_id();
-        assert_ne!(first, second, "a retry is not the request it retries");
+        // one draw can land on the one before it: the id is a xorshift taken
+        // modulo 65536, and a state the shift maps onto itself is a collision
+        // one time in 65536. Sixteen draws are not sixteen of the same, though
+        let drawn: Vec<u16> = (0..16).map(|_| gen_sequence_id()).collect();
+        assert!(
+            drawn.iter().any(|id| *id != drawn[0]),
+            "a retry is not the request it retries: {drawn:?}"
+        );
     }
 
     #[test]
@@ -1241,6 +1430,46 @@ mod tests {
         assert!(!logic.has_task(7));
         assert!(!logic.stop_task(7));
         assert_eq!(asked_of(&asked), Vec::<String>::new());
+    }
+
+    /// What a core that was told not to use a long link clears: not the queue
+    /// it stopped using, and so not the await of a task that queue still
+    /// holds. The task is still going to end of its own accord, and one task
+    /// answered twice — cancelled here, ended when the queue runs it out —
+    /// is one task too many.
+    #[test]
+    fn what_a_core_that_keeps_its_queue_clears_is_not_awaited_as_cancelled() {
+        let (mut logic, _asked) = logic();
+        let link = logic.default_long_link().expect("a default long link");
+        locked(&link).set_status(LongLinkStatus::Connected);
+
+        let mut task = Task::new(7, 12);
+        task.cgi = "/cgi-bin/7".to_string();
+        task.channel_select = Task::CHANNEL_ALL;
+        task.shortlink_host_list = vec!["short.host".to_string()];
+        let mut sent = logic.send_at(1_000, task, b"ask".to_vec());
+        assert!(poll(&mut sent).is_pending(), "the task is on the long link");
+        assert!(logic.net_core().expect("a core").longlink().has_task(7));
+
+        logic.disable_long_link();
+        logic.clear_tasks();
+        assert!(
+            logic.net_core().expect("a core").longlink().has_task(7),
+            "a queue the core is not using is not emptied"
+        );
+        assert!(
+            poll(&mut sent).is_pending(),
+            "the task is still going to end"
+        );
+
+        // what does answer it is the destroy, which takes every queue with it
+        assert!(logic.destroy());
+        match poll(&mut sent) {
+            Poll::Ready(Err(Failure::Ended { err_type, .. })) => {
+                assert_eq!(err_type, ErrCmdType::Canceld)
+            }
+            other => panic!("the await is answered when the core goes: {other:?}"),
+        }
     }
 
     /// A tick is only a delay to a caller that can read the clock it is measured
@@ -1350,14 +1579,20 @@ mod tests {
 
     #[test]
     fn a_traffic_report_goes_to_the_app_through_the_bridge() {
+        let asked = Arc::new(Mutex::new(Vec::new()));
         let mut logic = StnLogic::new();
         logic.set_callback(Rec {
-            asked: Arc::new(Mutex::new(Vec::new())),
+            asked: Arc::clone(&asked),
         });
 
         // the C++ counts its own log tag only, so what is here is the report
         // itself, which the app is the one that answers
         logic.traffic_data(100, 200);
+        assert_eq!(
+            asked_of(&asked),
+            vec!["traffic 100 200".to_string()],
+            "the bridge kept the report to itself"
+        );
     }
 
     #[test]

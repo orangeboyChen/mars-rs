@@ -47,20 +47,25 @@ pub fn set_strategy(period: u64, keep_time: u64) {
     *strategy = (period, keep_time);
 }
 
-/// `g_period` — what [`set_strategy`] set, or [`DEFAULT_PERIOD`].
-pub fn period() -> u64 {
-    strategy()
+/// `g_period` and `g_keepTime` — what [`set_strategy`] set, or the defaults.
+///
+/// Both, and under one lock: the two are set together, and a `set_strategy`
+/// from another thread between two reads would hand out a period of one
+/// strategy beside a keep time of another.
+fn strategy_now() -> (u64, u64) {
+    *strategy()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .0
+}
+
+/// `g_period` — what [`set_strategy`] set, or [`DEFAULT_PERIOD`].
+pub fn period() -> u64 {
+    strategy_now().0
 }
 
 /// `g_keepTime` — what [`set_strategy`] set, or [`DEFAULT_KEEP_TIME`].
 pub fn keep_time() -> u64 {
-    strategy()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .1
+    strategy_now().1
 }
 
 /// `fun_send_signalling_buffer_`.
@@ -194,23 +199,39 @@ impl SignallingKeeper {
     /// The same, with the reading handed in: while the keeper is keeping and
     /// its `keepTime` has not run out, the next buffer is posted `period`
     /// later; once it has, the signalling stops.
+    ///
+    /// The reading is the data's, and not this call's: `NetCore::feed_signalling`
+    /// carries it here a turn later than the link that saw it, so it can be an
+    /// older one than the touch the `keepTime` is measured from. The C++ reads
+    /// its own clock when the signal is delivered, so its `now` is never the
+    /// older of the two — `xassert2(now >= last_touch_time_)` is what says so
+    /// in a build that has asserts, and the `now < last_touch_time_` of the
+    /// same `if` is what a build without them still has, keeping the unsigned
+    /// subtraction behind it from wrapping.
+    ///
+    /// A reading carried here is late by a turn, and not a clock that went
+    /// backwards, so no reading ends the signalling: what ends it is the
+    /// `keepTime` running out. `saturating_sub` needs no guard, and stopping
+    /// for a reading that is merely late would end the signalling for a
+    /// mapping that is still busy.
     pub fn on_network_data_changed_at(&mut self, now: u64) {
         if !self.keeping {
             return;
         }
-        // `xassert2(now >= last_touch_time_)`, and the C++ treats a clock that
-        // went backwards the same way it treats a `keepTime` that ran out.
         let Some(last) = self.last_touch_time else {
             self.keeping = false;
             return;
         };
-        if now < last || now.saturating_sub(last) > keep_time() {
+        let now = now.max(last);
+        // one lock for the two of them: see [`strategy_now`]
+        let (period, keep_time) = strategy_now();
+        if now.saturating_sub(last) > keep_time {
             self.keeping = false;
             return;
         }
         // `CancelMessage(postid_)` + `AsyncInvokeAfter(g_period, …)`, which
         // posts one call: it runs once, `g_period` after this data
-        self.post = Post::Due(now.saturating_add(period()));
+        self.post = Post::Due(now.saturating_add(period));
     }
 
     /// `__OnTimeOut` — what the posted call does: send another buffer.
@@ -345,11 +366,17 @@ mod tests {
         keeper.on_network_data_changed_at(5_000);
         assert_eq!(keeper.due_time(), Some(4_000 + 1_000));
 
-        // a clock that went backwards is treated the same way
+        // a reading carried here one turn later than the data it is the
+        // reading of is not a clock that went backwards, and it is the one
+        // place the port and the C++ part ways: the C++ stops keeping on
+        // `now < last_touch_time_` itself. Data that moved before the touch
+        // still says the mapping is busy, so the `keepTime` is measured from
+        // the touch and the next buffer is posted after it
         let mut keeper = SignallingKeeper::new();
         keeper.keep_at(5_000);
         keeper.on_network_data_changed_at(4_000);
-        assert!(!keeper.is_keeping());
+        assert!(keeper.is_keeping());
+        assert_eq!(keeper.due_time(), Some(5_000 + 1_000));
 
         set_strategy(DEFAULT_PERIOD, DEFAULT_KEEP_TIME);
         drop(guard);
@@ -382,10 +409,25 @@ mod tests {
     #[test]
     fn a_cleared_send_keeps_the_time_but_sends_nothing() {
         let mut keeper = SignallingKeeper::new();
-        keeper.set_send(|_| 7);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recording = Arc::clone(&seen);
+        keeper.set_send(move |cmdid| {
+            recording
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(cmdid);
+            7
+        });
         keeper.clear_send();
         keeper.keep_at(1_000);
         assert!(keeper.is_keeping());
-        assert_eq!(keeper.sent(), 1, "the buffer still went out");
+        // `sent` is the count of the buffers the keeper meant to send, and
+        // not of the ones that reached the app — `fun_send_signalling_buffer_
+        // = NULL` is what the C++ clears, and the count goes up either way
+        assert_eq!(keeper.sent(), 1);
+        assert!(
+            seen.lock().unwrap_or_else(|e| e.into_inner()).is_empty(),
+            "the callback is gone, so no buffer went out"
+        );
     }
 }

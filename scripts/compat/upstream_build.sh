@@ -98,13 +98,46 @@ for f in $C_SRCS; do
     cc -O2 -w $INC -c "$f" -o "$OBJ/c_$(basename "$f").o"
 done
 
+# `mars/comm/strutil.h` says `uint8_t` and `uint64_t` without including
+# `<cstdint>`, which is a header a gcc of 13 no longer reaches through another
+# one: every declaration it makes of those types is dropped, and what a reader
+# sees of it is that `http::HeaderFields` has no member named `ContentLength`
+# — the member is there, declared `uint64_t`. Forced in on every C++ line, and
+# not patched into the checkout: this repository does not own the file, and
+# `-include` is a flag a clone of the day it was built on cannot undo. The C
+# lines get none, for which `cstdint` is not a header at all.
+CXXINC="-include cstdint -include cstring"
+
+# The 64 bytes a file nothing encrypts carries. `LogCrypt::SetHeaderInfo` copies
+# `client_pubkey_` into the header of every record, and the constructor returns
+# before anything writes it when it was handed no server key — which is what
+# `--pubkey=` is, and what a row of no crypt is — so those 64 bytes are whatever
+# that memory held: the byte the cross-read test first differed on was byte 14,
+# the fifth of them. The Rust zeroes them, so the two files of a row can agree
+# by accident and not otherwise. Zeroed in a patched copy, the way the decoder
+# is patched in `upstream_compat.sh`: the checkout is a clone this repository
+# does not own, and `memset` — the one thing the patch needs — is what
+# `-include cstring` above is for.
+LOG_CRYPT=$UP/mars/xlog/crypt/log_crypt.cc
+PATCHED_LOG_CRYPT=$OBJ/log_crypt.cc
+sed -e 's|^LogCrypt::LogCrypt(const char\* _pubkey) : seq_(0), is_crypt_(false) {|&\
+    memset(client_pubkey_, 0, sizeof(client_pubkey_));|' \
+    "$LOG_CRYPT" > "$PATCHED_LOG_CRYPT"
+grep -q "memset(client_pubkey_" "$PATCHED_LOG_CRYPT" || {
+    echo "could not patch $LOG_CRYPT — did upstream move the constructor?" >&2
+    exit 1
+}
+
 for f in $CXX_SRCS "$SRC"; do
-    c++ -std=c++14 -O2 -w $INC -c "$f" -o "$OBJ/cxx_$(basename "$f").o"
+    if [ "$f" = "$LOG_CRYPT" ]; then
+        f=$PATCHED_LOG_CRYPT
+    fi
+    c++ -std=c++14 -O2 -w $CXXINC $INC -c "$f" -o "$OBJ/cxx_$(basename "$f").o"
 done
 
 # The file-protection attribute helper is Objective-C++, and Apple-only.
 if [ "$OS" = "Darwin" ]; then
-    c++ -x objective-c++ -std=c++14 -O2 -w $INC -c "$UP"/mars/comm/objc/data_protect_attr.mm \
+    c++ -x objective-c++ -std=c++14 -O2 -w $CXXINC $INC -c "$UP"/mars/comm/objc/data_protect_attr.mm \
         -o "$OBJ/objc_protect.o"
     LIBS="$LIBS -framework Foundation"
 fi

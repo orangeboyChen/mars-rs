@@ -20,8 +20,20 @@ use marsrs_buffer::CompressMode;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppenderMode {
     /// `kAppenderAsync` — buffer + writer thread.
+    ///
+    /// The only mode in which [`XLogConfig::pub_key`] encrypts anything: an
+    /// async record's body is TEA-encrypted, a sync record's is not.
     Async,
     /// `kAppenderSync` — write on the caller's thread.
+    ///
+    /// A sync record's body is stored **in the clear whatever `pub_key`
+    /// says**: `LogCrypt::CryptSyncLog` has its TEA loop commented out in the
+    /// C++ and the port kept that, so a sync record's body is byte-identical
+    /// to one written with no key at all. Its header is not — it goes out
+    /// under the "crypt" magic and carries the 64-byte client public key —
+    /// so what a reader without the key holds is a plaintext body under a
+    /// header that says it is encrypted. Opening in this mode with a
+    /// `pub_key` logs a line that says so at the top of the file.
     Sync,
 }
 
@@ -53,11 +65,22 @@ pub struct XLogConfig {
     /// `mode_`
     pub mode: AppenderMode,
     /// `logdir_`
+    ///
+    /// Created (with `cachedir_`) for its owner alone — `0o700` on unix —
+    /// because a log holds everything the app wrote since it was installed.
     pub logdir: PathBuf,
     /// `nameprefix_`
     pub nameprefix: String,
     /// `pub_key_` — 128 hex chars of the *server* public key; empty means
     /// "no encryption".
+    ///
+    /// What it buys the caller is one thing and one thing only: the *body of
+    /// an async record* is TEA-encrypted. A sync record's body is stored in
+    /// the clear whatever this says (see [`AppenderMode::Sync`]), and a value
+    /// that is not the 128 hex characters of a valid secp256k1 point is
+    /// silently ignored — `LogCrypt` comes up with no TEA key, the records go
+    /// out with the NOCRYPT magics and plaintext bodies, and the only thing
+    /// that says so is a line at the top of the log file.
     pub pub_key: String,
     /// `compress_mode_`
     pub compress_mode: CompressMode,

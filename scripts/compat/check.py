@@ -52,17 +52,29 @@ def lines(records_path, decoded_path):
         decoded = handle.read()
 
     missing = []
+    checked = 0
     for record, expected in collections.Counter(records).items():
         try:
             text = record.decode("utf-8")
         except UnicodeDecodeError:
             continue  # not writable through the Rust appender's `&str`
+        checked += 1
         # One framed record: what the appender stamps in front of the body, the
         # body, and the newline that ends it.
         framed = b"][" + text.encode("utf-8") + b"\n"
         found = decoded.count(framed)
         if found < expected:
             missing.append((record, expected, found))
+
+    # A records file of nothing but records that were skipped is a comparison
+    # of nothing: `missing` stays empty over a file no record was looked for
+    # in, and `0` means "every record is there". One of the two has to have
+    # been asked about for the answer to mean anything.
+    if checked == 0:
+        print(f"{decoded_path}: no record of {records_path} was checked — "
+              "every one of them is a byte string the Rust appender cannot "
+              "write, so nothing was compared")
+        return 1
 
     if missing:
         for record, expected, found in missing:

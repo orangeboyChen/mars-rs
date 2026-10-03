@@ -159,6 +159,19 @@ fn a_reset_monitor_has_forgotten_its_budgets_and_refuses_everything() {
     assert!(monitor.send_limit_check(1, true));
     assert!(monitor.recv_limit_check(1, true));
     assert!(!monitor.send_limit_check(0, true), "0 is not over 0");
+
+    // and the budgets are the constructor's to build back up: a monitor that
+    // is kept for more than one run needs them, because `reset()` took them
+    monitor.set_thresholds(100, 100);
+    assert!(!monitor.send_limit_check(40, true));
+    assert_eq!(monitor.mobile_send(), 40);
+
+    // the byte it counted while it had no budget is still on the counter, so
+    // what came back is 41 and not 40 — and 40 + 41 is under the 100 it has
+    // again
+    assert!(!monitor.recv_limit_check(40, true));
+    assert_eq!(monitor.mobile_recv(), 41);
+    assert!(monitor.send_limit_check(61, true));
 }
 
 #[test]
@@ -167,12 +180,13 @@ fn the_counters_of_a_monitor_are_what_it_reports() {
     monitor.send_limit_check(10, false);
     monitor.recv_limit_check(20, true);
 
+    // a copy of it carries the counters, and not the monitor's own — a copy
+    // that lost one answers for itself here
     let same = monitor.clone();
-    assert_eq!(same, monitor);
     assert_eq!(same.wifi_send(), 10);
     assert_eq!(same.mobile_recv(), 20);
     assert!(
-        format!("{monitor:?}").contains("NetCheckTrafficMonitor"),
+        format!("{monitor:?}").contains("wifi_send: 10"),
         "{monitor:?}"
     );
 }

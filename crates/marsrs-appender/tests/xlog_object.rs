@@ -137,9 +137,33 @@ fn the_four_the_appender_has_no_getter_for_answer_what_was_set() {
     xlog.set_max_file_size_bytes(1 << 20);
     assert_eq!(xlog.max_file_size_bytes(), 1 << 20);
 
+    // Three days, and not an hour: a limit below one day is one the appender
+    // refuses, and the getter answers what is in force — see the test below.
     assert_eq!(xlog.max_alive_time_seconds(), 0);
+    xlog.set_max_alive_time_seconds(3 * 24 * 60 * 60);
+    assert_eq!(xlog.max_alive_time_seconds(), 3 * 24 * 60 * 60);
+}
+
+/// The one of the four the appender can refuse: a value below one day.
+///
+/// The getter answers what the appender holds files to, and not what was
+/// asked for, because the appender is what deletes them. An app that reads
+/// back an hour it never got stops uploading the logs it believes are gone.
+#[test]
+fn an_alive_time_below_a_day_is_refused_and_the_getter_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let xlog = Xlog::open(config(dir.path(), "alive"), LogLevel::Info).unwrap();
+
     xlog.set_max_alive_time_seconds(3600);
-    assert_eq!(xlog.max_alive_time_seconds(), 3600);
+    assert_eq!(
+        xlog.max_alive_time_seconds(),
+        0,
+        "what this `Xlog` last set is what it answers, and the hour was refused"
+    );
+
+    // A value the appender does take is the one the getter answers.
+    xlog.set_max_alive_time_seconds(3 * 24 * 60 * 60);
+    assert_eq!(xlog.max_alive_time_seconds(), 3 * 24 * 60 * 60);
 }
 
 #[test]
@@ -147,6 +171,22 @@ fn two_objects_of_one_prefix_are_one_appender() {
     let dir = tempfile::tempdir().unwrap();
     let one = Xlog::open(config(dir.path(), "shared"), LogLevel::Info).unwrap();
     let two = Xlog::open(config(dir.path(), "shared"), LogLevel::Info).unwrap();
+
+    // The four the appender has no getter for are this object's own answer and
+    // not the appender's, which is what `Xlog`'s own doc says of them: `one`
+    // set the alive time on the appender it shares with `two`, and `two` goes
+    // on answering what `two` last set itself, which is nothing — `0`, the
+    // ten days. An app that reads the value back out of a second `Xlog` of a
+    // prefix is told its logs are kept ten days whatever the first one asked
+    // for, and no platform of the port can do better: there is nothing to
+    // read the value back from.
+    one.set_max_alive_time_seconds(3 * 24 * 60 * 60);
+    assert_eq!(one.max_alive_time_seconds(), 3 * 24 * 60 * 60);
+    assert_eq!(
+        two.max_alive_time_seconds(),
+        0,
+        "the mirror is this object's and not the appender's"
+    );
 
     // The second is the appender the first opened, and not a second one.
     assert!(two.is_open());

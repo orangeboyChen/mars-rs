@@ -132,6 +132,23 @@ fn the_pair_is_picked_at_random_and_a_test_that_succeeds_lifts_its_ban() {
     assert_eq!(seen.sucs, 1, "and the app is told to reset the link");
 }
 
+/// A host's `Random` is asked for `0..bound`, and one that answers its bound is
+/// out of that range — the C++'s `rand() % bound` cannot be, so nothing there
+/// says what to do with such an answer. The draw is clamped to a pair there is
+/// rather than indexed with: a check that panicked on the host's arithmetic is
+/// not one the ip is ever unbanned by.
+#[test]
+fn a_random_that_answers_its_own_bound_is_out_of_range_and_the_last_pair_is_tested() {
+    let (mut check, seen) = a_check();
+    check.set_random(|bound| bound);
+    check.start_check_at(0);
+    assert_eq!(check.check_at(TIME_CHECK_PERIOD), Some(true));
+    assert_eq!(
+        seen.lock().unwrap_or_else(|e| e.into_inner()).tested,
+        vec![("9.10.11.12".to_string(), 443)]
+    );
+}
+
 #[test]
 fn a_test_that_does_not_succeed_tells_nobody() {
     let (mut check, seen) = a_check();
@@ -239,5 +256,7 @@ fn without_a_host_nothing_is_asked_for() {
     assert!(!check.try_connect_at(0));
     check.cancel_connect();
     check.stop_check();
-    assert!(format!("{check:?}").contains("NetSourceTimerCheck"));
+    // no test is running: `stop_check` of one that was never started is
+    // the C++'s own early return, and the post it armed keeps coming
+    assert!(format!("{check:?}").contains("testing: false"));
 }

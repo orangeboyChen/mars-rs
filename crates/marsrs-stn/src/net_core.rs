@@ -54,6 +54,7 @@
 //! metas they are, and the port keeps the links in the core.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -61,13 +62,14 @@ use marsrs_comm::tickcount::gettickcount;
 
 use crate::anti_avalanche::AntiAvalanche;
 use crate::dynamic_timeout::{DynamicTimeout, NetworkKind};
-use crate::long_link::LongLink;
+use crate::hook::Hook;
+use crate::long_link::{LongLink, MakeSure};
 use crate::longlink_identify_checker::{
     GetIdentifyCheckBuffer, IdentifyBuffer, OnIdentifyResponse,
 };
 use crate::net_source::NO_NET;
 use crate::task_profile::{
-    ConnectProfile, ErrCmdType, PrepareProfile, TaskFailHandleType, TaskProfile,
+    ConnectProfile, ErrCmdType, PrepareProfile, RunId, TaskFailHandleType, TaskProfile,
     LOCAL_CHANNEL_SELECT, LOCAL_NO_NET, LOCAL_RESET, LOCAL_START_TASK_FAIL, LOCAL_TASK_PARAM,
 };
 use crate::{
@@ -224,6 +226,18 @@ fn poisoned<T>(poisoned: PoisonError<T>) -> T {
     poisoned.into_inner()
 }
 
+/// What the queue's channel hooks hold: the link of every name in
+/// [`NetCore::links`], shared with the core, which is what makes or throws one
+/// away.
+type LongLinkChannels = Arc<Mutex<HashMap<String, Arc<Mutex<LongLink>>>>>;
+
+/// The long link of `name`, out of the map the queue's channel hooks hold;
+/// [`None`] is a channel the core has no link for, which is every question
+/// asked of a name that was never made, or of one that was thrown away.
+fn channel_of(channels: &LongLinkChannels, name: &str) -> Option<Arc<Mutex<LongLink>>> {
+    channels.lock().unwrap_or_else(poisoned).get(name).cloned()
+}
+
 fn unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -271,27 +285,27 @@ enum FollowUp {
 /// else the app is told comes from [`NetCore`] itself.
 #[derive(Default)]
 struct Hooks {
-    task_callback: Option<Box<TaskCallback>>,
-    on_task_end: Option<Box<OnTaskEnd>>,
-    push_preprocess: Option<Box<PushPreprocess>>,
-    on_push: Option<Box<OnPush>>,
-    report_task_profile: Option<Box<ReportTaskProfile>>,
-    report_task_limited: Option<Box<ReportTaskLimited>>,
-    on_timeout_or_remote_shutdown: Option<Box<TimeoutOrRemoteShutdown>>,
+    task_callback: Hook<TaskCallback>,
+    on_task_end: Hook<OnTaskEnd>,
+    push_preprocess: Hook<PushPreprocess>,
+    on_push: Hook<OnPush>,
+    report_task_profile: Hook<ReportTaskProfile>,
+    report_task_limited: Hook<ReportTaskLimited>,
+    on_timeout_or_remote_shutdown: Hook<TimeoutOrRemoteShutdown>,
 }
 
 impl std::fmt::Debug for Hooks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Hooks")
-            .field("task_callback", &self.task_callback.is_some())
-            .field("on_task_end", &self.on_task_end.is_some())
-            .field("push_preprocess", &self.push_preprocess.is_some())
-            .field("on_push", &self.on_push.is_some())
-            .field("report_task_profile", &self.report_task_profile.is_some())
-            .field("report_task_limited", &self.report_task_limited.is_some())
+            .field("task_callback", &self.task_callback.is_set())
+            .field("on_task_end", &self.on_task_end.is_set())
+            .field("push_preprocess", &self.push_preprocess.is_set())
+            .field("on_push", &self.on_push.is_set())
+            .field("report_task_profile", &self.report_task_profile.is_set())
+            .field("report_task_limited", &self.report_task_limited.is_set())
             .field(
                 "on_timeout_or_remote_shutdown",
-                &self.on_timeout_or_remote_shutdown.is_some(),
+                &self.on_timeout_or_remote_shutdown.is_set(),
             )
             .finish()
     }
@@ -316,6 +330,14 @@ pub struct NetCore {
     /// the links themselves here, because a link is what the multi-long-link
     /// APIs hand out.
     links: HashMap<String, LongLinkMetaData>,
+    /// The channel of every long link of [`NetCore::links`], by the same name.
+    ///
+    /// What a long-link channel is asked is asked of a name, and the queue asks
+    /// it through one hook for every channel — so what a hook holds is a map of
+    /// them and not one link. This is the half of [`NetCore::links`] a closure
+    /// can own, and it is kept beside it: a link made or thrown away is put in
+    /// or taken out of both.
+    channels: LongLinkChannels,
     /// Which of [`NetCore::links`] is `Config().isMain()`: the C++ marks the
     /// config, and a port answers with the name instead of writing to a value
     /// the link was made from.
@@ -338,7 +360,14 @@ pub struct NetCore {
     hooks: Arc<Mutex<Hooks>>,
 
     /// `need_use_longlink_`.
-    use_long_link: bool,
+    ///
+    /// Shared, and not a `bool` the closures below copy: `SetNeedUseLongLink`
+    /// sets a member of the C++'s own (`net_core.cc:1316`), and a queue's
+    /// callback there reads it when it runs. A copy is what made this setter
+    /// re-wire the whole core to change it, and a re-wire puts the channel
+    /// hooks of [`NetCore::wire_longlink_channels`] back — over any a host
+    /// installed on the queue itself.
+    use_long_link: Arc<AtomicBool>,
     /// `already_release_net_`.
     released: bool,
     /// `shortlink_error_count_`.
@@ -373,6 +402,21 @@ pub struct NetCore {
     /// `OnLonglinkIdentifyResponse` — the app's verdict on the answer.
     identify_response: Arc<Mutex<Option<Box<OnIdentifyResponse>>>>,
     /// `ActiveLogic::Instance()->IsForeground()`.
+    /// `ActiveLogic::isactive_` — what [`NetSource`] and [`TimingSync`] ask
+    /// [`ActiveLogic::IsActive()`] about, and what [`NetCore::set_active_at`]
+    /// sets. It is a cell and not a plain `bool` because the two of them ask
+    /// through a callback they were handed at construction, and the core is
+    /// the only thing that knows the answer: the C++'s is a member of a
+    /// singleton both read directly.
+    ///
+    /// It starts `true`, the way `ActiveLogic::ActiveLogic()` starts it: an
+    /// app is not in front until its host says it is, but it is active from
+    /// the moment it starts, and what ends that is ten minutes in the
+    /// background. Starting it `false` would make every host list the short
+    /// one and every sync wait the half hour until a host happened to move
+    /// the app between foreground and background, which is a change most
+    /// apps make once and some never make at all.
+    active: Arc<AtomicBool>,
     is_foreground: Option<Box<IsForeground>>,
     /// `ActiveLogic::Instance()->LastForegroundChangeTime()`.
     last_foreground_change_time: Option<Box<LastForegroundChangeTime>>,
@@ -406,14 +450,18 @@ impl NetCore {
             longlink: LongLinkTaskManager::new(),
             timing_sync: TimingSync::new_at(now),
             links: HashMap::new(),
+            channels: Arc::new(Mutex::new(HashMap::new())),
             default_link: None,
             factory: ChannelFactory::new(),
             anti_avalanche: Arc::new(Mutex::new(AntiAvalanche::new_at(false, now))),
             zombie: Arc::new(Mutex::new(ZombieTaskManager::new_at(now))),
             pending: Arc::new(Mutex::new(VecDeque::new())),
+            // `ActiveLogic::isactive_`, and `ActiveLogic::ActiveLogic()` made
+            // it `true`: see the field.
+            active: Arc::new(AtomicBool::new(true)),
             net_info: Arc::new(Mutex::new(Box::new(|| crate::NET_TYPE_WIFI))),
             hooks: Arc::new(Mutex::new(Hooks::default())),
-            use_long_link,
+            use_long_link: Arc::new(AtomicBool::new(use_long_link)),
             released: false,
             shortlink_error_count: 0,
             shortlink_try_flag: false,
@@ -433,6 +481,17 @@ impl NetCore {
             last_foreground_change_time: None,
             clock: None,
         };
+        // `ActiveLogic::IsActive()`, which the C++'s `NetSource` and
+        // `TimingSync` ask of the singleton themselves. The two of them hold
+        // a callback and not a copy of the flag, which is why a core that
+        // went inactive later is one they both see go: the cell is shared,
+        // and the core is what fills it.
+        let active = Arc::clone(&core.active);
+        core.timing_sync
+            .set_is_active(move || active.load(Ordering::SeqCst));
+        let active = Arc::clone(&core.active);
+        core.net_source
+            .set_is_active(move || active.load(Ordering::SeqCst));
         // `dynamic_timeout_`: the C++ owns one and hands the *same* one to both
         // queues (`net_core.cc:85,217`), so a package that went out on either
         // of them is what both compute their first-package timeouts from
@@ -522,13 +581,13 @@ impl NetCore {
 
         let hooks = Arc::clone(&self.hooks);
         let zombie = Arc::clone(&self.zombie);
-        let use_long_link = self.use_long_link;
+        let use_long_link = Arc::clone(&self.use_long_link);
         self.shortlink
             .set_callback(move |err_type, err_code, handle, task, cost, profile| {
                 call_back(
                     &hooks,
                     &zombie,
-                    use_long_link,
+                    use_long_link.load(Ordering::Relaxed),
                     gettickcount(),
                     CallFrom::Short,
                     err_type,
@@ -542,13 +601,13 @@ impl NetCore {
 
         let hooks = Arc::clone(&self.hooks);
         let zombie = Arc::clone(&self.zombie);
-        let use_long_link = self.use_long_link;
+        let use_long_link = Arc::clone(&self.use_long_link);
         self.longlink
             .set_callback(move |err_type, err_code, handle, task, cost, profile| {
                 call_back(
                     &hooks,
                     &zombie,
-                    use_long_link,
+                    use_long_link.load(Ordering::Relaxed),
                     gettickcount(),
                     CallFrom::Long,
                     err_type,
@@ -562,13 +621,14 @@ impl NetCore {
 
         let hooks = Arc::clone(&self.hooks);
         self.longlink.set_on_push(move |name, cmdid, taskid, body| {
-            let mut hooks = hooks.lock().unwrap_or_else(poisoned);
-            if let Some(preprocess) = hooks.push_preprocess.as_mut() {
-                preprocess(cmdid, body);
-            }
-            if let Some(on_push) = hooks.on_push.as_mut() {
-                on_push(name, cmdid, taskid, body);
-            }
+            let preprocess = hooks
+                .lock()
+                .unwrap_or_else(poisoned)
+                .push_preprocess
+                .clone();
+            let _ = preprocess.run(|preprocess| preprocess(cmdid, body));
+            let on_push = hooks.lock().unwrap_or_else(poisoned).on_push.clone();
+            let _ = on_push.run(|on_push| on_push(name, cmdid, taskid, body));
         });
 
         let hooks = Arc::clone(&self.hooks);
@@ -609,38 +669,32 @@ impl NetCore {
 
         let hooks = Arc::clone(&self.hooks);
         self.shortlink.set_report_profile(move |profile| {
-            if let Some(report) = hooks
+            let report = hooks
                 .lock()
                 .unwrap_or_else(poisoned)
                 .report_task_profile
-                .as_mut()
-            {
-                report(profile);
-            }
+                .clone();
+            let _ = report.run(|report| report(profile));
         });
         let hooks = Arc::clone(&self.hooks);
         self.longlink.set_report_profile(move |profile| {
-            if let Some(report) = hooks
+            let report = hooks
                 .lock()
                 .unwrap_or_else(poisoned)
                 .report_task_profile
-                .as_mut()
-            {
-                report(profile);
-            }
+                .clone();
+            let _ = report.run(|report| report(profile));
         });
 
         let hooks = Arc::clone(&self.hooks);
         self.shortlink
             .set_on_timeout_or_remote_shutdown(move |profile| {
-                if let Some(hook) = hooks
+                let hook = hooks
                     .lock()
                     .unwrap_or_else(poisoned)
                     .on_timeout_or_remote_shutdown
-                    .as_mut()
-                {
-                    hook(profile);
-                }
+                    .clone();
+                let _ = hook.run(|hook| hook(profile));
             });
 
         let net_info = Arc::clone(&self.net_info);
@@ -665,6 +719,93 @@ impl NetCore {
                 NetworkKind::Wifi
             }
         });
+
+        self.wire_longlink_channels();
+    }
+
+    /// What a long-link channel is, and how the queue of long-link tasks reaches
+    /// it: the send, the stop, the disconnect, the reset, and the two questions
+    /// a task asks before it goes out.
+    ///
+    /// The links are the core's — the C++'s `LongLinkMetaData` is what carries
+    /// these, and the port keeps the links in the core — so the core is the host
+    /// that wires them, and a link made after this call is reached through the
+    /// map the hooks hold. Left unwired, the queue answered its own: a channel
+    /// that is up whether or not it is, and a run for a request that was never
+    /// pushed onto the link at all. A task put on a long link then sat there
+    /// until its own timeout ran out — `LOCAL_TASK_TIMEOUT`, minutes and not
+    /// seconds, and an answer that never came is what a first-package timeout
+    /// is for — and a link that drew a bad answer was never taken down, which
+    /// is the other thing a queue does with one.
+    ///
+    /// One hook per question and one map for every name, which is why these are
+    /// wired once and not when a link is made: a host that wires its own over
+    /// them does it after this call, and keeps them.
+    fn wire_longlink_channels(&mut self) {
+        let channels = Arc::clone(&self.channels);
+        self.longlink.set_make_sure_connected(move |name| {
+            let Some(link) = channel_of(&channels, name) else {
+                return false;
+            };
+            // `Monitor()->MakeSureConnected()`: the C++ reads the `bool` and
+            // throws the `newone` away, and so does this — a link that is
+            // connecting is not one a task goes out on yet.
+            let status = link.lock().unwrap_or_else(poisoned).make_sure_connected();
+            status == MakeSure::Connected
+        });
+
+        let channels = Arc::clone(&self.channels);
+        self.longlink.set_channel_profile(move |name| {
+            let Some(link) = channel_of(&channels, name) else {
+                return ConnectProfile::new();
+            };
+            let link = link.lock().unwrap_or_else(poisoned);
+            link.profile().clone()
+        });
+
+        let channels = Arc::clone(&self.channels);
+        self.longlink.set_send(move |name, task, body| {
+            let link = channel_of(&channels, name)?;
+            let mut link = link.lock().unwrap_or_else(poisoned);
+            // `Channel()->Send(...)`: the request goes on the link's own queue,
+            // and what writes it is the host's run of the link and not this
+            // call. `None` is a link that is not up, which leaves the task in
+            // the queue to be tried again.
+            if !link.send(task.clone(), body) {
+                return None;
+            }
+            // The run is named by the task, which is what the queue asks about
+            // it — the port's link has no run of its own to hand out, and
+            // `LongLink::Send` answers with whether it took the request.
+            Some(RunId(u64::from(task.taskid)))
+        });
+
+        let channels = Arc::clone(&self.channels);
+        self.longlink.set_stop(move |name, taskid| {
+            if let Some(link) = channel_of(&channels, name) {
+                let _ = link.lock().unwrap_or_else(poisoned).stop(taskid);
+            }
+        });
+
+        let channels = Arc::clone(&self.channels);
+        self.longlink.set_disconnect(move |name, code| {
+            if let Some(link) = channel_of(&channels, name) {
+                link.lock().unwrap_or_else(poisoned).disconnect(code);
+            }
+        });
+
+        let channels = Arc::clone(&self.channels);
+        self.longlink.set_reset_channel(move |name| {
+            // `RedoTasks`' own: the link is taken down with `kReset`, and made
+            // again by the next question a task asks of it. The connect is
+            // cancelled and the server's trigger taken off inside the link,
+            // which is where the C++ does both.
+            if let Some(link) = channel_of(&channels, name) {
+                link.lock()
+                    .unwrap_or_else(poisoned)
+                    .disconnect(DisconnectInternalCode::Reset);
+            }
+        });
     }
 
     //===------------------------------------------------------------------===//
@@ -683,7 +824,11 @@ impl NetCore {
             + Send
             + 'static,
     ) {
-        self.hooks.lock().unwrap_or_else(poisoned).task_callback = Some(Box::new(callback));
+        self.hooks
+            .lock()
+            .unwrap_or_else(poisoned)
+            .task_callback
+            .set(Box::new(callback));
     }
 
     /// `StnManager::OnTaskEnd`.
@@ -691,17 +836,29 @@ impl NetCore {
         &mut self,
         end: impl FnMut(u32, &str, ErrCmdType, i32, &ConnectProfile) -> i32 + Send + 'static,
     ) {
-        self.hooks.lock().unwrap_or_else(poisoned).on_task_end = Some(Box::new(end));
+        self.hooks
+            .lock()
+            .unwrap_or_else(poisoned)
+            .on_task_end
+            .set(Box::new(end));
     }
 
     /// `push_preprocess_signal_`.
     pub fn set_push_preprocess(&mut self, preprocess: impl FnMut(u32, &[u8]) + Send + 'static) {
-        self.hooks.lock().unwrap_or_else(poisoned).push_preprocess = Some(Box::new(preprocess));
+        self.hooks
+            .lock()
+            .unwrap_or_else(poisoned)
+            .push_preprocess
+            .set(Box::new(preprocess));
     }
 
     /// `StnManager::OnPush`.
     pub fn set_on_push(&mut self, push: impl FnMut(&str, u32, u32, &[u8]) + Send + 'static) {
-        self.hooks.lock().unwrap_or_else(poisoned).on_push = Some(Box::new(push));
+        self.hooks
+            .lock()
+            .unwrap_or_else(poisoned)
+            .on_push
+            .set(Box::new(push));
     }
 
     /// `StnManager::ReportTaskProfile` — the finished task, which the queue a
@@ -712,7 +869,8 @@ impl NetCore {
         self.hooks
             .lock()
             .unwrap_or_else(poisoned)
-            .report_task_profile = Some(Box::new(report));
+            .report_task_profile
+            .set(Box::new(report));
     }
 
     /// `StnManager::ReportTaskLimited` — a task the anti-avalanche gates
@@ -727,7 +885,8 @@ impl NetCore {
         self.hooks
             .lock()
             .unwrap_or_else(poisoned)
-            .report_task_limited = Some(Box::new(limited));
+            .report_task_limited
+            .set(Box::new(limited));
     }
 
     /// `NetCore::SetShortLinkOnTimeoutOrRemoteShutdown` — a try of the
@@ -742,7 +901,8 @@ impl NetCore {
         self.hooks
             .lock()
             .unwrap_or_else(poisoned)
-            .on_timeout_or_remote_shutdown = Some(Box::new(ended));
+            .on_timeout_or_remote_shutdown
+            .set(Box::new(ended));
     }
 
     /// `StnManager::ReportConnectStatus`.
@@ -879,6 +1039,29 @@ impl NetCore {
         self.zombie.lock().unwrap_or_else(poisoned)
     }
 
+    /// [`ZombieTaskManager::redo_tasks_at`] for the tasks of this core.
+    ///
+    /// The lock the accessor hands out is taken and let go around every step,
+    /// and not around the whole pass: what a redo does to a zombie is an app
+    /// callback — a task timed out is reported, one with time left is started
+    /// again — and an app that answers one by asking this core about its
+    /// tasks asks for the lock the pass would be holding, which on one thread
+    /// is a hang. Which of the two each zombie gets is still decided in one
+    /// pass under the lock, so the pass sees the same queue and the same
+    /// reading the C++'s does.
+    fn redo_zombies_at(&mut self, now: u64) {
+        let (redos, calls) = {
+            // Not `for … in self.zombie().plan_redo_at(now)`: a temporary in
+            // the head of a `for` lives until the loop ends, which is the
+            // lock this pass must not hold.
+            let mut zombie = self.zombie();
+            (zombie.plan_redo_at(now), zombie.callbacks())
+        };
+        for redo in redos {
+            calls.apply(redo);
+        }
+    }
+
     /// `net_source_`.
     pub fn net_source(&mut self) -> &mut NetSource {
         &mut self.net_source
@@ -922,6 +1105,7 @@ impl NetCore {
 
     /// The same, with the reading handed in.
     pub fn set_active_at(&mut self, now: u64, is_active: bool) {
+        self.active.store(is_active, Ordering::SeqCst);
         self.anti_avalanche().on_signal_active(is_active);
         self.timing_sync.on_active_changed_at(now, is_active);
     }
@@ -992,7 +1176,12 @@ impl NetCore {
         if let Some(process) = self.task_process.as_mut() {
             process(&mut task);
         }
-        prepare.end_process_hosts_time = now;
+        // The clock's own reading, and not the tick the task came in with:
+        // the difference of the two is what the C++ logs as the cost of its
+        // `task_process_hook_`, and a copy of `now` into both is a cost of
+        // zero however long the hook took. It is the same pair
+        // `DnsProfile::end_time` is the end of.
+        prepare.end_process_hosts_time = gettickcount();
 
         if task.channel_select == 0 {
             self.end_task_at(
@@ -1029,7 +1218,7 @@ impl NetCore {
         // link that is already up is not woken either. What the monitor makes
         // of the question is its own, ladder and all: this is the pass, not a
         // connect.
-        if self.use_long_link
+        if self.use_long_link()
             && task.channel_select & Task::CHANNEL_LONG != 0
             && self.long_link_is_down(&task.channel_name)
             && self.is_foreground()
@@ -1046,7 +1235,8 @@ impl NetCore {
         // `IsSvrTrigOff()` answers `false` whatever it was set to
         // (`longlink.h:172-176`).
         let foreground = self.is_foreground();
-        if self.use_long_link && task.channel_select & Task::CHANNEL_MINOR_LONG != 0 && foreground {
+        if self.use_long_link() && task.channel_select & Task::CHANNEL_MINOR_LONG != 0 && foreground
+        {
             let hosts = task.minorlong_host_list.clone();
             if let Some(host) = hosts.first().cloned() {
                 if !self.links.contains_key(&host) {
@@ -1073,7 +1263,7 @@ impl NetCore {
                 // task as it came in, so what a retry of it goes out on is
                 // whatever the app put there — for a task that put nothing,
                 // nowhere at all
-                if self.use_long_link {
+                if self.use_long_link() {
                     task.shortlink_fallback_hostlist = task.shortlink_host_list.clone();
                 }
                 self.shortlink.start_task_at(now, task, prepare)
@@ -1090,7 +1280,7 @@ impl NetCore {
             );
             return false;
         }
-        if self.use_long_link {
+        if self.use_long_link() {
             self.zombie().on_net_core_start_task_at(now);
         }
         true
@@ -1102,7 +1292,7 @@ impl NetCore {
     /// told not to use the long link asks neither of them, whatever is still
     /// queued on them from before.
     pub fn stop_task(&mut self, taskid: u32) -> bool {
-        if self.use_long_link {
+        if self.use_long_link() {
             if self.longlink.stop_task(taskid) {
                 return true;
             }
@@ -1126,7 +1316,7 @@ impl NetCore {
     /// not the same as forgetting those tasks, since `StopTask` and
     /// `ClearTasks` leave them where they are.
     pub fn has_task(&self, taskid: u32) -> bool {
-        if self.use_long_link {
+        if self.use_long_link() {
             let saved = self.zombie.lock().unwrap_or_else(poisoned).has_task(taskid);
             if saved || self.longlink.has_task(taskid) {
                 return true;
@@ -1137,13 +1327,24 @@ impl NetCore {
 
     /// `ClearTasks()` — the long link's and the zombies' only while the core
     /// uses one, which is the C++'s `if (need_use_longlink_)`; the short
-    /// link's are always cleared.
-    pub fn clear_tasks(&mut self) {
-        if self.use_long_link {
+    /// link's are always cleared. The ids of what that threw away are handed
+    /// back, because an await is only ever answered by the end of the task it
+    /// waits for: a queue emptied here is never going to end that task, so the
+    /// await is answered as cancelled, or it stays `Pending` for the life of
+    /// the process. A queue this does *not* empty — the long link's and the
+    /// zombies' when the core was told not to use one — still ends its tasks
+    /// on a later pass, and the answer those ends carry is the true one: a
+    /// task that is still going to succeed is not one to answer as cancelled.
+    pub fn clear_tasks(&mut self) -> Vec<u32> {
+        let mut cleared = self.shortlink.task_ids();
+        self.shortlink.clear_tasks();
+        if self.use_long_link() {
+            cleared.extend(self.longlink.task_ids());
             self.longlink.clear_tasks();
+            cleared.extend(self.zombie().task_ids());
             self.zombie().clear_tasks();
         }
-        self.shortlink.clear_tasks();
+        cleared
     }
 
     /// `RedoTasks()` — every task that was out is cancelled and tried again.
@@ -1154,9 +1355,9 @@ impl NetCore {
     /// The same, with the reading handed in.
     pub fn redo_tasks_at(&mut self, now: u64) {
         self.net_source.clear_cache();
-        if self.use_long_link {
+        if self.use_long_link() {
             self.longlink.redo_tasks_at(now);
-            self.zombie().redo_tasks_at(now);
+            self.redo_zombies_at(now);
         }
         self.shortlink.redo_tasks_at(now);
     }
@@ -1184,7 +1385,7 @@ impl NetCore {
         // the queues hold the same timeout the core does, so one reset is the
         // C++'s `dynamic_timeout_->ResetStatus()`
         self.dynamic_timeout.reset();
-        if self.use_long_link {
+        if self.use_long_link() {
             self.timing_sync.on_network_change_at(now);
             // the C++'s `longlink_task_manager_->OnNetworkChange()` asks each
             // channel's own monitor, which drops the link and asks for a new
@@ -1199,10 +1400,10 @@ impl NetCore {
                     .get_mut(&name)
                     .is_some_and(|meta| meta.monitor().network_change_at(now));
                 if changed {
-                    self.longlink.redo_tasks_of_at(now, &name);
+                    self.longlink.redo_tasks_of_at(now, Some(&name));
                 }
             }
-            self.zombie().redo_tasks_at(now);
+            self.redo_zombies_at(now);
         }
         self.shortlink.redo_tasks_at(now);
         self.shortlink_try_flag = false;
@@ -1222,7 +1423,7 @@ impl NetCore {
     ) {
         self.shortlink
             .retry_tasks_at(now, err_type, err_code, handle, src_taskid);
-        if self.use_long_link {
+        if self.use_long_link() {
             self.longlink
                 .retry_tasks_at(now, err_type, err_code, handle, src_taskid, user_id);
         }
@@ -1234,7 +1435,7 @@ impl NetCore {
         if channel_select == Task::CHANNEL_SHORT {
             return self.shortlink.connect_profile(taskid).unwrap_or_default();
         }
-        if self.use_long_link
+        if self.use_long_link()
             && (channel_select == Task::CHANNEL_LONG
                 || channel_select == Task::CHANNEL_MINOR_LONG
                 || channel_select == Task::CHANNEL_BOTH)
@@ -1431,10 +1632,16 @@ impl NetCore {
             // itself, and the zombie check arms its own next alarm.
             self.shortlink.run_loop_at(now);
             self.longlink.run_loop_at(now);
-            self.zombie
-                .lock()
-                .unwrap_or_else(poisoned)
-                .on_timer_check_at(now);
+            // The check plans and applies like [`Self::redo_zombies_at`] does:
+            // what it does to a zombie is an app callback, and the lock the
+            // queue is kept behind is not to be held across one.
+            let (redos, calls) = {
+                let mut zombie = self.zombie.lock().unwrap_or_else(poisoned);
+                (zombie.plan_timer_check_at(now), zombie.callbacks())
+            };
+            for redo in redos {
+                calls.apply(redo);
+            }
             if self.timing_sync.due_time().is_some_and(|due| due <= now) {
                 self.timing_sync.on_alarm_at(now);
             }
@@ -1474,7 +1681,7 @@ impl NetCore {
         call_back(
             &Arc::clone(&self.hooks),
             &Arc::clone(&self.zombie),
-            self.use_long_link,
+            self.use_long_link(),
             now,
             from,
             err_type,
@@ -1495,16 +1702,14 @@ impl NetCore {
         err_code: i32,
         profile: &ConnectProfile,
     ) -> i32 {
-        match self
+        let end = self
             .hooks
             .lock()
             .unwrap_or_else(poisoned)
             .on_task_end
-            .as_mut()
-        {
-            Some(end) => end(task.taskid, &task.user_id, err_type, err_code, profile),
-            None => 0,
-        }
+            .clone();
+        end.run(|end| end(task.taskid, &task.user_id, err_type, err_code, profile))
+            .unwrap_or(0)
     }
 
     /// `__OnLongLinkNetworkError(...)` — the diagnosis is told, the app is told
@@ -1519,7 +1724,7 @@ impl NetCore {
         ip: &str,
         port: u16,
     ) {
-        if !self.use_long_link || self.released {
+        if !self.use_long_link() || self.released {
             return;
         }
         let continuous_fail = self.longlink.tasks_continuous_fail_count();
@@ -1538,7 +1743,7 @@ impl NetCore {
         }
 
         if err_type == ErrCmdType::Ok {
-            self.zombie().redo_tasks_at(now);
+            self.redo_zombies_at(now);
         }
 
         // `kEctDial`, `kEctHttp`, `kEctServer` and `kEctLocal` are not about
@@ -1584,8 +1789,8 @@ impl NetCore {
         }
         self.conn_status_call_back();
 
-        if self.use_long_link && err_type == ErrCmdType::Ok {
-            self.zombie().redo_tasks_at(now);
+        if self.use_long_link() && err_type == ErrCmdType::Ok {
+            self.redo_zombies_at(now);
         }
 
         if matches!(
@@ -1614,12 +1819,12 @@ impl NetCore {
 
     /// The same, with the reading handed in.
     pub fn on_longlink_status_changed_at(&mut self, now: u64, status: LongLinkStatus) {
-        if !self.use_long_link {
+        if !self.use_long_link() {
             return;
         }
         self.timing_sync.on_longlink_status_changed_at(now, status);
         if status == LongLinkStatus::Connected {
-            self.zombie().redo_tasks_at(now);
+            self.redo_zombies_at(now);
         }
         self.conn_status_call_back();
         if let Some(change) = self.on_longlink_status_change.as_mut() {
@@ -1634,7 +1839,7 @@ impl NetCore {
         // a core that does not use the long link has nothing to ask: the app's
         // answer is the short link's, and the long link stays "nothing has
         // tried yet"
-        if !self.use_long_link {
+        if !self.use_long_link() {
             let all = match self.shortlink_error_count {
                 count if count >= SHORTLINK_ERR_TIME => NetStatus::ServerFailed,
                 _ => NetStatus::Connected,
@@ -1700,7 +1905,7 @@ impl NetCore {
     /// metadata around it. [`None`] is a core that does not use the long link,
     /// or a config the factory would not make one for.
     pub fn create_long_link(&mut self, config: LonglinkConfig) -> Option<Arc<Mutex<LongLink>>> {
-        if !self.use_long_link {
+        if !self.use_long_link() {
             return None;
         }
         let name = config.name.clone();
@@ -1711,6 +1916,12 @@ impl NetCore {
         let link = self.factory.create_longlink(&config);
         let meta = LongLinkMetaData::new(config.clone(), link);
         self.links.insert(name.clone(), meta);
+        // and the queue's way of reaching it, which is the same name in the
+        // map its channel hooks were wired with
+        self.channels.lock().unwrap_or_else(poisoned).insert(
+            name.clone(),
+            Arc::clone(self.links.get(&name).expect("the link just made").channel()),
+        );
         if config.is_main() {
             self.default_link = Some(name.clone());
         }
@@ -1729,11 +1940,12 @@ impl NetCore {
 
     /// The same, with the reading handed in.
     pub fn destroy_long_link_at(&mut self, now: u64, name: &str) -> bool {
-        if !self.use_long_link || !self.links.contains_key(name) {
+        if !self.use_long_link() || !self.links.contains_key(name) {
             return false;
         }
         self.longlink.remove_long_link_at(now, name);
         self.links.remove(name);
+        self.channels.lock().unwrap_or_else(poisoned).remove(name);
         if self.default_link.as_deref() == Some(name) {
             self.default_link = None;
         }
@@ -1838,7 +2050,7 @@ impl NetCore {
         taskid: u32,
         code: DisconnectInternalCode,
     ) -> bool {
-        if !self.use_long_link {
+        if !self.use_long_link() {
             return false;
         }
         self.longlink.disconnect_by_taskid(taskid, code)
@@ -1870,26 +2082,51 @@ impl NetCore {
             .set_ip_connect_timeout(v4_timeout, v6_timeout);
     }
 
-    /// `SetNeedUseLongLink(flag)` — and the wiring that goes with it: the
-    /// queues' callbacks are the ones that decide whether a task is saved as a
-    /// zombie.
+    /// `SetNeedUseLongLink(flag)` — `need_use_longlink_ = flag`
+    /// (`net_core.cc:1316`), and nothing else: the flag is shared, so the
+    /// callbacks the queues hold read the new one the next time they run.
     pub fn set_need_use_long_link(&mut self, use_long_link: bool) {
-        self.use_long_link = use_long_link;
-        self.wire();
+        self.use_long_link.store(use_long_link, Ordering::Relaxed);
     }
 
     /// `UseLongLink()`.
     pub fn use_long_link(&self) -> bool {
-        self.use_long_link
+        self.use_long_link.load(Ordering::Relaxed)
     }
 
     /// `ReleaseNet()` — the tasks are dropped and the links are gone.
-    pub fn release(&mut self) {
-        self.clear_tasks();
+    ///
+    /// The ids of what that threw away are handed back, the way
+    /// [`NetCore::clear_tasks`] hands them back and for the same reason: a
+    /// queue emptied here is never going to end those tasks, so an await of
+    /// one of them is answered as cancelled by whoever holds the awaits, or
+    /// stays `Pending` for the life of the process. [`crate::StnLogic::release`] is
+    /// that caller.
+    pub fn release(&mut self) -> Vec<u32> {
+        let mut cleared = self.clear_tasks();
+        // The follow-ups go as well, and the task of a `Start` is reported
+        // like one a queue held: a zombie that is going to be started again
+        // is in no queue yet, so `clear_tasks` did not see it, and the
+        // follow-up is never run after this — a released core starts nothing,
+        // so what it would have done is drop the task without ending it.
+        let follow_ups: Vec<FollowUp> = self
+            .pending
+            .lock()
+            .unwrap_or_else(poisoned)
+            .drain(..)
+            .collect();
+        cleared.extend(follow_ups.iter().filter_map(|follow_up| match follow_up {
+            FollowUp::Start(task) => Some(task.taskid),
+            FollowUp::Retry { .. }
+            | FollowUp::LongLinkError { .. }
+            | FollowUp::ShortLinkError { .. } => None,
+        }));
         self.links.clear();
+        self.channels.lock().unwrap_or_else(poisoned).clear();
         self.default_link = None;
         self.timing_sync.cancel();
         self.released = true;
+        cleared
     }
 
     /// `IsAlreadyRelease()`.
@@ -1905,7 +2142,7 @@ impl NetCore {
     /// is a `nullptr` too: in both cases the C++ asks no question of the
     /// network and lets the task out.
     fn long_link_is_down(&self, name: &str) -> bool {
-        self.use_long_link
+        self.use_long_link()
             && self.long_link(name).is_some_and(|link| {
                 link.lock().unwrap_or_else(poisoned).connect_status() != LongLinkStatus::Connected
             })
@@ -1990,7 +2227,7 @@ impl NetCore {
             longlink_ok = false;
         }
 
-        if !self.use_long_link {
+        if !self.use_long_link() {
             return Task::CHANNEL_SHORT;
         }
 
@@ -2047,7 +2284,7 @@ impl Default for NetCore {
 impl std::fmt::Debug for NetCore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NetCore")
-            .field("use_long_link", &self.use_long_link)
+            .field("use_long_link", &self.use_long_link())
             .field("released", &self.released)
             .field("default_link", &self.default_link)
             .field("links", &self.links.keys().collect::<Vec<_>>())
@@ -2140,14 +2377,12 @@ fn anti_avalanche_check(
     // the app answers is the out-value of the C++'s `unsigned int&`, and the
     // C++ does not read it either — `Check` is `void` there and answers
     // `false` once a gate refused, so the gate's answer stands.
-    if let Some(report) = hooks
+    let report = hooks
         .lock()
         .unwrap_or_else(poisoned)
         .report_task_limited
-        .as_mut()
-    {
-        let _answered = report(kind.as_check_type(), task, param);
-    }
+        .clone();
+    let _answered = report.run(|report| report(kind.as_check_type(), task, param));
     false
 }
 
@@ -2168,11 +2403,9 @@ fn call_back(
     profile: &ConnectProfile,
 ) -> i32 {
     {
-        let mut hooks = hooks.lock().unwrap_or_else(poisoned);
-        if let Some(callback) = hooks.task_callback.as_mut() {
-            if callback(from, err_type, err_code, handle, task) == 0 {
-                return 0;
-            }
+        let callback = hooks.lock().unwrap_or_else(poisoned).task_callback.clone();
+        if callback.run(|callback| callback(from, err_type, err_code, handle, task)) == Some(0) {
+            return 0;
         }
     }
 
@@ -2245,10 +2478,9 @@ fn end_task(
     err_code: i32,
     profile: &ConnectProfile,
 ) -> i32 {
-    match hooks.lock().unwrap_or_else(poisoned).on_task_end.as_mut() {
-        Some(end) => end(task.taskid, &task.user_id, err_type, err_code, profile),
-        None => 0,
-    }
+    let end = hooks.lock().unwrap_or_else(poisoned).on_task_end.clone();
+    end.run(|end| end(task.taskid, &task.user_id, err_type, err_code, profile))
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -3098,6 +3330,55 @@ mod tests {
     }
 
     #[test]
+    fn a_redo_calls_the_app_with_the_zombie_queue_unlocked() {
+        let (mut core, _rec) = wired();
+        up(&core, LongLinkStatus::Connected);
+        core.longlink()
+            .set_buf2resp(|_task, _body, _channel| (9, TaskFailHandleType::TaskTimeout));
+        let mut doomed = task(7);
+        doomed.total_timeout = 50;
+        assert!(core.start_task_at(NOW, doomed));
+        core.longlink()
+            .on_response_at(NOW + 10, long_answer(7, profile_of("1.2.3.4")));
+        assert_eq!(core.zombie().len(), 1);
+
+        // An app that answers a failure by asking the core about its tasks
+        // asks for the lock the pass is holding, and a mutex taken twice on
+        // one thread never lets go: that is a hang and not a failure, so the
+        // callback asks the way `try_lock` does and the answer is what is
+        // read here.
+        let zombie = Arc::clone(&core.zombie);
+        let answers = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&answers);
+        core.set_task_callback(move |from, _err_type, _err_code, _handle, _task| {
+            if from == CallFrom::Zombie {
+                record
+                    .lock()
+                    .unwrap_or_else(poisoned)
+                    .push(zombie.try_lock().is_ok());
+            }
+            1
+        });
+
+        // the reading a zombie was saved at is the clock's own, which
+        // `call_back` reads for itself, so the reading the redo is handed has
+        // to be one that is past the deadline and not one of the test's
+        let later = gettickcount().saturating_add(1_000);
+        core.redo_tasks_at(later);
+
+        assert_eq!(
+            *answers.lock().unwrap_or_else(poisoned),
+            vec![true],
+            "the app is called with the zombie queue unlocked, so an app that comes back into the core is not hung"
+        );
+        assert_eq!(
+            core.zombie().len(),
+            0,
+            "the deadline ran out, so the task was failed instead of kept"
+        );
+    }
+
+    #[test]
     fn a_zombie_that_ends_is_not_saved_again() {
         let (mut core, rec) = wired();
         let task = task(7);
@@ -3526,13 +3807,19 @@ mod tests {
             .create_long_link(LonglinkConfig::new("second"))
             .is_none());
         assert!(core.long_link(MAIN).is_none());
-        // the same config twice does not make two links
+        // the same config twice does not make two links: what comes back the
+        // second time is the link itself, and not a second one that happens
+        // to be in the state the first is in
         let mut core = NetCore::new_at(NOW);
-        let first = core.create_long_link(LonglinkConfig::new("second"));
-        let again = core.create_long_link(LonglinkConfig::new("second"));
-        assert_eq!(
-            first.map(|link| link.lock().unwrap_or_else(poisoned).connect_status()),
-            again.map(|link| link.lock().unwrap_or_else(poisoned).connect_status())
+        let first = core
+            .create_long_link(LonglinkConfig::new("second"))
+            .expect("the link");
+        let again = core
+            .create_long_link(LonglinkConfig::new("second"))
+            .expect("the link");
+        assert!(
+            Arc::ptr_eq(&first, &again),
+            "a name the core has a link for is answered with that link"
         );
         assert_eq!(core.longlink().channels().len(), 2);
     }
@@ -3550,6 +3837,36 @@ mod tests {
         assert!(rec.status().is_empty());
         assert!(rec.long_err().is_empty());
         assert!(rec.short_err().is_empty());
+    }
+
+    /// A task that is going to be started again is a task of its own, and it
+    /// is not in a queue: it is a follow-up, and a core that is released runs
+    /// none of those — so the id has to come out of the release, or the await
+    /// of that task never hears the end it is waiting for.
+    #[test]
+    fn a_release_reports_the_task_a_follow_up_was_going_to_start() {
+        let (mut core, _rec) = wired();
+        up(&core, LongLinkStatus::Connected);
+        core.longlink()
+            .set_buf2resp(|_task, _body, _channel| (9, TaskFailHandleType::TaskTimeout));
+        assert!(core.start_task_at(NOW, task(7)));
+        core.longlink()
+            .on_response_at(NOW + 100, long_answer(7, profile_of("1.2.3.4")));
+        assert_eq!(core.zombie().len(), 1);
+
+        // what the host would have run: the link came back, so the zombie is
+        // taken out of the queue and posted to be started again — the task is
+        // in the follow-ups and in no queue
+        core.on_longlink_status_changed_at(NOW + 500, LongLinkStatus::Connected);
+        assert!(core.has_pending());
+        assert_eq!(core.zombie().len(), 0);
+
+        assert_eq!(core.release(), vec![7]);
+        assert!(!core.has_pending());
+        // and the core starts nothing of what is left behind
+        core.run_pending_at(NOW + 600);
+        assert!(!core.has_task(7));
+        assert_eq!(core.zombie().len(), 0);
     }
 
     #[test]
@@ -3704,20 +4021,117 @@ mod tests {
     #[test]
     fn the_active_signal_moves_the_sync_and_not_only_the_avalanche() {
         let (mut core, _rec) = wired();
-        core.timing_sync().set_is_active(|| true);
         core.timing_sync().set_is_logoned(|| true);
 
         // `ActiveLogic::SignalActive` has two listeners in the C++, and the
-        // anti-avalanche check was the only one that heard it here
+        // anti-avalanche check was the only one that heard it here: the sync
+        // reads `IsActive()` for itself, so it is the signal that tells it
         core.set_active_at(NOW, true);
         assert_eq!(
             core.timing_sync().due_time(),
             Some(NOW + ACTIVE_SYNC_INTERVAL)
         );
+        // ... and the alarm that fires after the signal has gone quiet is
+        // the one that reads the flag for itself, which is what makes the
+        // wiring and not only the signal worth testing: an app that went to
+        // the background keeps waiting the short time until it is asked again
+        // if the sync is the only thing that ever heard of it
+        let fired = core.timing_sync().on_alarm_at(NOW + ACTIVE_SYNC_INTERVAL);
+        assert_eq!(fired, NOW + ACTIVE_SYNC_INTERVAL + ACTIVE_SYNC_INTERVAL);
+
         core.set_active_at(NOW + 1_000, false);
         assert_eq!(
             core.timing_sync().due_time(),
             Some(NOW + 1_000 + INACTIVE_SYNC_INTERVAL)
+        );
+        let fired = core
+            .timing_sync()
+            .on_alarm_at(NOW + 1_000 + INACTIVE_SYNC_INTERVAL);
+        assert_eq!(
+            fired,
+            NOW + 1_000 + INACTIVE_SYNC_INTERVAL + INACTIVE_SYNC_INTERVAL
+        );
+    }
+
+    /// `ActiveLogic::IsActive()` is what the net source asks before it makes a
+    /// host list, and it is the same flag: an app the core was told is active
+    /// gets a list made the long way, and one it was told is not gets the
+    /// pairs shared out over the hosts — the background list, however long the
+    /// app is in front.
+    ///
+    /// A core that was told nothing is the foreground case and not the
+    /// background one: `ActiveLogic` is active until ten minutes in the
+    /// background end it, so an app that never moved is one the long list is
+    /// made for.
+    #[test]
+    fn an_active_app_is_one_the_net_source_makes_the_foreground_list_for() {
+        let (mut core, _rec) = wired();
+        core.net_source().set_longlink(
+            vec!["long.example".to_string(), "long2.example".to_string()],
+            vec![80],
+            "",
+        );
+        core.net_source().set_new_dns(|host, _, _| match host {
+            "long.example" => vec![
+                "1.1.1.1".to_string(),
+                "1.1.1.2".to_string(),
+                "1.1.1.3".to_string(),
+                "1.1.1.4".to_string(),
+                "1.1.1.5".to_string(),
+            ],
+            _ => vec![
+                "2.2.2.1".to_string(),
+                "2.2.2.2".to_string(),
+                "2.2.2.3".to_string(),
+                "2.2.2.4".to_string(),
+                "2.2.2.5".to_string(),
+            ],
+        });
+        core.net_source().set_random(|_bound| 0);
+
+        let config = LonglinkConfig::new(MAIN);
+        // a core nobody told anything, and then the two answers in turn
+        let untold = core.net_source().get_longlink_items(&config);
+        core.set_active_at(NOW, false);
+        let background = core.net_source().get_longlink_items(&config);
+        core.set_active_at(NOW, true);
+        let foreground = core.net_source().get_longlink_items(&config);
+
+        // five pairs a host while the app is in front — and one more, which
+        // is the `merge_type_count` ladder letting the second host in once
+        // the first has filled the list — against four shared out between
+        // them behind it
+        assert_eq!(untold.len(), 6, "an app that never went inactive");
+        assert_eq!(background.len(), 4, "the quota shared out over two hosts");
+        assert_eq!(foreground.len(), 6, "five from one host, and one more");
+    }
+
+    /// The two readings the C++ logs the difference of as the cost of its
+    /// `task_process_hook_`: the end is a second reading of the clock and not
+    /// a copy of the tick the task was asked at, which would be a cost of
+    /// zero whatever the hook did.
+    #[test]
+    fn the_end_of_the_hosts_hook_is_the_clock_and_not_the_tick_it_began_at() {
+        let (mut core, _rec) = wired();
+        core.set_task_process(|_task| {});
+
+        let mut only_short = task(11);
+        only_short.channel_select = Task::CHANNEL_SHORT;
+        let before = gettickcount();
+        assert!(core.start_task_at(NOW, only_short));
+        let after = gettickcount();
+
+        let tasks = core.shortlink().tasks();
+        assert_eq!(tasks.len(), 1, "the task went out on the short link");
+        let prepare = &tasks[0].prepare_profile;
+        assert_eq!(
+            prepare.begin_process_hosts_time, NOW,
+            "the tick the task was asked at"
+        );
+        assert!(
+            (before..=after).contains(&prepare.end_process_hosts_time),
+            "the end is a reading taken while the hook ran, and not {NOW}: {}",
+            prepare.end_process_hosts_time
         );
     }
 
@@ -3870,28 +4284,98 @@ mod tests {
         }
     }
 
+    /// The setters that are a line of forwarding: what they have to reach is
+    /// the piece the C++'s own is a method of — the short link, the long link,
+    /// the net source — and not a field of the core's own that nothing reads.
+    /// A call with nothing asserted after it is a call that passes whether the
+    /// setter forwards or does nothing at all.
     #[test]
     fn the_setters_reach_the_pieces_they_are_for() {
-        let (mut core, _rec) = wired();
+        let (mut core, rec) = wired();
         core.set_debug_host(SHORT_HOST);
-        core.forbid_longlink_tls_host(&[SHORT_HOST.to_string()]);
-        core.add_server_ban("1.2.3.4");
-        core.init_history_to_banned_list();
+        assert_eq!(
+            core.shortlink().debug_host(),
+            SHORT_HOST,
+            "the short link's own, and not a host of the core's"
+        );
+
+        // a host the C++'s `__ForbidUseTls` takes a long-link one for, which
+        // is what the name it is given has to have in it
+        core.forbid_longlink_tls_host(&[MAIN.to_string()]);
+        assert!(core.longlink().forbid_tls(&[MAIN.to_string()]));
+
         core.set_ip_connect_timeout(1000, 2000);
+        assert_eq!(core.net_source().ip_connect_timeout(), (1000, 2000));
+
         core.set_packer_encoder(3, "encoder");
         assert_eq!(core.packer_encoder_version(), 3);
         assert_eq!(core.packer_encoder_name(), "encoder");
 
+        // `MakeSureLongLinkConnected` is the link's own question and not one
+        // the core answers: what the core has to do is reach the link the
+        // name is for, and what reaching it does is start a run on it. A
+        // second run is not started while one is in flight, so the default
+        // link's turn is told apart by the scene a disconnect left on it,
+        // which is one a new run clears.
+        let link = Arc::clone(core.long_link(MAIN).expect("the default link"));
+        assert!(!link.lock().unwrap_or_else(poisoned).is_running());
+        core.make_sure_long_link_connected(MAIN);
+        assert!(link.lock().unwrap_or_else(poisoned).is_running());
+
+        // the default link's turn, which a run still in flight would make
+        // the same answer as the first: what tells them apart is the scene
+        // a disconnect left on it, which a new run clears
+        {
+            let mut link = link.lock().unwrap_or_else(poisoned);
+            link.disconnect(DisconnectInternalCode::Reset);
+            link.end_run();
+            assert!(link.disconnect_code().is_set());
+        }
+        core.make_sure_default_long_link_connected();
+        assert_eq!(
+            link.lock().unwrap_or_else(poisoned).disconnect_code(),
+            DisconnectInternalCode::None,
+            "the default link was not asked"
+        );
+
         up(&core, LongLinkStatus::Connected);
         assert!(core.start_task_at(NOW, task(7)));
         assert!(core.disconnect_long_link_by_taskid(7, DisconnectInternalCode::Reset));
-        core.make_sure_long_link_connected(MAIN);
-        core.make_sure_default_long_link_connected();
-        core.keep_signal_at(NOW);
-        core.stop_signal();
-        core.keep_signal();
+
+        assert!(core.start_task_at(NOW, task(8)));
+
+        // `RedoTasks` cancels every task that is out, which is a task that
+        // went out a second time only if the app asks for it again — what
+        // the core does on its own is end it. The reading is one that is
+        // past the deadline, because the reading a zombie was saved at is
+        // the clock's own and not one of the test's.
+        let later = gettickcount().saturating_add(1_000);
+        core.redo_tasks_at(later);
+        assert!(
+            rec.ended()
+                .iter()
+                .any(|(taskid, _, err_type, _, _)| *taskid == 8 && *err_type == ErrCmdType::Local),
+            "a redo cancelled nothing: {:?}",
+            rec.ended()
+        );
+
+        // `TouchTasks` is the look that ends a task whose time is up.
+        let mut brief = task(9);
+        brief.total_timeout = 50;
+        assert!(core.start_task_at(NOW, brief));
         core.touch_tasks_at(NOW + 100);
-        core.redo_tasks_at(NOW + 100);
+        assert!(
+            rec.ended().iter().any(|(taskid, ..)| *taskid == 9),
+            "a touch ended nothing: {:?}",
+            rec.ended()
+        );
+
+        // The two that are the net source's are the net source's own, and
+        // what they do to a list is `tests/net_source.rs`'s and
+        // `tests/simple_ipport_sort.rs`'s to say: here they are the calls
+        // `NetCore` forwards rather than keeps to itself.
+        core.add_server_ban("1.2.3.4");
+        core.init_history_to_banned_list();
     }
 
     #[test]

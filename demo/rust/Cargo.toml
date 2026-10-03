@@ -23,8 +23,9 @@ description = "The Rust demo of mars-rs: write a .xlog file and read it back"
 [dependencies]
 # The logging half of the port, by path and not by version: the demo is built
 # beside the port and is meant to be read next to it, so it compiles against
-# the tree it sits in rather than against whatever crates.io has. An app
-# outside this repository writes the line the docs give instead —
-# `cargo add marsrs-xlog`, which is this same crate from crates.io, or
-# `cargo add marsrs` for the whole port (xlog, STN and SDT) over it.
+# the tree it sits in rather than against a published crate. An app outside
+# this repository writes the line the docs give instead — today that is the
+# tag, `marsrs-xlog = { git = "https://github.com/orangeboyChen/mars-rs",
+# tag = "v0.1.0-alpha.3" }`, because the crate is not on crates.io yet;
+# `marsrs` is the same line for the whole port (xlog, STN and SDT).
 marsrs-xlog = { path = "../../crates/marsrs-xlog" }

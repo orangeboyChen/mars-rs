@@ -89,7 +89,11 @@ impl SpinLock {
             .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
-            spins += 1;
+            // Saturation, and not `+= 1`: the count only ever decides
+            // whether to spin or to yield, so a thread that has failed
+            // `u32::MAX` times keeps yielding — where an overflow is a
+            // panic in a debug build, in the middle of taking a lock.
+            spins = spins.saturating_add(1);
             if spins < 16 {
                 std::hint::spin_loop();
             } else {
@@ -271,12 +275,6 @@ impl Drop for MutexVectorGuard<'_> {
     }
 }
 
-/// `comm::Thread` — a named thread with an optional delayed or periodic start.
-///
-/// The C++ keeps a reference-counted `RunnableReference` so the target can be
-/// replaced between runs; the port takes the closure at start time, which is
-/// what every caller in mars actually does (`Thread(boost::bind(...), "name")`
-/// or `thread.start(op)`).
 /// Clears the `running` flag when the thread body ends, however it ends.
 ///
 /// A panicking callback unwinds past everything after it in the body, so the
@@ -290,6 +288,12 @@ impl Drop for RunningGuard {
     }
 }
 
+/// `comm::Thread` — a named thread with an optional delayed or periodic start.
+///
+/// The C++ keeps a reference-counted `RunnableReference` so the target can be
+/// replaced between runs; the port takes the closure at start time, which is
+/// what every caller in mars actually does (`Thread(boost::bind(...), "name")`
+/// or `thread.start(op)`).
 #[derive(Debug)]
 pub struct Thread {
     name: Option<String>,
@@ -442,14 +446,18 @@ impl Thread {
     }
 }
 
-/// What a delayed or periodic start waits on: the flag [`Thread::cancel_after`]
-/// and [`Thread::cancel_periodic`] set, and the condition the waiter sleeps
-/// on — the C++'s `condtime`.
-///
 /// The wait is one `wait_timeout` on a [`Condition`] and not a run of short
 /// sleeps, which is what a start thirty seconds from now used to cost: a
 /// wake-up every millisecond, thirty thousand of them, and a cancellation
 /// that went unnoticed for up to a millisecond after it was asked for.
+///
+/// A thousand years: what [`CancelSignal::wait`] waits for when the wait it
+/// was asked for does not fit in an [`Instant`].
+const UNREACHABLE_WAIT: Duration = Duration::from_secs(60 * 60 * 24 * 365 * 1000);
+
+/// What a delayed or periodic start waits on: the flag [`Thread::cancel_after`]
+/// and [`Thread::cancel_periodic`] set, and the condition the waiter sleeps
+/// on — the C++'s `condtime`.
 #[derive(Debug)]
 struct CancelSignal {
     cancelled: AtomicBool,
@@ -469,7 +477,12 @@ impl CancelSignal {
     /// `false` when the wait was cancelled, whether that happened before it
     /// began or while it was being waited out.
     fn wait(&self, duration: Duration) -> bool {
-        let deadline = Instant::now() + duration;
+        // `Instant` has a ceiling, and `now + duration` past it panics rather
+        // than overflowing: a wait that far out is a wait nothing outlives, so
+        // it is put where the clock can hold it instead.
+        let deadline = Instant::now()
+            .checked_add(duration)
+            .unwrap_or_else(|| Instant::now() + UNREACHABLE_WAIT);
         // The flag is read under the lock, and a canceller takes the lock
         // before it notifies: a cancel that lands between the read and the
         // wait is therefore one the wait knows about before it sleeps.

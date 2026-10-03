@@ -40,14 +40,16 @@ native 一侧在 Android 上倒是带着 STN —— 整个移植的那个 AAR �
 2. **发起一个任务。** 它被接过去，挑一条链路，放进队列，调用立刻返回。Rust 里
    `stn.send(task, body)` 还会把任务的回答交回来，可以 await。
 3. **驱动队列。** 本该是一个线程的地方，是 App 的一对调用 —— `run_pending()`，以及
-   告诉它这一趟最多还能等多久的 `due_time()`。Rust 里一个调用就把这一对跑起来：
+   告诉它这一趟最多还能等多久的 `due_delay()`。Rust 里一个调用就把这一对跑起来：
    `Driver::spawn(stn)` 起这个 crate 的一个线程排空队列，直到 `Driver` 被 drop。
    每个平台上，一个发起了却从没排空的任务都会待在它的队列里。
 
 ## Rust
 
 ```bash
-cargo add marsrs          # 整个移植：xlog、stn、sdt
+# 这个 crate 还没上 crates.io —— 发布还在进行中 —— 所以 Rust 应用现在从
+# tag 上取：只写 `cargo add marsrs` 是解析不到东西的。
+cargo add marsrs --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
 ```
 
 ```rust
@@ -167,7 +169,7 @@ profile 和报告。
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
+.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0-alpha.3")
 
 // 在要用的 target 里：
 .product(name: "MarsRSNet", package: "mars-rs")   // 要两半都有就 MarsRS
@@ -182,7 +184,7 @@ MarsStn.setApp { question in
     case .req2Buf:  return .encoded(try! encode(question.task!))
     case .buf2Resp: handle(question.body); return .decoded(errorCode: 0, handle: .normal)
     case .onTaskEnd: return .ended(errorCode: 0)
-    default:        return .nothing
+    default:        return .nothing()
     }
 }
 
@@ -252,7 +254,7 @@ decodedWithErrorCode:handle:]` —— 而不是对“带值的 case”做 switch
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")   // 只有 xlog 的那个没有
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0-alpha.3")   // 只有 xlog 的那个没有
 ```
 
 ```kotlin
@@ -304,7 +306,7 @@ interface，所以那个对象要 App 自己补完。
 
 ```kotlin
 // 共享模块的 build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")   // 不是 xlog-kmp
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0-alpha.3")   // 不是 xlog-kmp
 ```
 
 ```kotlin
@@ -357,7 +359,7 @@ Android 上走 JNI 桥，每个 Kotlin/Native target 上通过 cinterop 走 C AB
 `common` 声明只能是两者都能说出来的东西：Android 上那座桥自己回答十八个问题里的
 五个，所以 `setApp` 在那里只接到十三个，在 Kotlin/Native 上是全部十八个。
 
-## The C ABI {#c-abi}
+## C ABI {#c-abi}
 
 ```text
 marsrs-<version>-<host>.tar.gz   （Linux、macOS）

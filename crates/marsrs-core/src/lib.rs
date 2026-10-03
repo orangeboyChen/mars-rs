@@ -1,15 +1,18 @@
 //! `marsrs-core` — foundation primitives for the Rust port of Mars xlog.
 //!
-//! This crate is a faithful, dependency-free port of the byte-buffer types in
-//! `mars/comm` that the xlog pipeline is built on:
+//! This crate is a faithful port of the byte-buffer types in `mars/comm` that
+//! the xlog pipeline is built on:
 //!
 //! | C++                        | Rust                              |
 //! |----------------------------|-----------------------------------|
 //! | `mars::comm::PtrBuffer`    | [`ptrbuffer::PtrBuffer`]          |
 //! | `mars::comm::AutoBuffer`   | [`autobuffer::AutoBuffer`]        |
 //!
-//! Keeping these in a leaf crate means the compression, crypto and appender
-//! layers can be ported (and reviewed) independently.
+//! and of the wall-clock the appender reads when it names a file
+//! ([`localtime`]) — which is why the crate is not dependency-free: `chrono`
+//! is what `LocalTime` is worked out with. Keeping these in a leaf crate means
+//! the compression, crypto and appender layers can be ported (and reviewed)
+//! independently.
 
 #![deny(unsafe_code)]
 
@@ -65,6 +68,12 @@ mod tests {
         let mut buf = [0u8; 8];
         write_u16(&mut buf, 0, 0x1234);
         write_u32(&mut buf, 2, 0xdead_beef);
+        // the bytes, and not only what reads them back: a round trip
+        // through the same pair of helpers agrees with itself whichever
+        // way round they write them, and the order is the whole of what
+        // these pin down
+        assert_eq!(&buf[..2], &[0x34, 0x12]);
+        assert_eq!(&buf[2..6], &[0xef, 0xbe, 0xad, 0xde]);
         assert_eq!(read_u16(&buf, 0), 0x1234);
         assert_eq!(read_u32(&buf, 2), 0xdead_beef);
     }

@@ -128,14 +128,28 @@ impl NetCheckTrafficMonitor {
 
     /// `reset()` — the counters go back to nothing, and so do **both**
     /// thresholds: a monitor that has been reset refuses everything, since every
-    /// size is more than `0`.
+    /// size is more than `0`, and stays that way until
+    /// [`NetCheckTrafficMonitor::set_thresholds`] gives it a budget again.
     pub fn reset(&mut self) {
         self.wifi_recv = 0;
         self.wifi_send = 0;
         self.mobile_recv = 0;
         self.mobile_send = 0;
+        // The thresholds go too, so a monitor with no budget left refuses the
+        // next probe rather than count it — which is the behaviour this port
+        // has always had, and what `tests/trafficmonitor.rs` pins. The C++
+        // builds a new monitor per run and so has no setter to build the budget
+        // back up with; this port keeps one, which is why it needs one.
         self.wifi_data_threshold = 0;
         self.mobile_data_threshold = 0;
+    }
+
+    /// Both thresholds, in the order the C++ constructor takes them: what a
+    /// caller that keeps one monitor for more than one run needs after a
+    /// [`NetCheckTrafficMonitor::reset`], which leaves it with none.
+    pub fn set_thresholds(&mut self, mobile_data_threshold: u64, wifi_data_threshold: u64) {
+        self.mobile_data_threshold = mobile_data_threshold;
+        self.wifi_data_threshold = wifi_data_threshold;
     }
 
     /// `__data(sendDataSize, recvDataSize)` — one call's worth of traffic, on the
