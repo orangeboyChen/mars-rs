@@ -352,7 +352,10 @@ public actual object StnLogic {
         ask(Question.Kind.ReportTaskProfile) { this.profileJSON = taskString }
     }
 
-    /** What `marsrs-jni` hands [onTaskEnd]: the ten ticks and the rtt, and the two integers its `cgi_profile` fills in. */
+    /**
+     * What `marsrs-jni` hands [onTaskEnd]: the ten ticks and the rtt, and the two integers its
+     * `cgi_profile` fills in.
+     */
     internal class CgiProfile {
         @JvmField
         var taskStartTime: Long = 0
