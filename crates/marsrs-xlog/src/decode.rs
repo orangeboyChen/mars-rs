@@ -834,8 +834,8 @@ fn tea_decrypt_all(body: &[u8], key: &[u32; 4]) -> Vec<u8> {
 
 /// Inverse of `__TeaEncrypt` / `teaDecrypt`.
 fn tea_decrypt(block: &mut [u32; 2], key: &[u32; 4]) -> [u32; 2] {
-    let (mut low, mut high) = (block[0], block[1]);
-    let (k0, k1, k2, k3) = (key[0], key[1], key[2], key[3]);
+    let [mut low, mut high] = *block;
+    let [k0, k1, k2, k3] = *key;
     let mut sum = TEA_DELTA.wrapping_mul(TEA_ROUNDS);
     for _ in 0..TEA_ROUNDS {
         high = high.wrapping_sub(
