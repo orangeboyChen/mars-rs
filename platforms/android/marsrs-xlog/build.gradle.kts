@@ -83,7 +83,7 @@ android {
 // in the API this module publishes — a `suspend` function is a method with a
 // `Continuation` parameter to its caller, and that is the standard library's.
 dependencies {
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
 }
 
 // `components["release"]` does not exist yet while this script runs: AGP
