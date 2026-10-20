@@ -1281,6 +1281,7 @@ jobs:
     if: always() && needs.version.outputs.is_new == 'true' && needs.crates.result != 'skipped'
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
       TAG: ${{ needs.version.outputs.tag }}
       VERSION: ${{ needs.version.outputs.version }}
       CRATES_RESULT: ${{ needs.crates.result }}
