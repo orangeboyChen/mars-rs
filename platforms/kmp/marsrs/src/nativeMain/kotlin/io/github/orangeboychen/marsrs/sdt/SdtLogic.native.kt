@@ -26,7 +26,7 @@ import io.github.orangeboychen.marsrs.net.ffi.mars_sdt_take_report
 import kotlin.concurrent.Volatile
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
-import kotlin.native.ThreadLocal
+import kotlin.native.concurrent.ThreadLocal
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.CPointer
@@ -41,6 +41,14 @@ import kotlinx.cinterop.pointed
 import kotlinx.cinterop.set
 import kotlinx.cinterop.staticCFunction
 import kotlinx.cinterop.toKString
+
+/**
+ * Whether this thread is inside a run of the checks. A probe may not start
+ * another run from the same thread, while another thread may wait for the C
+ * ABI's existing lock and run later.
+ */
+@ThreadLocal
+private var running = false
 
 /**
  * The Kotlin/Native `actual`: the C ABI of `crates/marsrs-ffi` (`mars_sdt.h`)
@@ -97,20 +105,6 @@ public actual object SdtLogic {
      * can wait on.
      */
     private val pending = AtomicReference("")
-
-    /**
-     * Whether the thread this is read on is inside a run of the checks, which
-     * is what refuses a second one: see [runChecks], where the refusal is and
-     * where the reason is.
-     *
-     * One flag per thread and not one flag for the whole process: what has to
-     * be refused is the run a *probe* of a run asks for, which is a run the
-     * thread asking is already inside, and a run another thread asks for is
-     * not that one — it is a run the C ABI makes wait behind the first, which
-     * is what the other `actual` does with its own lock as well.
-     */
-    @ThreadLocal
-    private var running = false
 
     /** What [SdtLogic]'s own KDoc says, which is where the words are. */
     public actual fun interface ICallBack {
