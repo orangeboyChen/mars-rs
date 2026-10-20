@@ -259,14 +259,10 @@ jobs:
   # and the one job here a fork cannot answer: it needs the token below, and
   # GitHub Packages answers nothing without one, not even a 404.
   #
-  # Why this one and not a composite build: `platforms/kmp` does not build on
-  # a Linux runner. Under its own Gradle and its own Kotlin it fails to
-  # compile its own source —
-  # `Cannot access 'val IO: CoroutineDispatcher': it is internal in
-  # 'kotlinx.coroutines.Dispatchers'` — and `release.yml` publishes it from
-  # `macos-15` for that reason. Building the module here would cost a macOS
-  # runner, the Android SDK and ten Kotlin/Native targets on every pull
-  # request, so the demo is checked against the package an app actually gets.
+  # A composite build for this Linux target would need its native archives,
+  # the Android JNI libraries and an Android SDK, as the release's `kmp-host`
+  # job does. This job checks the package an app actually gets without
+  # provisioning those build inputs.
   #
   # Which means it is also the one demo whose drain is spelled the way the
   # newest tag spells it, and not `flushNow()`: a tag is a release behind the
