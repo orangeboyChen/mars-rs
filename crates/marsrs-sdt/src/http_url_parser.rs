@@ -1,7 +1,7 @@
 //! `mars/sdt/src/checkimpl/http_url_parser.h` — the URL of an HTTP check, as a
 //! host, a port and a path.
 //!
-//! `HttpUrlParser(url)` parses in its constructor, http and nothing else, and a
+//! `HttpUrlParser(url)` parses HTTP and HTTPS in its constructor, and a
 //! URL it could not read leaves an empty [`HttpUrlParser::host`] — which, with a
 //! [`HttpUrlParser::path`] that is still empty, is all a caller can see of that.
 //! The C++ keeps the `bool` `Parse()` returns to itself; so does this.
@@ -10,11 +10,13 @@
 //! `marsrs-comm` to ask, and the C++ trims the URL it was given and the host it
 //! read out of it.
 
-/// `kHttpSchema` — the scheme the parser understands, and the only one it does.
+/// The schemes accepted by an SDT HTTP probe.
 const HTTP_SCHEME: &str = "http://";
+const HTTPS_SCHEME: &str = "https://";
 /// The port of a URL that named none, of one whose port is `0` or unreadable,
 /// and of one that names no host at all: what `port_(80)` starts out as.
 const DEFAULT_PORT: u16 = 80;
+const DEFAULT_HTTPS_PORT: u16 = 443;
 
 /// `strutil::Trim` — the ASCII whitespace the C++ strips off both ends.
 const WHITESPACE: &[u8] = b" \t\n\x0b\x0c\r";
@@ -87,7 +89,7 @@ impl HttpUrlParser {
         &self.host
     }
 
-    /// `Port()` — `80` for a URL that named none.
+    /// `Port()` — `80` for HTTP or `443` for HTTPS when a URL named none.
     pub fn port(&self) -> u16 {
         self.port
     }
@@ -104,16 +106,25 @@ impl HttpUrlParser {
         &self.url
     }
 
-    /// `Parse()` — `false` for a URL that is not an http one, in which case
+    /// `Parse()` — `false` for a URL that is not HTTP or HTTPS, in which case
     /// nothing is filled in.
     fn parse(&mut self) -> bool {
-        // `ci_find_substr(url_, kHttpSchema, 0)`: the scheme has to be at the
-        // very front, and its case does not matter
-        let scheme = self.url.as_bytes().get(..HTTP_SCHEME.len());
-        if !scheme.is_some_and(|scheme| scheme.eq_ignore_ascii_case(HTTP_SCHEME.as_bytes())) {
+        // The scheme must be at the front, and its case does not matter.
+        let (scheme_start, default_port) = if self
+            .url
+            .get(..HTTPS_SCHEME.len())
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case(HTTPS_SCHEME))
+        {
+            (HTTPS_SCHEME.len(), DEFAULT_HTTPS_PORT)
+        } else if self
+            .url
+            .get(..HTTP_SCHEME.len())
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case(HTTP_SCHEME))
+        {
+            (HTTP_SCHEME.len(), DEFAULT_PORT)
+        } else {
             return false;
-        }
-        let scheme_start = HTTP_SCHEME.len();
+        };
         // `schema_start >= url_.length()`: the scheme and nothing else
         if scheme_start >= self.url.len() {
             return false;
@@ -151,12 +162,12 @@ impl HttpUrlParser {
             None => hoststr_rest.find(':'),
         };
         let (host, port) = match port_at {
-            None => (hoststr_rest.to_owned(), DEFAULT_PORT),
+            None => (hoststr_rest.to_owned(), default_port),
             Some(at) => {
                 let port_start = host_start + at;
                 let host = hoststr[host_start..port_start].to_owned();
                 let port = if port_start + 1 == hoststr.len() {
-                    DEFAULT_PORT
+                    default_port
                 } else {
                     atoi(&hoststr[port_start + 1..])
                 };
@@ -164,7 +175,7 @@ impl HttpUrlParser {
             }
         };
         self.host = trim(&host).to_owned();
-        self.port = if port == 0 { DEFAULT_PORT } else { port };
+        self.port = if port == 0 { default_port } else { port };
 
         // `path_ = url_.substr(schema_end)`, and `/` when that is empty — a URL
         // with no path goes to the root
