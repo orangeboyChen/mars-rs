@@ -310,7 +310,11 @@ impl Check {
                     host.clone()
                 };
                 url.push_str(cgi);
-                if !url.starts_with("http://") {
+                let has_http_scheme = ["http://", "https://"].iter().any(|scheme| {
+                    url.get(..scheme.len())
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(scheme))
+                });
+                if !has_http_scheme {
                     url = format!("http://{url}");
                 }
                 profile.url = url.clone();

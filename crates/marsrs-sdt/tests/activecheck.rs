@@ -552,6 +552,33 @@ fn the_url_of_the_http_check_is_the_host_and_the_cgi() {
     assert_eq!(request.checkresult_profiles[0].rtt, 100);
 }
 
+#[test]
+fn the_http_check_preserves_https_schemes() {
+    for host in ["https://secure.host", "HTTPS://secure.host"] {
+        let shortlink = link(&[(host, "2.2.2.2", 443)]);
+        let mut request = request_of(CheckIPPorts::new(), shortlink, UNUSE_TIMEOUT);
+        let (mut ask, asked) = stub(slow);
+        let mut check = check_of(&request);
+        assert!(check.start_do_check(
+            NetCheckType::HttpCheck,
+            &mut request,
+            &mut ask,
+            1,
+            "/healthz"
+        ));
+
+        let expected = format!("{host}/healthz");
+        assert_eq!(request.checkresult_profiles[0].url, expected);
+        assert_eq!(
+            asked.lock().unwrap().as_slice(),
+            &[Query::Http {
+                url: expected,
+                timeout_ms: HTTP_DEFAULT_TIMEOUT,
+            }]
+        );
+    }
+}
+
 /// The budget a probe before it spent is no reason to ask the HTTP probe for
 /// no time at all: `0` is a probe that cannot answer, which the check files as
 /// the network being down, and not one that was given the default.

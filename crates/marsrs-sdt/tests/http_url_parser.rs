@@ -25,6 +25,22 @@ fn a_url_that_names_a_port_names_the_port() {
 }
 
 #[test]
+fn an_https_url_uses_port_443_unless_it_names_one() {
+    let url = HttpUrlParser::new("https://secure.example/healthz");
+    assert_eq!(url.host(), "secure.example");
+    assert_eq!(url.port(), 443);
+    assert_eq!(url.path(), "/healthz");
+
+    let url = HttpUrlParser::new("HTTPS://secure.example:8443/healthz");
+    assert_eq!(url.host(), "secure.example");
+    assert_eq!(url.port(), 8443);
+    assert_eq!(url.path(), "/healthz");
+
+    let url = HttpUrlParser::new("https://secure.example:0/healthz");
+    assert_eq!(url.port(), 443);
+}
+
+#[test]
 fn a_url_with_no_path_goes_to_the_root() {
     // `path_ = url_.substr(schema_end)`, which is empty, so it becomes `/`
     let url = HttpUrlParser::new("http://1.2.3.4");
@@ -60,7 +76,7 @@ fn a_url_without_the_scheme_is_not_read_at_all() {
         HttpUrlParser::new(" http://www.qq.com/x").host(),
         "www.qq.com"
     );
-    assert_eq!(HttpUrlParser::new("https://www.qq.com/x").host(), "");
+    assert_eq!(HttpUrlParser::new("ftp://www.qq.com/x").host(), "");
 }
 
 #[test]

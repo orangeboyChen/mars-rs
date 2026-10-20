@@ -16,11 +16,11 @@
 # which is the answer that keeps the first honest, since two parsers agreeing is
 # not proof on its own.
 #
-# One row the two read differently, and both readings are pinned: the C++ splits
-# `[::1]:8080` at a colon of the address itself, so its host is `[` and its port
-# is the default one, while the port skips a bracketed host and reads the
-# address and the port behind it. A row like that prints `diverges` where the
-# others print `ok`, and it is still a row that fails when either side changes.
+# Two rows the parsers read differently have both readings pinned: the port
+# handles a bracketed IPv6 host and accepts HTTPS with port 443, while the C++
+# reads the IPv6 host's first colon as a port and rejects HTTPS. Such a row
+# prints `diverges` where the others print `ok`, and still fails if either
+# side changes unexpectedly.
 #
 # The C++ is built by `upstream_build.sh`, which clones Tencent/mars into
 # `target/upstream` on first use — nothing is vendored into this repository.
@@ -113,7 +113,9 @@ case("whitespace-behind-the-scheme", "http:// www.qq.com", "www.qq.com", 80, "/"
 # a path of nothing at all is the root, and a host of nothing is a URL the
 # parser could not read
 case("nothing-after-the-scheme", "http://", "", 80, "")
-case("not-an-http-url", "https://www.qq.com", "", 80, "")
+case("https-url", "https://www.qq.com", "", 80, "")
+diverges("https-url", "www.qq.com", 443, "/")
+case("not-a-web-url", "ftp://www.qq.com", "", 80, "")
 case("nothing-at-all", "", "", 80, "")
 # the scheme and a path with no host in between: nothing between the two ends
 # the host, so what it reads as one is the path
