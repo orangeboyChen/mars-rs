@@ -207,7 +207,7 @@ public actual class Xlog actual constructor(config: XlogConfig) {
         }
     }
 
-    public actual suspend fun flush() = withContext(Dispatchers.IO) {
+    public actual suspend fun flush() = withContext(Dispatchers.Default) {
         flushNow()
     }
 
