@@ -79,8 +79,15 @@ object BaseEvent {
 
         fun checkConnInfo(context: Context, activeNetInfo: NetworkInfo?) {
             if (activeNetInfo == null) {
+                // `lastConnected` goes false here as it does in the branch
+                // below, because one disconnect is several broadcasts and this
+                // branch is the one that answers them: the `null` arrives
+                // before a `DISCONNECTED` of its own, and that one only
+                // reports while `lastConnected` is still `true`. Left alone,
+                // STN is woken for the network it was already told is gone.
                 lastActiveNetworkInfo = null
                 lastWifiInfo = null
+                lastConnected = false
                 BaseEvent.onNetworkChange()
             } else if (activeNetInfo.detailedState != NetworkInfo.DetailedState.CONNECTED) {
                 if (lastConnected) {

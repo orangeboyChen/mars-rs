@@ -201,6 +201,12 @@ fn number(opts: &Opts, key: &str) -> Result<u32, String> {
 }
 
 fn unhex(text: &str) -> Result<Vec<u8>, String> {
+    // ASCII first: the digits below are taken two *bytes* at a time, and an
+    // even byte count is no promise that a byte index is a char boundary —
+    // one two-byte character is even, and slicing it panics.
+    if !text.is_ascii() {
+        return Err("--body is not ASCII".to_owned());
+    }
     if !text.len().is_multiple_of(2) {
         return Err("--body has an odd number of digits".to_owned());
     }
@@ -218,4 +224,28 @@ fn hex(bytes: &[u8]) -> String {
         out.push_str(&format!("{byte:02x}"));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A two-byte character is an *even* byte count, and slicing it at a byte
+    /// index that is not a char boundary panics — which is what `--body=é`
+    /// used to do on the way to a perfectly good error message.
+    #[test]
+    fn unhex_refuses_a_digit_that_is_not_a_char_boundary() {
+        assert!(unhex("é").is_err(), "one two-byte character is even");
+        assert!(unhex("éé").is_err());
+        assert!(unhex("ffé").is_err());
+        // and an odd count is still reported as one, not as a panic
+        assert!(unhex("abc").is_err());
+    }
+
+    #[test]
+    fn unhex_reads_hex_in_pairs() {
+        assert_eq!(unhex("").unwrap(), Vec::<u8>::new());
+        assert_eq!(unhex("00ff10").unwrap(), vec![0x00, 0xff, 0x10]);
+        assert!(unhex("zz").is_err(), "not a digit");
+    }
 }

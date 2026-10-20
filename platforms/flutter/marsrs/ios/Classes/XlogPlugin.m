@@ -3,7 +3,7 @@
 #import "mars_xlog.h"
 
 // The iOS half of the `marsrs` plugin: the C ABI of `mars_xlog.h`
-// (crate `marsrs-ffi`) behind the fifteen methods of the plugin's channel.
+// (crate `marsrs-ffi`) behind the fourteen methods of the plugin's channel.
 //
 // Objective-C, and not Swift: what the plugin carries is a static library with
 // a C header, and `MarsRSFFI` — the module SwiftPM makes of the two — is not
@@ -17,7 +17,7 @@
 //
 // Every key below is a field `lib/marsrs.dart` put there, and every
 // default is the one `mars_xlog.h` documents — `logDir` is the field with
-// none, because the appender answers `MARS_XLOG_ERR_EMPTY_LOG_DIR` without it.
+// none, because the C ABI opens no appender without it.
 
 static NSString *const kXlogChannel = @"marsrs";
 
@@ -99,6 +99,14 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
 /// `mars_xlog_release_instance` releases is the one of the prefix it is given.
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *instances;
 
+/// The one queue a drain runs on — `flush:` and `close:` both — and serial,
+/// which is what makes two drains of one appender one after the other: a
+/// global concurrent queue runs the blocks it is handed at once, on as many
+/// threads as it has. The Kotlin half of this plugin drains on a
+/// single-thread executor and says as much of it, and this is the queue that
+/// sentence is about.
+@property(nonatomic, strong) dispatch_queue_t flushQueue;
+
 @end
 
 @implementation XlogPlugin
@@ -115,6 +123,8 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   self = [super init];
   if (self) {
     _instances = [[NSMutableDictionary alloc] init];
+    _flushQueue = dispatch_queue_create("io.github.orangeboychen.marsrs.flush",
+                                        DISPATCH_QUEUE_SERIAL);
   }
   return self;
 }
@@ -279,7 +289,10 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
     return;
   }
   int level = XlogInt(call.arguments, @"level", MarsLevelInfo);
-  XlogAnswer(result, @(mars_xlog_is_enabled_for(instance, level) != 0));
+  // `YES` or `NO`, and not `@(… != 0)`: that one boxes an `int`, which the
+  // standard codec writes as an int32, and Dart's `await … as bool` throws a
+  // type error on it rather than reading it.
+  XlogAnswer(result, @(mars_xlog_is_enabled_for(instance, level) != 0 ? YES : NO));
 }
 
 /// `mars_xlog_flush_now_instance`: the drain is on the thread this is called
@@ -293,7 +306,7 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   // Off the thread the call came in on, and back to it for the answer: a
   // platform channel is answered on the app's main thread, and a drain blocks
   // the thread it runs on.
-  dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+  dispatch_async(self.flushQueue, ^{
     mars_xlog_flush_now_instance(instance);
     dispatch_async(dispatch_get_main_queue(), ^{
       XlogAnswer(result, nil);
@@ -365,16 +378,41 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
   XlogAnswer(result, nil);
 }
 
-/// `mars_xlog_release_instance`: closes the appender `open` made.
+/// `mars_xlog_release_instance_of`: closes the appender `open` made.
+///
+/// The release is a drain of everything the appender still holds and a write of
+/// the banner that ends the file, so it runs off the thread the call came in
+/// on — the app's main thread, the one the UI draws on — the way `flush:` does
+/// it. The handle is read and the prefix is taken out of `instances` here and
+/// not in the block, because the dictionary is this thread's: a second `close`
+/// of the prefix that lands before the drain runs finds nothing and releases
+/// nothing twice.
+///
+/// Not what keeps a reopen safe, though: a reopen is answered the handle that
+/// is still there, and the release below closes that one — so what an app owes
+/// a prefix it closed is the `await` of this call, which is what the Dart
+/// `open` of the same prefix waits for.
 - (void)close:(FlutterMethodCall *)call result:(FlutterResult)result {
   NSString *namePrefix = XlogString(call.arguments, @"namePrefix");
-  if (self.instances[namePrefix] == nil) {
+  NSNumber *handle = self.instances[namePrefix];
+  if (handle == nil) {
     XlogAnswer(result, nil);
     return;
   }
-  mars_xlog_release_instance(namePrefix.UTF8String);
+  long long opened = handle.longLongValue;
   [self.instances removeObjectForKey:namePrefix];
-  XlogAnswer(result, nil);
+  // `mars_xlog_release_instance_of` and not `mars_xlog_release_instance`: a
+  // release is given a prefix, so what it closes is whichever appender the
+  // prefix answers *at that moment* — one another part of the app opened
+  // after this one was closed. Naming the handle makes the question and the
+  // release one call, which a `mars_xlog_get_instance` before a release is
+  // not: a `close` on another thread lands between the two.
+  dispatch_async(self.flushQueue, ^{
+    mars_xlog_release_instance_of(namePrefix.UTF8String, opened);
+    dispatch_async(dispatch_get_main_queue(), ^{
+      XlogAnswer(result, nil);
+    });
+  });
 }
 
 #pragma mark - The appender of a call
@@ -385,7 +423,13 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
 - (long long)instanceForCall:(FlutterMethodCall *)call result:(FlutterResult)result {
   NSString *namePrefix = XlogString(call.arguments, @"namePrefix");
   NSNumber *handle = self.instances[namePrefix];
-  if (handle == nil) {
+  // The registry and not the handle [instances] holds: `mars_xlog_release_instance`
+  // releases the appender of a *prefix* and not of a handle, so a handle whose
+  // appender another part of the app closed is still the number this dictionary
+  // holds — and every symbol of the C ABI answers nothing for a handle it does
+  // not know, which is a call that silently writes nothing.
+  long long opened = handle == nil ? 0 : handle.longLongValue;
+  if (opened == 0 || mars_xlog_get_instance(namePrefix.UTF8String) != opened) {
     XlogAnswer(result,
                [FlutterError errorWithCode:kXlogError
                                    message:[NSString stringWithFormat:
@@ -393,7 +437,7 @@ static NSString *XlogOptionalString(NSDictionary *arguments, NSString *key) {
                                    details:nil]);
     return 0;
   }
-  return handle.longLongValue;
+  return opened;
 }
 
 @end

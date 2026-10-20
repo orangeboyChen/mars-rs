@@ -522,7 +522,8 @@ mod tests {
         // `endtime_` is still 0, so the answer is the running span: a caller
         // polling a waiting alarm is asking how long it has waited, and 0
         // told it nothing at all.
-        assert!(alarm.elapse_time() < 60_000);
+        assert!(alarm.is_waiting(), "the span is the one it is waiting");
+        assert!(alarm.elapse_time() < 60_000, "and not the 60s it waits for");
         std::thread::sleep(Duration::from_millis(50));
         assert!(
             alarm.elapse_time() >= 40,

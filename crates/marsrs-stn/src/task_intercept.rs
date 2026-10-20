@@ -177,6 +177,6 @@ mod tests {
         intercept.add_intercept_task("task", b"the answer".to_vec());
         assert_eq!(intercept.intercept_task_info("task"), None);
         assert_eq!(intercept.intercept_task_info("other"), None);
-        assert!(format!("{intercept:?}").contains("TaskIntercept"));
+        assert!(format!("{intercept:?}").contains("name: \"task\""));
     }
 }

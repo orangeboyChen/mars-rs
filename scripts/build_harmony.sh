@@ -44,7 +44,11 @@ if [ -z "${OHOS_SDK_HOME:-}" ]; then
     # cmake are left in the archive and out of the cache, because the download
     # is 2.7 GB and the runner's disk is not.
     OHOS_SDK_HOME="$sdk_cache/ohos-sdk/linux"
-    if [ ! -d "$OHOS_SDK_HOME/native" ]; then
+    # The artifact of the component and not the directory of it: a download
+    # interrupted between `mkdir` and `unzip` leaves a `native/` that is there
+    # and empty, and a cache that looks warm is a build whose `clang` — the
+    # first thing the loop below asks for — is not.
+    if [ ! -x "$OHOS_SDK_HOME/native/llvm/bin/clang" ]; then
         command -v unzip > /dev/null || {
             echo "::error::unzip is needed to unpack the OHOS SDK"
             exit 1
@@ -163,4 +167,13 @@ for entry in "${abis[@]}"; do
     cp "target/$target/release/libmars_ffi.so" "$out/$abi/libmars_ffi.so"
 done
 
+# `find` answers 0 for a tree with no `.so` in it and so does `sort`, so an
+# output directory the loop above never wrote to is a script that passed. What
+# says the archives are there is the count and not the exit of either: the
+# three the loop was asked for, and not merely one.
+count="$(find "$out" -name '*.so' | wc -l | tr -d ' ')"
+[ "$count" -eq "${#abis[@]}" ] || {
+    echo "::error::$out holds $count .so and not ${#abis[@]}"
+    exit 1
+}
 find "$out" -name '*.so' | sort

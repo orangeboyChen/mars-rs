@@ -16,8 +16,12 @@ marsrs-xlog = { path = "../../crates/marsrs-xlog" }
 
 and the empty `[workspace]` table above it is what takes this package out of the
 repository's own workspace — without it, `cargo` answers "current package
-believes it's in a workspace when it's not". An app outside this repository
-writes `marsrs-xlog = "0.1.0"` instead, once the crate is up.
+believes it's in a workspace when it's not". An app outside this repository writes the line the docs give instead — today
+that is the tag, because the crate is not on crates.io yet:
+
+```toml
+marsrs-xlog = { git = "https://github.com/orangeboyChen/mars-rs", tag = "v0.1.0-alpha.3" }
+```
 
 ## What to look at
 

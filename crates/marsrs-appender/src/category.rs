@@ -28,7 +28,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Condvar, Mutex, OnceLock, RwLock};
+use std::sync::{Condvar, Mutex, MutexGuard, OnceLock, RwLock};
 
 use crate::{
     appender_close_instance, appender_flush_instance, appender_flush_now_instance,
@@ -202,10 +202,6 @@ struct Registry {
     next: XloggerHandle,
     categories: HashMap<XloggerHandle, XloggerCategory>,
     by_prefix: HashMap<String, XloggerHandle>,
-    /// `<dir>/<prefix>.mmap3` and the slots next to it: one-shot recovery reads
-    /// and unlinks those files, so it has to stay away from an instance that
-    /// owns one.
-    mmap_paths: HashMap<XloggerHandle, PathBuf>,
     /// The prefixes whose appender is being opened right now.
     opening: HashSet<String>,
 }
@@ -225,7 +221,6 @@ fn registry() -> &'static Mutex<Registry> {
             next: DEFAULT_HANDLE + 1,
             categories: HashMap::new(),
             by_prefix: HashMap::new(),
-            mmap_paths: HashMap::new(),
             opening: HashSet::new(),
         })
     })
@@ -324,11 +319,6 @@ pub fn new_xlogger_instance(config: &XLogConfig, level: LogLevel) -> XloggerHand
     category.appender = appender;
     registry.categories.insert(handle, category);
     registry.by_prefix.insert(config.nameprefix.clone(), handle);
-    // The slot the instance got, not `<prefix>.mmap3` as such: a second process
-    // using the same prefix holds slot 0 and this one has been given slot 1.
-    if let Some(path) = appender.and_then(crate::instance_cache_path) {
-        registry.mmap_paths.insert(handle, path);
-    }
     drop(registry);
     // the handle is in the table, so whoever was waiting for the prefix finds
     // it now
@@ -349,12 +339,34 @@ pub fn get_xlogger_instance(nameprefix: &str) -> XloggerHandle {
 
 /// `mars::xlog::ReleaseXloggerInstance`.
 pub fn release_xlogger_instance(nameprefix: &str) {
-    let mut registry = registry().lock().unwrap_or_else(|e| e.into_inner());
+    release_locked(
+        registry().lock().unwrap_or_else(|e| e.into_inner()),
+        nameprefix,
+    );
+}
+
+/// [`release_xlogger_instance`] for a caller that knows which handle it holds:
+/// the prefix is released only while it still answers `handle`.
+///
+/// Releasing takes the prefix and not the handle, so asking the registry and
+/// then releasing is two answers and not one: a third `Xlog` opening this
+/// prefix in between is handed a new handle, and the release by prefix closes
+/// that one — the appender the caller was asking about is already gone and the
+/// one it just closed is not its own. This is the question and the release
+/// under one lock, so nothing can land between them.
+pub fn release_xlogger_instance_of(nameprefix: &str, handle: XloggerHandle) {
+    let registry = registry().lock().unwrap_or_else(|e| e.into_inner());
+    if registry.by_prefix.get(nameprefix).copied() != Some(handle) {
+        return;
+    }
+    release_locked(registry, nameprefix);
+}
+
+fn release_locked(mut registry: MutexGuard<'_, Registry>, nameprefix: &str) {
     let Some(handle) = registry.by_prefix.remove(nameprefix) else {
         return;
     };
     let category = registry.categories.remove(&handle);
-    registry.mmap_paths.remove(&handle);
     drop(registry);
 
     // The C++ releases the instance's own appender here
@@ -442,10 +454,14 @@ pub fn set_max_file_size(handle: XloggerHandle, bytes: u64) {
 }
 
 /// `mars::xlog::SetMaxAliveTime` — per instance.
-pub fn set_max_alive_duration(handle: XloggerHandle, secs: u64) {
+///
+/// Whether `secs` was applied is what the answer says: the appender refuses a
+/// value below one day, the way `open` refuses one, and a caller that reports
+/// the value it asked for would be reporting a limit no file is held to.
+pub fn set_max_alive_duration(handle: XloggerHandle, secs: u64) -> bool {
     match target(handle) {
         Target::Instance(id) => appender_set_max_alive_duration_instance(id, secs),
-        Target::Gone => {}
+        Target::Gone => false,
     }
 }
 
@@ -584,6 +600,25 @@ mod tests {
         let again = new_xlogger_instance(&config("one", dir.path()), LogLevel::Info);
         assert_ne!(again, DEFAULT_HANDLE);
         release_xlogger_instance("one");
+    }
+
+    #[test]
+    fn a_stale_handle_cannot_release_a_reopened_prefix() {
+        let _guard = serial();
+        let dir = tempfile::tempdir().unwrap();
+        let first = new_xlogger_instance(&config("reopened", dir.path()), LogLevel::Info);
+        assert_ne!(first, DEFAULT_HANDLE);
+
+        release_xlogger_instance_of("reopened", first);
+        let second = new_xlogger_instance(&config("reopened", dir.path()), LogLevel::Info);
+        assert_ne!(second, DEFAULT_HANDLE);
+        assert_ne!(first, second);
+
+        release_xlogger_instance_of("reopened", first);
+        assert_eq!(get_xlogger_instance("reopened"), second);
+
+        release_xlogger_instance_of("reopened", second);
+        assert_eq!(get_xlogger_instance("reopened"), DEFAULT_HANDLE);
     }
 
     /// Today's log file in `dir`, i.e. the only `*.xlog` there.

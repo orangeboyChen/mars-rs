@@ -15,10 +15,17 @@ use std::process::Command;
 
 /// Every `mars_xlog_*` the C++ header is written over: the one member of
 /// [`marsrs::xlog::Xlog`](../../include/mars_xlog.hpp) each of them is.
+///
+/// `mars_xlog_release_instance` is not one of them, though `mars_xlog.h`
+/// declares it and the library exports it: `Xlog` has no member for it, because
+/// a `Xlog` closes by prefix *and* handle — `mars_xlog_release_instance_of`,
+/// which is the next entry — and asking for the one that releases by prefix
+/// alone from a header that holds a handle would be two owners of one close.
+/// What guards that symbol is `tests/abi_surface.rs`, which calls it.
 const SYMBOLS: [&str; 16] = [
     "mars_xlog_new_instance",
     "mars_xlog_get_instance",
-    "mars_xlog_release_instance",
+    "mars_xlog_release_instance_of",
     "mars_xlog_get_level",
     "mars_xlog_set_level_instance",
     "mars_xlog_set_mode_instance",
@@ -108,8 +115,18 @@ fn the_cpp_header_compiles_and_asks_for_the_c_symbols() {
     };
 
     for symbol in SYMBOLS {
+        // The last field of the line, and not a `contains` over the whole of
+        // it: `mars_xlog_release_instance` is a prefix of
+        // `mars_xlog_release_instance_of`, so a substring search answers yes
+        // for a symbol this object file never asked the linker for — and the
+        // one thing this loop is for is that it did. The `trim_start_matches`
+        // is the leading underscore a Mach-O object's symbols carry.
         assert!(
-            listed.lines().any(|line| line.contains(symbol)),
+            listed.lines().any(|line| line
+                .split_whitespace()
+                .last()
+                .map(|name| name.trim_start_matches('_'))
+                == Some(symbol)),
             "`{symbol}` is not among the symbols tests/cpp_surface.cpp asks for"
         );
     }

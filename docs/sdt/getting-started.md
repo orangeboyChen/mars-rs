@@ -35,7 +35,9 @@ In Rust the three are one call — `sdt.diagnose(…)` — and the mode has name
 ## Rust
 
 ```bash
-cargo add marsrs          # the whole port: xlog, stn and sdt
+# The crate is not on crates.io yet — publication is pending — so a Rust app
+# takes it off the tag: `cargo add marsrs` on its own resolves nothing.
+cargo add marsrs --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
 ```
 
 ```rust
@@ -54,15 +56,19 @@ let shortlink = CheckIPPorts::new();
 let mut ask = Ask::new(|query| match query {
     Query::Dns { domain, .. } => Answer::Dns {
         error_code: 0, rtt: 12, ips: vec!["1.2.3.4".to_owned()],
+        local_dns: String::new(),
     },
-    Query::Tcp { .. } => Answer::Tcp { sent: 0, received: 0, is_noop_resp: true, rtt: 30 },
+    Query::Tcp { .. } => Answer::Tcp {
+        sent: 0, received: 0, is_noop_resp: true, conntime: 0, rtt: 30,
+    },
     Query::Http { .. } => Answer::Http { error_code: 0, status_code: 200, rtt: 40 },
     Query::Ping { .. } => Answer::Ping { error_code: 0, rtt: 20, status: None },
 });
 
 // 3. the whole diagnosis: ping and dns, then tcp, over the network `1` names,
 //    which is what `comm::getNetInfo()` is in the C++. `None` is a check that
-//    is already in flight.
+//    did not start: one that is already in flight, or a mode with none of the
+//    three bits — `is_checking()` tells the two apart.
 let results = sdt
     .diagnose(
         &longlink, &shortlink, Mode::BASIC | Mode::LONG, 10_000, &mut ask, 1,
@@ -94,7 +100,7 @@ with `set_callback`, the way it is when the three calls are made apart.
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
+.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0-alpha.3")
 
 // and, in the target that takes it:
 .product(name: "MarsRSNet", package: "mars-rs")   // or MarsRS, for both halves
@@ -109,8 +115,8 @@ let longLink = [MarsSdt.Link(
     ports: [MarsSdt.HostPort(host: "1.2.3.4", port: 80)]
 )]
 MarsSdt.setHTTPNetCheckCGI("http://example.com/netcheck")
-// 1 | 2 is NET_CHECK_BASIC | NET_CHECK_LONG: ping and dns, then tcp
-MarsSdt.startActiveCheck(longLink: longLink, shortLink: [], mode: 1 | 2, timeout: 10_000)
+// [.basic, .long] is ping and dns, then tcp
+MarsSdt.startActiveCheck(longLink: longLink, shortLink: [], mode: [.basic, .long], timeout: 10_000)
 
 // 2. the plan, over the network `probe` answers with
 MarsSdt.runChecks(networkType: 1) { query in
@@ -119,7 +125,7 @@ MarsSdt.runChecks(networkType: 1) { query in
     case .tcp:   return .tcp(errorCode: 0, rtt: 30, noop: MarsSdt.Noop(sent: 0, received: 0, isNoopResponse: true))
     case .http:  return .http(errorCode: 0, rtt: 40, statusCode: 200)
     case .ping:  return .ping(errorCode: 0, rtt: 20, lossRate: 0, averageRTT: 18)
-    default:     return .nothing
+    default:     return .nothing()
     }
 }
 
@@ -143,7 +149,7 @@ so [the plan](/sdt/checks) stays Swift's.
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")   // xlog alone has none of it
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0-alpha.3")   // xlog alone has none of it
 ```
 
 ```kotlin
@@ -188,7 +194,7 @@ SdtLogic.runChecks(
 
 ```kotlin
 // build.gradle.kts of the shared module
-implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")   // not xlog-kmp
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0-alpha.3")   // not xlog-kmp
 ```
 
 ```kotlin
@@ -238,8 +244,7 @@ marsrs-<version>-<host>.zip      (Windows)
 MarsSdtIpPort port = { "1.2.3.4", 80 };
 MarsSdtHosts longlink[] = { { "default", &port, 1 } };
 mars_sdt_set_http_netcheck_cgi("http://example.com/netcheck");
-/* 1 | 2 is NET_CHECK_BASIC | NET_CHECK_LONG: ping and dns, then tcp */
-mars_sdt_start_active_check(longlink, 1, NULL, 0, 1 | 2, 10000);
+mars_sdt_start_active_check(longlink, 1, NULL, 0, NET_CHECK_BASIC | NET_CHECK_LONG, 10000);
 
 /* 2. the plan, over the network `probe` answers with */
 static void probe(void *ctx, const MarsSdtQuery *q, MarsSdtAnswer *a) {

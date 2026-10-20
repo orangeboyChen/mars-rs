@@ -79,8 +79,10 @@ pub struct LogBuffer {
     /// zstd compression level; ignored by the zlib backend.
     level: i32,
     /// The live compression stream, if any. `None` before the first
-    /// `__Reset()` and after every [`LogBuffer::flush`] (the C++ calls
-    /// `deflateEnd` / `ZSTD_e_end` there).
+    /// `__Reset()` and after every [`LogBuffer::drained`] — the port ends the
+    /// stream there (`deflateEnd` / `ZSTD_e_end`) and not in
+    /// [`LogBuffer::flush`], which is where the C++ ends it, so that a flush
+    /// can be repeated for a drain that failed.
     compressor: Option<Compressor>,
 }
 
@@ -167,6 +169,14 @@ impl LogBuffer {
                     > max_length
                 {
                     raw_log_len = max_length.saturating_sub(HEADER_LEN + TAILER_LEN);
+                    // The clamp has to land in the region and not only in
+                    // `self.length`: `flush` copies the header out with the
+                    // payload, so a block that still claims the length a dead
+                    // process was interrupted leaving is one `get_period_logs`
+                    // reaches `pos + len + TAILER_LEN > file_size` on and drops
+                    // whole — every record in the block, and not just the tail
+                    // that never made it.
+                    LogCrypt::set_log_len(region, u32::try_from(raw_log_len).unwrap_or(u32::MAX));
                 }
                 self.length = raw_log_len.saturating_add(HEADER_LEN).min(max_length);
             }
@@ -197,7 +207,14 @@ impl LogBuffer {
     ///
     /// Returns `false` when `data` is empty, when the region cannot hold the
     /// header, or when there is no room left for the payload (the C++ relies on
-    /// `size_t` underflow here and corrupts memory instead).
+    /// `size_t` underflow here and corrupts memory instead) — a compressor that
+    /// emitted nothing included, which is the same thing said by a write that
+    /// put no byte of the record anywhere.
+    ///
+    /// A record that would be cut is refused rather than cut: the caller that
+    /// gets a `false` drains the block and writes the record into the next
+    /// one, so what it loses is nothing, and what it does not get is a record
+    /// whose tail is in no file and whose header says it is whole.
     pub fn write(&mut self, region: &mut [u8], data: &[u8]) -> bool {
         if data.is_empty() {
             return false;
@@ -221,6 +238,13 @@ impl LogBuffer {
             if avail_out == 0 {
                 return false;
             }
+            // A record the room cannot hold whole is refused for the same
+            // reason it is refused below: a compressor handed a `dst` it can
+            // fill takes the whole input and emits what fits, and the rest
+            // goes when the stream does, at the next `drained`.
+            if Compressor::worst_case(self.mode, data.len()) > avail_out {
+                return false;
+            }
 
             // `__Reset()` normally creates the stream; also create it lazily
             // for a region whose content was recovered by `attach()` (the C++
@@ -234,8 +258,14 @@ impl LogBuffer {
 
             let dst = &mut region[self.length..self.length + avail_out];
             match compressor.compress(data, dst) {
+                // A compressor that emitted nothing wrote no record at all —
+                // the C++ cannot say so either (`Compress` answers a length,
+                // and `0` and `(size_t)-1` are the same length to the code
+                // behind it), so this is the port's answer to "no room": a
+                // `true` here would report a record that is in no file and
+                // left no marker behind as a record that was written.
+                Some(0) | None => return false,
                 Some(n) => n,
-                None => return false,
             }
         } else {
             // Reserve the tailer byte like the compress branch does, or a full
@@ -245,14 +275,19 @@ impl LogBuffer {
                 .len()
                 .saturating_sub(self.length)
                 .saturating_sub(TAILER_LEN);
-            if room == 0 {
+            // `buff_.Write(_data, _length)` — the C++ truncates the copy at
+            // `MaxLength()` but then keeps using the untruncated length, and
+            // corrupts the region. Clamping the copy stops the corruption but
+            // answers `true` for a record that was cut, which is worse than
+            // the corruption for the caller that would have written it: the
+            // appender drains a block a record did not fit and writes the
+            // record into the block that comes after, and a `true` is what
+            // keeps it from ever asking.
+            if data.len() > room {
                 return false;
             }
-            // `buff_.Write(_data, _length)` — the C++ truncates the copy at
-            // `MaxLength()` but then keeps using the untruncated length; we
-            // clamp so the follow-up crypt pass cannot read out of bounds.
-            let n = data.len().min(room);
-            region[self.length..self.length + n].copy_from_slice(&data[..n]);
+            let n = data.len();
+            region[self.length..self.length + n].copy_from_slice(data);
             n
         };
 
@@ -324,7 +359,12 @@ impl LogBuffer {
         // `__Flush()`
         LogCrypt::update_log_hour(region);
 
-        let flush_len = self.length;
+        // `min(region.len())` because the length is this buffer's and the
+        // region is a parameter: a caller that hands `flush` a shorter slice
+        // than the one `attach` or `write` sized the buffer against would
+        // otherwise index past its end — in a logging library, where the
+        // panic is worse than the record it is trying to save.
+        let flush_len = self.length.min(region.len());
         out.write(&region[..flush_len]);
 
         // The tailer goes into `out` and not into the region. It is what ends a
@@ -332,12 +372,16 @@ impl LogBuffer {
         // exactly as it was so that the next drain can copy it again — with the
         // tailer written into the region, a later `write` would append behind
         // it and leave a stray `kMagicEnd` in the middle of the payload.
-        if flush_len + TAILER_LEN <= region.len() {
-            out.write(&[self.magic_end]);
-            flush_len + TAILER_LEN
-        } else {
-            flush_len
-        }
+        // It is written into `out`, and not into the region, so it needs no
+        // room there — which is why nothing tests `flush_len + TAILER_LEN <=
+        // region.len()`: a caller that hands `flush` a shorter slice than the
+        // one `write` sized the buffer against is the caller this `min` exists
+        // for, and the guard used to drop the one byte that ends the block for
+        // exactly that caller. A block with no tailer is one every reader
+        // resyncs over, so the records lost are all of them and not the last
+        // byte.
+        out.write(&[self.magic_end]);
+        flush_len + TAILER_LEN
     }
 
     /// `__Clear()` — the other half of [`LogBuffer::flush`], and only for the
@@ -480,6 +524,69 @@ mod tests {
         assert!(region.iter().all(|&b| b == 0), "region must be zeroed");
     }
 
+    /// The tailer is written into `out`, so it does not compete with the
+    /// payload for room in the region — and a flush that was handed a shorter
+    /// slice than the buffer was sized against is the one that used to lose it.
+    /// A block with no tailer is one every reader resyncs over, so the records
+    /// lost were all of them.
+    #[test]
+    fn a_flush_of_a_region_the_tailer_does_not_fit_in_writes_the_tailer() {
+        let mut region = vec![0u8; REGION_LEN];
+        let mut buf = LogBuffer::new(false, None, CompressMode::Zlib, 6);
+
+        assert!(buf.write(&mut region, b"one\n"));
+        let len = buf.len();
+
+        let mut out = AutoBuffer::new();
+        let n = buf.flush(&mut region[..len], &mut out);
+
+        assert_eq!(n, len + TAILER_LEN);
+        assert_eq!(out.len(), n);
+        assert_eq!(out.as_slice()[n - 1], magic::END, "tailer");
+        assert_eq!(&out.as_slice()[..len], &region[..len]);
+    }
+
+    /// A record that does not fit the room that is left is refused, and not
+    /// cut: the caller that gets a `false` drains the block and writes the
+    /// record into the next one, so refusing costs nothing and cutting would
+    /// cost the tail of the record and every record behind it in the block.
+    #[test]
+    fn a_record_that_does_not_fit_the_room_that_is_left_is_refused() {
+        // Room for eight bytes of payload and nothing more.
+        let mut region = vec![0u8; HEADER_LEN + 8 + TAILER_LEN + 3];
+        let mut buf = LogBuffer::new(false, None, CompressMode::Zlib, 6);
+
+        assert!(buf.write(&mut region, b"12345678"));
+        assert_eq!(buf.len(), HEADER_LEN + 8);
+
+        // Three bytes are left, and this record is five.
+        assert!(!buf.write(&mut region, b"tail!"));
+        assert_eq!(buf.len(), HEADER_LEN + 8, "the half a record is not kept");
+        assert_eq!(LogCrypt::get_log_len(&region), 8);
+        assert_eq!(&region[HEADER_LEN..HEADER_LEN + 8], b"12345678");
+
+        let mut out = AutoBuffer::new();
+        let n = buf.flush(&mut region, &mut out);
+        assert_eq!(LogCrypt::get_log_len(out.as_slice()), 8);
+        assert_eq!(out.as_slice()[n - 1], magic::END);
+    }
+
+    /// The same for the compress path, where the record that does not fit is
+    /// one the stream took only part of: what a compressor did not consume is
+    /// in no window and no file, so a write that lost it has to say so.
+    #[test]
+    fn a_record_a_compressor_could_not_take_all_of_is_refused() {
+        // Incompressible, so the stream cannot shrink it into the room.
+        let record: Vec<u8> = (0..512u32)
+            .map(|index| (index.wrapping_mul(97) ^ 0x5a) as u8)
+            .collect();
+        let mut region = vec![0u8; HEADER_LEN + 64 + TAILER_LEN];
+        let mut buf = LogBuffer::new(true, None, CompressMode::Zlib, 6);
+
+        assert!(!buf.write(&mut region, &record));
+        assert_eq!(buf.len(), HEADER_LEN, "the half a record is not kept");
+    }
+
     /// A record written after a drain that did not reach a file joins the block
     /// that is still there, rather than starting a second one behind a tailer
     /// byte.
@@ -552,10 +659,17 @@ mod tests {
         buf.attach(&mut region);
         assert_eq!(buf.len(), HEADER_LEN + 100);
 
-        // An oversized length is clamped so header + payload + tailer fit.
+        // An oversized length is clamped so header + payload + tailer fit —
+        // and the clamp is written back into the header, because what `flush`
+        // copies out of the region is the header and the payload together.
         le::write_u32(&mut region, 5, u32::MAX);
         buf.attach(&mut region);
         assert_eq!(buf.len(), REGION_LEN - TAILER_LEN);
+        assert_eq!(
+            LogCrypt::get_log_len(&region),
+            (REGION_LEN - TAILER_LEN - HEADER_LEN) as u32,
+            "the header still claims a payload the region cannot hold"
+        );
 
         // An unknown magic resets the buffer.
         region[0] = 0xAB;

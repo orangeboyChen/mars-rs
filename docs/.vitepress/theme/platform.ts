@@ -40,6 +40,7 @@ const PLATFORMS: string[][] = [
   ['Kotlin Multiplatform'],
   ['Flutter'],
   ['React Native'],
+  ['HarmonyOS'],
   ['C'],
 ]
 

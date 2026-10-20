@@ -155,3 +155,21 @@ fn error_codes_match_the_header_defines() {
         );
     }
 }
+
+/// The number the C ABI is: the one `demo/c/README.md`, the platform READMEs
+/// and `scripts/build_xcframework.sh` write down, and the one that rotted into
+/// a 23 that no symbol of the header was ever part of. A symbol that lands is
+/// a number none of them says any more, so this is the test that says which of
+/// the two is wrong.
+#[test]
+fn the_abi_is_the_seventeen_symbols_the_prose_counts() {
+    let declared = declared();
+    assert_eq!(
+        declared.len(),
+        17,
+        "include/mars_xlog.h declares {count} `mars_xlog_*` symbols, and 17 is what \
+         demo/c/README.md, the platform READMEs and scripts/build_xcframework.sh say: \
+         {declared:?}",
+        count = declared.len()
+    );
+}

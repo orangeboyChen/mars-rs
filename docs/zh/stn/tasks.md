@@ -87,21 +87,23 @@ await 的任务上。见[那些问题](/zh/stn/callbacks)。
 
 ## 一个任务跑在什么上面
 
-没有谁替你排空队列。`run_pending` / `due_time` —— [快速开始](/zh/stn/getting-started)
+没有谁替你排空队列。`run_pending` / `due_delay` —— [快速开始](/zh/stn/getting-started)
 那页上每种写法里都有 —— 就是把任务从队列里挪出去，而 App 不要求就一个线程也不起：
 那个循环是 App 的，一个发起了却一直没排空的任务会一直坐在队列里，直到进程结束。
 
 在 Rust 里一个调用就够了：`Driver::spawn(stn)` 起这个 crate 的一个线程，做的正是
-宿主那个循环做的事 —— 到点了 `run_pending()`，其间睡 `due_delay()` —— `Driver`
-被 drop 的时候这个线程被 join。那个 logic 是共享的、不是被搬走的，所以 App 留着自己
+宿主那个循环做的事 —— 每 20 ms 一片，片尾 `run_pending()`，然后睡满这一片 —— 这个
+睡眠**不是** `due_delay()` 回答的那个延迟：那是"被自己的 socket 唤醒的宿主可以等多
+久"，而这个 crate 的线程没有谁唤醒它 —— `Driver` 被 drop 的时候这个线程被 join；
+除非这次 drop 自己正握着线程要的那把 logic 锁，那时交给 stop 标志去结束。那个 logic 是共享的、不是被搬走的，所以 App 留着自己
 的 `Arc`，继续通过它发任务。已经有 `run_pending` 循环的宿主留着它就好，不需要
 `Driver`：一趟把某个任务跑完的时候，await 它的人会被唤醒，所以一个 `Driver` 和宿主
 自己的循环可以一起用。
 
-`due_time` 是距离下一趟还有多久，单位是毫秒：`0` 是已经到期的一趟，队列里等着的一
-个 follow-up 就是。它是一个时长，不是一个时刻，跨 ABI 的调用方要的正是这个：tick
-的原点只有本进程读得到，所以给宿主的只是还要等多久。它也不是什么承诺 —— 一个不停
-空转调 `run_pending` 的循环照样能工作，只是会白烧掉一个核。
+`due_delay()` 是距离下一趟还有多久，单位是毫秒：`0` 是已经到期的一趟，队列里等着
+的一个 follow-up 就是。它是一个时长，不是一个时刻，跨 ABI 的调用方要的正是这个：
+tick 的原点只有本进程读得到，所以给宿主的只是还要等多久。它也不是什么承诺 —— 一个
+不停空转调 `run_pending` 的循环照样能工作，只是会白烧掉一个核。
 
 在 Android 和共享 Kotlin 上，只有在这个循环里 App 才看得到两座桥对一个形状意见不
 一致：`StnLogic.dueTime()` 回答 `Long?` —— 没有可等的东西时是 `null` —— 因为 JNI

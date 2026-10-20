@@ -38,15 +38,18 @@
 //! host with a loop of its own keeps it, and the two work together, because a
 //! pass that ends a task wakes whoever awaited it. A [`Sent`] that nothing
 //! drains stays [`Pending`](std::task::Poll::Pending) — the same way a task
-//! that is started and never drained stays in its queue.
+//! that is started and never drained stays in its queue. A task the app
+//! stopped, or one a core that was destroyed or cleared threw away, is not
+//! waiting for a pass at all: no queue holds it any more, so it is answered
+//! as cancelled on the spot.
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::task::{Context, Poll, Waker};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::stn_callback_bridge::CgiProfile;
 use crate::task_profile::ErrCmdType;
@@ -61,6 +64,11 @@ pub struct Answer {
     /// The timings of the connect the task ran on.
     pub profile: CgiProfile,
 }
+
+/// The error code a task the app broke off is given, which is none of its own:
+/// a cancellation is a failure, and it is the one [`Failure::Ended::err_code`]
+/// answers `0` for where everything else gets a negative code.
+const CANCELLED: i32 = 0;
 
 /// Why a task has no answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -278,6 +286,37 @@ impl Ends {
         }
     }
 
+    /// The end of a task that was dropped rather than run out, which is what
+    /// [`StnLogic::stop_task`] and a core that throws its queues away leave
+    /// behind: no queue holds the task any more, so no pass is ever going to
+    /// report it, and an await that was not answered here would stay
+    /// [`Pending`](std::task::Poll::Pending) for the life of the process. The
+    /// app is not asked about it, which is the C++'s own answer to `StopTask`.
+    ///
+    /// A task nobody is awaiting is left alone, the way [`Ends::finish`] leaves
+    /// one alone.
+    pub(crate) fn cancel(&mut self, taskid: u32) {
+        self.finish(
+            taskid,
+            ErrCmdType::Canceld,
+            CANCELLED,
+            CgiProfile::default(),
+        );
+    }
+
+    /// [`Ends::cancel`] for every task still being awaited.
+    pub(crate) fn cancel_all(&mut self) {
+        for taskid in self.pending() {
+            self.cancel(taskid);
+        }
+    }
+
+    /// The ids an end has not come for yet, which is every task an app may
+    /// still be awaiting.
+    fn pending(&self) -> Vec<u32> {
+        self.requests.keys().copied().collect()
+    }
+
     /// The end of a task, which is taken once and is the one thing that stops
     /// it being awaited.
     pub(crate) fn take(&mut self, taskid: u32) -> Option<Ended> {
@@ -313,13 +352,18 @@ impl Ends {
 /// for an app that awaits a task and has no loop — it is started by
 /// [`Driver::spawn`] and stops when the [`Driver`] is dropped.
 ///
-/// The thread sleeps the delay [`StnLogic::due_delay`] answers and drains the
-/// queues when it is up, in slices short enough that a dropped driver is
-/// noticed before it is waited for.
+/// The thread drains the queues at the end of every slice, and not at the
+/// delay [`StnLogic::due_delay`] answers, which is the number a *host*
+/// schedules a run loop of its own with: how long it may wait is what that
+/// delay says, and a host that is woken before it is up is a host that comes
+/// back early. Nothing wakes this thread, so see `drain`.
 #[derive(Debug)]
 pub struct Driver {
     stop: Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// The logic the thread is draining, which [`Driver::shutdown`] asks
+    /// whether it can join by.
+    logic: Arc<Mutex<StnLogic>>,
 }
 
 impl Driver {
@@ -337,23 +381,48 @@ impl Driver {
         let stop = Arc::new(AtomicBool::new(false));
         let thread = {
             let stop = Arc::clone(&stop);
+            let logic = Arc::clone(&logic);
             std::thread::Builder::new()
                 .name("marsrs-stn-driver".to_owned())
                 .spawn(move || drain(&logic, &stop))
                 .ok()
         };
-        Self { stop, thread }
+        Self {
+            stop,
+            thread,
+            logic,
+        }
     }
 
     fn shutdown(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            // the thread is joined rather than left to the process: a task
-            // that was mid-pass when the driver was dropped is one whose end
-            // nobody is waiting for any more, and it is not one the host
-            // should find still running after the drop came back
-            let _joined = thread.join();
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        // The thread is joined rather than left to the process: a task that
+        // was mid-pass when the driver was dropped is one whose end nobody is
+        // waiting for any more, and it is not one the host should find still
+        // running after the drop came back.
+        //
+        // Unless the join cannot come back, which is the case in which this
+        // call is holding the logic the thread is waiting for: an app that
+        // drops its driver with the lock taken — and a callback of the pass
+        // the thread is running now, which is a pass holding it — would wait
+        // for a thread waiting for a lock this call holds, and neither would
+        // end. So the lock is asked first, and a thread that is not one this
+        // call can join is left to the stop flag, which is what ends it
+        // either way.
+        match self.logic.try_lock() {
+            // the lock is free, so the thread is not in a pass it cannot come
+            // back from: it is sleeping, or about to take the lock itself
+            Ok(free) => drop(free),
+            // a panic poisoned it, which is not a lock anybody holds
+            Err(TryLockError::Poisoned(poisoned)) => drop(poisoned.into_inner()),
+            // somebody holds it — this call, or another thread of the app —
+            // and the pass the thread is waiting for is the one holding it
+            Err(TryLockError::WouldBlock) => return,
         }
+        let _joined = thread.join();
     }
 }
 
@@ -369,18 +438,25 @@ const SLICE_MS: u64 = 20;
 
 fn drain(logic: &Arc<Mutex<StnLogic>>, stop: &AtomicBool) {
     while !stop.load(Ordering::Relaxed) {
-        let wait = {
+        {
             let mut logic = locked(logic);
             logic.run_pending();
-            // nothing to wait for is not nothing to do: a task another thread
-            // started is a queue with a pass due in it, and there is no waker
-            // to hear about it, so the driver looks again
-            logic.due_delay().unwrap_or(SLICE_MS)
-        };
-        let until = Instant::now() + Duration::from_millis(wait);
-        while Instant::now() < until && !stop.load(Ordering::Relaxed) {
-            std::thread::sleep(Duration::from_millis(SLICE_MS));
         }
+        // A pass at the end of every slice, and not at the delay
+        // [`StnLogic::due_delay`] answers. That delay is the earliest alarm
+        // the queues have armed — a first-package timeout, a retry, the next
+        // heartbeat — and an alarm is not when there is work to do: an
+        // answer a socket has already read, and a task another thread has
+        // already started, arm no alarm at all, because this crate starts
+        // no thread of a socket's own and a queue is only ever drained by a
+        // pass. Sleeping out the delay is a ceiling on how late both are
+        // seen, and on a quiet link it is a ceiling of tens of seconds,
+        // which is a task answered with a timeout an answer had beaten.
+        //
+        // A host may sleep the delay, and the bridges hand it across for
+        // that: a host is woken by its own sockets and by whatever else it
+        // waits on, and a thread of this crate's is woken by nothing.
+        std::thread::sleep(Duration::from_millis(SLICE_MS));
     }
 }
 
@@ -393,10 +469,12 @@ fn locked<T: ?Sized>(lock: &Arc<Mutex<T>>) -> MutexGuard<'_, T> {
 mod tests {
     use std::future::Future;
     use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::task::{Context, Poll, Waker};
+    use std::time::{Duration, Instant};
 
-    use super::{Answer, Driver, Ends, Failure, Sent, StnLogic};
+    use super::{Answer, Driver, Ends, Failure, Sent, StnLogic, SLICE_MS};
     use crate::stn_callback_bridge::CgiProfile;
     use crate::task_profile::{ConnectProfile, ErrCmdType};
 
@@ -470,6 +548,54 @@ mod tests {
         assert_eq!(ends.lock().unwrap().request(7), None);
     }
 
+    /// A task no queue holds any more — one the app stopped, or one a core that
+    /// was cleared or destroyed threw away — is answered here or not at all:
+    /// nothing is ever going to report it, so an end that was not made now
+    /// would be a `Sent` that stays `Pending` for the life of the process.
+    #[test]
+    fn a_task_that_was_dropped_ends_as_cancelled_and_wakes_whoever_awaited_it() {
+        let ends = ends();
+        let mut sent = Sent::waiting(Arc::clone(&ends), 7);
+        assert!(poll(&mut sent).is_pending());
+
+        ends.lock().unwrap().cancel(7);
+        assert_eq!(ends.lock().unwrap().wakes().len(), 1);
+
+        let mut sent = Sent::waiting(Arc::clone(&ends), 7);
+        match poll(&mut sent) {
+            Poll::Ready(Err(Failure::Ended {
+                err_type, err_code, ..
+            })) => {
+                assert_eq!(err_type, ErrCmdType::Canceld);
+                assert_eq!(err_code, 0, "a cancellation carries no code of its own");
+            }
+            other => panic!("the task was cancelled: {other:?}"),
+        }
+
+        // and a task nobody is awaiting is not one there is an end to make
+        let mut ends = Ends::default();
+        ends.cancel(9);
+        assert!(ends.take(9).is_none());
+    }
+
+    #[test]
+    fn every_task_that_was_dropped_ends_as_cancelled() {
+        let ends = Arc::new(Mutex::new(Ends::default()));
+        ends.lock().unwrap().start(7, b"ask".to_vec());
+        ends.lock().unwrap().start(8, b"ask".to_vec());
+        ends.lock().unwrap().cancel_all();
+
+        for taskid in [7, 8] {
+            let mut sent = Sent::waiting(Arc::clone(&ends), taskid);
+            match poll(&mut sent) {
+                Poll::Ready(Err(Failure::Ended { err_type, .. })) => {
+                    assert_eq!(err_type, ErrCmdType::Canceld);
+                }
+                other => panic!("task {taskid} was cancelled: {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn an_end_nobody_awaited_is_kept_for_the_poll_that_comes_for_it() {
         // a task the two gates refused, which is over before there is a poll
@@ -487,5 +613,42 @@ mod tests {
         drop(driver);
         // the drop joins the thread, so the logic is this thread's again
         assert!(!logic.lock().unwrap().is_created());
+    }
+
+    /// The other drop: one made while the logic is held, by an app that is
+    /// holding it or by a callback of the pass the thread is running — which
+    /// is a pass holding it. The thread's next pass waits for that lock and
+    /// the join waits for the thread, so a drop that joined would not come
+    /// back at all; what ends the thread instead is the stop flag.
+    #[test]
+    fn a_driver_is_dropped_without_waiting_for_a_pass_that_cannot_end() {
+        let logic = Arc::new(Mutex::new(StnLogic::new()));
+        let driver = Driver::spawn(Arc::clone(&logic));
+        let held = Arc::clone(&logic);
+        let dropped = Arc::new(AtomicBool::new(false));
+        let back = Arc::clone(&dropped);
+
+        let holding = std::thread::spawn(move || {
+            let _pass = held.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            // a slice, and then some: the thread is only ever waiting for the
+            // lock between two passes, and it is the waiting for it that a
+            // drop that joins cannot come back from
+            std::thread::sleep(Duration::from_millis(SLICE_MS * 4));
+            drop(driver);
+            back.store(true, Ordering::SeqCst);
+        });
+
+        // A hang is not a failure any test reports, so the wait is bounded:
+        // what is asked about is a drop that does not come back.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !dropped.load(Ordering::SeqCst) {
+            assert!(
+                Instant::now() < deadline,
+                "the drop of a driver whose logic is held is waiting for the thread, and the \
+                 thread is waiting for the lock the drop is holding"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        holding.join().expect("the drop came back");
     }
 }

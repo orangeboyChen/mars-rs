@@ -18,7 +18,6 @@ package io.github.orangeboychen.marsrs.comm
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkInfo
-import android.net.Proxy
 import android.net.wifi.WifiInfo as AndroidWifiInfo
 import android.net.wifi.WifiManager
 import android.os.Handler
@@ -33,12 +32,17 @@ import android.telephony.TelephonyManager
  */
 object PlatformComm {
 
-    private const val IS_PROXY_ON = false
-
     @JvmField
+    @Volatile
     var context: Context? = null
 
+    /**
+     * The looper an app handed [init]. Kept, and posted on nothing: the nine
+     * questions of [C2Java] are asked on the thread the Rust side attached, and
+     * not on this one — `Mars.init` says why. [release] is what clears it.
+     */
     @JvmField
+    @Volatile
     var handler: Handler? = null
 
     const val E_NO_NET: Int = -1
@@ -85,14 +89,34 @@ object PlatformComm {
         var extraInfo: String? = null
     }
 
-    /** How the platform callbacks are initialized: the nine methods of C2Java all take what they
-     * ask about from the context that is kept here. */
+    /**
+     * How the platform callbacks are initialized: the nine methods of C2Java all
+     * take what they ask about from the context that is kept here.
+     *
+     * What is kept is the application context of the one handed over, and not
+     * that one: what the nine ask of it — a system service, a network, a signal
+     * — is the process' and not an Activity's, and a field nothing clears would
+     * hold that Activity for the life of the process.
+     */
     @JvmStatic
     fun init(ncontext: Context?, nhandler: Handler?) {
-        context = ncontext
+        context = ncontext?.applicationContext
         handler = nhandler
 
-        NetworkSignalUtil.initNetworkSignalUtil(ncontext)
+        NetworkSignalUtil.initNetworkSignalUtil(context)
+    }
+
+    /**
+     * Lets go of what [init] kept — the context, the handler and the phone-state
+     * listener — which is the only way an app that is done with the port has of
+     * dropping a context it handed over. Nothing of [C2Java] answers afterwards:
+     * every one of the nine reads the context this clears.
+     */
+    @JvmStatic
+    fun release() {
+        NetworkSignalUtil.release()
+        context = null
+        handler = null
     }
 
     object C2Java {
@@ -128,44 +152,29 @@ object PlatformComm {
         }
 
         /**
-         * The mars callback that gets the HTTP proxy info
+         * The mars callback that gets the HTTP proxy info.
+         *
+         * `-1`, and always: what `marsrs-jni` reads as "there is no proxy".
+         * Android has no process-wide HTTP proxy for a library to read any more
+         * — `android.net.Proxy` is deprecated, and what took its place
+         * (`ConnectivityManager.getDefaultProxy`) is a proxy of the network and
+         * not one an app sets for the process. What stood here was forty lines
+         * of reading behind a constant no caller could turn on, so every app
+         * got `-1` and none of them was told why. `NetStatusUtil.getProxyInfo`
+         * is the one that still reads one, for an app that wants it.
          */
         @JvmStatic
-        @Suppress("DEPRECATION")
-        fun getProxyInfo(strProxy: StringBuffer): Int {
-            if (!IS_PROXY_ON) {
-                return -1
-            }
-
-            var proxyPort = -1
-            var proxy = ""
-            try {
-                proxy = Proxy.getDefaultHost() ?: ""
-                proxyPort = Proxy.getDefaultPort()
-                if (proxy.isNotEmpty() && proxyPort > 0) {
-                    strProxy.append(proxy)
-                    return proxyPort
-                }
-                proxy = System.getProperty("http.proxyHost") ?: ""
-                val vmPort = System.getProperty("http.proxyPort")
-                if (vmPort != null && vmPort.isNotEmpty()) {
-                    proxyPort = Integer.parseInt(vmPort)
-                }
-                if (proxy.isNotEmpty()) {
-                    strProxy.append(proxy)
-                    return proxyPort
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-
-            strProxy.append(proxy)
-            return proxyPort
-        }
+        fun getProxyInfo(strProxy: StringBuffer): Int = -1
 
         @JvmStatic
         fun getStatisticsNetType(): Int {
-            val ctx = context ?: return 0
+            // `NETTYPE_NON`, the "no network" this class spells, and not the `0`
+            // a bare return carries: `0` is `NETTYPE_NOT_WIFI`, a network there
+            // is no type for, and `marsrs-jni` hands it to STN as one it may go
+            // out on — the one thing a released context cannot answer for. Every
+            // other `C2Java` callback answers its own empty for a context that
+            // is gone: `E_NO_NET`, `null`, `-1`.
+            val ctx = context ?: return NETTYPE_NON
 
             return try {
                 val ret = NetStatusUtil.getNetType(ctx)

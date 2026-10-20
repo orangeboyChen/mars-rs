@@ -51,7 +51,7 @@ pub use marsrs_core as bytes;
 /// Reading a `.xlog` back: the port of upstream's `decode_log_file.c`.
 pub mod decode;
 
-pub use decode::{decode_log_file, decode_records, DecodeError};
+pub use decode::{decode_log_file, decode_records, decode_records_counted, DecodeError, Decoded};
 
 #[cfg(test)]
 mod tests {
@@ -59,12 +59,25 @@ mod tests {
 
     #[test]
     fn the_xlog_surface_is_reachable_through_the_facade() {
-        // One name per re-export, so that a rename in a crate behind this one
-        // breaks this test rather than a caller's build.
-        assert!(std::any::type_name::<XLogConfig>().ends_with("XLogConfig"));
-        assert!(std::any::type_name::<LogBuffer>().ends_with("LogBuffer"));
-        // `PtrBuffer<'a>` keeps its lifetime in its name, so it is matched on
-        // and not compared whole.
-        assert!(std::any::type_name::<bytes::PtrBuffer<'static>>().contains("PtrBuffer"));
+        // One re-export per type, asked by identity and not by name: a name
+        // says what a type is called, and a facade that re-exported a type of
+        // its own would call it the same. What a caller needs is the type the
+        // crate behind the facade hands out, because a `LogBuffer` of this
+        // crate's own is not one the same `marsrs-buffer` would take, and a
+        // `PtrBuffer` either.
+        assert_eq!(
+            std::any::TypeId::of::<XLogConfig>(),
+            std::any::TypeId::of::<marsrs_appender::XLogConfig>()
+        );
+        assert_eq!(
+            std::any::TypeId::of::<LogBuffer>(),
+            std::any::TypeId::of::<marsrs_buffer::LogBuffer>()
+        );
+        // `PtrBuffer<'a>` borrows, so it is asked of the lifetime that makes
+        // it a type with no borrow in it.
+        assert_eq!(
+            std::any::TypeId::of::<bytes::PtrBuffer<'static>>(),
+            std::any::TypeId::of::<marsrs_core::PtrBuffer<'static>>()
+        );
     }
 }

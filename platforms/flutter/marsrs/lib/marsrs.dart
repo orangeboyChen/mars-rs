@@ -4,7 +4,7 @@
 // C ABI, and they land here.
 //
 // A method channel, and not `dart:ffi`: the Apple binary is a static library
-// inside `MarsRSXlog.xcframework`, and `DynamicLibrary.open` has nothing to open
+// inside `marsrs-xlog.xcframework`, and `DynamicLibrary.open` has nothing to open
 // for one. So what the two halves call is the instance API the Swift and the
 // Kotlin of the port publish — `mars_xlog_new_instance` and friends over the C
 // ABI on iOS, `Xlog(XlogConfig(...))` over the AAR on Android.
@@ -72,7 +72,7 @@ enum CompressMode {
 class XlogConfig {
   const XlogConfig({
     required this.logDir,
-    this.namePrefix = 'xlog',
+    this.namePrefix = defaultNamePrefix,
     this.level = LogLevel.info,
     this.mode = AppenderMode.async,
     this.pubKey = '',
@@ -86,7 +86,26 @@ class XlogConfig {
   final String logDir;
 
   /// What every file starts with, and the name the appender is known by.
+  ///
+  /// A blank one is [defaultNamePrefix], which is what [effectiveNamePrefix]
+  /// answers and what the halves are given.
   final String namePrefix;
+
+  /// The prefix an appender opened with this is known by: [namePrefix], or
+  /// [defaultNamePrefix] when that one is blank.
+  ///
+  /// Both halves substitute the default when they open — the empty prefix is
+  /// the one the process-wide appender is known by, and the Kotlin refuses a
+  /// blank one — so an appender an app opened with a blank prefix is stored
+  /// under the default, and a call naming the blank one finds no appender at
+  /// all. Naming the default is what keeps the `Xlog` an app holds and the
+  /// appender the halves hold the same one.
+  String get effectiveNamePrefix =>
+      namePrefix.trim().isEmpty ? defaultNamePrefix : namePrefix;
+
+  /// What a blank [namePrefix] is opened as: the prefix the Kotlin and the
+  /// Objective-C halves substitute.
+  static const String defaultNamePrefix = 'xlog';
 
   /// The level a record has to reach.
   final LogLevel level;
@@ -113,7 +132,7 @@ class XlogConfig {
   Map<String, Object?> toMap() {
     return <String, Object?>{
       'logDir': logDir,
-      'namePrefix': namePrefix,
+      'namePrefix': effectiveNamePrefix,
       'level': level.value,
       'mode': mode.value,
       'pubKey': pubKey,
@@ -130,6 +149,35 @@ class Xlog {
   Xlog._(this.namePrefix, this._level, this._mode);
 
   static const MethodChannel _channel = MethodChannel('marsrs');
+
+  /// The shortest lifetime of a file the appender takes, in seconds: one below
+  /// it — `0` among them — is refused, and the appender keeps the lifetime it
+  /// had. `MIN_LOG_ALIVE_TIME` of the Rust, which is the one place the number
+  /// is written down.
+  static const int minAliveTimeSeconds = 86400;
+
+  /// The [Xlog] of every prefix this isolate has open, and what [open] answers
+  /// for one that is open already: the platform side opens one appender per
+  /// prefix and answers the one that is open — the same appender, and not a
+  /// second one carrying the second configuration — the way the Kotlin, the
+  /// Swift and the ArkTS of the port all do.
+  ///
+  /// Without it a second [open] of one prefix is a second Dart object over the
+  /// one appender, and the two disagree: `close` on one of them releases the
+  /// appender the other still answers `isOpen` for, and a write through that
+  /// other is a write the platform side refuses and this library swallows.
+  /// A [level] or a [mode] the two objects mirror is the appender's, and the
+  /// second [XlogConfig] whose every field the platform side discarded is not
+  /// what either mirror reads.
+  static final Map<String, Xlog> _opened = <String, Xlog>{};
+
+  /// The [open] of a prefix that has not answered yet, and what a second [open]
+  /// of that prefix is answered with: the channel call below is an await, so an
+  /// [open] that ran in it read a map the first had not written to yet and
+  /// opened the prefix again — one appender, two [Xlog]s, and the second
+  /// displacing the first in [_opened], which is then the one [close] releases
+  /// while the app still writes through the one it was handed.
+  static final Map<String, Future<Xlog>> _opening = <String, Future<Xlog>>{};
 
   /// What every file of this appender starts with, and what it is known by.
   final String namePrefix;
@@ -159,9 +207,55 @@ class Xlog {
   /// The platform side answers `marsrs` / `the appender refused the
   /// configuration` when the appender would not take it, and
   /// `logDir is empty` when [XlogConfig.logDir] is.
+  ///
+  /// A prefix that is open already is answered with the [Xlog] it was opened
+  /// with, and [config] is not applied: the platform side answers the appender
+  /// of that prefix and not a second one, so a configuration it discarded is
+  /// not one any mirror of the appender may read. [close] the one you were
+  /// given before you open the prefix again.
   static Future<Xlog> open(XlogConfig config) async {
+    final prefix = config.effectiveNamePrefix;
+    final opening = _opening[prefix];
+    if (opening != null) {
+      return opening;
+    }
+    final pending = _open(config);
+    _opening[prefix] = pending;
+    try {
+      return await pending;
+    } finally {
+      _opening.remove(prefix);
+    }
+  }
+
+  static Future<Xlog> _open(XlogConfig config) async {
+    final prefix = config.effectiveNamePrefix;
+    final opened = _opened[prefix];
+    if (opened != null) {
+      final closing = opened._closing;
+      // A prefix that is closing is not open: the drain it is waiting for is
+      // the one that releases the appender, so an [open] that did not wait
+      // would be given an appender the platform side is still closing.
+      if (closing == null) {
+        return opened;
+      }
+      await closing;
+    }
+    // Read the map again, and not the [opened] this call started with: the
+    // await above is a place another [open] of this prefix ran in, and the
+    // [Xlog] that one left here is the appender that is open now. Opening
+    // over it would be two [Xlog]s of one appender, which is what this map
+    // is here to keep from happening, and the one displaced is the one
+    // [close] no longer takes out of it: `close` removes the [Xlog] the map
+    // holds, and not the one the app was handed.
+    final current = _opened[prefix];
+    if (current != null && current._closing == null) {
+      return current;
+    }
     await _channel.invokeMethod<void>('open', config.toMap());
-    return Xlog._(config.namePrefix, config.level, config.mode);
+    final xlog = Xlog._(prefix, config.level, config.mode);
+    _opened[prefix] = xlog;
+    return xlog;
   }
 
   /// The level a record has to reach: what this was last set to, and what the
@@ -215,18 +309,32 @@ class Xlog {
     if (_closing != null) {
       return;
     }
-    _maxFileSizeBytes = bytes;
     _send('setMaxFileSize', <String, Object?>{'bytes': bytes});
+    // Mirrored once it is a size the platform side took, and not before: a
+    // negative one is not a size either half hands to the C ABI, which reads
+    // it as an `unsigned long long`. `0` is a size and not an absence —
+    // "never split" — so it is mirrored like any other.
+    if (bytes >= 0) {
+      _maxFileSizeBytes = bytes;
+    }
   }
 
-  /// How many seconds a log file is kept; `0` is the C++'s own ten days.
+  /// How many seconds a log file is kept: `0` is the lifetime an appender
+  /// opened with none keeps — the C++'s own ten days — and one below a day is
+  /// a lifetime the appender refuses, so what this answers is the one it has
+  /// and not the last one it was asked for.
   int get maxAliveTimeSeconds => _maxAliveTimeSeconds;
 
   set maxAliveTimeSeconds(int seconds) {
     if (_closing != null) {
       return;
     }
-    _maxAliveTimeSeconds = seconds;
+    // Mirrored once it is a lifetime the appender took, and not before: a day
+    // is the shortest one it takes, and `0` is below it, so a mirror that took
+    // the number would answer a lifetime no appender is writing under.
+    if (seconds >= minAliveTimeSeconds) {
+      _maxAliveTimeSeconds = seconds;
+    }
     _send('setMaxAliveTime', <String, Object?>{'seconds': seconds});
   }
 
@@ -355,7 +463,17 @@ class Xlog {
     }
     final drain = _invoke<void>('close');
     _closing = drain;
-    return drain;
+    // The prefix is free again only once the drain has run, and not when this
+    // call was made: an [open] that came in between the two would be answered
+    // with this [Xlog], and one that came in after would open a prefix the
+    // platform side is still closing.
+    try {
+      return await drain;
+    } finally {
+      if (_opened[namePrefix] == this) {
+        _opened.remove(namePrefix);
+      }
+    }
   }
 
   /// Every call carries the name the appender was opened with, because the

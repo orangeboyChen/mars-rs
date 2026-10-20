@@ -65,6 +65,12 @@ internal final class XlogBackgroundFlush {
     /// - Parameter xlog: an appender to flush when the app leaves the screen.
     internal func add(_ xlog: Xlog) {
         lock.lock()
+        // The slots of the appenders that are gone come out here and not only
+        // when a notification drains the list: that happens when the app leaves
+        // the screen, so an app that opens a short-lived `Xlog` per component
+        // would hold a `WeakAppender` for every one it ever opened for as long
+        // as it stays in front.
+        appenders = appenders.filter { $0.appender != nil }
         appenders.append(WeakAppender(appender: xlog))
         lock.unlock()
     }

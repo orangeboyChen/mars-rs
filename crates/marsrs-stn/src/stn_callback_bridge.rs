@@ -60,6 +60,17 @@ pub type ShortLinkErrorListener = dyn FnMut(ErrCmdType, i32, &str, &str, u16) + 
 /// what STN does when the app says nothing: a task is encoded to nothing, an
 /// answer is a good one, a check that never happened is asked for again on the
 /// next connect.
+///
+/// Every question is asked from inside a pass, on the thread that asked for it
+/// — a host's run loop, the driver's thread, or the thread that called
+/// `start_task` — and that thread is holding the logic's lock while it runs,
+/// because a pass is a `&mut StnLogic`. A method that comes back into the
+/// logic from inside one, over a bridge or not, waits for a lock this thread
+/// already holds, and `std::sync::Mutex` is not reentrant, so it hangs rather
+/// than reporting an error: what an app that wants a task started from
+/// [`App::on_task_end`] does is hand the call to a thread of its own. This is
+/// the one way the port is narrower than the C++, whose own re-entry is a
+/// message queue and not a lock.
 pub trait App: Send {
     /// `MakesureAuthed` — whether the app is logged in for this host and user,
     /// which is what a `need_authed` task waits for.

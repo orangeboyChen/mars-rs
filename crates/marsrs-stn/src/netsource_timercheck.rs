@@ -2,12 +2,13 @@
 //! off a backup ip.
 //!
 //! While the app is active the C++ posts a check every [`TIME_CHECK_PERIOD`].
-//! Each one asks three questions before it does anything: is the long link on a
-//! backup ip ([`IpSourceType::Backup`]), is no check already running, and did
-//! fewer than [`MAX_SPEED_TEST_COUNT`] of them happen in the last
-//! [`INTERVAL_TIME`]? Then it resolves the host the link is on, picks one ip
-//! and one port out of what dns and `NetSource` give it at random, and asks
-//! whether that pair can be reached. A pair that can is one whose ban is
+//! Each one asks three questions before it does anything: is the long link on
+//! a backup ip ([`IpSourceType::Backup`]), is no check already running, and
+//! did no more than [`MAX_SPEED_TEST_COUNT`] of them happen in the last
+//! [`INTERVAL_TIME`] — one test more than the name says, which is what that
+//! const's own doc is about? Then it resolves the host the link is on, picks
+//! one ip and one port out of what dns and `NetSource` give it at random, and
+//! asks whether that pair can be reached. A pair that can is one whose ban is
 //! lifted, and the app is told — which is what makes the long link drop and
 //! connect again on a better ip.
 //!
@@ -100,8 +101,12 @@ impl NetSourceTimerCheck {
         Self::new_at(gettickcount())
     }
 
-    /// The same, with the reading the C++'s `gettickcount()` would hand out.
-    pub fn new_at(_now: u64) -> Self {
+    /// The same, with the reading the C++'s `gettickcount()` would hand out:
+    /// the seed of the random pick too, which is what makes a check a test can
+    /// pin down — [`crate::net_source::NetSource::new_at`] seeds from the
+    /// reading it is handed as well, and a check that read the clock besides
+    /// the reading it was given is one no reading of its own pins down.
+    pub fn new_at(now: u64) -> Self {
         Self {
             period_due: None,
             testing: false,
@@ -115,7 +120,7 @@ impl NetSourceTimerCheck {
             remove_long_ban_ip: None,
             speed_test: None,
             on_time_check_suc: None,
-            random: Box::new(crate::xorshift(marsrs_comm::tickcount::gettickcount())),
+            random: Box::new(crate::xorshift(now)),
         }
     }
 
@@ -280,8 +285,13 @@ impl NetSourceTimerCheck {
             return false;
         }
 
-        let ip_index = self.random(ips.len());
-        let port_index = self.random(ports.len());
+        // a host's `Random` is asked for `0..bound`, and one that answers its
+        // bound is out of that range: the draw is clamped to a pair there is
+        // rather than indexed with, because a check that panicked on the host's
+        // arithmetic is not one the ip is ever unbanned by. Both lists are
+        // known to be non-empty here.
+        let ip_index = self.random(ips.len()).min(ips.len() - 1);
+        let port_index = self.random(ports.len()).min(ports.len() - 1);
         let ip = ips[ip_index].clone();
         let port = ports[port_index];
 
@@ -611,6 +621,9 @@ mod tests {
         assert!(!check.try_connect_at(0));
         check.cancel_connect();
         check.stop_check();
-        assert!(format!("{check:?}").contains("NetSourceTimerCheck"));
+        // and what `__StopCheck` leaves alone: a check that was never in
+        // flight keeps its period armed
+        assert!(format!("{check:?}").contains("testing: false"));
+        assert!(check.period_due().is_some());
     }
 }

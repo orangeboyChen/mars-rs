@@ -51,7 +51,9 @@ internal final class Xlog: NSObject {
     /// `false` is a configuration it refused — an empty `logDir` or
     /// `namePrefix`, or a directory it cannot write to — and it is what the JS
     /// caller turns into a throw rather than a handle nothing was opened
-    /// for.
+    /// for. `true` for a prefix that is already open says which appender the
+    /// prefix has, and not that the configuration was taken again: the C ABI
+    /// answers the appender that is already there.
     @objc(open:)
     internal func openAppender(_ config: [AnyHashable: Any]) -> Bool {
         let logDir = string(config, "logDir")
@@ -61,14 +63,14 @@ internal final class Xlog: NSObject {
         let namePrefix = string(config, "namePrefix").isEmpty
             ? Self.defaultNamePrefix
             : string(config, "namePrefix")
-        // One appender per prefix: a prefix this module has already opened is
-        // answered as it is, and not opened again over the first, which would be
-        // a handle nothing releases. `src/index.ts` keeps the same map, so the
-        // two names an app holds for one prefix are one appender, and `close` on
-        // either is `close` on both.
-        guard handles[namePrefix] == nil else {
-            return true
-        }
+        // The C ABI is what keeps one appender per prefix: it answers the
+        // handle of the appender this prefix already has rather than opening a
+        // second one over its files, so asking again is how a prefix another
+        // part of the app closed is opened again — and the handle this stores
+        // is the one the registry answers, and not a dead one the last `open`
+        // left behind. `src/index.ts` keeps the same map, so the two names an
+        // app holds for one prefix are one appender, and `close` on either is
+        // `close` on both.
         let level = int(config, "level", Int32(MarsLevelInfo.rawValue))
         let mode = int(config, "mode", Int32(MarsAppenderAsync.rawValue))
         let compressMode = int(config, "compressMode", Int32(MarsCompressZlib.rawValue))
@@ -102,12 +104,12 @@ internal final class Xlog: NSObject {
     /// empty: there is no JS frame to name, and the C++ writes an empty one too.
     @objc(log:level:tag:message:)
     internal func log(_ namePrefix: String, level: Double, tag: String, message: String) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix), let native = int32(level) else {
             return
         }
         tag.withCString { cTag in
             message.withCString { cMessage in
-                mars_xlog_write_instance(handle, Int32(level), cTag, nil, nil, 0, cMessage)
+                mars_xlog_write_instance(handle, native, cTag, nil, nil, 0, cMessage)
             }
         }
     }
@@ -120,7 +122,7 @@ internal final class Xlog: NSObject {
     /// state, and the day's file is the question `logFiles` asks.
     @objc(currentLogPath:)
     internal func currentLogPath(of namePrefix: String) -> String? {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix) else {
             return nil
         }
         return path { out, len in
@@ -152,19 +154,35 @@ internal final class Xlog: NSObject {
     /// to build.
     @objc(isLoggable:level:)
     internal func isLoggable(_ namePrefix: String, level: Double) -> Bool {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix), let native = int32(level) else {
             return false
         }
-        return mars_xlog_is_enabled_for(handle, Int32(level)) != 0
+        return mars_xlog_is_enabled_for(handle, native) != 0
     }
 
     /// `mars_xlog_get_level`: what the appender answers, and not what JS holds.
+    ///
+    /// Asked of the handle [openHandle] answered, and not of the one [handles]
+    /// cached: a prefix is one appender to the C ABI, so an appender another
+    /// part of the app closed — a `MarsRSXlog.Xlog` of the same prefix — took
+    /// it out of the registry and left the handle cached here, and
+    /// `mars_xlog_get_level` answers `-1` for a handle it does not know.
     @objc(getLevel:)
     internal func level(of namePrefix: String) -> Double {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix) else {
             return Double(MARS_LEVEL_NONE)
         }
-        return Double(mars_xlog_get_level(handle))
+        let native = mars_xlog_get_level(handle)
+        // A level `MarsLogLevel` does not carry — the `-1` above among them —
+        // is answered as `MARS_LEVEL_NONE` and not as it stands, which is the
+        // answer the Kotlin half of this module gives for the same numbers:
+        // `0`, `MarsLevelVerbose`, is the level that logs everything, so a
+        // level that is not one read as `0` is the opposite of what an
+        // appender that writes nothing was asked.
+        guard native >= 0, native <= MARS_LEVEL_NONE else {
+            return Double(MARS_LEVEL_NONE)
+        }
+        return Double(native)
     }
 
     /// `mars_xlog_request_flush_instance`: tells the writer thread it may take what is
@@ -175,7 +193,7 @@ internal final class Xlog: NSObject {
     /// `flush`.
     @objc(requestFlush:)
     internal func requestFlush(_ namePrefix: String) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix) else {
             return
         }
         mars_xlog_request_flush_instance(handle)
@@ -187,7 +205,7 @@ internal final class Xlog: NSObject {
     /// on the JS thread and nowhere else.
     @objc(flushNow:)
     internal func flushNow(_ namePrefix: String) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix) else {
             return
         }
         mars_xlog_flush_now_instance(handle)
@@ -209,7 +227,7 @@ internal final class Xlog: NSObject {
         resolve: @escaping (Any?) -> Void,
         reject: @escaping (String?, String?, Error?) -> Void
     ) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix) else {
             resolve(nil)
             return
         }
@@ -222,25 +240,25 @@ internal final class Xlog: NSObject {
     /// `mars_xlog_set_level_instance`.
     @objc(setLevel:level:)
     internal func setLevel(_ namePrefix: String, level: Double) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix), let native = int32(level) else {
             return
         }
-        mars_xlog_set_level_instance(handle, Int32(level))
+        mars_xlog_set_level_instance(handle, native)
     }
 
     /// `mars_xlog_set_mode_instance`.
     @objc(setMode:mode:)
     internal func setMode(_ namePrefix: String, mode: Double) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix), let native = int32(mode) else {
             return
         }
-        mars_xlog_set_mode_instance(handle, Int32(mode))
+        mars_xlog_set_mode_instance(handle, native)
     }
 
     /// `mars_xlog_set_console_log_instance`.
     @objc(setConsoleLogEnabled:enabled:)
     internal func setConsoleLogEnabled(_ namePrefix: String, enabled: Bool) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix) else {
             return
         }
         mars_xlog_set_console_log_instance(handle, enabled ? 1 : 0)
@@ -251,36 +269,55 @@ internal final class Xlog: NSObject {
     /// 2^53.
     @objc(setMaxFileSize:bytes:)
     internal func setMaxFileSize(_ namePrefix: String, bytes: Double) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix), let native = uint64(bytes) else {
             return
         }
-        mars_xlog_set_max_file_size_instance(handle, UInt64(bytes))
+        mars_xlog_set_max_file_size_instance(handle, native)
     }
 
     /// `mars_xlog_set_max_alive_duration_instance`.
     @objc(setMaxAliveTime:seconds:)
     internal func setMaxAliveTime(_ namePrefix: String, seconds: Double) {
-        guard let handle = handles[namePrefix] else {
+        guard let handle = openHandle(of: namePrefix), let native = int64(seconds) else {
             return
         }
-        mars_xlog_set_max_alive_duration_instance(handle, Int64(seconds))
+        mars_xlog_set_max_alive_duration_instance(handle, native)
     }
 
-    /// `mars_xlog_release_instance`: closes the appender `open` made.
+    /// `mars_xlog_release_instance_of`: closes the appender `open` made.
+    ///
+    /// The prefix is released only while the appender of it is still the one
+    /// `open` was answered with: a release is given a *prefix*, so one another
+    /// part of the app opened after this one was closed would be theirs and
+    /// would be closed by this. Naming the handle is what makes the question
+    /// and the release one call.
+    ///
+    /// Off the JS thread, the way `flush` is: a method codegen answers no
+    /// promise from is a call made on the JS thread, and a release is a drain
+    /// of everything the appender still holds and a write of the banner that
+    /// ends the file. The handle is taken out of `handles` here and not in the
+    /// block, so a reopen of the prefix that lands while the drain is queued
+    /// is a reopen of an appender this close never held.
     @objc(close:)
     internal func close(_ namePrefix: String) {
-        guard handles.removeValue(forKey: namePrefix) != nil else {
+        guard let handle = handles.removeValue(forKey: namePrefix) else {
             return
         }
-        namePrefix.withCString { mars_xlog_release_instance($0) }
+        Self.flushQueue.async {
+            namePrefix.withCString { prefix in
+                mars_xlog_release_instance_of(prefix, handle)
+            }
+        }
     }
 
     /// Closes what `open` opened and `close` was not asked about: the module
     /// goes away with the bridge, and an appender is a file its writer thread
     /// holds open.
     deinit {
-        for namePrefix in handles.keys {
-            namePrefix.withCString { mars_xlog_release_instance($0) }
+        for (namePrefix, handle) in handles {
+            namePrefix.withCString { prefix in
+                mars_xlog_release_instance_of(prefix, handle)
+            }
         }
         handles.removeAll()
     }
@@ -310,6 +347,27 @@ internal final class Xlog: NSObject {
         case cacheDir = 3
     }
 
+    /// The handle [handles] holds for `namePrefix`, and `nil` when it is not
+    /// the appender of that prefix any more: the registry is asked, and the
+    /// handle it answers is the one that is open.
+    ///
+    /// The registry and not the handle alone, which is the question the Swift
+    /// `Xlog` of the port asks in its own `openHandle`:
+    /// `mars_xlog_release_instance` releases the appender of a *prefix* and
+    /// not of a handle, so a handle whose appender something else closed is
+    /// still the number this dictionary holds, and every symbol of the C ABI
+    /// answers a handle it does not know — `mars_xlog_get_level` with `-1`,
+    /// which is a level of no `MarsLogLevel`.
+    private func openHandle(of namePrefix: String) -> Int64? {
+        guard let handle = handles[namePrefix] else {
+            return nil
+        }
+        let owns = namePrefix.withCString { prefix in
+            mars_xlog_get_instance(prefix) == handle
+        }
+        return owns ? handle : nil
+    }
+
     /// Runs `body` with every one of `strings` as a C string, and frees the
     /// copies it made: `MarsXLogConfig` holds pointers rather than copies, and a
     /// Swift `String` has no C string of its own to hand out — `withCString` is
@@ -333,6 +391,44 @@ internal final class Xlog: NSObject {
     private func int(_ config: [AnyHashable: Any], _ key: String, _ fallback: Int32) -> Int32 {
         (config[key] as? NSNumber)?.int32Value ?? fallback
     }
+
+    /// What the caller sent for a level or a mode, and `nil` when it is not one:
+    /// a `Double`, because JS has one number type, and `Int32(_:)` traps on a
+    /// `NaN`, an infinity and a number out of `Int32`'s range — a trap on the
+    /// JS thread is the app dying, where a level nobody asked for is a record
+    /// that is not written. What it answers for a number with a fraction in it
+    /// is the number without one, which is the same truncation the Kotlin half
+    /// of this module does.
+    private func int32(_ value: Double) -> Int32? {
+        guard value.isFinite, value >= Double(Int32.min), value <= Double(Int32.max) else {
+            return nil
+        }
+        return Int32(value)
+    }
+
+    /// What the caller sent for a file size, and `nil` when it is not one: a
+    /// `UInt64` a `NaN`, a negative number or one above `UInt64.max` is not,
+    /// and `UInt64(_:)` traps on all three.
+    private func uint64(_ value: Double) -> UInt64? {
+        guard value.isFinite, value >= 0, value < 18446744073709551616.0 else {
+            return nil
+        }
+        return UInt64(value)
+    }
+
+    /// What the caller sent for a file lifetime, and `nil` when it is not one:
+    /// the same trap in `Int64(_:)`, and `0` is the lifetime an appender opened
+    /// with none keeps — the C++'s own ten days, and not one a setter can ask
+    /// for, since a lifetime below a day is refused — so a lifetime of `NaN`
+    /// was one the app never asked for rather than one it was told had been
+    /// refused.
+    private func int64(_ value: Double) -> Int64? {
+        guard value.isFinite,
+              value >= -9223372036854775808.0, value < 9223372036854775808.0 else {
+            return nil
+        }
+        return Int64(value)
+    }
     /// What `read` writes into the buffer it is handed, as a string; `nil` when
     /// it wrote nothing — a negative code, or a path of no length.
     ///
@@ -353,17 +449,19 @@ internal final class Xlog: NSObject {
     /// there is nothing at that index: the list the C++ fills a `std::vector`
     /// with, asked one at a time.
     ///
-    /// `daysAgo` is a `Double` because JS has one number type, and it is
-    /// converted with `Int32(exactly:)` and not `Int32(_:)`: the latter traps
-    /// on a value it cannot represent — `NaN`, `Infinity`, a number out of
-    /// `Int32`'s range — and a trap on the JS thread is the app dying, where
-    /// a day nobody asked for is an empty list.
+    /// `daysAgo` is a `Double` because JS has one number type, and it is read
+    /// with [`int32`] and not `Int32(_:)`: the latter traps on a value it
+    /// cannot represent — `NaN`, `Infinity`, a number out of `Int32`'s range
+    /// — and a trap on the JS thread is the app dying, where a day nobody
+    /// asked for is an empty list. [`int32`] truncates a fraction the way the
+    /// Kotlin half of this module does, so `1.5` days ago is yesterday on both
+    /// of them and not yesterday on one and nothing on the other.
     private func dayPaths(
         of namePrefix: String,
         daysAgo: Double,
         at symbol: (Int64, Int32, UInt32, UnsafeMutablePointer<CChar>, UInt32) -> Int32
     ) -> [String] {
-        guard let handle = handles[namePrefix], let timespan = Int32(exactly: daysAgo) else {
+        guard let handle = openHandle(of: namePrefix), let timespan = int32(daysAgo) else {
             return []
         }
         var walked: [String] = []

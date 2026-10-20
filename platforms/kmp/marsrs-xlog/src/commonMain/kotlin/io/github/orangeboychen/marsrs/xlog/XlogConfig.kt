@@ -34,13 +34,14 @@ public enum class CompressMode {
  *
  * Every property has the default the C++ project's own `XLogConfig` carries, so
  * the only one an app has to give is [logDir], and a config the appender cannot
- * honour is refused here and not silently by the bridge: `mars_xlog_open`
- * answers a config it does not like by opening nothing, and an app that finds
- * out three days later that it has no logs has no way back.
+ * honour is refused here and not silently by the bridge:
+ * `mars_xlog_new_instance` answers a config it does not like by opening
+ * nothing, and an app that finds out three days later that it has no logs has
+ * no way back.
  *
  * @property logDir the directory the log files are written to. It is created if
  *   it is missing, and it is the one field the C ABI insists on: without it,
- *   `mars_xlog_open` answers `MARS_XLOG_ERR_EMPTY_LOG_DIR` and opens nothing.
+ *   `mars_xlog_new_instance` answers the handle no appender is behind.
  * @property namePrefix the name every log file starts with (`marsrs_20260927.xlog`),
  *   and the name the appender is known by — an app that writes through two of
  *   them gives them two.
@@ -51,7 +52,9 @@ public enum class CompressMode {
  *   writes it unencrypted, the way an empty key does in the C++.
  * @property compressMode how a closed log file is compressed.
  * @property compressLevel the level of that compression; `0` is what the C++
- *   passes on — 6, the appender's own default.
+ *   passes on — 6, the appender's own default. The ceiling is the compressor's
+ *   and not one number for both: `9` for [CompressMode.ZLIB] and `22` for
+ *   [CompressMode.ZSTD].
  * @property cacheDir where the mmap cache the appender keeps lives; `null` puts
  *   it in [logDir], as the C++ does.
  * @property cacheDays how many days of log files are kept; `0` keeps all of
@@ -72,8 +75,14 @@ public data class XlogConfig(
         require(logDir.isNotBlank()) { "logDir must not be blank: no appender is opened without one" }
         require(namePrefix.isNotBlank()) { "namePrefix must not be blank: it is what an appender is known by" }
         require(cacheDays >= 0) { "cacheDays must not be negative, was $cacheDays" }
-        require(compressLevel in DEFAULT_COMPRESS_LEVEL..MAX_COMPRESS_LEVEL) {
-            "compressLevel must be in $DEFAULT_COMPRESS_LEVEL..$MAX_COMPRESS_LEVEL, was $compressLevel"
+        // The ceiling is the compressor's, and not one number for both: zstd
+        // takes levels zlib has no meaning for, and a config that opens on
+        // every other platform of the port — the Android AAR's own, and
+        // Swift's, which reads `0...22` for zstd — was refused here for being
+        // above zlib's `9`.
+        val maxLevel = if (compressMode == CompressMode.ZSTD) MAX_ZSTD_COMPRESS_LEVEL else MAX_ZLIB_COMPRESS_LEVEL
+        require(compressLevel in DEFAULT_COMPRESS_LEVEL..maxLevel) {
+            "compressLevel must be in $DEFAULT_COMPRESS_LEVEL..$maxLevel for $compressMode, was $compressLevel"
         }
     }
 
@@ -84,7 +93,10 @@ public data class XlogConfig(
 
         const val DEFAULT_COMPRESS_LEVEL = 0
 
-        const val MAX_COMPRESS_LEVEL = 9
+        const val MAX_ZLIB_COMPRESS_LEVEL = 9
+
+        /** `ZSTD_maxCLevel()`, and what the appender refuses a level above. */
+        const val MAX_ZSTD_COMPRESS_LEVEL = 22
 
         const val NO_CACHE_DAYS = 0
     }

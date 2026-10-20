@@ -402,7 +402,15 @@ impl WeakNetworkLogic {
             self.report(WeakKey::CgiCount, 1, false);
             if outcome.err_type == ErrCmdType::Ok {
                 self.report(WeakKey::CgiSucc, 1, false);
-                self.report(WeakKey::CgiCost, outcome.cost() as i32, false);
+                // `kCgiCost` is an `int` in the C++, and the cost of a task is
+                // a span of milliseconds: one that ran for more than the
+                // twenty-four days an `int` can carry is reported at its
+                // ceiling and not as a negative number
+                self.report(
+                    WeakKey::CgiCost,
+                    i32::try_from(outcome.cost()).unwrap_or(i32::MAX),
+                    false,
+                );
             } else {
                 self.cgi_fail_num += 1;
                 if let Some(key) = WeakKey::for_fail_step(outcome.fail_step()) {
@@ -443,7 +451,9 @@ impl WeakNetworkLogic {
             self.report(WeakKey::ExitWeak, 1, false);
             self.report(
                 WeakKey::WeakTime,
-                self.span_since(self.first_mark_tick, now) as i32,
+                // the same ceiling: a weak network that lasted longer than an
+                // `int` can carry is reported as one that lasted that long
+                i32::try_from(self.span_since(self.first_mark_tick, now)).unwrap_or(i32::MAX),
                 false,
             );
         }
@@ -580,6 +590,27 @@ mod tests {
             logic.is_last_valid_connect_fail_at(10_100),
             Some((true, 100))
         );
+    }
+
+    #[test]
+    fn a_span_no_int_can_carry_is_reported_at_its_ceiling() {
+        let reports = Reports::default();
+        let mut logic = reporting(&reports);
+        logic.on_connect_event_at(1_000, true, WEAK_CONNECT_RTT + 1, 0);
+        assert!(logic.is_weak());
+
+        // a task that took longer than the twenty-four days an `int` can
+        // carry is a cost of `i32::MAX`, and not of whatever the low bits of
+        // the span happen to be
+        let long = TaskOutcome::new(0, i32::MAX as u64 + 1);
+        logic.on_task_event_at(2_000, &long);
+        assert_eq!(reports.value_of(WeakKey::CgiCost), Some(i32::MAX));
+
+        // and the weak network it was marked for, ended after as long
+        let after = 2_000 + i32::MAX as u64 + 1;
+        logic.on_connect_event_at(after, false, 0, 0);
+        assert!(!logic.is_weak());
+        assert_eq!(reports.value_of(WeakKey::WeakTime), Some(i32::MAX));
     }
 
     #[test]

@@ -24,11 +24,12 @@ pub struct CheckResultProfile {
     pub ip: String,
     /// `port` — tcp, http.
     pub port: u32,
-    /// `conntime` — how long the connect took.
+    /// `conntime` — how long the connect took: tcp.
     pub conntime: u64,
-    /// `rtt` — tcp and http round trip, dns resolve time.
+    /// `rtt` — tcp and http round trip, dns resolve time, ping's average.
     pub rtt: u64,
-    /// `rtt_str` — ping, which reports a string.
+    /// `rtt_str` — ping, which reports a string, and the same number `rtt`
+    /// carries truncated to whole milliseconds.
     pub rtt_str: String,
 
     /// `url` — http.
@@ -43,7 +44,7 @@ pub struct CheckResultProfile {
 
     /// `domain_name` — the dns host.
     pub domain_name: String,
-    /// `local_dns` — dns.
+    /// `local_dns` — dns: the resolver the addresses came from.
     pub local_dns: String,
     /// `ip1` — dns.
     pub ip1: String,

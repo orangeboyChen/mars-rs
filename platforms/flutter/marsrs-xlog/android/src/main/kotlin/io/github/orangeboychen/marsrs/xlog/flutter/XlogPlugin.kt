@@ -1,4 +1,4 @@
-// The Android half of the `marsrs_xlog` plugin: the fifteen methods of
+// The Android half of the `marsrs_xlog` plugin: the fourteen methods of
 // the plugin's channel, each of them a straight call of a member of `Xlog` —
 // the Kotlin face of `libmarsrsxlog.so` in the `marsrs-xlog` AAR, and the same
 // class `platforms/kmp/marsrs-xlog` publishes to a Kotlin Multiplatform app
@@ -23,6 +23,8 @@
 
 package io.github.orangeboychen.marsrs.xlog.flutter
 
+import android.os.Handler
+import android.os.Looper
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -34,6 +36,9 @@ import io.github.orangeboychen.marsrs.xlog.LogLevel
 import io.github.orangeboychen.marsrs.xlog.Xlog
 import io.github.orangeboychen.marsrs.xlog.XlogConfig
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 /** The Android half of `marsrs_xlog`. */
 class XlogPlugin :
@@ -49,7 +54,33 @@ class XlogPlugin :
      */
     private val appenders = ConcurrentHashMap<String, Xlog>()
 
+    /**
+     * The one thread `flush` drains on, and the one the iOS half drains on for
+     * the same reason: a drain blocks the thread it runs on, and the thread a
+     * platform channel is handled on is the app's main looper — which is the
+     * thread the UI draws on, and not one an app's `await xlog.flush()` may
+     * hold up. Serial, so two drains of one appender are one drain after
+     * another and not two writers in one file.
+     *
+     * A `var`, and rebuilt by [onAttachedToEngine], because [onDetachedFromEngine]
+     * shuts this one down: a detach is not always the last thing that happens
+     * to a plugin instance, and no drain can be put on an executor that is
+     * shut down, so the `flush` after one would be a `RejectedExecutionException`
+     * where a plugin that is attached again is a plugin that answers.
+     */
+    private var flushQueue: ExecutorService = Executors.newSingleThreadExecutor()
+
+    /** What a drain is answered on: a `Result` is a reply on the channel, and
+     * the channel is the main thread's. */
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        // What [onDetachedFromEngine] shut down, which nothing can be handed
+        // again: an attach after a detach is a plugin that answers `flush`
+        // again, and not one that throws on the first Dart caller to ask.
+        if (flushQueue.isShutdown) {
+            flushQueue = Executors.newSingleThreadExecutor()
+        }
         channel = MethodChannel(binding.binaryMessenger, CHANNEL).also {
             it.setMethodCallHandler(this)
         }
@@ -58,6 +89,11 @@ class XlogPlugin :
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel?.setMethodCallHandler(null)
         channel = null
+        closeAll()
+        // The thread `flush` drains on is this plugin's and not the app's, and
+        // a plugin outlives the engine it was attached to: a thread left
+        // running would be one more per engine, for the life of the process.
+        flushQueue.shutdown()
     }
 
     override fun onMethodCall(call: MethodCall, result: Result) {
@@ -97,6 +133,15 @@ class XlogPlugin :
      * is answered with, rather than a handle nothing was opened for.
      */
     private fun open(call: MethodCall, result: Result) {
+        // The message the Dart doc of `Xlog.open` promises for an empty
+        // `logDir`, and the one the iOS half answers: `Xlog.open` below
+        // refuses a blank one too, but with the single message `marsrs-jni`
+        // has for every refusal, which names neither the field nor the
+        // reason.
+        if (call.string("logDir").isBlank()) {
+            result.error(ERROR, "logDir is empty", null)
+            return
+        }
         val config = XlogConfig(
             logDir = call.string("logDir"),
             namePrefix = call.string("namePrefix").ifBlank { DEFAULT_NAME_PREFIX },
@@ -155,10 +200,24 @@ class XlogPlugin :
      * disk, and the one the Dart caller awaits — that caller has no thread of
      * its own to block on, so the wait is this side's and the answer is what
      * it awaits.
+     *
+     * Off the main thread, and back to it for the answer, the way the iOS half
+     * does it: `onMethodCall` runs on the app's main looper, so a drain here
+     * would be a drain on the thread the UI draws on.
      */
     private fun flush(call: MethodCall, result: Result) {
-        call.appender().flushNow()
-        result.success(null)
+        val appender = call.appender()
+        flushQueue.execute {
+            // Answered either way: a `Result` is one reply and one only, and
+            // the Dart caller is awaiting this one — so a drain that throws is
+            // an `await` nothing ever settles, and a plugin that looks hung.
+            try {
+                appender.flushNow()
+                mainHandler.post { result.success(null) }
+            } catch (e: Exception) {
+                mainHandler.post { result.error(ERROR, e.message, null) }
+            }
+        }
     }
 
     /** `Xlog.requestFlush`: asks the writer thread to drain, answers nothing. */
@@ -197,11 +256,74 @@ class XlogPlugin :
         result.success(null)
     }
 
-    /** `Xlog.close`: releases the appender `open` made. */
+    /**
+     * `Xlog.close`: releases the appender [open] made.
+     *
+     * Off the main thread, and back to it for the answer, the way [flush] does
+     * it: `Xlog.close` is a drain of everything the appender is still holding,
+     * and a write of the banner that ends the file, so an app that closes its
+     * appender on the way out would hold the thread the UI draws on for as
+     * long as that takes. The one drain that stays on it is the one a queue
+     * that was shut down already refuses to take — what that means is that
+     * [closeAll] ran, and with it this close.
+     */
     private fun close(call: MethodCall, result: Result) {
         val namePrefix = call.string("namePrefix")
-        appenders.remove(namePrefix)?.close()
-        result.success(null)
+        // Taken out of [appenders] here, and not on the queue below: the map is
+        // this thread's, so a second `close` of the prefix that lands before
+        // the drain runs finds nothing and releases nothing twice.
+        //
+        // Not what keeps a reopen safe, though: a reopen is answered the handle
+        // that is still there, and the release below closes that one — so what
+        // an app owes a prefix it closed is the `await` of this call, which is
+        // what the Dart `open` of the same prefix waits for.
+        val appender = appenders.remove(namePrefix)
+        if (appender == null) {
+            result.success(null)
+            return
+        }
+        try {
+            flushQueue.execute {
+                // Answered either way, the way [flush] answers: what a
+                // `close()` is awaiting is the drain, and a drain that threw
+                // is not one that answered.
+                try {
+                    appender.close()
+                    mainHandler.post { result.success(null) }
+                } catch (e: Exception) {
+                    mainHandler.post { result.error(ERROR, e.message, null) }
+                }
+            }
+        } catch (e: RejectedExecutionException) {
+            // The one drain that is not off this thread: the queue is shut
+            // down, so there is no thread to hand it to, and an appender that
+            // is going away with the plugin is drained here or not at all.
+            appender.close()
+            result.success(null)
+        }
+    }
+
+    /**
+     * Every appender [open] made, closed: what a plugin the engine has left
+     * owes the files it was writing, and the only drain they will get — the
+     * queue is shut down below, so an appender left open is one whose records
+     * stay in its buffer, whose writer thread stays alive and whose cache
+     * stays claimed for the life of the process.
+     *
+     * Closed on the queue and not on this thread, which is the app's main
+     * looper, because `Xlog.close` is itself a drain; and `shutdown` runs what
+     * it was handed before it stops, so these do run. A queue that was shut
+     * down already — a detach before this one — was handed them then.
+     */
+    private fun closeAll() {
+        try {
+            flushQueue.execute {
+                appenders.values.forEach { it.close() }
+                appenders.clear()
+            }
+        } catch (e: RejectedExecutionException) {
+            appenders.clear()
+        }
     }
 
     /**
@@ -260,7 +382,10 @@ class XlogPlugin :
         /** The C ABI reads a max file size of `0` as "never split". */
         private const val NO_FILE_SIZE_LIMIT = 0L
 
-        /** The C ABI reads a max alive time of `0` as the C++'s own ten days. */
+        /** `0`: the lifetime an appender opened with none keeps, which is the
+         * C++'s own ten days — and not one the C ABI applies, because a
+         * lifetime below a day is refused and `0` is below it. What it is here
+         * is the number a call that named none sends. */
         private const val NO_ALIVE_TIME_LIMIT = 0L
     }
 }

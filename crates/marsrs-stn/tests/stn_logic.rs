@@ -14,8 +14,9 @@
 
 use std::future::Future;
 use std::pin::pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll, Wake, Waker};
 
 use marsrs_stn::sent::{self, Answer, Failure};
 use marsrs_stn::task_profile::TaskFailHandleType;
@@ -513,14 +514,22 @@ fn a_reset_throws_every_task_away() {
 
     assert!(!host.logic.has_task(7));
     assert!(host.logic.is_created(), "the core is made again");
-    // and the app is still the one STN talks to
-    host.write(Some(b"/cgi-bin/9"));
-    assert!(host
+    // and the app is still the one STN talks to: an app that says it is not
+    // logged in is the only thing that can answer `false`, since the answer
+    // an app that never said is `true`
+    host.authed(false);
+    assert!(!host
         .logic
         .bridge()
         .lock()
         .unwrap()
         .makesure_authed(LONG_HOST, "user"));
+    assert_eq!(
+        host.said().authed.last(),
+        Some(&(LONG_HOST.to_string(), "user".to_string()))
+    );
+
+    host.write(Some(b"/cgi-bin/9"));
 }
 
 #[test]
@@ -679,6 +688,22 @@ fn settled(awaited: sent::Sent) -> Result<Answer, Failure> {
     }
 }
 
+/// A waker that counts: what an executor does with a wake is poll again, so
+/// a call that ends a task is a call that wakes whoever awaited it, and the
+/// count is the only thing that says so — polling again finds the end either
+/// way.
+struct Counting(AtomicUsize);
+
+impl Wake for Counting {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 /// A task an app awaits, on the long link, with the body the app handed.
 fn awaited(host: &mut Host, taskid: u32) -> sent::Sent {
     let mut task = Task::new(taskid, 12);
@@ -742,6 +767,50 @@ fn an_awaited_task_that_failed_ends_with_where_it_failed() {
     }
 }
 
+/// `DestroyLonglink_ext` takes every task of the link with it, and those are
+/// ended inside the call — so the call is what wakes whoever awaited one of
+/// them, and not the next pass. An app's executor polls when it is woken and
+/// not on a timer, and a host whose [`StnLogic::due_delay`] came back `None`
+/// makes no pass at all.
+#[test]
+fn a_task_the_destroyed_link_took_with_it_wakes_whoever_awaited_it() {
+    let mut host = Host::new();
+    host.bring_up(MAIN, LongLinkStatus::Connected);
+    let awaited = awaited(&mut host, 7);
+
+    let counting = Arc::new(Counting(AtomicUsize::new(0)));
+    let waker = Waker::from(Arc::clone(&counting));
+    let mut awaited = pin!(awaited);
+    let mut context = Context::from_waker(&waker);
+
+    assert!(
+        awaited.as_mut().poll(&mut context).is_pending(),
+        "a task that is out is not one that ended"
+    );
+    assert_eq!(
+        counting.0.load(Ordering::SeqCst),
+        0,
+        "nothing has ended it yet"
+    );
+
+    assert!(host.logic.destroy_long_link_at(START + 100, MAIN));
+    assert!(!host.logic.has_task(7));
+    assert!(
+        counting.0.load(Ordering::SeqCst) > 0,
+        "no pass is going to end a task no queue holds"
+    );
+
+    match awaited.as_mut().poll(&mut context) {
+        Poll::Ready(Err(Failure::Ended {
+            err_type, err_code, ..
+        })) => {
+            assert_eq!(err_type, ErrCmdType::Local);
+            assert!(err_code < 0, "the link that went away is why: {err_code}");
+        }
+        other => panic!("the task ended with the link, and not like this: {other:?}"),
+    }
+}
+
 #[test]
 fn a_task_no_queue_took_ends_before_the_app_awaits_it() {
     // no net core, so nothing to start it on
@@ -773,4 +842,76 @@ fn a_task_no_queue_took_ends_before_the_app_awaits_it() {
     host.logic.net_core().expect("no net core").release();
     let awaited = host.logic.send_at(START, Task::new(9, 12), Vec::new());
     assert_eq!(settled(awaited), Err(Failure::Refused));
+}
+
+/// `StopTask` — the queue drops the task and reports nothing, which in the C++
+/// is the whole of it. Here an app may be awaiting the task, and nothing is
+/// ever going to report it again, so the stop is what answers it.
+#[test]
+fn a_task_the_app_stopped_is_answered_as_cancelled() {
+    let mut host = Host::new();
+    host.bring_up(MAIN, LongLinkStatus::Connected);
+    let awaited = awaited(&mut host, 7);
+
+    assert!(
+        host.logic.stop_task(7),
+        "the long link's queue had the task"
+    );
+    assert!(!host.logic.has_task(7));
+
+    // the app is not asked about a task it broke off itself, so what ends the
+    // await is the stop and not a pass
+    assert!(host.said().ended.is_empty());
+    assert_cancelled(settled(awaited));
+}
+
+/// `ClearTasks` and `OnDestroy` throw the queues away with everything on them,
+/// and [`StnLogic`] outlives both: every task still being awaited is answered
+/// here or not at all.
+#[test]
+fn tasks_a_core_threw_away_are_answered_as_cancelled() {
+    let mut host = Host::new();
+    host.bring_up(MAIN, LongLinkStatus::Connected);
+    let first = awaited(&mut host, 7);
+    let second = awaited(&mut host, 8);
+    host.logic.clear_tasks();
+    assert!(!host.logic.has_task(7));
+    assert!(!host.logic.has_task(8));
+    assert_cancelled(settled(first));
+    assert_cancelled(settled(second));
+
+    // and a core the app destroyed takes every queue with it
+    let mut host = Host::new();
+    host.bring_up(MAIN, LongLinkStatus::Connected);
+    let awaited = awaited(&mut host, 9);
+    assert!(host.logic.destroy());
+    assert_cancelled(settled(awaited));
+}
+
+/// `ReleaseNet` leaves the logic created and empties every queue, so an await
+/// of a task it threw away has to be answered here too: a released core ends
+/// nothing, and a pass never comes for it again.
+#[test]
+fn tasks_a_released_core_threw_away_are_answered_as_cancelled() {
+    let mut host = Host::new();
+    host.bring_up(MAIN, LongLinkStatus::Connected);
+    let awaited = awaited(&mut host, 7);
+    host.logic.release();
+    assert!(host.logic.is_created(), "the core is still there");
+    assert!(!host.logic.has_task(7));
+    assert_cancelled(settled(awaited));
+}
+
+/// What a task that was dropped rather than run out ends with: `kEctCanceld`,
+/// and no error code of its own.
+fn assert_cancelled(outcome: Result<Answer, Failure>) {
+    match outcome {
+        Err(Failure::Ended {
+            err_type, err_code, ..
+        }) => {
+            assert_eq!(err_type, ErrCmdType::Canceld);
+            assert_eq!(err_code, 0);
+        }
+        other => panic!("the task was cancelled, and not like this: {other:?}"),
+    }
 }

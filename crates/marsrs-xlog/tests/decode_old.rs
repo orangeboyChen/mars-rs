@@ -159,7 +159,9 @@ fn a_chunk_that_runs_past_the_body_ends_the_chunk_walk() {
     // of the record is not a stream and it contributes no text — and the record
     // behind it is what says the walk went on, which is the point of it. The C
     // exits the whole process on a stream that will not inflate; this does not.
-    assert!(text.contains("after\n"), "{text}");
+    // "ab" is not in it: the record the walk gave up on contributes no text
+    // at all, and not the half of a chunk it read.
+    assert_eq!(text, "after\n", "{text}");
 }
 
 /// One sync record of the shape an appender writes now, for a file that mixes

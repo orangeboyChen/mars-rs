@@ -50,6 +50,11 @@ esac
 # missing — a `--depth=1` fetch of a commit the clone already has would draw a
 # shallow boundary the merge base of the diff below may sit behind.
 if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+  # A fetch that cannot get it is answered by what comes after and not by
+  # this line: `git diff` of a commit the clone does not have fails too, and
+  # a diff it cannot compute is one of the answers this script must never
+  # conclude "nothing changed" from. So the `|| true` is the fetch's and the
+  # gate's answer is the `needed true` below.
   git fetch --no-tags --depth=1 origin "$BASE_SHA" 2>/dev/null || true
 fi
 

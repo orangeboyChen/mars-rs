@@ -213,8 +213,8 @@ above do it, and so does an app that closes its appender.
 | knob | what it does | default |
 |---|---|---|
 | `maxFileSizeBytes` | a file is closed and a new one opened once it reaches this many bytes | `0` — never split |
-| `maxAliveTimeSeconds` | a file older than this many seconds is dropped | `0` — keep it (the C++ keeps its own ten days) |
-| `cacheDays` | an async cache file older than this many days is dropped | `0` — keep every one |
+| `maxAliveTimeSeconds` | a file older than this many seconds is dropped | `0` — ten days; a value under a day is refused, and the one already in force stands |
+| `cacheDays` | how many days a file staged in the cache directory waits before it is moved into the log directory | `0` — nothing is staged: the day's file is written in the log directory |
 
 ## Reading a file back
 
@@ -225,8 +225,9 @@ mars logs reads these.
 ::: code-group
 
 ```bash [The CLI]
-cargo install marsrs-xlog          # puts `xlog` on the $PATH; a release
-                                   # carries the same command as an archive
+# The crate is not on crates.io yet — publication is pending — so this is the
+# tag; a release carries the same command as an archive.
+cargo install --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3 marsrs-xlog
 xlog decode --privkey=<hex> marsrs_20260927.xlog --out=marsrs.plain
 ```
 

@@ -38,7 +38,9 @@ fn trim(s: &str) -> &str {
 /// turns into [`DEFAULT_PORT`].
 ///
 /// The sign counts, because the C++'s is a cast and not a check: a port of `-1`
-/// is `65535` there, and here, and not a port that did not read.
+/// is `65535` there, and here, and not a port that did not read. So does a
+/// number `strtol` cannot hold: it answers `LONG_MAX` for one, which the cast
+/// makes `65535` and not the `0` that would have become [`DEFAULT_PORT`].
 fn atoi(text: &str) -> u16 {
     let text = text.trim_start_matches(|char: char| char.is_ascii_whitespace());
     let (negative, digits) = match text.strip_prefix('-') {
@@ -49,7 +51,11 @@ fn atoi(text: &str) -> u16 {
         .chars()
         .take_while(|char| char.is_ascii_digit())
         .collect();
-    let value = digits.parse::<i64>().unwrap_or(0);
+    let value = if digits.is_empty() {
+        0
+    } else {
+        digits.parse::<i64>().unwrap_or(i64::MAX)
+    };
     (if negative { -value } else { value }) as u16
 }
 
@@ -114,20 +120,38 @@ impl HttpUrlParser {
         }
 
         // `ci_find_substr(url_, "/", schema_start + 1)` — the first `/` after
-        // the scheme ends the host
-        let scheme_end = self.url[scheme_start + 1..]
-            .find('/')
+        // the scheme ends the host. It is looked for in the bytes and not in a
+        // slice of the URL: a host need not be ASCII, and the byte the C++
+        // starts searching at is not a boundary a slice may be taken at —
+        // `http://éxample.com/x` starts its host with two bytes.
+        let scheme_end = self.url.as_bytes()[scheme_start + 1..]
+            .iter()
+            .position(|byte| *byte == b'/')
             .map_or(self.url.len(), |at| scheme_start + 1 + at);
         let hoststr = trim(&self.url[scheme_start..scheme_end]);
 
         // `ci_find_substr(hoststr, "@", 0)` — `user:pwd@host`, and the host is
         // what comes after the `@`
         let host_start = hoststr.find('@').map_or(0, |at| at + 1);
+        let hoststr_rest = &hoststr[host_start..];
 
         // `ci_find_substr(hoststr, ":", host_start)` — a port, unless the URL
-        // ends in a colon and names none
-        let (host, port) = match hoststr[host_start..].find(':') {
-            None => (hoststr[host_start..].to_owned(), DEFAULT_PORT),
+        // ends in a colon and names none.
+        //
+        // A bracketed host is skipped: `[::1]:8080` is an address and a port,
+        // and the first colon the C++ finds is one of the address's, which is
+        // what reads `[` as the host and leaves the port at `80`.
+        let port_at = match hoststr_rest.strip_prefix('[') {
+            Some(after_bracket) => after_bracket.find(']').and_then(|close| {
+                // `close` is where the `]` is in `after_bracket`, which is one
+                // further on in `hoststr_rest`; the port's colon is the first
+                // one after it
+                hoststr_rest[close + 1..].find(':').map(|at| close + 1 + at)
+            }),
+            None => hoststr_rest.find(':'),
+        };
+        let (host, port) = match port_at {
+            None => (hoststr_rest.to_owned(), DEFAULT_PORT),
             Some(at) => {
                 let port_start = host_start + at;
                 let host = hoststr[host_start..port_start].to_owned();

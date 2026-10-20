@@ -42,6 +42,7 @@ import io.github.orangeboychen.marsrs.xlog.Xlog
 import io.github.orangeboychen.marsrs.xlog.XlogConfig
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 /** The Android half of `Xlog`. */
 class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactContext) {
@@ -63,11 +64,12 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * `Xlog.open(XlogConfig(...))`: opens the appender of the configuration
      * `src/index.ts` sent, and answers whether it took it.
      *
-     * One appender per prefix: a prefix [appenders] already holds is answered
-     * as `true` without a second `Xlog` over the first, which would be a handle
-     * nothing releases. `src/index.ts` does the same, so the two names an app
-     * holds for one prefix are one appender and `close` on either closes it for
-     * both.
+     * One appender per prefix: `Xlog.open` answers the appender the prefix
+     * already has rather than a second one over its files, so asking again is
+     * how a prefix another part of the app closed is opened again — and a
+     * prefix whose appender is still open is answered as it is. `src/index.ts`
+     * does the same, so the two names an app holds for one prefix are one
+     * appender and `close` on either closes it for both.
      *
      * [Xlog.open] is what refuses a configuration the appender cannot honour —
      * a blank `logDir` or `namePrefix`, a compression level out of range — and
@@ -77,9 +79,12 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      */
     override fun open(config: ReadableMap): Boolean {
         val namePrefix = config.string("namePrefix").ifBlank { DEFAULT_NAME_PREFIX }
-        if (appenders.containsKey(namePrefix)) {
-            return true
-        }
+        // [appenders] holding one is not the same as there being one: the
+        // appender of a prefix is one for the whole process, so an `Xlog` of
+        // this prefix the app closed itself took it away, and answering `true`
+        // for it would leave every later call writing through a handle that
+        // has no appender behind it.
+        appenders[namePrefix]?.takeIf { it.isOpen }?.let { return true }
         // Both calls and not the open only: `XlogConfig` is where a blank
         // `logDir`, a negative `cacheDays` and a compression level out of
         // range are refused, and it throws before `Xlog.open` is ever reached
@@ -113,7 +118,8 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * too.
      */
     override fun log(namePrefix: String, level: Double, tag: String, message: String) {
-        appender(namePrefix)?.log(LogLevel.of(level.toInt()), tag, message)
+        val native = int32(level) ?: return
+        appender(namePrefix)?.log(LogLevel.of(native), tag, message)
     }
 
     /** `Xlog.currentLogPath`: the directory this appender writes its files
@@ -121,20 +127,35 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
     override fun currentLogPath(namePrefix: String): String? = appender(namePrefix)?.currentLogPath
 
     /** `Xlog.logFiles`: the day's files that are there. */
-    override fun logFiles(namePrefix: String, daysAgo: Double): WritableArray? =
-        appender(namePrefix)?.logFiles(daysAgo.toLong())?.let { Arguments.fromList(it) }
+    override fun logFiles(namePrefix: String, daysAgo: Double): WritableArray? {
+        val day = int32(daysAgo) ?: return Arguments.createArray()
+        return appender(namePrefix)?.logFiles(day.toLong())?.let { Arguments.fromList(it) }
             ?: Arguments.createArray()
+    }
 
     /** `Xlog.logFileNames`: the day's names, whether or not they are there yet. */
-    override fun logFileNames(namePrefix: String, daysAgo: Double): WritableArray? =
-        appender(namePrefix)?.logFileNames(daysAgo.toLong())?.let { Arguments.fromList(it) }
+    override fun logFileNames(namePrefix: String, daysAgo: Double): WritableArray? {
+        val day = int32(daysAgo) ?: return Arguments.createArray()
+        return appender(namePrefix)?.logFileNames(day.toLong())?.let { Arguments.fromList(it) }
             ?: Arguments.createArray()
+    }
 
     /** `Xlog.isLoggable`: whether a record of the level would be written. */
-    override fun isLoggable(namePrefix: String, level: Double): Boolean =
-        appender(namePrefix)?.isLoggable(LogLevel.of(level.toInt())) ?: false
+    override fun isLoggable(namePrefix: String, level: Double): Boolean {
+        val native = int32(level) ?: return false
+        return appender(namePrefix)?.isLoggable(LogLevel.of(native)) ?: false
+    }
 
-    /** `Xlog.level`, read: what `marsrs-jni` answers, and not what JS holds. */
+    /**
+     * `Xlog.level`, read: what `marsrs-jni` answers, and not what JS holds.
+     *
+     * `NONE` and not a level the enum does not carry, which is what the iOS
+     * half of this module answers for the same numbers and the answer that is
+     * safe: `VERBOSE` is the ordinal `0`, so a `-1` read as a level is the
+     * level that logs everything — the opposite of what an appender that
+     * writes nothing was asked. An appender there is none of is `NONE` on
+     * both halves.
+     */
     override fun getLevel(namePrefix: String): Double =
         appender(namePrefix)?.level?.ordinal?.toDouble() ?: LogLevel.NONE.ordinal.toDouble()
 
@@ -155,22 +176,42 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
      * A TurboModule method that answers a promise is the one codegen calls off
      * the JS thread, which is the whole reason this one answers one: a drain
      * blocks the thread it runs on, and the JS thread is not one to block.
+     *
+     * A flush asked of a module [invalidate] has already shut the queue down
+     * is no drain and a settled promise: the `await` in JS does not return
+     * from a promise nobody resolved, and there is no appender left to drain.
      */
     override fun flush(namePrefix: String, promise: Promise) {
-        flushQueue.execute {
-            appender(namePrefix)?.flushNow()
+        try {
+            flushQueue.execute {
+                // Settled whatever the drain does, and not only when it ends
+                // well: a throw inside a `Runnable` is swallowed by the
+                // executor that was handed it, and a promise nobody settles
+                // is an `await` in JS that never comes back.
+                try {
+                    appender(namePrefix)?.flushNow()
+                    promise.resolve(null)
+                } catch (e: Exception) {
+                    promise.reject(FLUSH_FAILED, e.message)
+                }
+            }
+        } catch (e: RejectedExecutionException) {
+            // The queue is shut down, so the drain it was handed is one it
+            // will never run: settle here, and not in it.
             promise.resolve(null)
         }
     }
 
     /** `Xlog.level`. */
     override fun setLevel(namePrefix: String, level: Double) {
-        appender(namePrefix)?.level = LogLevel.of(level.toInt())
+        val native = int32(level) ?: return
+        appender(namePrefix)?.level = LogLevel.of(native)
     }
 
     /** `Xlog.mode`. */
     override fun setMode(namePrefix: String, mode: Double) {
-        appender(namePrefix)?.mode = appenderModeOf(mode.toInt())
+        val native = int32(mode) ?: return
+        appender(namePrefix)?.mode = appenderModeOf(native)
     }
 
     /** `Xlog.consoleLogEnabled`. */
@@ -181,17 +222,88 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
     /** `Xlog.maxFileSizeBytes`. A `Double` and not a `Long`: the module carries
      * every JS number as one, and a file size is below 2^53. */
     override fun setMaxFileSize(namePrefix: String, bytes: Double) {
-        appender(namePrefix)?.maxFileSizeBytes = bytes.toLong()
+        val native = int64(bytes) ?: return
+        appender(namePrefix)?.maxFileSizeBytes = native
     }
 
     /** `Xlog.maxAliveTimeSeconds`. */
     override fun setMaxAliveTime(namePrefix: String, seconds: Double) {
-        appender(namePrefix)?.maxAliveTimeSeconds = seconds.toLong()
+        val native = int64(seconds) ?: return
+        appender(namePrefix)?.maxAliveTimeSeconds = native
     }
 
-    /** `Xlog.close`: releases the appender `open` made. */
+    /**
+     * `Xlog.close`: releases the appender `open` made.
+     *
+     * A method that answers no promise is a call codegen makes on the JS
+     * thread, and `Xlog.close` is a drain of everything the appender is still
+     * holding and a write of the banner that ends the file — so this one is
+     * handed to the queue, the way [flush] is, and the JS thread is free again
+     * at once.
+     *
+     * Taken out of [appenders] here and not on the queue: a reopen of the
+     * prefix that lands while the drain is queued is otherwise an appender
+     * this close never held. What a queue that was shut down already means is
+     * that [closeAll] ran, and with it this close.
+     */
     override fun close(namePrefix: String) {
-        appenders.remove(namePrefix)?.close()
+        val appender = appenders.remove(namePrefix) ?: return
+        try {
+            flushQueue.execute { appender.close() }
+        } catch (e: RejectedExecutionException) {
+            appender.close()
+        }
+    }
+
+    /**
+     * What React Native calls when the bridge this module was made for goes
+     * away: the one place every appender [open] made is closed — see
+     * [closeAll] — and the one place the thread [flushQueue] runs on is shut
+     * down:
+     * `Executors.newSingleThreadExecutor` keeps a non-daemon thread alive
+     * until something shuts it, so a module that did not would leave one
+     * behind per bridge reload — each of them idle, and each of them a
+     * process that will not end while they are there.
+     */
+    override fun invalidate() {
+        super.invalidate()
+        closeAll()
+        flushQueue.shutdown()
+    }
+
+    /**
+     * Every appender [open] made, closed: what a module that is going away
+     * owes the files it was writing, and the only drain they will get — the
+     * queue is shut down below, so an appender left open is one whose records
+     * stay in its buffer, whose writer thread stays alive and whose cache
+     * stays claimed for the life of the process.
+     *
+     * Closed on the queue and not on this thread, which is the JS thread,
+     * because `Xlog.close` is itself a drain; and `shutdown` runs what it was
+     * handed before it stops, so these do run. What is not left to the queue
+     * is the map: [appenders] is emptied before the drain is handed over, so a
+     * `close` that arrives in the window between the two has no appender of
+     * its own to drain on the JS thread. A queue that refuses the drain — an
+     * `invalidate` before this one — is one this closes here instead.
+     */
+    private fun closeAll() {
+        // Taken out of [appenders] here, and not on the queue below: a `close`
+        // of a prefix that lands before the drain runs is then a `close` with
+        // no appender to find, where the old order left it in the map for the
+        // length of the drain — and the window between this call and
+        // `flushQueue.shutdown()` is exactly when such a `close` arrives,
+        // because `shutdown` refuses what it is handed next and not what is
+        // already queued.
+        val closing = appenders.values.toList()
+        appenders.clear()
+        try {
+            flushQueue.execute { closing.forEach { it.close() } }
+        } catch (e: RejectedExecutionException) {
+            // A queue that refuses the drain is one this closes here: an
+            // appender that is going away with the module is drained now or
+            // not at all, and the records it still holds go with it.
+            closing.forEach { it.close() }
+        }
     }
 
     /**
@@ -218,6 +330,9 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
         /** `0` keeps every cache file, which is what the C++'s default is. */
         private const val NO_CACHE_DAYS = 0
 
+        /** What a drain that threw is answered with: see [flush]. */
+        private const val FLUSH_FAILED = "E_XLOG_FLUSH"
+
         /**
          * `AppenderMode` of the number `mars_xlog.h` gives a mode: an ordinal
          * the enum does not carry is one the caller sent by mistake, and `ASYNC`
@@ -232,6 +347,45 @@ class XlogModule(reactContext: ReactApplicationContext) : NativeXlogSpec(reactCo
         fun compressModeOf(ordinal: Int): CompressMode = when (ordinal) {
             CompressMode.ZSTD.ordinal -> CompressMode.ZSTD
             else -> CompressMode.ZLIB
+        }
+
+        /**
+         * The number JS sent for a level, a mode or a day, and `null` when it
+         * is not one: a `NaN`, an infinity, and anything the `Int` the C ABI
+         * takes cannot hold.
+         *
+         * `Double.toInt()` answers `0` for a `NaN`, and `LogLevel.of` answers
+         * `VERBOSE` for a `0`, so a level JS computed and came to no level
+         * with — a sum with an `undefined` in it — was one the appender was
+         * *moved* to, and the one it was moved to is the level that logs
+         * everything: an app that meant to log nothing logged all of it. The
+         * iOS half of this module read the same number with a trap rather
+         * than a `0` — `Int32(_:)` on a `NaN` ends the app — and neither is
+         * an answer, so both leave the appender alone now.
+         */
+        private fun int32(value: Double): Int? {
+            if (!value.isFinite() || value < Int.MIN_VALUE.toDouble() || value > Int.MAX_VALUE.toDouble()) {
+                return null
+            }
+            return value.toInt()
+        }
+
+        /**
+         * The number JS sent for a size or a file lifetime, and `null` when it
+         * is not one: the same three, over the `Long` the Kotlin takes. A
+         * `NaN` was answered as `0` — "never split" for a size, and for a
+         * lifetime the one an appender opened with none keeps, the C++'s own
+         * ten days, which no setter can ask for either — and that is a setting
+         * an app never asked for and not one it was told had been refused.
+         */
+        private fun int64(value: Double): Long? {
+            if (!value.isFinite() ||
+                value < Long.MIN_VALUE.toDouble() ||
+                value >= Long.MAX_VALUE.toDouble()
+            ) {
+                return null
+            }
+            return value.toLong()
         }
     }
 }

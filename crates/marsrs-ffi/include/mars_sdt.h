@@ -40,7 +40,14 @@
  *
  * Threading: every symbol may be called from any thread, but the diagnosis is
  * one process-wide value — the counterpart of the C++'s singleton — and
- * `mars_sdt_run_checks` holds it for as long as the checks take.
+ * `mars_sdt_run_checks` holds it for as long as the checks take. Everything a
+ * run calls back into is therefore entered with that lock held, and must not
+ * call another `mars_sdt_*` from inside: the probe, which is asked once per
+ * check, and — on a seam that hands the report to an app — the app's own
+ * handler for it. Either one asking `mars_sdt_is_checking()`,
+ * `mars_sdt_plan()` or `mars_sdt_start_active_check()` waits for the lock the
+ * run is holding, and the run is waiting for the call to come back. What a
+ * probe needs is in the query it is given.
  *
  * Panics: no Rust panic ever crosses this boundary. Every entry point is
  * wrapped in `catch_unwind`; a panic is reported as `MARS_SDT_ERR_PANIC` (or
@@ -66,7 +73,20 @@ extern "C" {
 #define MARS_SDT_ERR_NO_SPACE (-3)   /* output buffer too small (0 or < need) */
 #define MARS_SDT_ERR_NO_PROBE (-4)   /* `mars_sdt_run_checks` got no probe    */
 #define MARS_SDT_ERR_BUSY (-5)       /* a check is already in flight          */
-#define MARS_SDT_ERR_NO_CHECK (-6)   /* nothing is in flight, so nothing ran  */
+#define MARS_SDT_ERR_NO_CHECK (-6)   /* no check recorded anything           */
+#define MARS_SDT_ERR_BAD_ARG (-7)    /* the arguments cannot start a check    */
+
+/* --- the bits a mode is made of ------------------------------------------ */
+
+/* `NET_CHECK_BASIC` / `NET_CHECK_LONG` / `NET_CHECK_SHORT` of
+ * mars/sdt/constants.h, which the `mode` of `mars_sdt_start_active_check` is
+ * made of: they OR together, and a mode with none of them in it is no checks
+ * at all — an empty plan, and MARS_SDT_ERR_BAD_ARG. It is not "run
+ * everything", which is `NET_CHECK_BASIC | NET_CHECK_LONG | NET_CHECK_SHORT`.
+ */
+#define NET_CHECK_BASIC 1 /* ping and dns                                    */
+#define NET_CHECK_LONG 2  /* tcp: a noop out to the long link's hosts        */
+#define NET_CHECK_SHORT 4 /* http: the net-check CGI, the short link's hosts */
 
 /* --- what a probe is asked, and what it answers -------------------------- */
 
@@ -172,8 +192,14 @@ int mars_sdt_http_netcheck_cgi(char* out, unsigned int len);
  * `StartActiveCheck` — a diagnosis of the two links' hosts, in `mode` and with
  * `timeout` milliseconds to spend on it.
  *
- * @return MARS_SDT_OK, or MARS_SDT_ERR_BUSY when a check is already in flight,
- *         or MARS_SDT_ERR_PANIC.
+ * @return MARS_SDT_OK, or MARS_SDT_ERR_BUSY when a check is already in flight —
+ *         the one answer a caller retries — or MARS_SDT_ERR_BAD_ARG when these
+ *         arguments cannot start a check at all: a `longlink` / `shortlink`
+ *         that promises `count` hosts behind a NULL pointer, or a `mode` with
+ *         none of the three `NET_CHECK_*` bits in it, which is a request with an
+ *         empty plan. The two are separate codes because retrying the first
+ *         ends when the request in flight does and retrying the second never
+ *         does, or MARS_SDT_ERR_PANIC.
  */
 int mars_sdt_start_active_check(const MarsSdtHosts* longlink,
                                 unsigned int longlink_count,
@@ -201,7 +227,14 @@ unsigned int mars_sdt_plan(MarsSdtCheck* out, unsigned int cap);
  * Runs the planned checks — one probe per check, in order — and reports what
  * they recorded. This is the `__RunOn` thread of the C++, driven by the caller.
  *
- * `probe` may be NULL, which is reported as MARS_SDT_ERR_NO_PROBE.
+ * `probe` may be NULL, which is reported as MARS_SDT_ERR_NO_PROBE; the request
+ * in flight is cancelled, so the next MARS_SDT_START is taken rather than
+ * answered MARS_SDT_ERR_BUSY for the life of the process.
+ *
+ * MARS_SDT_ERR_NO_CHECK is what a run that recorded nothing answers — nothing
+ * was in flight, the request was cancelled before its first check, or the
+ * checks it planned had nothing to check — and not "the run failed": the
+ * request is over and the report for it is an empty one.
  * `network_type` is the `comm::getNetInfo()` every check writes into its
  * profiles, which is the platform's to answer.
  *
@@ -212,8 +245,12 @@ int mars_sdt_run_checks(void* ctx, MarsSdtProbe probe, int network_type);
 
 /**
  * Takes the JSON report of everything the checks have reported since the last
- * call — the document `SdtLogic.reportSignalDetectResults(String)` gets in the
- * C++: `{"details":[ … ]}`, one object per check.
+ * call — `{"details":[ … ]}`, one object per host a check probed, of every
+ * result recorded since the last take.
+ *
+ * Not the document `SdtLogic.reportSignalDetectResults(String)` gets in the
+ * C++, which is the one of the run that just finished: the callback records a
+ * run's results, and a take hands over however many runs are waiting.
  *
  * @return the number of bytes written excluding the terminating NUL, or a
  *         negative MARS_SDT_ERR_* code.

@@ -201,8 +201,14 @@ afterEvaluate {
     // another name, and Gradle would publish it all the same — one archive is
     // missing and the klib of that target links nothing. So fail loudly, the way
     // `marsrs-xlog` does: `marsrs-kmp-native.zip` of the release carries them.
-    val netDirs = nativeDir.listFiles()?.filter { it.isDirectory && it.name != androidNativeDir.name } ?: emptyList()
-    val withoutNet = netDirs.filter { !File(it, "libmars_net_ffi.a").isFile }
+    //
+    // A `native/` that is not there at all is the same failure, and it is the
+    // one `listFiles()` answers `null` for: an empty list of targets is a check
+    // that finds nothing missing in nothing, and a module whose every klib
+    // links nothing is published.
+    val netDirs = nativeDir.listFiles().orEmpty().filter { it.isDirectory && it.name != androidNativeDir.name }
+    val withoutNet =
+        if (netDirs.isEmpty()) listOf(nativeDir) else netDirs.filter { !File(it, "libmars_net_ffi.a").isFile }
     if (withoutNet.isNotEmpty()) {
         throw GradleException(
             "No libmars_net_ffi.a in ${withoutNet.joinToString { it.name }}. " +

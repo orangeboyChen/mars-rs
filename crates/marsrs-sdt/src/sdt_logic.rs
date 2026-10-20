@@ -7,7 +7,7 @@
 use crate::checkimpl::Ask;
 use crate::constants::{NET_CHECK_BASIC, NET_CHECK_LONG, NET_CHECK_SHORT};
 use crate::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
-use crate::sdt::{Callback, CheckIPPorts, NetCheckType};
+use crate::sdt::{Callback, CheckIPPorts, NetCheckStatus, NetCheckType};
 use crate::sdt_core::{CancelHandle, SdtCore};
 
 /// Which checks a diagnosis runs — the `mode` of the C++, named instead of
@@ -133,8 +133,9 @@ impl SdtLogic {
     /// [`SdtLogic::run_checks`] and the report, which is what the C++ does in
     /// `StartActiveCheck` and on the `__RunOn` thread it starts behind it.
     ///
-    /// [`None`] is a check that is already in flight, which is the `false` of
-    /// the upstream call. The results are also handed to the app's
+    /// [`None`] is a request that was not taken: a check that is already in
+    /// flight, or a mode of no checks at all, which is the `false` of the
+    /// upstream call. The results are also handed to the app's
     /// [`Callback`], the way they are when an app makes the three calls itself.
     ///
     /// What it is not is a future: every check is a probe that runs to its own
@@ -161,7 +162,15 @@ impl SdtLogic {
 
     /// `StartActiveCheck(longlink_check_item, shortlink_check_item, mode, timeout)`.
     ///
-    /// `false` when a check is already in flight.
+    /// `false` when no check was started: one that is already in flight, or a
+    /// `mode` with none of the three `NET_CHECK_*` bits in it, which is a plan
+    /// of nothing. [`SdtLogic::is_checking`] tells the two apart.
+    ///
+    /// A `timeout` of `0` is a run with no timeout of its own: every probe is
+    /// asked with the default of its kind, and nothing breaks the plan off for
+    /// having spent too long. A bridge that hands a signed timeout across reads
+    /// a negative one as this — the C++ hands the negative to its probes
+    /// instead, which is a run that ends behind the first of them.
     pub fn start_active_check(
         &mut self,
         longlink_items: &CheckIPPorts,
@@ -202,6 +211,27 @@ impl SdtLogic {
     /// Whether a check is in flight.
     pub fn is_checking(&self) -> bool {
         self.core.is_checking()
+    }
+
+    /// `netcheck_status_` — where the diagnosis as a whole is:
+    /// [`NetCheckStatus::Checking`] while a request is in flight,
+    /// [`NetCheckStatus::CheckEnd`] once a run is over, and
+    /// [`NetCheckStatus::None`] before the first one.
+    ///
+    /// A listener that was handed results asks for this and for
+    /// [`SdtLogic::is_cancelled`] together: `CheckEnd` of a cancelled run is a
+    /// diagnosis that was cut short, whose results are the ones the checks
+    /// before the cancel recorded — not one that ended on its own, and not
+    /// something the results themselves say.
+    pub fn status(&self) -> NetCheckStatus {
+        self.core.status()
+    }
+
+    /// Whether the request was cancelled: what makes
+    /// [`NetCheckStatus::CheckEnd`] a truncated diagnosis rather than a
+    /// finished one.
+    pub fn is_cancelled(&self) -> bool {
+        self.core.is_cancelled()
     }
 
     /// Runs the checks of the request — one `do_check` per planned check, in

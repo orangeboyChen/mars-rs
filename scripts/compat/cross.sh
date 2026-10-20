@@ -35,7 +35,15 @@ cargo build --manifest-path "$REPO/Cargo.toml" -p marsrs-compat --release
 cargo build --manifest-path "$REPO/Cargo.toml" -p marsrs-appender --release \
     --example xlog_file
 
-if [ ! -x "$OUT/upstream_encode" ] || [ ! -x "$OUT/upstream_decode" ]; then
+# … or older than anything it was built out of: the encoder's own source, the
+# script that patches upstream's decoder, and the manifest whose keys that
+# patch writes into it. A binary that outlives its sources answers with the
+# C++ of the day it was built, and the table below would print that as the
+# C++ answer.
+if [ ! -x "$OUT/upstream_encode" ] || [ ! -x "$OUT/upstream_decode" ] \
+    || [ "$REPO/scripts/compat/upstream_encode.cpp" -nt "$OUT/upstream_encode" ] \
+    || [ "$REPO/scripts/compat/upstream_compat.sh" -nt "$OUT/upstream_decode" ] \
+    || [ "$MANIFEST" -nt "$OUT/upstream_decode" ]; then
     sh "$REPO/scripts/compat/upstream_compat.sh" "$OUT" > /dev/null
 fi
 
@@ -47,11 +55,32 @@ manifest = json.load(open('$MANIFEST'))
 for case in manifest['cases']:
     print(case['name'], case['mode'], case['compress'], case['sync'],
           case['crypt'], case['flush_every'], case['file'])" > "$WORK/cases.txt"
+# A manifest of no case is a run that compared nothing: `FAILED` would stay at
+# zero over a table of no rows, which is the same answer a run of sixteen
+# passing cases gives.
+[ -s "$WORK/cases.txt" ] || {
+    echo "crates/marsrs-compat/fixtures/manifest.json names no case" >&2
+    exit 1
+}
 
 FAILED=0
+# The rows that compared nothing instead of failing: see the `cpp-decoder` arm.
+# Counted so that the run's last line cannot say "every check passed" over a
+# table with a row in it that was excused.
+CPP_DECODER=0
 printf '| case | rust -> cpp | cpp -> rust | bytes |\n|---|---|---|---|\n'
 
 while read -r name mode compress sync crypt flush_every file; do
+    # The golden of the case, which no step of this loop reads: both `.xlog`s
+    # are written fresh into `$WORK`, and what every comparison is against is
+    # `expected.bin`. So a case that names a file that is not in `fixtures/` —
+    # or names none at all — is a row that says `ok` over nothing, which is
+    # the hole the check above closes for the table and not for the rows.
+    [ -s "$FIX/$file" ] || {
+        echo "the case $name names $file, which is not a file of $FIX" >&2
+        exit 1
+    }
+
     # `--pubkey` empty is "no server key", i.e. the no-crypt magics.
     if [ "$crypt" = 1 ]; then
         KEY="--pubkey=$PUBKEY"
@@ -94,10 +123,15 @@ while read -r name mode compress sync crypt flush_every file; do
             RUST_CPP=FAILED
             FAILED=$((FAILED + 1))
             cat "$WORK/$name-rust.diff"
-        elif python3 "$REPO/scripts/compat/check.py" exact \
+        elif [ -s "$WORK/$name-control.plain" ] && python3 "$REPO/scripts/compat/check.py" exact \
             "$WORK/$name-control.plain" "$WORK/$name-rust.plain" \
             > "$WORK/$name-control.diff"; then
+            # An empty control is not "upstream reads both files the same
+            # way", it is upstream's decoder having written nothing at all —
+            # and two empty files compare equal, so without the `-s` the row
+            # is excused for a comparison that never happened.
             RUST_CPP="cpp-decoder"
+            CPP_DECODER=$((CPP_DECODER + 1))
             echo "$name: upstream's decoder reads both files the same wrong" \
                 "way, so this is not a difference between the encoders" >&2
         else
@@ -132,7 +166,10 @@ while read -r name mode compress sync crypt flush_every file; do
         else
             BYTES=FAILED
             FAILED=$((FAILED + 1))
-            cmp "$WORK/$name-rust.xlog" "$WORK/$name-cpp.xlog" || true
+            # The table this script prints is a markdown table, so a
+            # diagnostic on stdout lands between two rows of it; `comm.sh`
+            # sends its own to stderr for the same reason.
+            cmp "$WORK/$name-rust.xlog" "$WORK/$name-cpp.xlog" >&2 || true
         fi
     else
         BYTES="random"
@@ -163,8 +200,17 @@ for mode in zlib zstd; do
             "$REPO/target/release/examples/xlog_file" --mode="$mode" \
                 --sync="$sync" "$RUST_DIR" "$FIX/inputs.bin" "$KEY" \
                 > "$WORK/app-rust-$tag.txt"
-            RUST_CPP=ok
-            for file in $(cat "$WORK/app-rust-$tag.txt"); do
+            # A row that names no file is a row that compared nothing: the
+            # loop over an empty list leaves `ok` where it is, and `ok` is a
+            # claim about a comparison that ran.
+            files="$(cat "$WORK/app-rust-$tag.txt")"
+            if [ -z "$files" ]; then
+                echo "$tag: the Rust appender named no file to decode" >&2
+                RUST_CPP=FAILED
+            else
+                RUST_CPP=ok
+            fi
+            for file in $files; do
                 "$OUT/upstream_decode" "$file" "$file.plain"
                 python3 "$REPO/scripts/compat/check.py" lines \
                     "$FIX/inputs.bin" "$file.plain" || RUST_CPP=FAILED
@@ -174,8 +220,14 @@ for mode in zlib zstd; do
             "$OUT/upstream_encode" --appender=1 --mode="$mode" --sync="$sync" \
                 --pubkey="$KEY" --records="$FIX/inputs.bin" \
                 --out="$CPP_DIR" > "$WORK/app-cpp-$tag.txt"
-            CPP_RUST=ok
-            for file in $(cat "$WORK/app-cpp-$tag.txt"); do
+            files="$(cat "$WORK/app-cpp-$tag.txt")"
+            if [ -z "$files" ]; then
+                echo "$tag: upstream's appender named no file to decode" >&2
+                CPP_RUST=FAILED
+            else
+                CPP_RUST=ok
+            fi
+            for file in $files; do
                 "$REPO/target/release/xlog-compat" decode --privkey="$PRIVKEY" \
                     --in="$file" --out="$file.plain" > /dev/null
                 python3 "$REPO/scripts/compat/check.py" lines \
@@ -192,5 +244,12 @@ done
 if [ "$FAILED" -ne 0 ]; then
     echo "$FAILED check(s) failed" >&2
     exit 1
+fi
+# Not an `exit 1` — a row upstream's own decoder excuses is not a failure of
+# the port — but not silence either: "every cross-read check passed" over a
+# table with an excused row in it reads as though the rust -> cpp direction had
+# been compared on every case, and it has not.
+if [ "$CPP_DECODER" -ne 0 ]; then
+    echo "$CPP_DECODER row(s) compared nothing: upstream's decoder read its own file the way it read ours" >&2
 fi
 echo "every cross-read check passed; the files are in $WORK"

@@ -5,13 +5,20 @@ name: Gradle wrapper
 # GitHub's own ecosystem table says what the `gradle` entry of
 # .github/dependabot.yml updates: dependencies declared in a build script —
 # here the Android Gradle Plugin of platforms/android/build.gradle.kts — and
-# not Gradle itself, whose only declaration in the tree is the
-# `distributionUrl` of
-# platforms/android/gradle/wrapper/gradle-wrapper.properties. So the wrapper
-# has an updater of its own: a `gradlew wrapper` against the newest Gradle
-# there is, and a pull request, which is what puts the branch through rust.yml
-# and the three lint workflows the way every other pull request goes through
-# them.
+# not Gradle itself, which the tree declares only as the `distributionUrl` of
+# a gradle-wrapper.properties: four of them, one under each of the four
+# Gradle builds here. So the wrappers have an updater of their own: a
+# `gradlew wrapper` in each of the four against the newest Gradle there is,
+# and one pull request for all of them, which is what puts the branch through
+# rust.yml and the three lint workflows the way every other pull request goes
+# through them.
+#
+# Four and not one, because a wrapper nobody moves is a wrapper that rots:
+# platforms/kmp sits two majors behind the other three, and it is the one the
+# Kotlin jobs run — release.yml's `kmp` and `kmp-host`, and publish.yml's
+# `kmp`, every one of them a `cd platforms/kmp && ./gradlew`. The two under
+# `demo/` are what demo.yml's android and kmp jobs run, and a demo whose
+# Gradle has been left behind is a demo that cannot build the port beside it.
 #
 # Nothing here runs a Gradle build: `wrapper` is a task of the distribution the
 # wrapper already points at, and all it rewrites is the wrapper.
@@ -39,6 +46,12 @@ jobs:
       # once a week should not leave this to the first Monday run to discover.
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      # Every wrapper in the tree, in one place, so that a fifth Gradle build
+      # is one word here and not a step of its own. `platforms/kmp` has an
+      # Android target too, which is why the SDK above is named: a `./gradlew`
+      # of it configures that target whether or not the task it is asked for
+      # is one of Android's.
+      WRAPPERS: platforms/android platforms/kmp demo/android demo/kmp
     steps:
       - uses: actions/checkout@v7
       # Gradle 9 runs on 17 and up; 21 is the current LTS, and a job that runs
@@ -66,8 +79,11 @@ jobs:
           LATEST: ${{ steps.latest.outputs.version }}
         run: |
           set -euo pipefail
-          cd platforms/android
-          ./gradlew wrapper --gradle-version "$LATEST" --distribution-type bin
+          for dir in $WRAPPERS; do
+            echo "::group::$dir"
+            (cd "$dir" && ./gradlew wrapper --gradle-version "$LATEST" --distribution-type bin)
+            echo "::endgroup::"
+          done
       - name: Open the pull request
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -75,15 +91,15 @@ jobs:
           BASE: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          if [ -z "$(git status --porcelain platforms/android)" ]; then
-            echo "the wrapper is already Gradle $LATEST"
+          if [ -z "$(git status --porcelain -- $WRAPPERS)" ]; then
+            echo "every wrapper is already Gradle $LATEST"
             exit 0
           fi
           # One branch, forced: a wrapper left open for a week is updated in
           # place when the next Gradle comes out, and not stacked on itself.
           branch=deps/gradle-wrapper
           git switch -C "$branch"
-          git add -A platforms/android
+          git add -A -- $WRAPPERS
           git -c user.name='github-actions[bot]' \
               -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
               commit -m "deps(gradle): the wrapper moves to Gradle $LATEST"
@@ -91,11 +107,13 @@ jobs:
           # A file, and not an argument: the body is prose, and prose in a
           # `-f body=…` is a quoting problem.
           cat > pr.md <<BODY
-          `gradlew wrapper --gradle-version $LATEST`.
+          `gradlew wrapper --gradle-version $LATEST`, in every directory of the
+          tree that carries one.
 
           Dependabot cannot do this one: its \`gradle\` entry updates what a build
-          script declares, and Gradle itself is declared only in
-          \`platforms/android/gradle/wrapper/gradle-wrapper.properties\`.
+          script declares, and Gradle itself is declared only in the
+          \`gradle-wrapper.properties\` of each of those directories — a file
+          Dependabot does not read.
 
           Everything else in the pull request is the gate every branch goes
           through: rustfmt, clippy, the test suite, the cross builds, ktlint

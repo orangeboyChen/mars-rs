@@ -80,7 +80,8 @@ export interface Spec extends TurboModule {
   /** `mars_xlog_set_max_alive_duration_instance`. */
   setMaxAliveTime(namePrefix: string, seconds: number): void;
 
-  /** `mars_xlog_release_instance`: releases the appender `open` made. */
+  /** Releases the appender `open` made: by handle on iOS, by prefix on
+   * Android. */
   close(namePrefix: string): void;
 }
 

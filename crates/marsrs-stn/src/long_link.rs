@@ -61,6 +61,7 @@
 //! and the pair it happened on.
 
 use std::collections::VecDeque;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use marsrs_comm::local_ipstack::LocalIpStack;
 use marsrs_comm::{ProxyInfo, ProxyType, SocketAddress};
@@ -222,6 +223,9 @@ pub type LocalStack = dyn FnMut() -> LocalIpStack + Send;
 pub type NetLabel = dyn FnMut() -> String + Send;
 /// `getNetInfo()` — the same, as the number the smart heartbeat wants.
 pub type NetType = dyn FnMut() -> i32 + Send;
+/// `time(NULL)` — the unix second the smart heartbeat stamps the record of a
+/// network with. Unset is the clock of the machine the port runs on.
+pub type Clock = dyn FnMut() -> u64 + Send;
 /// `socket_address::getsockname(_sock)` — the near end of a socket.
 pub type LocalAddress = dyn FnMut(SocketFd) -> SocketAddress + Send;
 /// `fun_network_report_` without its `__LINE__`.
@@ -461,9 +465,10 @@ impl RunEnd {
 /// the heartbeat that is out or a task's.
 ///
 /// The C++ calls `OnResponse` from inside its loop and `OnRecv` for a package
-/// that is not whole yet; the port hands the answers back instead, which is what
-/// [`LongLink::read_at`] returns. A package that is still missing bytes is
-/// neither: it stays in the link's buffer, and nothing is handed back for it.
+/// that is not whole yet; the port hands the answers back instead, in the
+/// [`Read`] [`LongLink::read_at`] answers with. A package that is still missing
+/// bytes is neither: it stays in the link's buffer, and nothing is handed back
+/// for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
     /// A task's answer — the C++'s `OnResponse(kEctOK, 0, ...)`.
@@ -483,6 +488,38 @@ pub enum Answer {
         /// The task it is the answer to.
         taskid: u32,
     },
+}
+
+/// What one read of the socket gave: every whole package in it, and why the run
+/// is over, when it is.
+///
+/// A run can be over with packages already unpacked, and the two come back
+/// together for that reason: the C++ hands each package to `OnResponse` as it
+/// unpacks it, and only sees the package that ends the run afterwards, so what
+/// it had answered before it ended is answered all the same. A read that hands
+/// back an end and no answers is a run that ended before it read anything.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Read {
+    /// The whole packages in what came, in the order they were unpacked.
+    pub answers: Vec<Answer>,
+    /// Why the run is over, and [`None`] for one that is not.
+    pub end: Option<RunEnd>,
+}
+
+impl Read {
+    /// A read the run went on after: what it answered, and no end.
+    fn answered(answers: Vec<Answer>) -> Self {
+        Self { answers, end: None }
+    }
+
+    /// A read the run is over after: what it answered before it ended, and why
+    /// it ended.
+    fn ended(answers: Vec<Answer>, end: RunEnd) -> Self {
+        Self {
+            answers,
+            end: Some(end),
+        }
+    }
 }
 
 /// What the host's run wrote: how many bytes went out, and which tasks the
@@ -549,6 +586,7 @@ pub struct LongLink {
     on_link_status: Option<Box<LinkStatus>>,
     on_noop_alarm_received: Option<Box<NoopAlarmReceived>>,
     on_network_data_changed: Option<Box<NetworkDataChanged>>,
+    clock: Option<Box<Clock>>,
 }
 
 impl LongLink {
@@ -605,12 +643,25 @@ impl LongLink {
             on_link_status: None,
             on_noop_alarm_received: None,
             on_network_data_changed: None,
+            clock: None,
         }
     }
 
     /// `config_` — what the link was built from.
     pub fn config(&self) -> &LonglinkConfig {
         &self.config
+    }
+
+    /// `encoder_` — the encoder every package this link writes goes through.
+    ///
+    /// A host that gave [`crate::NetCore`] an encoder of its own has no other
+    /// way to see which one a link ended up with: what the encoder decides —
+    /// the cmdid of a heartbeat, whether there is an interval of its own,
+    /// whether a connected pair is asked to answer first — is asked of the
+    /// link and not of the app, and a link that quietly kept the default is
+    /// one that answers every one of those differently without saying so.
+    pub fn encoder(&self) -> LongLinkEncoder {
+        self.encoder
     }
 
     /// `Profile()` — the record of the connect, and of the run that came
@@ -795,6 +846,22 @@ impl LongLink {
         self.net_type = Some(Box::new(net_type));
     }
 
+    /// `time(NULL)` — what the smart heartbeat stamps a network's record with,
+    /// and what a week of those is measured against. Unset is the clock of the
+    /// machine the port runs on.
+    pub fn set_clock(&mut self, clock: impl FnMut() -> u64 + Send + 'static) {
+        self.clock = Some(Box::new(clock));
+    }
+
+    /// `time(NULL)`, as the smart heartbeat wants it: the second, and not the
+    /// tick a run was measured with.
+    fn unix_secs(&mut self) -> i64 {
+        match self.clock.as_mut() {
+            Some(clock) => clock() as i64,
+            None => unix_secs() as i64,
+        }
+    }
+
     /// `socket_address::getsockname` — unset leaves the near end of the socket
     /// out of the profile.
     pub fn set_local_address(
@@ -872,7 +939,8 @@ impl LongLink {
             self.profile.conn_reason = reason;
             self.status = LongLinkStatus::ConnectIdle;
             self.disconnect_code = DisconnectInternalCode::None;
-            self.server_triggered_off = false;
+            // `svr_trig_off_` was cleared on the way in, so it is not cleared
+            // again here
             // what the C++'s `__RunReadWrite` starts with: a run asks the
             // identify check again and sends its first heartbeat at once. Its
             // `alarmnoopinterval`, `alarmnooptimeout` and `first_noop_sent` are
@@ -1305,16 +1373,16 @@ impl LongLink {
     /// A package that is missing bytes is kept for the next read — it is the
     /// `LONGLINK_UNPACK_CONTINUE` the C++ breaks out of its loop for, and what
     /// [`LongLink::recv_len`] is.
-    pub fn read_at(&mut self, now: u64, socket: SocketFd) -> Result<Vec<Answer>, RunEnd> {
+    pub fn read_at(&mut self, now: u64, socket: SocketFd) -> Read {
         let bytes = match self.socket_recv(socket) {
             Ok(bytes) => bytes,
-            Err(err_code) => return Err(RunEnd::socket(err_code)),
+            Err(err_code) => return Read::ended(Vec::new(), RunEnd::socket(err_code)),
         };
         if bytes.is_empty() {
             // `0 == recvlen`: the peer hung up, which the next run writes on
             // the profile rather than reporting
             self.server_triggered_off = true;
-            return Err(RunEnd::shutdown());
+            return Read::ended(Vec::new(), RunEnd::shutdown());
         }
         self.last_recv = now;
         // the C++ emits before it hands the bytes to its unpacker, so a read
@@ -1326,7 +1394,13 @@ impl LongLink {
         while !self.recv.is_empty() {
             let unpacked = longlink_unpack(&self.recv);
             match unpacked {
-                Unpacked::False => return Err(RunEnd::unpack()),
+                // a package that is not one ends the run, and what was
+                // unpacked before it is still answered: the C++ hands each
+                // package over as it unpacks it, and this is the package it
+                // sees after the ones it already handed over
+                Unpacked::False => {
+                    return Read::ended(answers, RunEnd::unpack());
+                }
                 // not a whole package yet: what came stays for the next read
                 Unpacked::Continue => break,
                 Unpacked::Package {
@@ -1341,7 +1415,7 @@ impl LongLink {
                         // place for ever, which is no answer at all. The port
                         // ends the run on it, the way it ends one on a package
                         // that is not a package
-                        return Err(RunEnd::unpack());
+                        return Read::ended(answers, RunEnd::unpack());
                     }
                     let answer = if self.noop_resp_at(now, cmdid, seq, &body) {
                         Answer::Heartbeat { cmdid, taskid: seq }
@@ -1357,11 +1431,11 @@ impl LongLink {
                 }
             }
         }
-        Ok(answers)
+        Read::answered(answers)
     }
 
     /// The same, with the reading of the clock the host's `gettickcount()`.
-    pub fn read(&mut self, socket: SocketFd) -> Result<Vec<Answer>, RunEnd> {
+    pub fn read(&mut self, socket: SocketFd) -> Read {
         self.read_at(marsrs_comm::tickcount::gettickcount(), socket)
     }
 
@@ -1506,9 +1580,16 @@ impl LongLink {
     /// so the answer of a noop the app asked for is what the profile of the
     /// heartbeat before it ends up saying.
     pub fn trig_noop_at(&mut self, now: u64) {
+        // What the flag was before this call is what it is put back to when
+        // nothing went out: a noop that did not go out is not a heartbeat that
+        // is out, but one that was already out when this was asked for is, and
+        // clearing the flag here throws its answer away — `noop_resp_at` ends
+        // nothing for a heartbeat it does not think is out, and
+        // `is_noop_timed_out` never fires for one.
+        let was_nooping = self.nooping;
         self.nooping = true;
         let sent = self.noop_req_at(now, false);
-        if !sent && self.nooping {
+        if !sent && !was_nooping {
             self.nooping = false;
         }
     }
@@ -1521,17 +1602,20 @@ impl LongLink {
     /// `__NoopReq(_log, _alarm, need_active_timeout)` — the noop itself, or the
     /// identify check the app answered with when there is one to send.
     ///
-    /// Either way the timeout alarm is started, and cancelled again when
-    /// nothing went out: the C++ starts it, sends, and starts it once more,
-    /// which is the same reading twice.
+    /// The timeout alarm is started for what went out, and not asked for before
+    /// it is known whether anything does: a noop that did not go out leaves
+    /// the alarm that is already waiting alone, and that alarm is the watchdog
+    /// of the heartbeat which *is* out — the one the interval sent while this
+    /// one was being asked for. Cancelling it first and starting it again after
+    /// the send is a heartbeat with no watchdog in between, and worse, none at
+    /// all when the send does not happen: `is_noop_timed_out` never fires for
+    /// it, and the answer the server sends ends nothing.
     pub fn noop_req_at(&mut self, now: u64, need_active_timeout: bool) -> bool {
         let wait = if need_active_timeout {
             NOOP_ACTIVE_TIMEOUT
         } else {
             NOOP_TIMEOUT
         };
-        self.noop_timeout.cancel();
-        self.noop_timeout.start_at(now, wait);
 
         let sent = match self.identify.get_identify_buffer() {
             Some((buffer, cmdid)) => {
@@ -1544,11 +1628,16 @@ impl LongLink {
             }
             None => self.send_noop_when_no_data(),
         };
-
         if !sent {
-            self.noop_timeout.cancel();
+            return false;
         }
-        sent
+        // no [`NoopAlarm::cancel`] first: the C++'s `Alarm::Start` refuses to
+        // start an alarm that is already waiting, so it has to cancel, while
+        // [`NoopAlarm::start_at`] writes the reading over whatever was there.
+        // Cancelling here would also take the watchdog off a heartbeat that is
+        // out and put it back only if this send happens.
+        self.noop_timeout.start_at(now, wait);
+        true
     }
 
     /// `__NoopResp(...)` — whether what came back is the answer to the
@@ -1569,7 +1658,16 @@ impl LongLink {
             }
         }
 
-        if self.encoder.noop_isresp(Task::NOOP_TASK_ID, cmdid) {
+        // The taskid the package came in with, and not the constant:
+        // `noop_isresp` is the one place the two are compared, so handing it
+        // the constant made its own question answer itself and left the cmdid
+        // as the only thing a heartbeat was told apart by. A business answer
+        // that happens to carry the noop's cmdid was then filed as a
+        // heartbeat — its task never got an answer and waited for its
+        // timeout — and the heartbeat it was filed as cancelled the noop
+        // alarm, so a link that was already dead reported one that went
+        // through.
+        if self.encoder.noop_isresp(taskid, cmdid) {
             is_noop = true;
         }
 
@@ -1665,8 +1763,11 @@ impl LongLink {
             noop.noop_cost = now.saturating_sub(noop.noop_starttime);
             noop.success = success;
         }
+        // the record of a network is kept across runs of the app, so what it is
+        // stamped with is the second and not the tick the run was measured with
+        let second = self.unix_secs();
         if let Some(heartbeat) = self.heartbeat.as_mut() {
-            heartbeat.on_heart_result(success, fail_of_timeout, seconds(now));
+            heartbeat.on_heart_result(success, fail_of_timeout, second);
         }
     }
 
@@ -1837,7 +1938,7 @@ impl LongLink {
                 }
             }
             LongLinkStatus::ConnectFailed | LongLinkStatus::DisConnected => {
-                let now = now_seconds();
+                let now = self.unix_secs();
                 if let Some(heartbeat) = self.heartbeat.as_mut() {
                     heartbeat.on_longlink_disconnect(now);
                 }
@@ -1878,15 +1979,15 @@ impl LongLink {
     }
 }
 
-/// `SmartHeartbeat::OnLongLinkDisconnect` wants seconds, which is what the
-/// C++'s `gettickcount() / 1000` is.
-fn now_seconds() -> i64 {
-    (marsrs_comm::tickcount::gettickcount() / 1000) as i64
-}
-
-/// The same, for a reading the host handed in.
-fn seconds(now: u64) -> i64 {
-    (now / 1000) as i64
+/// `time(NULL)` — the unix second, which is what the record of a network is
+/// stamped with: a host that keeps one between runs of the app hands it back
+/// with a [`LongLink::set_clock`] of its own, and this is what a link without
+/// one falls back to.
+fn unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or(0)
 }
 
 impl std::fmt::Debug for LongLink {
@@ -2605,6 +2706,37 @@ mod tests {
         assert_eq!(link.heartbeat().unwrap().info().succ_heart_count, 0);
     }
 
+    /// The record of a network is one a host keeps between runs of the app, so
+    /// what it is stamped with is `time(NULL)` — and not the tick the run was
+    /// measured with, which is a few thousand seconds at most and which would
+    /// leave every record a week away from being probed again.
+    #[test]
+    fn a_heartbeat_stamps_its_record_with_the_second_the_host_says() {
+        // the interval is one value for the whole process
+        let _lock = crate::test_lock();
+        let (mut link, _) = link();
+        link.set_clock(|| 1_700_000_000);
+        link.set_net_label(|| "wifi".to_string());
+        link.set_smart_heartbeat(SmartHeartbeat::new());
+        link.make_sure_connected();
+        assert!(link.connect_at(1_000).is_ok());
+
+        // `NetStableTestCount` heartbeats and one to settle the count: it is
+        // only past them that a result is written into the record at all
+        for round in 0..=crate::config::NET_STABLE_TEST_COUNT {
+            let now = 2_000 + u64::from(round) * 1_000;
+            assert!(link.send_heartbeat_at(now, false, false));
+            written(&mut link);
+            assert!(link.noop_resp_at(now + 500, NOOP_CMDID, Task::NOOP_TASK_ID, b""));
+        }
+
+        assert_eq!(
+            link.heartbeat().unwrap().info().last_modify_time,
+            1_700_000_000,
+            "the second the host said, and not `gettickcount() / 1000`"
+        );
+    }
+
     /// A link that is up: what every heartbeat test starts from.
     fn connected() -> LongLink {
         connected_with(LongLinkEncoder::new())
@@ -3110,7 +3242,7 @@ mod tests {
         *seen.answer.lock().unwrap() = longlink_pack(12, 7, b"hello");
 
         assert_eq!(
-            link.read_at(2_000, socket).unwrap(),
+            link.read_at(2_000, socket).answers,
             vec![Answer::Task {
                 cmdid: 12,
                 taskid: 7,
@@ -3132,13 +3264,15 @@ mod tests {
         // half a package, which is the `LONGLINK_UNPACK_CONTINUE` the C++ breaks
         // its loop for
         *seen.answer.lock().unwrap() = packed[..packed.len() / 2].to_vec();
-        assert_eq!(link.read_at(2_000, socket).unwrap(), vec![]);
+        let read = link.read_at(2_000, socket);
+        assert_eq!(read.answers, vec![]);
+        assert_eq!(read.end, None, "half a package is not the end of a run");
         assert_eq!(link.recv_len(), packed.len() / 2);
 
         // ... and the rest of it makes a whole one, out of both reads
         *seen.answer.lock().unwrap() = packed[packed.len() / 2..].to_vec();
         assert_eq!(
-            link.read_at(2_100, socket).unwrap(),
+            link.read_at(2_100, socket).answers,
             vec![Answer::Task {
                 cmdid: 12,
                 taskid: 7,
@@ -3157,13 +3291,40 @@ mod tests {
         link.make_sure_connected();
         let socket = link.connect_at(1_000).unwrap();
         *seen.answer.lock().unwrap() = vec![0; crate::longlink::HEADER_LEN];
-        assert_eq!(link.read_at(2_000, socket), Err(RunEnd::unpack()));
+        assert_eq!(link.read_at(2_000, socket).end, Some(RunEnd::unpack()));
+    }
+
+    #[test]
+    fn a_read_that_ends_answers_with_what_it_had_unpacked() {
+        let _lock = crate::test_lock();
+        let (mut link, seen) = link();
+        link.make_sure_connected();
+        let socket = link.connect_at(1_000).unwrap();
+        // a whole package, and then the header that claims no bytes at all
+        let mut packed = longlink_pack(12, 7, b"hello");
+        packed.resize(packed.len() + crate::longlink::HEADER_LEN, 0);
+        *seen.answer.lock().unwrap() = packed;
+
+        let read = link.read_at(2_000, socket);
+        assert_eq!(
+            read.answers,
+            vec![Answer::Task {
+                cmdid: 12,
+                taskid: 7,
+                body: b"hello".to_vec(),
+            }],
+            "the C++ handed this one over before it saw the package that ends the run"
+        );
+        assert_eq!(read.end, Some(RunEnd::unpack()));
     }
 
     #[test]
     fn a_read_of_nothing_is_the_peer_hanging_up() {
         let mut link = connected();
-        assert_eq!(link.read_at(2_000, SocketFd(3)), Err(RunEnd::shutdown()));
+        assert_eq!(
+            link.read_at(2_000, SocketFd(3)).end,
+            Some(RunEnd::shutdown())
+        );
         // `svr_trig_off_`, which the next run writes on the profile rather than
         // reporting
         assert!(link.is_server_triggered_off());
@@ -3180,13 +3341,39 @@ mod tests {
         *seen.answer.lock().unwrap() = longlink_pack(NOOP_CMDID, Task::NOOP_TASK_ID, &[]);
 
         assert_eq!(
-            link.read_at(1_500, socket).unwrap(),
+            link.read_at(1_500, socket).answers,
             vec![Answer::Heartbeat {
                 cmdid: NOOP_CMDID,
                 taskid: Task::NOOP_TASK_ID,
             }]
         );
         assert!(!link.is_nooping(), "the heartbeat answered");
+    }
+
+    /// The cmdid is not the only thing a heartbeat is told apart by. An app
+    /// sets the noop's cmdid, so a business answer can carry it too — and a
+    /// package that does was filed as a heartbeat: the task it answers never
+    /// got one and waited for its own timeout, while the heartbeat that was
+    /// filed in its place cancelled the noop alarm of a link that is dead.
+    #[test]
+    fn a_task_that_answers_with_the_noops_cmdid_is_no_heartbeat() {
+        let _lock = crate::test_lock();
+        let (mut link, seen) = link();
+        link.make_sure_connected();
+        let socket = link.connect_at(1_000).unwrap();
+        assert!(link.send_heartbeat_at(1_000, false, false));
+        written(&mut link);
+        *seen.answer.lock().unwrap() = longlink_pack(NOOP_CMDID, 7, b"answer");
+
+        assert_eq!(
+            link.read_at(1_500, socket).answers,
+            vec![Answer::Task {
+                cmdid: NOOP_CMDID,
+                taskid: 7,
+                body: b"answer".to_vec(),
+            }]
+        );
+        assert!(link.is_nooping(), "the heartbeat is still out");
     }
 
     #[test]
@@ -3269,7 +3456,7 @@ mod tests {
         assert_eq!(link.connect_status(), LongLinkStatus::Connected);
         assert!(link.send(Task::new(7, 12), b"hello"));
         assert!(link.write(SocketFd(3), false).is_ok());
-        assert_eq!(link.read(SocketFd(3)), Err(RunEnd::shutdown()));
+        assert_eq!(link.read(SocketFd(3)).end, Some(RunEnd::shutdown()));
         link.finish_run(SocketFd(3), RunEnd::ok());
         assert!(!link.is_running());
     }

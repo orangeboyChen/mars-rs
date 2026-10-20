@@ -105,7 +105,7 @@ typedef enum {
 typedef struct {
     int mode;              /* MarsAppenderMode; default when unset: Async   */
     const char* log_dir;   /* mandatory, directory is created if missing     */
-    const char* name_prefix; /* used verbatim; no default, as in C++      */
+    const char* name_prefix; /* used verbatim; no default; "" is refused  */
     const char* pub_key;   /* NULL / "" => logs are written unencrypted      */
     int compress_mode;     /* MarsCompressMode; default when unset: Zlib     */
     int compress_level;    /* <= 0 => keep the appender default (6)          */
@@ -137,8 +137,19 @@ long long mars_xlog_new_instance(const MarsXLogConfig* config, int level);
 /* The handle registered for name_prefix, or 0 when there is none. */
 long long mars_xlog_get_instance(const char* name_prefix);
 
-/* Releases the instance and closes its appender. */
+/* Releases the instance and closes its appender. Prefer the handle-aware
+ * mars_xlog_release_instance_of() when the caller holds an instance handle. */
 void mars_xlog_release_instance(const char* name_prefix);
+
+/* The same, and only while name_prefix is still registered under `instance`.
+ *
+ * Releasing takes the prefix and not the handle, so asking
+ * mars_xlog_get_instance and then calling mars_xlog_release_instance is two
+ * answers and not one: an open of the same prefix that lands between the two is
+ * handed a handle of its own, and the release closes that one. This is the
+ * question and the release in one call, which is also what makes a second
+ * close of a prefix a no-op however many callers hold its handle. */
+void mars_xlog_release_instance_of(const char* name_prefix, long long instance);
 
 /* Writes through an instance; honours the instance's level. */
 void mars_xlog_write_instance(long long instance,

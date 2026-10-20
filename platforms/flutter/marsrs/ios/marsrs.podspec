@@ -15,7 +15,7 @@
 
 Pod::Spec.new do |s|
   s.name             = 'marsrs'
-  s.version          = '0.1.0-alpha.2'
+  s.version          = '0.1.0-alpha.3'
   s.summary          = 'Flutter plugin for mars-rs, a Rust implementation of Tencent/mars: the whole port, xlog today.'
   s.homepage         = 'https://github.com/orangeboyChen/mars-rs'
   s.license          = { :type => 'MIT', :file => '../LICENSE' }

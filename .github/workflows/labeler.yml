@@ -91,3 +91,23 @@ jobs:
       - uses: actions/labeler@v7
         with:
           sync-labels: true
+
+  # The map is only as good as the paths it names. Eighteen of its globs named
+  # directories that had been moved under `platforms/` and so labelled nothing
+  # at all — for as long as it took somebody to read the file, because a rule
+  # that never fires leaves no trace: the label is simply absent, and that is
+  # what a pull request that needed no label looks like too.
+  #
+  # Its own job, and not a step of the one above: that one is skipped for a
+  # pull request whose token cannot write, and a fork's pull request is exactly
+  # where a glob of the map is worth checking. No label is written here, so
+  # `contents: read` is all it asks for.
+  globs:
+    name: Every glob matches a path
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the globs of .github/labeler.yml
+        run: .github/scripts/check_labeler_globs.py

@@ -9,6 +9,13 @@ happened; `flushNow()` drains on the calling thread, so the records are on disk
 when it returns; `await flush()` hands the drain to another thread and answers
 when it is over.
 
+These pages describe the tree at `main`. The newest release, `v0.1.0-alpha.3`,
+is older than it, and it spells the drain one way: `flush(sync = true)` in
+Kotlin and Swift, `mars_xlog_flush_instance(h, 1)` in C, and
+`appender_flush_sync()` in Rust. The three calls above are `main`'s: an app
+that takes a tagged release gets the older spelling until the next tag, and a
+Cargo dependency on the repository gets these by leaving `--tag` off.
+
 ## Where it is
 
 | your app is | what carries xlog | how you reach it |
@@ -38,8 +45,12 @@ Native carry the logger in both of their packages today.
 ## Rust
 
 ```bash
-cargo add marsrs          # the whole port: xlog, stn and sdt
-cargo add marsrs-xlog     # xlog alone — the logger and nothing else
+# The crates are not on crates.io yet — publication is pending — so a Rust app
+# takes them off the tag: `cargo add marsrs-xlog` on its own resolves nothing.
+# xlog alone — the logger and nothing else:
+cargo add marsrs-xlog --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
+# the whole port: + STN and SDT
+cargo add marsrs --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
 ```
 
 `marsrs` is one module per piece of mars — `xlog`, `stn`, `sdt`, `comm` — and
@@ -48,7 +59,7 @@ logs takes `marsrs-xlog`, or `marsrs` with the rest turned off:
 
 ```toml
 [dependencies]
-marsrs = { version = "0.1", default-features = false, features = ["xlog"] }
+marsrs = { git = "https://github.com/orangeboyChen/mars-rs", tag = "v0.1.0-alpha.3", default-features = false, features = ["xlog"] }
 ```
 
 ```rust
@@ -87,7 +98,7 @@ itself when it is dropped, so one held for the life of the process needs no
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
+.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0-alpha.3")
 
 // and, in the target that takes it:
 .product(name: "MarsRSXlog", package: "mars-rs")
@@ -134,7 +145,7 @@ C symbols are there too for whoever prefers them.
 platform :ios, '12.0'
 use_frameworks!
 
-pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/v0.1.0/MarsRSXlog.podspec'
+pod 'MarsRSXlog', :podspec => 'https://raw.githubusercontent.com/orangeboyChen/mars-rs/v0.1.0-alpha.3/MarsRSXlog.podspec'
 ```
 
 Three pods, under the names of the three products above: `MarsRSXlog` is the
@@ -182,8 +193,8 @@ console sink, which takes a C function pointer.
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:xlog:0.1.0")    // xlog alone
-implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")  // + STN and SDT
+implementation("io.github.orangeboychen.marsrs:xlog:0.1.0-alpha.3")    // xlog alone
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0-alpha.3")  // + STN and SDT
 ```
 
 Both AARs carry the same `libmarsrsxlog.so`, for `arm64-v8a`, `armeabi-v7a` and
@@ -223,8 +234,8 @@ maven {
 }
 
 // build.gradle.kts of the shared module
-implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0")    // xlog alone
-implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")  // + STN and SDT
+implementation("io.github.orangeboychen.marsrs:xlog-kmp:0.1.0-alpha.3")    // xlog alone
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0-alpha.3")  // + STN and SDT
 ```
 
 One dependency in `commonMain`, and each platform compiles its own half of it —
@@ -304,12 +315,14 @@ the logger, in both of its packages.
 ## React Native
 
 ```bash
-npm install marsrs-react-native-xlog       # or marsrs-react-native, for the whole port
+npm install marsrs-react-native-xlog@alpha       # or marsrs-react-native@alpha, for the whole port
 cd ios && pod install
 ```
 
-The package is on npm, so `npm install` takes the newest version there. Nothing
-in the app has to name the module: autolinking finds the `ReactPackage` in
+The package is on npm, and every version of it so far is a prerelease published
+under the `alpha` tag — so `npm install` has to name it: without `@alpha` it
+asks for `latest`, which no version has been published under yet. Nothing in the
+app has to name the module: autolinking finds the `ReactPackage` in
 `android/` and the pod in `ios/`, which is what puts `Xlog` in
 `TurboModuleRegistry`. It is a TurboModule, which is what the New Architecture is
 for — React Native 0.74 or newer, with the bridge switched off — and it is the
@@ -349,7 +362,7 @@ marsrs-<version>-<host>.zip      (Windows)
     include/mars_xlog.hpp   the logger in C++
     include/mars_sdt.h      the network diagnosis
     include/mars_stn.h      the task pipeline
-    libmars_ffi.a / libmars_ffi.so (.dylib, .dll)
+    lib/libmars_ffi.a / lib/libmars_ffi.so (.dylib, .dll)
 ```
 
 built for `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin` and
@@ -381,8 +394,8 @@ handle. There is no process-wide appender to open from C — an app that wants a
 second logger gives it a second prefix.
 
 ```bash
-cc -I include -o app app.c libmars_ffi.a -lpthread -ldl     # static
-cc -I include -o app app.c -L. -lmars_ffi                  # shared
+cc -I include -o app app.c lib/libmars_ffi.a -lpthread -ldl     # static
+cc -I include -o app app.c -Llib -lmars_ffi                     # shared
 ```
 
 Every call that answers an `int` answers `MARS_XLOG_OK` (0) or a negative
@@ -435,7 +448,7 @@ The header is C++17: it refuses to compile below that, and `std::future` is what
 `flush()` answers.
 
 ```bash
-c++ -std=c++17 -I include -o app app.cpp libmars_ffi.a -lpthread -ldl
+c++ -std=c++17 -I include -o app app.cpp lib/libmars_ffi.a -lpthread -ldl
 ```
 
 ## HarmonyOS
@@ -450,7 +463,8 @@ that file. What the HAR carries is `libmarsrs_xlog.so` — the staticlib of the 
 ABI with a NAPI module linked around it — for `arm64-v8a`, `armeabi-v7a` and
 `x86_64`, so an app that takes it resolves nothing else. An app that writes NAPI
 of its own takes `marsrs-harmony-<version>.tar.gz` instead: the three
-`libmars_ffi.so` and `mars_xlog.h`, with nothing wrapped around them.
+`libmars_ffi.so` and the four headers of the C ABI, with nothing wrapped around
+them.
 
 ```typescript
 import { AppenderMode, LogLevel, Xlog } from 'marsrs-harmonyos-xlog';

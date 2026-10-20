@@ -18,14 +18,16 @@
 # by .github/workflows/release.yml for every release — the one place in this
 # repository that knows them, and one Dependabot has no business guessing at.
 #
-# The Gradle wrapper is not here, and not because it is left out: GitHub's own
-# ecosystem table says the `gradle` entry updates what a build script declares,
-# and Gradle itself is declared nowhere but
-# platforms/android/gradle/wrapper/gradle-wrapper.properties — a file
-# Dependabot does not read. So the wrapper has an updater of its own,
-# .github/workflows/gradle-wrapper.yml: weekly, a `gradlew wrapper` against the
-# newest Gradle services.gradle.org names, and a pull request, which is what
-# makes the branch it opens go through the gate like any other.
+# The Gradle wrappers are not here, and not because they are left out: GitHub's
+# own ecosystem table says the `gradle` entry updates what a build script
+# declares, and Gradle itself is declared nowhere but the `distributionUrl` of
+# a gradle-wrapper.properties — four of them, one under each of the four
+# Gradle builds in the tree (platforms/android, platforms/kmp, demo/android and
+# demo/kmp) — and a file Dependabot does not read. So the wrappers have an
+# updater of their own, .github/workflows/gradle-wrapper.yml: weekly, a
+# `gradlew wrapper` in each of the four against the newest Gradle
+# services.gradle.org names, and a pull request, which is what makes the branch
+# it opens go through the gate like any other.
 
 version: 2
 

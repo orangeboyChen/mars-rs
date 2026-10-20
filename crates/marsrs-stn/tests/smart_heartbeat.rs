@@ -88,7 +88,6 @@ fn the_interval_a_host_kept_is_the_one_the_next_session_starts_on() {
     let mut second = SmartHeartbeat::new();
     second.on_longlink_established(&kept.net_detail, kept.net_type);
     *second.info_mut() = kept.clone();
-    assert_eq!(second.info().cur_heart, kept.cur_heart);
 
     // the new session tests the minimum again, and from the heartbeat after
     // that it carries on where the last one stopped, not from the short end

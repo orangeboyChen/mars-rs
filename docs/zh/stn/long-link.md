@@ -7,7 +7,7 @@
 |---|---|---|---|---|
 | 它连到哪里 | `set_longlink_svr_addr` | `setLongLinkServerAddress` | `setLonglinkSvrAddr` | `mars_stn_set_longlink_svr_addr` |
 | 短连接去哪里 | `set_shortlink_svr_addr` | `setShortLinkServerAddress` | `setShortlinkSvrAddr` | `mars_stn_set_shortlink_svr_addr` |
-| 强制连一次 | `make_sure_long_link_connected` | `makeSureLongLinkConnected` | `makesureLongLinkConnected` | `mars_stn_makesure_longlink_connected` |
+| 强制连一次 | `make_sure_default_long_link_connected` | `makeSureLongLinkConnected` | `makesureLongLinkConnected` | `mars_stn_makesure_longlink_connected` |
 | 强制连一次你命名的那条 | `make_sure_long_link_connected` | `makeSureLongLinkConnected(name:)` | `makesureLongLinkConnectedExt` | `mars_stn_makesure_longlink_connected_ext` |
 | 再开一条有名的 | `create_long_link` | `createLongLink` | `createLonglink` | `mars_stn_create_longlink` |
 | 丢掉那条有名的 | `destroy_long_link` | `destroyLongLink` | `destroyLonglink` | `mars_stn_destroy_longlink` |
@@ -23,8 +23,9 @@
 上面这些调用的都是默认那条长连接。要再开一条，应用得给它一个名字 —— `create_long_link`
 加一个 `LonglinkConfig`：名字、host 列表、要不要自己重连、要不要向应用报状态。之后
 就按这个名字找它：`destroy_long_link` 把它丢掉、并让正在它上面跑的任务全部失败，
-`mark_main_longlink` 让它成为给应用报状态的那一条。`group` 留空、`link_type` 给 `0`，拿
-到的就是长连接的默认值。
+`mark_main_longlink` 让它成为给应用报状态的那一条。除 Rust 之外的每个平台上，`group`
+留空、`link_type` 给 `0`，拿到的就是长连接的默认值；Rust 里 `LonglinkConfig::new`
+已经把它们填好了 —— `group` 是 `default-group`，`link_type` 是 `Task::CHANNEL_LONG`。
 
 `makesureLongLinkConnected()` 在 Android 和共享 Kotlin 上什么也不回答 —— C ABI 的
 那个符号回答 1 或 0，JNI 那个回答 `void` —— 想知道的调用方读 `Question.linkStatus`。

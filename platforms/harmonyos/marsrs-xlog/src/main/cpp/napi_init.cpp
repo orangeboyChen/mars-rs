@@ -71,7 +71,10 @@ typedef struct {
 } Instance;
 
 // What `mars_xlog_new_instance` answered, by name prefix. Guarded by a mutex:
-// every method may be called from any thread, and `Xlog` of the ArkTS says so.
+// every method may be called from any thread, and the mutex is the only thing
+// that makes it so — `Xlog` of the ArkTS says nothing about threads either way,
+// so a claim that the class is the one holding it up would be a claim nothing
+// in the tree keeps.
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static Instance* g_instances = NULL;
 static size_t g_instances_count = 0;
@@ -133,9 +136,12 @@ static char* NamedString(napi_env env, napi_value object, const char* key, const
     return value;
 }
 
-// A number field of the config object, or `fallback` when it is absent or is
-// not a number. Every number of the config is an int at the C ABI, so the double
-// ArkTS hands over is read as one here and not carried as a double.
+// A number field of the config object, or `fallback` when it is absent, is not
+// a number, or is one the C ABI's `int` cannot hold — `NaN`, an infinity, and
+// anything past an `int32_t` among them. Every number of the config is an int
+// at the C ABI, so the double ArkTS hands over is read as one here and not
+// carried as a double: `napi_get_value_int32` is `ToInt32`, which answers `0`
+// for all three, and a level of `0` is the one that logs everything.
 static int NamedInt(napi_env env, napi_value object, const char* key, int fallback) {
     napi_value property = NULL;
     if (napi_get_named_property(env, object, key, &property) != napi_ok || property == NULL) {
@@ -145,11 +151,12 @@ static int NamedInt(napi_env env, napi_value object, const char* key, int fallba
     if (napi_typeof(env, property, &type) != napi_ok || type != napi_number) {
         return fallback;
     }
-    int32_t value = 0;
-    if (napi_get_value_int32(env, property, &value) != napi_ok) {
+    double number = 0;
+    if (napi_get_value_double(env, property, &number) != napi_ok ||
+        !(number >= -2147483648.0 && number <= 2147483647.0)) {
         return fallback;
     }
-    return value;
+    return (int)number;
 }
 
 // The string argument at `index`, malloc'd, or NULL: what every method that
@@ -164,11 +171,90 @@ static char* ArgString(napi_env env, napi_callback_info info, size_t index) {
     return CopyString(env, argv[index]);
 }
 
+// The number argument at `index` as an `int32_t`, and `0` — "not a number this
+// module will hand on" — when it is not one.
+//
+// `napi_get_value_int32` is ECMAScript's `ToInt32` and not a range check: a
+// `NaN`, an infinity and `4294967296` all come out of it as `0`. So a level
+// ArkTS computed and came to no level with — a sum with an `undefined` in it
+// — was one the appender was *moved* to, and `0` is the level that lets every
+// record through: an app that meant to log nothing logged all of it, and a
+// record it wrote at no level was written at `verbose`. The double is read and
+// bounded instead, which is the one thing the engine answers that says whether
+// the number is one at all.
+static bool Int32Arg(napi_env env, napi_callback_info info, size_t index, int32_t* out) {
+    size_t argc = index + 1;
+    napi_value argv[4] = {NULL, NULL, NULL, NULL};
+    napi_value self = NULL;
+    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || argc <= index) {
+        return false;
+    }
+    double number = 0;
+    if (napi_get_value_double(env, argv[index], &number) != napi_ok ||
+        !(number >= -2147483648.0 && number <= 2147483647.0)) {
+        return false;
+    }
+    *out = (int32_t)number;
+    return true;
+}
+
+// The number argument at `index` as a `long long`, and `0` when it is not one
+// that fits: `ToInt32` is what the engine's int32 read does, so a `NaN` came
+// out of it as `0` — the appender's own "ten days", the C++'s default — and a
+// file lifetime an app meant to be a year came out as one it never asked
+// for.
+static bool Int64Arg(napi_env env, napi_callback_info info, size_t index, long long* out) {
+    size_t argc = index + 1;
+    napi_value argv[4] = {NULL, NULL, NULL, NULL};
+    napi_value self = NULL;
+    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || argc <= index) {
+        return false;
+    }
+    double number = 0;
+    if (napi_get_value_double(env, argv[index], &number) != napi_ok ||
+        !(number >= -9223372036854775808.0 && number < 9223372036854775808.0)) {
+        return false;
+    }
+    *out = (long long)number;
+    return true;
+}
+
+// The number argument at `index` as an `unsigned long long`, and `0` when it is
+// not one that fits.
+//
+// `0` is a size and not a missing argument: it is the appender's own "never
+// split", so a caller that takes the split away again has to reach it, and a
+// setter that only ever moved the size up is a size an app cannot turn off.
+// The ceiling is `2^64`, which is what the `unsigned long long` of the C ABI
+// holds: a double at or above it is not a size the conversion has an answer
+// for, and one below `0` is not a size at all.
+static bool UInt64Arg(napi_env env, napi_callback_info info, size_t index, unsigned long long* out) {
+    size_t argc = index + 1;
+    napi_value argv[4] = {NULL, NULL, NULL, NULL};
+    napi_value self = NULL;
+    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || argc <= index) {
+        return false;
+    }
+    double number = 0;
+    if (napi_get_value_double(env, argv[index], &number) != napi_ok ||
+        !(number >= 0 && number < 18446744073709551616.0)) {
+        return false;
+    }
+    *out = (unsigned long long)number;
+    return true;
+}
+
 // --- the table ------------------------------------------------------------
 
 // The handle of a prefix, or 0 when this module has no appender of that name —
 // which is every method's answer for "the appender is closed": a call after
 // `close` is dropped, and not a use of a handle that was released.
+// The handle is used with `g_lock` released, which is what lets another thread
+// `close` the prefix in between: a handle whose appender is gone is a no-op to
+// the C ABI — the registry looks it up and finds nothing — so such a call
+// writes nothing rather than writing through an appender that is closed, and
+// that is why the call is made outside the lock instead of holding the lock
+// across the I/O of a write.
 static long long HandleOf(const char* namePrefix) {
     if (namePrefix == NULL) {
         return 0;
@@ -219,7 +305,7 @@ static int Remember(const char* namePrefix, long long handle) {
     return 1;
 }
 
-// `mars_xlog_release_instance`, and the table's own entry for the prefix: an
+// `mars_xlog_release_instance_of`, and the table's own entry for the prefix: an
 // appender closed here is a prefix the next `open` opens afresh, which is what
 // makes `close` and `open` of one prefix a pair and not a leak. The last entry
 // is moved into the hole, because the table is a set and not a list.
@@ -296,15 +382,32 @@ static napi_value Open(napi_env env, napi_callback_info info) {
     int level = NamedInt(env, argv[0], "level", MarsLevelInfo);
 
     long long handle = mars_xlog_get_instance(namePrefix);
+    // What this call opened, and not what it was answered: a handle the
+    // registry answered is an appender someone else opened, and only an
+    // appender this call opened may be released by it.
+    int opened = 0;
     if (handle == 0) {
         handle = mars_xlog_new_instance(&config, level);
+        if (handle != 0) {
+            opened = 1;
+        }
     }
     if (handle != 0 && !Remember(namePrefix, handle)) {
         // The table is what every call after this one goes through, so an
         // appender it cannot remember is an appender it cannot reach: closed
         // again, rather than opened and left for the process to leak.
-        mars_xlog_release_instance(namePrefix);
-        handle = 0;
+        //
+        // Only when this call is the one that opened it.
+        // `mars_xlog_release_instance` releases the appender of a *prefix*
+        // and not of a handle, so releasing one the registry answered closes
+        // an appender another caller is writing through — and flushes its
+        // cache out from under it. A prefix that was open already is
+        // answered `true` instead: the appender is there, and it was there
+        // before this call was made.
+        if (opened != 0) {
+            mars_xlog_release_instance_of(namePrefix, handle);
+            handle = 0;
+        }
     }
 
     free(logDir);
@@ -334,14 +437,9 @@ static napi_value SetLevel(napi_env env, napi_callback_info info) {
     if (handle == 0) {
         return Undefined(env);
     }
-    size_t argc = 2;
-    napi_value argv[2] = {NULL, NULL};
-    napi_value self = NULL;
-    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) == napi_ok && argc >= 2) {
-        int32_t level = MarsLevelInfo;
-        if (napi_get_value_int32(env, argv[1], &level) == napi_ok) {
-            mars_xlog_set_level_instance(handle, level);
-        }
+    int32_t level = MarsLevelInfo;
+    if (Int32Arg(env, info, 1, &level)) {
+        mars_xlog_set_level_instance(handle, level);
     }
     return Undefined(env);
 }
@@ -355,14 +453,9 @@ static napi_value SetMode(napi_env env, napi_callback_info info) {
     if (handle == 0) {
         return Undefined(env);
     }
-    size_t argc = 2;
-    napi_value argv[2] = {NULL, NULL};
-    napi_value self = NULL;
-    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) == napi_ok && argc >= 2) {
-        int32_t mode = MarsAppenderAsync;
-        if (napi_get_value_int32(env, argv[1], &mode) == napi_ok) {
-            mars_xlog_set_mode_instance(handle, mode);
-        }
+    int32_t mode = MarsAppenderAsync;
+    if (Int32Arg(env, info, 1, &mode)) {
+        mars_xlog_set_mode_instance(handle, mode);
     }
     return Undefined(env);
 }
@@ -396,18 +489,9 @@ static napi_value SetMaxFileSize(napi_env env, napi_callback_info info) {
     if (handle == 0) {
         return Undefined(env);
     }
-    size_t argc = 2;
-    napi_value argv[2] = {NULL, NULL};
-    napi_value self = NULL;
-    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) == napi_ok && argc >= 2) {
-        double bytes = 0;
-        // Clamped and not dropped: `0` is the appender's own "never split",
-        // so a caller that takes the split away again has to reach it — a
-        // setter that only ever moves the size up is a size an app cannot
-        // turn off.
-        if (napi_get_value_double(env, argv[1], &bytes) == napi_ok && bytes >= 0) {
-            mars_xlog_set_max_file_size_instance(handle, (unsigned long long)bytes);
-        }
+    unsigned long long bytes = 0;
+    if (UInt64Arg(env, info, 1, &bytes)) {
+        mars_xlog_set_max_file_size_instance(handle, bytes);
     }
     return Undefined(env);
 }
@@ -419,14 +503,9 @@ static napi_value SetMaxAliveTime(napi_env env, napi_callback_info info) {
     if (handle == 0) {
         return Undefined(env);
     }
-    size_t argc = 2;
-    napi_value argv[2] = {NULL, NULL};
-    napi_value self = NULL;
-    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) == napi_ok && argc >= 2) {
-        int32_t seconds = 0;
-        if (napi_get_value_int32(env, argv[1], &seconds) == napi_ok) {
-            mars_xlog_set_max_alive_duration_instance(handle, (long long)seconds);
-        }
+    long long seconds = 0;
+    if (Int64Arg(env, info, 1, &seconds)) {
+        mars_xlog_set_max_alive_duration_instance(handle, seconds);
     }
     return Undefined(env);
 }
@@ -437,15 +516,8 @@ static napi_value IsLoggable(napi_env env, napi_callback_info info) {
     char* namePrefix = ArgString(env, info, 0);
     long long handle = HandleOf(namePrefix);
     free(namePrefix);
-    size_t argc = 2;
-    napi_value argv[2] = {NULL, NULL};
-    napi_value self = NULL;
-    if (handle == 0 ||
-        napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || argc < 2) {
-        return Boolean(env, false);
-    }
     int32_t level = MarsLevelInfo;
-    if (napi_get_value_int32(env, argv[1], &level) != napi_ok) {
+    if (handle == 0 || !Int32Arg(env, info, 1, &level)) {
         return Boolean(env, false);
     }
     return Boolean(env, mars_xlog_is_enabled_for(handle, level) != 0);
@@ -466,7 +538,12 @@ static napi_value Log(napi_env env, napi_callback_info info) {
         return Undefined(env);
     }
     int32_t level = MarsLevelInfo;
-    napi_get_value_int32(env, argv[1], &level);
+    // A level that is not one leaves the record unwritten and not written at
+    // `verbose`: what an app computed no level with is a record it did not
+    // ask for, and `verbose` is the one level that lets everything through.
+    if (!Int32Arg(env, info, 1, &level)) {
+        return Undefined(env);
+    }
     char* tag = CopyString(env, argv[2]);
     char* message = CopyString(env, argv[3]);
     mars_xlog_write_instance(handle, level, tag == NULL ? "" : tag, "", "", 0,
@@ -547,7 +624,7 @@ static napi_value Paths(napi_env env, napi_callback_info info, PathAt pathAt) {
         return list;
     }
     int32_t daysAgo = 0;
-    if (napi_get_value_int32(env, argv[1], &daysAgo) != napi_ok) {
+    if (!Int32Arg(env, info, 1, &daysAgo)) {
         napi_throw_error(env, NULL, "marsrs-harmonyos-xlog: the day is not a number");
         return Undefined(env);
     }
@@ -612,8 +689,17 @@ static napi_value Close(napi_env env, napi_callback_info info) {
     if (namePrefix == NULL) {
         return Undefined(env);
     }
+    // The handle the table remembers and not the table alone: `Forget` drops an
+    // entry whoever opened the appender it names, and a release is given a
+    // *prefix*, so a `close` of one this module never opened — or of one it has
+    // closed already — released whichever appender another caller had there,
+    // and flushed its cache out from under it. Naming the handle releases this
+    // one's, and a second `close` releases nothing at all.
+    long long handle = HandleOf(namePrefix);
     Forget(namePrefix);
-    mars_xlog_release_instance(namePrefix);
+    if (handle != 0) {
+        mars_xlog_release_instance_of(namePrefix, handle);
+    }
     free(namePrefix);
     return Undefined(env);
 }

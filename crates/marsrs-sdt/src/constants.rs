@@ -25,6 +25,17 @@ pub const fn mode_short(mode: i32) -> bool {
     mode & NET_CHECK_SHORT != 0
 }
 
+/// Whether `mode` names a check at all.
+///
+/// A mode with none of the three bits is a plan of nothing: the run behind it
+/// checks nothing and reports nothing, while the request it was given sits in
+/// the core as one that was taken. [`crate::SdtCore::start_check`] refuses it,
+/// and the C ABI answers the same refusal as `MARS_SDT_ERR_BAD_ARG` — the one
+/// seam that says why, where a bool can only say no.
+pub const fn has_check(mode: i32) -> bool {
+    mode & (NET_CHECK_BASIC | NET_CHECK_LONG | NET_CHECK_SHORT) != 0
+}
+
 /// `DEFAULT_HTTP_HOST`.
 pub const DEFAULT_HTTP_HOST: &str = "www.qq.com";
 /// `DEFAULT_PING_HOST`.

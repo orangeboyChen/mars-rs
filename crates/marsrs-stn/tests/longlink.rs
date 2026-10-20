@@ -153,11 +153,10 @@ fn what_the_long_link_asks_the_encoder() {
     assert!(encoder.identify_isresp(11, 11));
     assert!(!encoder.identify_isresp(11, 12));
 
-    // the interval it starts the long link on is the short end of the range
-    assert_eq!(
-        encoder.heart_interval(),
-        marsrs_stn::config::MIN_HEART_INTERVAL
-    );
+    // the interval it starts the long link on is `MinHeartInterval`, three
+    // and a half minutes — the C++'s own number, and not the constant this
+    // crate spells it with
+    assert_eq!(encoder.heart_interval(), 210 * 1000);
 }
 
 #[test]

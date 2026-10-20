@@ -14,7 +14,6 @@ import android.telephony.PhoneStateListener
 import android.telephony.SignalStrength
 import android.telephony.TelephonyManager
 import android.util.Log
-import java.util.Locale
 
 /**
  * The network-status helpers `C2Java.getStatisticsNetType`, `getCurSIMInfo` and
@@ -580,7 +579,22 @@ object NetStatusUtil {
 
     const val UNKNOW_TYPE: Int = 999
 
+    /**
+     * What the last `onSignalStrengthsChanged` read: written on the phone's
+     * thread and read on whichever thread `getStrength` comes in on.
+     */
+    @Volatile
     private var nowStrength = 0
+
+    /**
+     * The one listener there is, and the one every `getStrength` hands to
+     * `TelephonyManager.listen`: what keeps a listener is one record per
+     * listener, and a `listen` of one it has a record for already changes that
+     * record, so a `StrengthListener` made in the call was one more record —
+     * and one more callback writing [nowStrength] — per call, for the life of
+     * the process.
+     */
+    private val strengthListener = StrengthListener()
 
     // What `getNetTypeForStat` answers, and the one number STN is given for a
     // network: `NETTYPE_WIFI` for a Wifi, `UNKNOW_TYPE` for one it cannot place,
@@ -649,7 +663,7 @@ object NetStatusUtil {
                 // of the last callback — `0` until the first one lands, which
                 // is what a caller gets for the first seconds of a process.
                 (context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager)?.listen(
-                    StrengthListener(),
+                    strengthListener,
                     PhoneStateListener.LISTEN_SIGNAL_STRENGTHS
                 )
                 Math.abs(nowStrength)

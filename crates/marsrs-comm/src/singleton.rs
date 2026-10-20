@@ -32,7 +32,9 @@ impl<T> Singleton<T> {
         self.cell.get_or_init(f)
     }
 
-    /// `Singleton::Create()` — `false` when something was already created.
+    /// `Singleton::Create()` — what was already created comes back as
+    /// `Err`, so the value the caller made is theirs to drop and not
+    /// something the slot took and threw away.
     pub fn set(&self, value: T) -> Result<(), T> {
         self.cell.set(value)
     }

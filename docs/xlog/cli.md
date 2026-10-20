@@ -11,22 +11,24 @@ away.
 
 ::: code-group
 
-```bash [From crates.io]
-cargo install marsrs-xlog      # the `xlog` bin of the crate, on the $PATH
+```bash [From the tag]
+# The crate is not on crates.io yet — publication is pending — so the tag is
+# what `cargo install` is pointed at. It puts the `xlog` bin on the $PATH.
+cargo install --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3 marsrs-xlog
 xlog --version
 ```
 
 ```bash [From a release]
 # marsrs-xlog-cli-<version>-<host>.tar.gz, or .zip on Windows
-tar -xzf marsrs-xlog-cli-0.1.0-aarch64-apple-darwin.tar.gz
-./marsrs-xlog-cli-0.1.0-aarch64-apple-darwin/xlog --version
+tar -xzf marsrs-xlog-cli-0.1.0-alpha.3-aarch64-apple-darwin.tar.gz
+./marsrs-xlog-cli-0.1.0-alpha.3-aarch64-apple-darwin/xlog --version
 ```
 
 :::
 
 The archive is built for the same three hosts as the C ABI's — Linux, macOS and
 Windows — and carries one command and nothing else; it is for the machine that
-has no Rust toolchain. `cargo install` and the archive give the same `xlog`.
+has no Rust toolchain. The tag and the archive give the same `xlog`.
 
 | command | what it does |
 |---|---|
@@ -80,10 +82,18 @@ xlog decode --privkey=<hex> marsrs_20260927.xlog --out=marsrs.plain
 A file written with no public key is read with no option at all. An encrypted
 record met without the private key is an error that names the record, and not a
 record that is silently skipped: a file either gives its records back or says why
-it cannot.
+it cannot. So is a file read with the key of *another* pair — every record of it
+is unreadable, which is a file that was read and gave nothing back, and the
+command says so instead of handing over a log of markers.
 
 `INPUT` is a path or `-`, and `--out` is a path, `-`, or left out — so
 `xlog decode a.xlog | less` works, and so does `xlog decode < a.xlog > a.plain`.
+A value of no characters says the same thing as `-`: `--in=` is standard input and
+`--out=` standard output.
+
+A `--` ends the options, so what stands behind it is an input however it starts:
+`xlog encode -- -weird.xlog` reads a file of that name instead of looking for an
+option called `-w`.
 
 This is upstream's `decode_mars_log_file.py` over the same bytes, so a `.xlog`
 written by the C++ implementation is read here and one written here is read
@@ -105,7 +115,7 @@ makes `encode` of a file and `decode` of the result give the file back.
 | `-s, --sync=0\|1` | one record per block instead of one block per file | `0` |
 | `-c, --compress=0\|1` | compress the payload. An async body is framed either way, so `--compress=0` goes with `--sync=1` | `1` |
 | `-l, --level=N` | the zstd level | `6` |
-| `-r, --region=N` | the size of the buffer a record is written through | `153600` |
+| `-r, --region=N` | the size of the buffer a record is written through | `153600`, and at most `67108864` |
 
 What it writes is the file the C++ implementation writes — same magic, same
 framing, same compression — which is the reason to write one: a `.xlog` to test a

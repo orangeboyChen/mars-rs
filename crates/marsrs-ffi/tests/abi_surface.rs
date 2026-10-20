@@ -13,10 +13,10 @@ use mars_ffi::abi::{
     mars_xlog_current_log_path_instance, mars_xlog_flush_now_instance, mars_xlog_get_instance,
     mars_xlog_get_level, mars_xlog_getfilepath_from_timespan_instance, mars_xlog_is_enabled_for,
     mars_xlog_make_logfile_name_instance, mars_xlog_new_instance, mars_xlog_release_instance,
-    mars_xlog_set_console_log_instance, mars_xlog_set_level_instance,
-    mars_xlog_set_max_alive_duration_instance, mars_xlog_set_max_file_size_instance,
-    mars_xlog_set_mode_instance, mars_xlog_write_instance, MarsXLogConfig, MARS_XLOG_ERR_NO_PATH,
-    MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_OUT,
+    mars_xlog_release_instance_of, mars_xlog_set_console_log_instance,
+    mars_xlog_set_level_instance, mars_xlog_set_max_alive_duration_instance,
+    mars_xlog_set_max_file_size_instance, mars_xlog_set_mode_instance, mars_xlog_write_instance,
+    MarsXLogConfig, MARS_XLOG_ERR_NO_PATH, MARS_XLOG_ERR_NO_SPACE, MARS_XLOG_ERR_NULL_OUT,
 };
 
 fn serial() -> MutexGuard<'static, ()> {
@@ -66,16 +66,60 @@ fn make_config(dir: &std::path::Path, mode: c_int, compress: c_int) -> ConfigBun
     }
 }
 
+/// A prefix is a name and not text, so one that is not UTF-8 is kept — with
+/// U+FFFD for the byte that is not — and the appender is registered under it.
+/// The lookup and the release have to read it the same way: read as a `&str`,
+/// the whole of such a prefix is `""`, so a caller found no appender where it
+/// had just opened one and never closed it.
+#[test]
+fn a_prefix_that_is_not_utf8_is_the_one_the_appender_was_opened_with() {
+    let _guard = serial();
+    let dir = tempdir("lossy-prefix");
+    let log_dir = CString::new(dir.to_str().unwrap()).unwrap();
+    let pub_key = CString::new("").unwrap();
+    let prefix = CString::new([b'a', b'p', b'p', 0xff, b'n', b'a', b'm', b'e']).unwrap();
+    let raw = MarsXLogConfig {
+        mode: 0,
+        log_dir: log_dir.as_ptr(),
+        name_prefix: prefix.as_ptr(),
+        pub_key: pub_key.as_ptr(),
+        compress_mode: 0,
+        compress_level: 0,
+        cache_dir: std::ptr::null(),
+        cache_days: 0,
+    };
+
+    let handle = unsafe { mars_xlog_new_instance(&raw, 0) };
+    assert!(handle > 0, "an instance is a handle");
+    assert_eq!(
+        unsafe { mars_xlog_get_instance(prefix.as_ptr()) },
+        handle,
+        "the prefix it was opened with names it"
+    );
+
+    unsafe {
+        mars_xlog_release_instance(prefix.as_ptr());
+    }
+    assert_eq!(
+        unsafe { mars_xlog_get_instance(prefix.as_ptr()) },
+        0,
+        "and it is the one that closed it"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_new_instance_refuses_a_bad_config_before_touching_the_disk() {
     let _guard = serial();
     // `0` is the answer to every one of these: an instance is a handle, and
     // there is no room in one for a `MARS_XLOG_ERR_*` code. What is pinned
     // here is that the config is refused at all, and before the disk is
-    // touched.
+    // touched — so the directory a refused config names is one that was
+    // never made, and it is still not there at the end of it.
     assert_eq!(unsafe { mars_xlog_new_instance(std::ptr::null(), 0) }, 0);
 
-    let dir = tempdir("bad");
+    let parent = tempdir("bad");
+    let dir = parent.join("never");
     for (mode, compress) in [(7, 0), (0, 9)] {
         let config = make_config(&dir, mode, compress);
         assert_eq!(unsafe { mars_xlog_new_instance(&config.raw, 0) }, 0);
@@ -85,7 +129,11 @@ fn a_new_instance_refuses_a_bad_config_before_touching_the_disk() {
     let mut config = make_config(&dir, 0, 0);
     config.raw.log_dir = empty.as_ptr();
     assert_eq!(unsafe { mars_xlog_new_instance(&config.raw, 0) }, 0);
-    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        !dir.exists(),
+        "a config the ABI refused is not one it opened the directory of"
+    );
+    let _ = std::fs::remove_dir_all(&parent);
 }
 
 #[test]
@@ -176,20 +224,82 @@ fn instances_are_created_addressed_and_released() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `XloggerCategory::IsEnabledFor` is `level_ <= _level` on the **raw**
-/// `TLogLevel`, and the C++ casts whatever the caller passes
-/// (`(TLogLevel)_level`), so `MARS_LEVEL_NONE` (6) is a level a caller may ask
-/// about — it is not `Fatal`, and it is not "no answer at all".
+/// Releasing takes the prefix and not the handle, so a caller that asks the
+/// registry and then releases is answered twice and not once: an open of the
+/// same prefix that lands between the two is handed a handle of its own, and
+/// the release closes that appender instead of the one the caller asked about.
+/// `mars_xlog_release_instance_of` is the two under one lock.
 #[test]
-fn is_enabled_for_compares_the_raw_level() {
+fn a_release_names_the_instance_it_closes() {
+    let _guard = serial();
+    let dir = tempdir("release-of");
+    let config = make_config(&dir, 1, 0);
+    let prefix = CString::new("Mars").unwrap();
+    let first = unsafe { mars_xlog_new_instance(&config.raw, 2) };
+    assert!(first > 0, "an instance is a handle");
+
+    // A handle that is not the one this prefix is registered under closes
+    // nothing at all, `0` included: releasing took the prefix only, and both
+    // of these would have closed this appender.
+    unsafe {
+        mars_xlog_release_instance_of(prefix.as_ptr(), 0);
+    }
+    assert_eq!(unsafe { mars_xlog_get_instance(prefix.as_ptr()) }, first);
+    unsafe {
+        mars_xlog_release_instance_of(prefix.as_ptr(), first + 1);
+    }
+    assert_eq!(unsafe { mars_xlog_get_instance(prefix.as_ptr()) }, first);
+
+    // The handle it *is* registered under does.
+    unsafe {
+        mars_xlog_release_instance_of(prefix.as_ptr(), first);
+    }
+    assert_eq!(unsafe { mars_xlog_get_instance(prefix.as_ptr()) }, 0);
+
+    // And the same call again — a second `close` of a prefix another part of
+    // the app has opened since — is what the re-open race looks like from the
+    // caller that lost it: the appender that is there now is not the one this
+    // handle named, so it stays.
+    let second = unsafe { mars_xlog_new_instance(&config.raw, 2) };
+    assert!(second > 0, "the prefix opens again");
+    unsafe {
+        mars_xlog_release_instance_of(prefix.as_ptr(), first);
+    }
+    assert_eq!(
+        unsafe { mars_xlog_get_instance(prefix.as_ptr()) },
+        second,
+        "a stale handle closes none but its own"
+    );
+    unsafe {
+        mars_xlog_release_instance_of(prefix.as_ptr(), second);
+    }
+    assert_eq!(unsafe { mars_xlog_get_instance(prefix.as_ptr()) }, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `IsEnabledFor` answers about the raw level a record carries, so
+/// (`(TLogLevel)_level`) — so `-1` is asked about as `-1`, and not as the
+/// `Verbose` the filter would make of it.
+///
+/// What the raw comparison does not answer is a level no record can carry:
+/// `MARS_LEVEL_NONE` (6) is a filter, and the write refuses it as a level, so
+/// it is answered `0` and not `1`. Answering `1` there told a caller a write
+/// was coming that the write itself drops.
+#[test]
+fn is_enabled_for_answers_about_the_levels_a_record_can_have() {
     let _guard = serial();
     let dir = tempdir("enabled");
     let config = make_config(&dir, 0, 0);
     let handle = unsafe { mars_xlog_new_instance(&config.raw, 0) };
     assert!(handle > 0, "an instance is a handle");
 
-    mars_xlog_set_level_instance(handle, 0); // Verbose: everything passes, 6 included
-    assert_eq!(mars_xlog_is_enabled_for(handle, 6), 1);
+    mars_xlog_set_level_instance(handle, 0); // Verbose: every record passes
+                                             // `MARS_LEVEL_NONE` is a filter and not a record's level — the write
+                                             // refuses it — so the answer is `0` even when everything else passes.
+    assert_eq!(mars_xlog_is_enabled_for(handle, 6), 0);
+    // … and so is anything past it, which the C++ would have answered `1` to.
+    assert_eq!(mars_xlog_is_enabled_for(handle, 7), 0);
+    assert_eq!(mars_xlog_is_enabled_for(handle, 100), 0);
     assert_eq!(mars_xlog_is_enabled_for(handle, 5), 1);
     // A negative level is below Verbose, so nothing passes it.
     assert_eq!(mars_xlog_is_enabled_for(handle, -1), 0);
@@ -290,10 +400,10 @@ fn the_file_questions_are_answered_by_the_instance() {
     );
 }
 
-/// The three setters the C ABI carries and no getter answers for — the mode,
-/// the console and the two sizes — are the three no test called. They are
-/// asked for here, and what is asserted is the one of the four whose effect
-/// can be seen from outside: a file that is closed once it reaches its size.
+/// The four setters the C ABI carries and no getter answers for — the mode, the
+/// console and the two sizes — are the four no test called. They are asked for
+/// here, and what is asserted is the one of the four whose effect can be seen
+/// from outside: a file that is closed once it reaches its size.
 #[test]
 fn the_setters_the_abi_has_no_getter_for_take_effect() {
     let _guard = serial();

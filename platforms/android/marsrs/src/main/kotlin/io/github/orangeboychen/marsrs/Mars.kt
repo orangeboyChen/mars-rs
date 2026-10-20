@@ -19,12 +19,62 @@ import io.github.orangeboychen.marsrs.comm.PlatformComm
  */
 object Mars {
 
+    /** `marsrsxlog` — the `crate-name` of `marsrs-jni`, and the one library every `external` of this AAR lives in. */
+    private const val LIBRARY = "marsrsxlog"
+
+    /**
+     * Whether `libmarsrsxlog.so` is in this process: what [loadDefaultMarsLibrary]
+     * sets, and what [requireLibrary] asks before a symbol is reached. It is
+     * public because [loadDefaultMarsLibrary] cannot be the only way an app
+     * hears the answer — that one logs a failure and goes on.
+     *
+     * A load that failed used to be a log line and nothing else, and the failure
+     * then came out of whichever `external` an app called first — thrown on the
+     * thread the port was running on, as an `UnsatisfiedLinkError` naming a
+     * symbol and not the load that never happened.
+     */
+    @Volatile
+    var libraryLoaded = false
+        private set
+
     @JvmStatic
     fun loadDefaultMarsLibrary() {
         try {
-            System.loadLibrary("marsrsxlog")
+            System.loadLibrary(LIBRARY)
+            libraryLoaded = true
         } catch (e: Throwable) {
-            android.util.Log.e("mars.Mars", "", e)
+            // Logged and not rethrown: this is called from the `init` of
+            // `StnLogic` and of `SdtLogic`, and an exception out of the `init`
+            // of a class leaves it one the app can never touch again. What names
+            // the library instead is [requireLibrary], on the call that reaches
+            // a symbol.
+            android.util.Log.e("mars.Mars", "System.loadLibrary(\"$LIBRARY\") failed", e)
+        }
+    }
+
+    /**
+     * `libmarsrsxlog.so`, or an `IllegalStateException` naming it: what
+     * [onCreate] and [onDestroy] ask before [BaseEvent] reaches a symbol, so
+     * that a process the library is not in says so on the call an app made
+     * rather than inside one.
+     *
+     * Those two are the entry points of this object, and the ones its own
+     * `external`s are behind. `StnLogic` and `SdtLogic` are not guarded this
+     * way — their `init` calls [loadDefaultMarsLibrary], which has to log a
+     * failed load and go on, because an exception out of the `init` of a class
+     * is a class the app can never touch again — so a call of theirs with the
+     * library missing is still an `UnsatisfiedLinkError` naming the symbol.
+     * `BaseEvent` has no `init` of its own at all: what its receiver calls is
+     * reached on a library whichever of those the app touched first already
+     * loaded, and when none did it fails the same way. [libraryLoaded] is what
+     * an app asks when it wants that answer before it makes one.
+     */
+    private fun requireLibrary() {
+        if (!libraryLoaded) {
+            loadDefaultMarsLibrary()
+        }
+        check(libraryLoaded) {
+            "lib$LIBRARY.so is not loaded: no `external` of io.github.orangeboychen.marsrs can be answered without it"
         }
     }
 
@@ -34,6 +84,18 @@ object Mars {
     /**
      * Initializes the platform callbacks, and has to be called before `onCreate`: every method of
      * C2Java takes what it asks about from the context that [PlatformComm.init] leaves behind.
+     *
+     * [handler] is kept and nothing is posted on it: the Rust side attaches the
+     * thread that called into it and asks the nine questions there, so the
+     * device is read on a thread of the port's and not on the looper an app
+     * handed over. It is asked for because `Mars.java` of the C++ project is —
+     * an app that hands its main looper over is not answered on it, and hears
+     * nothing about that.
+     *
+     * What is kept is the application context of the one handed over — so an
+     * Activity is safe to hand over — and it is kept for the process: the nine
+     * questions are answered from it whenever the port asks, which is why
+     * [release] is the way an app lets go of it.
      */
     @JvmStatic
     fun init(context: Context, handler: Handler) {
@@ -42,24 +104,35 @@ object Mars {
     }
 
     /**
+     * Lets go of what [init] kept: the context, the handler and the phone-state
+     * listener `NetworkSignalUtil` put on the air. Nothing of `C2Java` answers
+     * afterwards, so this is for an app that is done with the port and not one
+     * that goes on being asked about the device.
+     */
+    @JvmStatic
+    fun release() {
+        PlatformComm.release()
+        hasInitialized = false
+    }
+
+    /**
      * Called when the app starts: the first startup has to go through [init] first, and every one
      * after it goes through [BaseEvent.onCreate].
      */
     @JvmStatic
     fun onCreate(isFirstStartup: Boolean) {
-        if (isFirstStartup && hasInitialized) {
-            BaseEvent.onCreate()
-        } else if (!isFirstStartup) {
-            BaseEvent.onCreate()
-        } else {
+        if (isFirstStartup && !hasInitialized) {
             error(
                 "Mars.init must be executed before Mars.onCreate when the app starts for the first time."
             )
         }
+        requireLibrary()
+        BaseEvent.onCreate()
     }
 
     @JvmStatic
     fun onDestroy() {
+        requireLibrary()
         BaseEvent.onDestroy()
     }
 }

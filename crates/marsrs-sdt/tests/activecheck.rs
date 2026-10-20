@@ -6,12 +6,13 @@ use std::sync::{Arc, Mutex};
 use marsrs_sdt::activecheck::Check;
 use marsrs_sdt::checkimpl::{Answer, Ask, PingStatus, Query};
 use marsrs_sdt::netchecker_profile::{CheckRequestProfile, CheckResultProfile};
+use marsrs_sdt::report::report_json;
 use marsrs_sdt::sdt::{Callback, CheckIPPort, CheckIPPorts, CheckStatus, NetCheckType, TcpErrCode};
 use marsrs_sdt::sdt_core::{CancelHandle, SdtCore};
 use marsrs_sdt::sdt_logic::SdtLogic;
 use marsrs_sdt::{
-    DEFAULT_HTTP_HOST, DEFAULT_PING_COUNT, DEFAULT_PING_HOST, NET_CHECK_BASIC, NET_CHECK_SHORT,
-    UNUSE_TIMEOUT,
+    DEFAULT_DNS_TIMEOUT, DEFAULT_HTTP_HOST, DEFAULT_PING_COUNT, DEFAULT_PING_HOST,
+    HTTP_DEFAULT_TIMEOUT, NET_CHECK_BASIC, NET_CHECK_SHORT, UNUSE_TIMEOUT,
 };
 
 /// The hosts of one link: the name they are filed under, the ip, and the port.
@@ -56,12 +57,14 @@ fn slow(query: &Query) -> Answer {
         Query::Dns { .. } => Answer::Dns {
             error_code: 0,
             rtt: 100,
+            local_dns: "8.8.8.8".to_owned(),
             ips: vec!["1.1.1.1".to_owned(), "2.2.2.2".to_owned()],
         },
         Query::Tcp { .. } => Answer::Tcp {
             sent: 0,
             received: 0,
             is_noop_resp: true,
+            conntime: 40,
             rtt: 100,
         },
         Query::Http { .. } => Answer::Http {
@@ -128,6 +131,11 @@ fn a_host_that_cannot_probe_fails_every_check_it_runs() {
     // a request nobody sent, to the CGI the core was given
     assert_eq!(results[3].url, "http://short.host/netcheck");
     assert_eq!(results[3].status_code, 0);
+    // `error_code` is what the app reads for "how the probe went", and a
+    // profile that was never given one says `0`, which is "worked": a request
+    // nobody sent has to say so here, and not only in the status the run
+    // reports
+    assert_eq!(results[3].error_code, -1);
 
     assert_eq!(request.check_status, CheckStatus::CheckFinish);
     // a run without a timeout is never a run that ran out of one
@@ -221,6 +229,7 @@ fn the_dns_check_records_what_the_resolve_answered() {
         Query::Dns { .. } => Answer::Dns {
             error_code: 0,
             rtt: 7,
+            local_dns: "8.8.8.8".to_owned(),
             ips: vec![
                 "1.1.1.1".to_owned(),
                 "2.2.2.2".to_owned(),
@@ -237,6 +246,7 @@ fn the_dns_check_records_what_the_resolve_answered() {
     assert_eq!(profile.domain_name, "long.host");
     assert_eq!(profile.error_code, 0);
     assert_eq!(profile.rtt, 7);
+    assert_eq!(profile.local_dns, "8.8.8.8");
     assert_eq!(profile.ip1, "1.1.1.1");
     assert_eq!(profile.ip2, "2.2.2.2");
     assert_eq!(request.check_status, CheckStatus::CheckContinue);
@@ -266,6 +276,7 @@ fn a_resolve_that_failed_takes_no_address_from_the_answer() {
         Query::Dns { .. } => Answer::Dns {
             error_code: -1,
             rtt: 12,
+            local_dns: "8.8.8.8".to_owned(),
             ips: vec!["1.1.1.1".to_owned(), "2.2.2.2".to_owned()],
         },
         _ => Answer::Nothing,
@@ -277,6 +288,8 @@ fn a_resolve_that_failed_takes_no_address_from_the_answer() {
     let profile = &request.checkresult_profiles[0];
     assert_eq!(profile.error_code, -1);
     assert_eq!(profile.rtt, 12);
+    // the resolver that was asked is named whether or not it answered
+    assert_eq!(profile.local_dns, "8.8.8.8");
     assert!(profile.ip1.is_empty(), "ip1: {}", profile.ip1);
     assert!(profile.ip2.is_empty(), "ip2: {}", profile.ip2);
     assert_eq!(request.check_status, CheckStatus::CheckFinish);
@@ -296,6 +309,8 @@ fn the_tcp_check_records_the_noop_round_trip() {
     let profile = &request.checkresult_profiles[0];
     assert_eq!(profile.error_code, 0);
     assert_eq!(profile.rtt, 100);
+    // the connect is its own timing, and not the round trip the noop took
+    assert_eq!(profile.conntime, 40);
     assert_eq!(profile.ip, "1.2.3.4");
     assert_eq!(profile.port, 80);
     assert_eq!(
@@ -321,6 +336,7 @@ fn a_noop_that_did_not_go_out_is_a_send_error() {
             sent: -1,
             received: 0,
             is_noop_resp: false,
+            conntime: 9,
             rtt: 9,
         },
         _ => Answer::Nothing,
@@ -350,12 +366,14 @@ fn a_receive_that_failed_is_not_the_last_host_the_check_looks_at() {
             sent: 0,
             received: -1,
             is_noop_resp: false,
+            conntime: 0,
             rtt: 1200,
         },
         _ => Answer::Tcp {
             sent: 0,
             received: 0,
             is_noop_resp: true,
+            conntime: 0,
             rtt: 10,
         },
     });
@@ -388,6 +406,7 @@ fn an_answer_that_was_not_the_noops_is_a_response_error() {
             sent: 0,
             received: 0,
             is_noop_resp: false,
+            conntime: 0,
             rtt: 9,
         },
         _ => Answer::Nothing,
@@ -415,6 +434,8 @@ fn the_ping_check_records_the_status_of_a_run_that_came_back() {
     // `snprintf(loss_rate, 16, "%f", ...)`: six decimals, like `%f`
     assert_eq!(profile.loss_rate, "0.000000");
     assert_eq!(profile.rtt_str, "12.500000");
+    // and `rtt_str` is the `rtt` as a string, so the two are the same number
+    assert_eq!(profile.rtt, 12);
     // an item with no ip is pinged at `DEFAULT_PING_HOST`
     assert_eq!(profile.ip, DEFAULT_PING_HOST);
     // and the timeout the C++ hands `RunPingQuery` is in seconds
@@ -452,8 +473,45 @@ fn a_ping_that_did_not_come_back_has_no_status() {
     assert_eq!(profile.checkcount, DEFAULT_PING_COUNT);
     assert!(profile.loss_rate.is_empty());
     assert!(profile.rtt_str.is_empty());
-    // a run that was started without one asks for no timeout at all
+    // a run that came back failed has no status to take a round trip from
+    assert_eq!(profile.rtt, 0);
+    // and it is filed under the item it was made for, which is the long-link
+    // host's ip and not `DEFAULT_PING_HOST`: the ip is an empty string only
+    // when the item has none
     assert_eq!(profile.ip, "1.2.3.4");
+}
+
+/// A status that is not a number: every probe lost, so the average of the
+/// round trips that came back is one over none of them.
+#[test]
+fn a_status_that_is_not_a_number_is_left_out_of_the_report() {
+    let mut request = request_of(
+        link(&[("long.host", "1.2.3.4", 80)]),
+        CheckIPPorts::new(),
+        5000,
+    );
+    let (mut ask, _) = stub(|query| match query {
+        Query::Ping { .. } => Answer::Ping {
+            error_code: 0,
+            rtt: 2,
+            status: Some(PingStatus::new(f32::NAN, f32::INFINITY)),
+        },
+        _ => Answer::Nothing,
+    });
+    let mut check = check_of(&request);
+    assert!(check.start_do_check(NetCheckType::PingCheck, &mut request, &mut ask, 1, ""));
+
+    let profile = &request.checkresult_profiles[0];
+    assert_eq!(profile.error_code, 0);
+    assert!(profile.loss_rate.is_empty());
+    assert!(profile.rtt_str.is_empty());
+    assert_eq!(profile.rtt, 0);
+    // `NaN` and `inf` are not JSON, and the report is one document the app
+    // parses: a number that is not one in a single field of it is a whole
+    // diagnosis the app cannot read.
+    let json = report_json(&request.checkresult_profiles);
+    assert!(!json.contains("NaN"), "{json}");
+    assert!(!json.contains("inf"), "{json}");
 }
 
 #[test]
@@ -479,16 +537,58 @@ fn the_url_of_the_http_check_is_the_host_and_the_cgi() {
     // of one that has no scheme
     assert_eq!(urls[0], format!("http://{DEFAULT_HTTP_HOST}/netcheck"));
     assert_eq!(urls[1], "http://short.host/netcheck");
-    // the C++ hands `SendHttpQuery` the timeout as the request has it
+    // `SendHttpQuery` gets the timeout the request has, and the default of
+    // its kind when the request has none — the same reading every other probe
+    // is asked under, and not `UNUSE_TIMEOUT` itself, which is twenty-four
+    // days of it
     assert_eq!(
         asked.lock().unwrap()[1],
         Query::Http {
             url: "http://short.host/netcheck".to_owned(),
-            timeout_ms: UNUSE_TIMEOUT
+            timeout_ms: HTTP_DEFAULT_TIMEOUT
         }
     );
     assert_eq!(request.checkresult_profiles[0].status_code, 200);
     assert_eq!(request.checkresult_profiles[0].rtt, 100);
+}
+
+/// The budget a probe before it spent is no reason to ask the HTTP probe for
+/// no time at all: `0` is a probe that cannot answer, which the check files as
+/// the network being down, and not one that was given the default.
+#[test]
+fn an_http_check_with_nothing_left_asks_for_the_default() {
+    // two hosts, one port each: `spend` breaks the port loop, and the host
+    // loop walks on
+    let shortlink = link(&[("short.a", "1.1.1.1", 80), ("short.b", "2.2.2.2", 80)]);
+    // ten milliseconds, and every probe of `slow` takes a hundred
+    let mut request = request_of(CheckIPPorts::new(), shortlink, 10);
+    let (mut ask, asked) = stub(slow);
+    let mut check = check_of(&request);
+
+    assert!(check.start_do_check(
+        NetCheckType::HttpCheck,
+        &mut request,
+        &mut ask,
+        1,
+        "/netcheck"
+    ));
+    assert_eq!(check.remaining(), 0, "the first probe spent the budget");
+
+    let asked = asked.lock().unwrap().clone();
+    assert_eq!(
+        asked,
+        vec![
+            Query::Http {
+                url: "http://short.a/netcheck".to_owned(),
+                timeout_ms: 10
+            },
+            Query::Http {
+                url: "http://short.b/netcheck".to_owned(),
+                timeout_ms: HTTP_DEFAULT_TIMEOUT
+            },
+        ],
+        "the second host is asked anyway, and not for nothing"
+    );
 }
 
 #[test]
@@ -706,4 +806,34 @@ fn a_diagnosis_runs_through_the_core_and_the_logic() {
     assert_eq!(results.len(), 5);
     // `ReportNetCheckResult` is what `run` does that `run_on` does not
     assert_eq!(reported.lock().unwrap().len(), 5);
+}
+
+/// The walk goes on after the budget is spent — the C++ `break`s out of the
+/// loop it is in and no more — but a probe is not asked for with nothing:
+/// `0` milliseconds is a resolve or a connect that cannot answer, which the
+/// check files as the network being down. It gets the default instead.
+#[test]
+fn a_probe_asked_for_with_nothing_left_is_asked_with_the_default() {
+    let longlink = link(&[("long.a", "1.1.1.1", 80)]);
+    let shortlink = link(&[("short.a", "3.3.3.3", 80)]);
+    let mut request = request_of(longlink, shortlink, 10);
+    let (mut ask, asked) = stub(slow);
+
+    let mut check = check_of(&request);
+    assert!(check.start_do_check(NetCheckType::DnsCheck, &mut request, &mut ask, 1, ""));
+    let asked = asked.lock().unwrap().clone();
+    assert_eq!(
+        asked,
+        vec![
+            Query::Dns {
+                domain: "long.a".to_owned(),
+                timeout_ms: 10
+            },
+            Query::Dns {
+                domain: "short.a".to_owned(),
+                timeout_ms: DEFAULT_DNS_TIMEOUT
+            },
+        ],
+        "the short-link host is asked anyway, and not for nothing"
+    );
 }

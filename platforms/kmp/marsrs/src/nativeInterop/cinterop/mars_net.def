@@ -22,9 +22,13 @@ headers = mars_sdt.h mars_stn.h
 headerFilter = mars_sdt.h mars_stn.h
 staticLibraries = libmars_net_ffi.a
 
-# `iana-time-zone` asks `CFTimeZone*` what the time zone is, which is why
-# `Package.swift` names the framework in its `linkerSettings` too: a Rust
-# `staticlib` carries no link flags of its own.
+# The four lines `marsrs-xlog`'s `mars_ffi.def` carries, which this one does
+# not need for the archive under it: `Package.swift` gives this half's target
+# no `linkerSettings`, because an archive built `--no-default-features
+# --features sdt,stn` holds no `iana-time-zone` and so asks no `CFTimeZone*`
+# — it references nothing outside libSystem. A flag naming a framework the
+# app links anyway costs nothing, and the two `.def` files are written the
+# same way, one per module, by `build.gradle.kts`.
 linkerOpts.osx = -framework CoreFoundation
 linkerOpts.ios = -framework CoreFoundation
 linkerOpts.watchos = -framework CoreFoundation

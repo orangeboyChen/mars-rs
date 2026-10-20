@@ -182,4 +182,9 @@ for entry in "${targets[@]}"; do
     build_one sdt,stn libmars_net_ffi.a
 done
 
-find "$out" -name '*.a' | sort
+# `find` answers 0 for a tree with no `.a` in it and so does `sort`, so an
+# output directory the loop above never wrote to is a script that passed. What
+# says the archives are there is the list and not the exit of either.
+archives="$(find "$out" -name '*.a' | sort)"
+[ -n "$archives" ] || { echo "::error::no .a under $out"; exit 1; }
+printf '%s\n' "$archives"

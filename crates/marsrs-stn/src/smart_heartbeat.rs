@@ -425,10 +425,19 @@ impl SmartHeartbeat {
                     self.report(SmartHeartBeatAction::ReCalc, true);
                     self.info.fail_heart_count = 0;
                 } else {
+                    // Saturating, and not a plain subtraction: `cur_heart`
+                    // is writable through [`Self::info_mut`], and an interval
+                    // below the two steps is one this subtraction would
+                    // underflow — a panic in a debug build, and an interval
+                    // of hours in a release one.
+                    let shorter = self
+                        .info
+                        .cur_heart
+                        .saturating_sub(HEART_STEP + SUCCESS_STEP);
                     self.info.cur_heart = if self.is_doze_style() {
                         MIN_HEART_INTERVAL
-                    } else if self.info.cur_heart - HEART_STEP - SUCCESS_STEP > MIN_HEART_INTERVAL {
-                        self.info.cur_heart - HEART_STEP - SUCCESS_STEP
+                    } else if shorter > MIN_HEART_INTERVAL {
+                        shorter
                     } else {
                         MIN_HEART_INTERVAL
                     };

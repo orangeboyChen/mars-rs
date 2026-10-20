@@ -277,7 +277,9 @@ fn a_package_that_does_not_check_out_is_refused() {
 #[test]
 fn a_simple_package_is_a_length_and_a_body() {
     // `uint16_t`
-    let packed = simple_short_pack(b"hello");
+    let Some(packed) = simple_short_pack(b"hello") else {
+        panic!("a body of five bytes is packed")
+    };
     assert_eq!(simple_short_pack_length(5), 7);
     assert_eq!(packed.len(), 7);
     assert_eq!(&packed[..2], &7u16.to_be_bytes());
@@ -306,7 +308,9 @@ fn a_simple_package_is_a_length_and_a_body() {
 
 #[test]
 fn a_simple_package_that_has_not_arrived_whole_is_continued() {
-    let packed = simple_short_pack(b"hello");
+    let Some(packed) = simple_short_pack(b"hello") else {
+        panic!("a body of five bytes is packed")
+    };
 
     // fewer bytes than the length in front of the body
     assert_eq!(simple_short_unpack(&[0]), SimpleUnpacked::Continue);
@@ -373,10 +377,33 @@ fn a_simple_package_whose_length_is_shorter_than_its_header_is_refused() {
 fn a_simple_package_of_nothing_is_a_length() {
     // `_packlen` counts the length in front of the body, so an empty body is a
     // package of two (or four) bytes
-    assert_eq!(simple_short_pack(b"").len(), 2);
-    let SimpleUnpacked::Ok { pack_len, data } = simple_short_unpack(&simple_short_pack(b"")) else {
-        panic!("{:?}", simple_short_unpack(&simple_short_pack(b"")))
+    let Some(packed) = simple_short_pack(b"") else {
+        panic!("a body of nothing is packed")
+    };
+    assert_eq!(packed.len(), 2);
+    let SimpleUnpacked::Ok { pack_len, data } = simple_short_unpack(&packed) else {
+        panic!("{:?}", simple_short_unpack(&packed))
     };
     assert_eq!(pack_len, 2);
     assert!(data.is_empty());
+}
+
+#[test]
+fn a_body_two_bytes_cannot_say_the_length_of_is_not_packed() {
+    // what the two bytes in front can say: 65535, less the two of them
+    let Some(packed) = simple_short_pack(&vec![7u8; u16::MAX as usize - 2]) else {
+        panic!("a body that two bytes can say the length of is packed")
+    };
+    let SimpleUnpacked::Ok { pack_len, data } = simple_short_unpack(&packed) else {
+        panic!("{:?}", simple_short_unpack(&packed))
+    };
+    assert_eq!(pack_len, u16::MAX as usize);
+    assert_eq!(data.len(), u16::MAX as usize - 2);
+
+    // one byte more, and the length wraps: a package the other end reads as
+    // a different one is not one this packs at all
+    assert!(
+        simple_short_pack(&vec![7u8; u16::MAX as usize - 1]).is_none(),
+        "a length two bytes cannot say is not packed with one that wrapped"
+    );
 }

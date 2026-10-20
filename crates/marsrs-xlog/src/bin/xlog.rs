@@ -36,6 +36,15 @@
 //! `INPUT` is a path or `-` for standard input (`--in=` and `--records=` say
 //! the same thing), and `--out` is a path or `-` for standard output; it is
 //! standard output when it is left out, so `xlog decode a.xlog | less` works.
+//! A value of no characters says the same thing as `-`: `--in=` is standard
+//! input and `--out=` standard output, because a path of no characters is not
+//! one anything can open.
+//!
+//! A `--` ends the options: what stands behind it is an `INPUT`, however it
+//! starts, so a file whose name begins with a dash is one the command reads
+//! and not an option it does not have. It ends the questions too — `xlog help`
+//! and `xlog --version` are asked as a subcommand or as a flag of their own,
+//! and not from the value of an option.
 //!
 //! Every option has a short spelling, and takes its value either attached —
 //! `-oFILE`, `-o=FILE` — or as the next argument, `-o FILE`. A subcommand has
@@ -47,24 +56,34 @@ use std::fs;
 use std::io::{Read, Write};
 use std::process::ExitCode;
 
-use marsrs_crypt::TAILER_LEN;
-use marsrs_xlog::{bytes::AutoBuffer, decode_records, CompressMode, LogBuffer};
+use marsrs_crypt::{HEADER_LEN, TAILER_LEN};
+use marsrs_xlog::{bytes::AutoBuffer, decode_records_counted, CompressMode, Decoded, LogBuffer};
 
 /// `kBufferBlockLength` in `mars/xlog/src/appender.cc` (150 KiB), the size of
 /// the region a record is written through.
 const DEFAULT_REGION: usize = 150 * 1024;
+/// The biggest `--region` there is — 64 MiB, which is four hundred times the
+/// block the appender writes through and more room than a record of any size
+/// an app writes needs. A number past it is refused: the region is
+/// `vec![0u8; region_len]`, so a `--region` that is a typo is a terabyte the
+/// process asks for and the machine does not have.
+const MAX_REGION: usize = 64 * 1024 * 1024;
 /// `ZSTD_c_compressionLevel` default of `XlogConfig` in the C++ appender.
 const DEFAULT_LEVEL: i32 = 6;
-/// The bytes one record needs of the region: its own length, the tailer byte,
-/// and the most a compressor adds to an input it cannot compress — zstd's
-/// `ZSTD_COMPRESSBOUND` is `len + len / 128 + 64`, and that also covers zlib's
-/// stored blocks, five bytes per 64 KiB.
+/// The bytes one record needs of the region: the block's header, its own
+/// length, the tailer byte, and the most a compressor adds to an input it
+/// cannot compress — zstd's `ZSTD_COMPRESSBOUND` is `len + len / 256 + 64`,
+/// the number `marsrs_buffer::Compressor::worst_case` asks for, and this leaves half as
+/// much margin again (`len / 128`), which is also what covers zlib's stored
+/// blocks, five bytes per 64 KiB.
 ///
 /// [`LogBuffer::write`] writes into the room there is and drops the rest, so
 /// the CLI has to know this before it writes and not after: a record that
-/// turned out not to fit would be truncated in silence.
+/// turned out not to fit would be truncated in silence. The header is one
+/// block's and not one record's, but a region sized for one record carries
+/// one block, so it is part of the room that record needs.
 fn room_for(len: usize) -> usize {
-    len + len / 128 + TAILER_LEN + 64
+    HEADER_LEN + len + len / 128 + TAILER_LEN + 64
 }
 
 const USAGE: &str = "\
@@ -96,12 +115,14 @@ options:
                          nor encrypted, which is what the C++ writes
   -l, --level=N          encode: the zstd level, 6 by default
   -r, --region=N         encode: the size of the buffer a record is written
-                         through, 153600 by default; a record that needs a
-                         bigger one is given it
+                         through, 153600 by default and 67108864 at most; a
+                         record that needs a bigger one is given it
 
-INPUT of `-`, or none at all, is standard input; so is `--out=-`. A short
-option takes its value attached — `-oFILE`, `-o=FILE` — or as the next
-argument, `-o FILE`.
+INPUT of `-`, or none at all, is standard input; so is `--out=-`. A value of no
+characters says the same thing: `--in=` is standard input and `--out=` standard
+output. A `--` ends the options, so what stands behind it is an INPUT however it
+starts. A short option takes its value attached — `-oFILE`, `-o=FILE` — or as the
+next argument, `-o FILE`.
 
 `xlog keygen` prints the pair as `pubkey=HEX` and `privkey=HEX`: the 128 hex
 characters a `pubKey` is configured with, and the 64 that `xlog decode
@@ -134,19 +155,16 @@ struct Command {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    // Asked anywhere on the line, not only as a subcommand: `xlog encode --help`
-    // is the same question as `xlog help`, and both are answered the same way.
-    if args
-        .iter()
-        .any(|arg| matches!(arg.as_str(), "help" | "h" | "--help" | "-h"))
-    {
+    // Asked as the subcommand, or as a flag of its own — and not as the value
+    // of an option, which is what a scan of every argument would also match:
+    // `xlog decode --out help` names a file called `help`, and asks for no
+    // help at all. `xlog encode --help` is the same question as `xlog help`,
+    // and both are answered the same way.
+    if asked(&args, &["help", "h"], &["--help", "-h"]) {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
     }
-    if args
-        .iter()
-        .any(|arg| matches!(arg.as_str(), "--version" | "-V" | "-v"))
-    {
+    if asked(&args, &[], &["--version", "-V", "-v"]) {
         println!("xlog {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
@@ -181,6 +199,28 @@ fn main() -> ExitCode {
     }
 }
 
+/// Whether the command line asked for one of `words` as its subcommand, or for
+/// one of `flags` as an option of its own.
+///
+/// A scan of every argument is not what this is: an option's value is an
+/// argument too, and `xlog decode --out help` names a file called `help` while
+/// asking for nothing. So the two places the question can stand are the two a
+/// command line has for it — the first argument, which is where a subcommand
+/// is, and an argument that is an option of its own — and neither is behind the
+/// `--` that says everything after it is an input: `xlog encode -- --help`
+/// reads a file of that name.
+fn asked(args: &[String], words: &[&str], flags: &[&str]) -> bool {
+    if args
+        .first()
+        .is_some_and(|first| words.contains(&first.as_str()))
+    {
+        return true;
+    }
+    args.iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .any(|arg| flags.contains(&arg.as_str()))
+}
+
 impl Command {
     /// Parses `--key=value` and `-k value` options, and at most one positional
     /// argument.
@@ -198,9 +238,24 @@ impl Command {
         };
 
         let mut index = 0;
+        // What stands behind a `--` is an input however it starts: an option's
+        // own spelling is not the only way a file of records is named, and a
+        // path that begins with a dash is one an option parser takes for an
+        // option of its own.
+        let mut inputs_only = false;
         while index < args.len() {
             let arg = &args[index];
             index += 1;
+            if inputs_only {
+                if command.input.replace(arg.clone()).is_some() {
+                    return Err(format!("two inputs given, the second one `{arg}`"));
+                }
+                continue;
+            }
+            if arg == "--" {
+                inputs_only = true;
+                continue;
+            }
             if let Some(rest) = arg.strip_prefix("--") {
                 // `--out=PATH` and `--out PATH` are the same option; the second
                 // one is what a command line reads like, and the value is the
@@ -219,11 +274,15 @@ impl Command {
                     return Err(format!("unknown option `-{letter}`\n\n{USAGE}"));
                 };
                 let attached = &cluster[letter.len_utf8()..];
-                let attached = attached.strip_prefix('=').unwrap_or(attached);
-                let value = if attached.is_empty() {
-                    value_of(arg, key, &mut index, args)?
-                } else {
-                    attached
+                // An `=` was written, so what follows it is the value even
+                // when what follows it is nothing: `-o=` is `--out=`, which
+                // is the stream and not the next argument — see [`given`].
+                // `-o` on its own is the one that takes the next argument,
+                // and `-oPATH` is the one whose value is in the argument.
+                let value = match attached.strip_prefix('=') {
+                    Some(value) => value,
+                    None if !attached.is_empty() => attached,
+                    None => value_of(arg, key, &mut index, args)?,
                 };
                 command.set(what, key, value)?;
             } else if command.input.replace(arg.clone()).is_some() {
@@ -231,11 +290,6 @@ impl Command {
             }
         }
 
-        if command.pubkey.as_deref() == Some("") {
-            command.pubkey = None;
-        }
-        // An option of another subcommand is a mistake and not a default: a
-        // `--privkey` that `encode` ignores writes a file nobody asked for.
         if what != What::Encode && command.pubkey.is_some() {
             return Err("--pubkey is an option of `xlog encode`".into());
         }
@@ -265,8 +319,8 @@ impl Command {
             return Err(format!("--{key} is not an option of `xlog keygen`"));
         }
         match key {
-            "in" | "records" => self.input = Some(value.to_owned()),
-            "out" => self.out = Some(value.to_owned()),
+            "in" | "records" => self.input = given(value),
+            "out" => self.out = given(value),
             "mode" => {
                 self.mode = match value {
                     "zlib" => CompressMode::Zlib,
@@ -286,10 +340,21 @@ impl Command {
                     self.sync = flag;
                 }
             }
-            "pubkey" => self.pubkey = Some(value.to_owned()),
+            "pubkey" => self.pubkey = given(value),
             "privkey" => self.privkey = Some(privkey(value)?),
             "level" => self.level = number(key, value)?,
-            "region" => self.region = number(key, value)?,
+            "region" => {
+                self.region = number(key, value)?;
+                // `--region` is a floor and not a ceiling — a record that needs
+                // more room is given it — so a number past this one is a typo
+                // and not a request: the region is `vec![0u8; region_len]`, and
+                // `--region=999999999999` is a terabyte of it.
+                if self.region > MAX_REGION {
+                    return Err(format!(
+                        "--region must be at most {MAX_REGION} bytes, got `{value}`"
+                    ));
+                }
+            }
             other => return Err(format!("unknown option `--{other}`")),
         }
         Ok(())
@@ -315,7 +380,13 @@ impl Command {
             None | Some("-") => std::io::stdout()
                 .write_all(bytes)
                 .map_err(|e| format!("write standard output: {e}")),
-            Some(path) => fs::write(path, bytes).map_err(|e| format!("write {path}: {e}")),
+            // Created for its owner alone: what lands in `--out` is the log
+            // itself, and `fs::write` would leave it readable by every user of
+            // the machine — see [`create_key_file`].
+            Some(path) => create_output_file(path).and_then(|mut file| {
+                file.write_all(bytes)
+                    .map_err(|e| format!("write {path}: {e}"))
+            }),
         }
     }
 
@@ -333,6 +404,14 @@ impl Command {
         }
         Ok(records)
     }
+}
+
+/// A value of no characters is a value that was not given: `--out=` is
+/// standard output the way leaving `--out` out is, `--in=` is standard input,
+/// and `--pubkey=` is a file in the clear — a path, a key and a hex string of
+/// no characters are not ones anything can open, derive or parse.
+fn given(value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 /// The long name of every short option: `-o PATH` is `--out=PATH`, and `-k` is
@@ -486,32 +565,71 @@ fn encode(command: Command) -> Result<(), String> {
 /// framing.
 fn decode(command: Command) -> Result<(), String> {
     let bytes = command.input()?;
-    match decode_records(&bytes, command.privkey.as_ref()) {
-        Ok(plain) => {
-            command.output(&plain)?;
-            eprintln!("xlog: {} bytes -> {} bytes", bytes.len(), plain.len());
-            Ok(())
+    // The text the walk read is written out whether or not the walk ended in an
+    // error — `parseFile` of `decode_log_file.c` writes the output it has, and
+    // so does this: a file that lost its end to a process killed between two
+    // writes still holds every record before the damage, and an operator told
+    // "truncated" with nothing beside it cannot read a single one of them. The
+    // reason is still what the command answers with — the file's tail is
+    // missing, and that has to be said too. What is not written is a file of
+    // nothing: a walk that stopped with no text at all leaves the file the
+    // caller named alone instead of emptying it.
+    let (plain, note, failed) = match decode_records_counted(&bytes, command.privkey.as_ref()) {
+        Ok(decoded) => {
+            let note = if decoded.unreadable > 0 {
+                format!(
+                    ", {} of {} records unreadable",
+                    decoded.unreadable, decoded.records
+                )
+            } else {
+                String::new()
+            };
+            let failed = nothing_came_out(&decoded, command.privkey.is_some());
+            (decoded.text, note, failed)
         }
-        Err(err) => {
-            // `parseFile` of `decode_log_file.c` writes the output it has
-            // whether or not the walk ended in an error, and so does this: a
-            // file that lost its end to a process killed between two writes
-            // still holds every record before the damage, and an operator told
-            // "truncated" with nothing beside it cannot read a single one of
-            // them. The error is still what the command answers with — the
-            // file's tail is missing, and that has to be said.
-            if !err.recovered.is_empty() {
-                command.output(&err.recovered)?;
-                eprintln!(
-                    "xlog: {} bytes -> {} bytes, then {}",
-                    bytes.len(),
-                    err.recovered.len(),
-                    err.reason
-                );
-            }
-            Err(err.reason)
-        }
+        Err(err) => (
+            err.recovered,
+            format!(", then {}", err.reason),
+            Some(err.reason),
+        ),
+    };
+
+    if failed.is_none() || !plain.is_empty() {
+        command.output(&plain)?;
+        eprintln!("xlog: {} bytes -> {} bytes{note}", bytes.len(), plain.len());
     }
+    match failed {
+        Some(reason) => Err(reason),
+        None => Ok(()),
+    }
+}
+
+/// Whether a walk that ended well read no log at all: every record it found is
+/// one whose text did not come out of it, so what it answers with is a marker
+/// per record and nothing else.
+///
+/// That is what a file read with the wrong key looks like — a `--privkey` of
+/// another pair is a record unreadable per record, and the walk ends well —
+/// and a log of markers is not one an operator can tell from a log that said
+/// so. A file no record came out of is a file that was not read, which is a
+/// failure whatever the walk answered.
+fn nothing_came_out(decoded: &Decoded, with_key: bool) -> Option<String> {
+    if !decoded.nothing_came_out() {
+        return None;
+    }
+    Some(if with_key {
+        format!(
+            "none of the {} records in the file came out: a record is read with the private \
+             key of the pair it was written with, and this one is not it",
+            decoded.records
+        )
+    } else {
+        format!(
+            "none of the {} records in the file came out: an encrypted record is read with \
+             --privkey, the private key of the pair the file was written with",
+            decoded.records
+        )
+    })
 }
 
 /// Makes a key pair: the 128 hex characters a `pubKey` is configured with, and
@@ -600,6 +718,37 @@ fn create_key_file(path: &str) -> Result<std::fs::File, String> {
             format!("write {path}: {e}")
         }
     })
+}
+
+/// Creates the file `--out` names: for its owner alone, and over what is there.
+///
+/// The mode [`create_key_file`] uses, for one half of the same reason: what
+/// `decode` writes is the log text of an app, and `fs::write` creates with
+/// `0666 & umask`, which under the usual `022` is readable by every user of the
+/// machine. `encode` writes a `.xlog` through the same option, and a file of
+/// records is no more the machine's than the text they decode to. The other
+/// half — never over a file that is already there — is a key's alone: an output
+/// the caller named is theirs to replace.
+fn create_output_file(path: &str) -> Result<fs::File, String> {
+    #[cfg(unix)]
+    let opened = {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+    };
+    #[cfg(not(unix))]
+    let opened = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path);
+
+    opened.map_err(|e| format!("write {path}: {e}"))
 }
 
 /// The 32 bytes of a `--privkey`, which is 64 hex characters.

@@ -74,5 +74,10 @@ fun Xlog.writeDemoRecords() {
     // `sync = true` waits for the write, so every record above is on disk when
     // this returns. An app calls it before it reads the files, uploads them, or
     // exits.
+    //
+    // `flush(sync = true)`, and not `flushNow()`: this demo is compiled against
+    // the package on GitHub Packages and not against this tree, and the name
+    // that release published is this one — `flushNow` is the name the module
+    // carries now, and it is not one the version `marsrs` above names has.
     flush(sync = true)
 }

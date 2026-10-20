@@ -16,6 +16,9 @@
 # also the one thing that has to come first: a package npm has never seen has no
 # settings to put a trusted publisher in, so its first version is published by
 # hand, once, and this script says so instead of failing a release over it.
+# What it says it with is `::error::` and not a warning: a green job that
+# published nothing is a release that looks complete and is not, which is how a
+# release can go out without the crates anybody could have seen were missing.
 #
 # Published out of the directories the packaging stamped, and not out of the
 # tarballs: what goes up is what the release carries — the version of
@@ -42,12 +45,21 @@ version="${version#v}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$root"
 
+# Whether this script put the modules on npm: what a Summary step of the job
+# reads before it names a version. `false` on every path that leaves one
+# unpublished, so a summary can never quote a version npm does not have.
+published() {
+    printf 'published=%s\n' "$1" >> "${GITHUB_OUTPUT:-/dev/null}"
+}
+
 # The pair of the tree, unless the caller named the directories to publish.
 if [ "$#" -gt 0 ]; then
     pkgs=("$@")
 else
     pkgs=(platforms/react-native/marsrs platforms/react-native/marsrs-xlog)
 fi
+
+every_published=true
 
 # The status of a package or of a version of one on npm: 200 is "npm has it",
 # 404 is "it does not", and both are answers about the package. Read off the
@@ -69,7 +81,8 @@ for pkg in "${pkgs[@]}"; do
     status="$(registry_status "$name")"
     case "$status" in
         404)
-            echo "::warning::npm has no $name yet; publish its first version by hand, then name this repository as its trusted publisher"
+            echo "::error::npm has no $name yet; publish its first version by hand, then name this repository as its trusted publisher"
+            every_published=false
             continue
             ;;
         200)
@@ -121,3 +134,5 @@ for pkg in "${pkgs[@]}"; do
     # No `--access`: an unscoped package is public, and npm says so.
     (cd "$pkg" && npm publish "${args[@]}")
 done
+
+published "$every_published"

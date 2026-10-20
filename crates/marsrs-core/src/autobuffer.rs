@@ -62,7 +62,6 @@ impl AutoBuffer {
 
     /// Writes `src` at `pos`, growing the buffer when needed.
     pub fn write_at(&mut self, pos: usize, src: &[u8]) {
-        debug_assert!(pos <= self.length);
         self.fit(pos + src.len());
         self.data[pos..pos + src.len()].copy_from_slice(src);
         self.length = self.length.max(pos + src.len());
@@ -88,7 +87,6 @@ impl AutoBuffer {
     }
 
     pub fn set_length(&mut self, pos: usize, length: usize) {
-        debug_assert!(pos <= length);
         self.fit(length);
         self.length = length;
         self.seek(pos as isize, Seek::Start);
@@ -179,6 +177,28 @@ mod tests {
         buf.set_length(2, 6);
         assert_eq!(buf.pos(), 2);
         assert_eq!(buf.pos_slice(), b"cdef");
+    }
+
+    #[test]
+    fn set_length_clamps_a_pos_past_the_length_it_set() {
+        let mut buf = AutoBuffer::new();
+        // What the doc promises for both of them, and what a debug build did
+        // not do: it panicked on a `pos` past `length` where a release build
+        // clamped it, so one input had two answers.
+        buf.set_length(64, 8);
+        assert_eq!(buf.len(), 8);
+        assert_eq!(buf.pos(), 8);
+    }
+
+    #[test]
+    fn a_write_past_the_length_grows_the_buffer() {
+        let mut buf = AutoBuffer::new();
+        buf.write(b"ab");
+        // "growing the buffer when needed" is what `write_at`'s doc says, and
+        // the bytes it skips are zeroes and not whatever was there.
+        buf.write_at(4, b"z");
+        assert_eq!(buf.len(), 5);
+        assert_eq!(buf.as_slice(), b"ab\0\0z");
     }
 
     #[test]

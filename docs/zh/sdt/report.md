@@ -1,7 +1,8 @@
 # 报告
 
-每一项检查写一个 `CheckResultProfile`，报告就是它们变成的 JSON ——
-`{"details":[ … ]}`，一项检查一个对象：
+每一项检查探测到的每个 host 写一个 `CheckResultProfile`，报告就是它们变成的 JSON ——
+`{"details":[ … ]}`，一个 host 一个对象，而不是一项检查一个对象：ping 和 dns 会走两条
+链路，所以这两项各为长连接的每个 host 写一个、为短连接的每个 host 写一个。
 
 ```json
 {
@@ -33,17 +34,19 @@
 | 什么 | Rust | Swift | 共享 Kotlin、Android | C |
 |---|---|---|---|---|
 | 报告 | `report_json(&results)` | `MarsSdt.takeReport()` | `SdtLogic.takeReport()` | `mars_sdt_take_report(buf, len)` |
-| 改用回调 | — | — | `SdtLogic.setCallBack { … }` | — |
+| 改用回调 | `sdt.set_callback(…)` | — | `SdtLogic.setCallBack(object : SdtLogic.ICallBack { … })` | — |
 
 两条路拿的是同一份文档，所以 App 用其中一条：在 Android 和共享 Kotlin 上，一趟会把
 报告交给回调*并且*留着给之后的 `takeReport()`，所以两个都用的 App 会把同一次诊断送
 两次。取走就清空了 —— 下一次调用报的是这之后发生的事。
 
 在 Android 和共享 Kotlin 上报告是一个 `String?`，所以没有 buffer 要估大小。Swift
-的 `takeReport()` 从 4 KB 起、翻倍到 1 MB，只有没东西可拿的时候才回答 `nil`。
-`mars_sdt_take_report` 在报告塞不进 buffer 时回答 `MARS_SDT_ERR_NO_SPACE` —— 而且
-**结果留着**，所以调用方换一个更大的 buffer 再问一次，拿到的还是那次诊断，而不是
-一份空的。
+的 `takeReport()` 从 4 KB 起、翻倍到 1 MB，三种情况下回答 `nil`：没东西可拿；C ABI
+回答的不是 `MARS_SDT_ERR_NO_SPACE` 而是别的负码 —— panic，或 buffer 是 NULL ——
+或者报告连 1 MB 都装不下。只有第一种是"还没有诊断"，把每个 `nil` 都当第一种
+处理的 App 会丢掉一份它本来已经拿到的报告。`mars_sdt_take_report` 在报告塞不进
+buffer 时回答 `MARS_SDT_ERR_NO_SPACE` —— 而且**结果留着**，所以调用方换一个更大的
+buffer 再问一次，拿到的还是那次诊断，而不是一份空的。
 
 ## 取消，以及从头再来
 
@@ -51,18 +54,24 @@
 |---|---|---|---|---|
 | 停掉这一趟 | `cancel_active_check` / `cancel_handle` | `cancelActiveCheck` | `cancelActiveCheck` | `mars_sdt_cancel_active_check` |
 | 有一趟在跑吗 | `is_checking` | `isChecking` | `isChecking` | `mars_sdt_is_checking` |
-| 全丢掉 | `SdtCore::reset` | `reset` | `reset` | `mars_sdt_reset` |
+| 全丢掉 | 换一个 `SdtLogic` | `reset` | `reset` | `mars_sdt_reset` |
 
 在 Rust 里一趟会独占借用这个 logic，所以 `run_checks` 还在栈上的时候调不了
 `cancel_active_check`：先用 `cancel_handle()` 拿一个 `CancelHandle`，交给要停这一趟
 的那一方 —— 那个探测闭包，socket 握在它手上，而这个 socket 必须让出来。
 
+`SdtLogic` 上没有 `reset` —— 它背后的 `SdtCore` 是私有字段 —— 所以 Rust 要把一次诊断
+全丢掉的办法是换一个：把这个 logic drop 掉，再建一个，然后把回调再设到新的那个上。跑完
+的一趟不需要这些：它结束时清掉计划和 request，而 `run_checks` 是把结果交回来而不是留
+着，所以下一次 `start_active_check` 就是一次从零开始的诊断。
+
 其余每个平台的取消都不需要 handle：它设的是这一趟会读的那个标志，不拿这一趟握着的
 锁，所以它能在探测还没问完的时候从另一个线程落下来 —— 而这也正是取消有意义的唯一
 时刻。它做的是不让计划里剩下的部分跑起来；已经发出去的探测打断不了。
 
-还有，一次只能跑一趟：诊断是一个进程级的值，所以第二次 `runChecks` 会等第一次
-而不是跟它并排跑 —— 在 Android 和共享 Kotlin 上，第二次调用直到第一次结束才返回。
+还有，一次只能跑一趟：诊断是一个进程级的值，所以第二次 `runChecks` 不会跟第一次并排
+跑。在 Android 上它会等 —— 第二次调用直到第一次结束才返回。在其余的 Kotlin 目标上它
+被拒绝：`runChecks` 回答 `false`，什么也不跑。
 
 ## 接着看
 

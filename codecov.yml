@@ -29,6 +29,7 @@ coverage:
 
 comment:
   # reach, diff, files: what the coverage of the change is, what it did to the
-  # number, and where. No `flags` — there is one flag, and a column of one says
-  # nothing a reader of this repository does not already know.
+  # number, and where. `flags` is not one of them — the one report there is is
+  # tagged `rust` on its way up, so a column of it says nothing a reader of
+  # this repository does not already know.
   layout: 'reach, diff, files'

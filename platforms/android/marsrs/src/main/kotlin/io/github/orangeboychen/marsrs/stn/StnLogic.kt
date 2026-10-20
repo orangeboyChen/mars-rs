@@ -48,8 +48,17 @@ object StnLogic {
         @JvmField
         var cgi: String? = null
 
+        /**
+         * The host, or the ip, a task on the short link goes out to.
+         *
+         * `List` and not `ArrayList`, which is what an app builds one with:
+         * `marsrs-jni` reads this with the descriptor `Ljava/util/List;`, and a
+         * `GetFieldID` is a lookup by name *and* descriptor — declared as
+         * `ArrayList` it finds nothing, the read falls into its `Err` arm, and
+         * the task goes out with an empty host list and no error anywhere.
+         */
         @JvmField
-        var shortLinkHostList: ArrayList<String>? = null // host or ip
+        var shortLinkHostList: List<String>? = null
 
         @JvmField
         var sendOnly: Boolean = false
@@ -109,7 +118,7 @@ object StnLogic {
             channelselect: Int,
             cmdid: Int,
             cgi: String?,
-            shortLinkHostList: ArrayList<String>?
+            shortLinkHostList: List<String>?
         ) {
             this.taskID = genTaskID()
             this.channelSelect = channelselect
@@ -174,9 +183,17 @@ object StnLogic {
         @JvmField
         var name: String? = null
 
-        /** The hosts the link goes out on. */
+        /**
+         * The hosts the link goes out on.
+         *
+         * `List` and not `ArrayList`, for the same reason as
+         * [Task.shortLinkHostList]: the descriptor `longlink_config_from_java`
+         * reads this under is `Ljava/util/List;` — as an `ArrayList` it reads
+         * nothing, and `createLonglink` answers `false` for a config the app
+         * filled in.
+         */
         @JvmField
-        var hostList: ArrayList<String>? = null
+        var hostList: List<String>? = null
 
         /** `false` leaves the reconnecting to a task. */
         @JvmField
@@ -317,7 +334,9 @@ object StnLogic {
      * Created by caoshaokun on 16/2/1.
      *
      * An app that uses the signalling channel has to implement this interface — the port asks the
-     * app the fifteen questions below.
+     * app thirteen of the fourteen questions below. `isLogoned` is the one it is not asked: the
+     * state it names is one STN keeps and answers itself, so no question crosses into the app for
+     * it, and an app that answers it is answering a question nobody put to it.
      */
     interface ICallBack {
         /**
@@ -328,8 +347,11 @@ object StnLogic {
         /**
          * The SDK asks the app to resolve a host name: the app may answer with ordinary DNS, or
          * with a host-to-IP mapping of its own
+         * @param host  the host name
+         * @param isLongLinkHost whether the host is one of the long link's, which the app may
+         *                       answer differently for
          */
-        fun onNewDns(host: String?): Array<String>?
+        fun onNewDns(host: String?, isLongLinkHost: Boolean): Array<String>?
 
         /**
          * A message the SVR pushed down has come in
@@ -368,8 +390,12 @@ object StnLogic {
 
         /**
          * The traffic statistics
+         *
+         * `Long`, because that is what the two counters are: `marsrs-jni` hands
+         * over the `i64` STN kept, and an `Int` is a counter that wraps — a
+         * session over 2GiB is answered as a negative one.
          */
-        fun trafficData(send: Int, recv: Int)
+        fun trafficData(send: Long, recv: Long)
 
         /**
          * A notice of the connection state
@@ -406,6 +432,7 @@ object StnLogic {
         fun reportTaskProfile(taskString: String?)
     }
 
+    @Volatile
     private var callBack: ICallBack? = null
 
     /** Sets the instance the network layer calls back on — the app implements NetworkCallBack */
@@ -562,6 +589,16 @@ object StnLogic {
      *
      * A name a link already has is that link and not a second one.
      *
+     * What is made is a link and not a connection: nothing dials until
+     * [makesureLongLinkConnectedExt] asks it to or a task goes out on it, so
+     * [longLinkIsConnectedExt] reads `false` of a link made a moment ago.
+     *
+     * A config whose [LonglinkConfig.isMain] is `true` also takes "the" long
+     * link over from whichever link had it: [makesureLongLinkConnected],
+     * [longLinkIsConnected] and every call that names no link answer for this
+     * one from then on, and [markMainLonglink] is how another one gets it
+     * back.
+     *
      * @return whether the link is there afterwards — an answer the C++ cannot
      *     give, its `CreateLonglink_ext` being `void`
      */
@@ -648,17 +685,19 @@ object StnLogic {
      * The host the long link is set up with, and the host a short-link task names: the network
      * layer asks the app for what DNS makes of a host.
      * @param host  the host name
+     * @param isLongLinkHost whether the host is one of the long link's, which the network layer
+     *                       knows and the app is told
      * @return empty: the layer below resolves it itself
      */
     @JvmStatic
-    private fun onNewDns(host: String?): Array<String>? {
+    private fun onNewDns(host: String?, isLongLinkHost: Boolean): Array<String>? {
         return try {
             val imp = callBack
             if (imp == null) {
                 NullPointerException("callback is null").printStackTrace()
                 return null
             }
-            imp.onNewDns(host)
+            imp.onNewDns(host, isLongLinkHost)
         } catch (e: Exception) {
             e.printStackTrace()
             null
@@ -755,7 +794,7 @@ object StnLogic {
 
     /** Reports the traffic the signalling used */
     @JvmStatic
-    private fun trafficData(send: Int, recv: Int) {
+    private fun trafficData(send: Long, recv: Long) {
         try {
             val imp = callBack
             if (imp == null) {

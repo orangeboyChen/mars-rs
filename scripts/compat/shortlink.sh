@@ -31,7 +31,11 @@ cargo build --manifest-path "$REPO/Cargo.toml" -p marsrs-compat --release
 RUST=$REPO/target/release/stn-compat
 CPP=$OUT/upstream_shortlink
 
-if [ ! -x "$CPP" ]; then
+# … or older than the harness it was built out of: an edit to
+# `upstream_shortlink.cpp` is otherwise a binary that keeps answering for a
+# source it no longer matches, and the C++ column of the table below is then
+# not the C++ of this tree.
+if [ ! -x "$CPP" ] || [ "$REPO/scripts/compat/upstream_shortlink.cpp" -nt "$CPP" ]; then
     MARS_SRC="$REPO/scripts/compat/upstream_shortlink.cpp" \
     MARS_SRCS="$UP/mars/comm/autobuffer.cc \
                $UP/mars/comm/http.cc \
@@ -106,7 +110,9 @@ while read -r name url body_hex headers; do
     else
         BYTES=FAILED
         FAILED=$((FAILED + 1))
-        cmp "$RUST_FILE" "$CPP_FILE" || true
+        # A diagnostic on stdout lands between two rows of the table this
+        # script prints, which is why it goes to stderr.
+        cmp "$RUST_FILE" "$CPP_FILE" >&2 || true
     fi
 
     # 2. each side's parser on the other side's file. The files are the same
@@ -118,7 +124,7 @@ while read -r name url body_hex headers; do
     else
         READ=FAILED
         FAILED=$((FAILED + 1))
-        diff "$WORK/$name-rc.txt" "$WORK/$name-cr.txt" || true
+        diff "$WORK/$name-rc.txt" "$WORK/$name-cr.txt" >&2 || true
     fi
 
     # 3. the body that went in is the body that came out. `body ` with nothing

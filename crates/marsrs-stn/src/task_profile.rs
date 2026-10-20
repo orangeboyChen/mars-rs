@@ -895,12 +895,14 @@ pub fn compute_task_timeout(task: &Task) -> u64 {
         BASE_TASK_TIMEOUT
     };
     // `int trycount = 0; if (0 <= retry_count) trycount = retry_count; trycount++;`
-    let tries = if task.retry_count >= 0 {
-        task.retry_count + 1
+    // — an `int` in the C++, and a count of tries here, which is what the
+    // timeout below is multiplied by: `i32::MAX + 1` is not one.
+    let tries: u64 = if task.retry_count >= 0 {
+        u64::from(task.retry_count as u32) + 1
     } else {
         1
     };
-    let mut timeout = (wait + TASK_TIMEOUT_MARGIN) * tries as u64;
+    let mut timeout = (wait + TASK_TIMEOUT_MARGIN) * tries;
     if task.long_polling {
         // `task_timeout = (_task.long_polling_timeout + 5 * 1000)` — the C++'s
         // `int` arithmetic, on a value it then keeps in a `uint64_t`: a caller
@@ -1151,5 +1153,18 @@ mod tests {
 
         task.long_polling_timeout = 20_000;
         assert_eq!(compute_task_timeout(&task), 25_000);
+    }
+
+    #[test]
+    fn a_task_at_the_top_of_the_count_of_tries_still_has_a_timeout() {
+        let mut task = Task::new(1, 1);
+        // The C++ counts the tries in an `int`, and `+ 1` on an `i32` at its
+        // top is not a count of tries: what it makes is a timeout that is not
+        // one — a negative count, or a panic in a build that checks.
+        task.retry_count = i32::MAX;
+        assert_eq!(
+            compute_task_timeout(&task),
+            (BASE_TASK_TIMEOUT + TASK_TIMEOUT_MARGIN) * (i32::MAX as u64 + 1)
+        );
     }
 }

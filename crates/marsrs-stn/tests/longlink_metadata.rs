@@ -321,7 +321,7 @@ fn the_link_s_own_traffic_is_what_the_keeper_s_next_buffer_waits_on() {
 
     // a read is data that moved too, and it leaves a reading of its own
     let answers = meta.channel().lock().unwrap().read_at(2_000, SocketFd(3));
-    assert_eq!(answers.unwrap().len(), 1);
+    assert_eq!(answers.answers.len(), 1);
     assert_eq!(meta.take_network_data_changed(), Some(2_000));
     meta.keeper().on_network_data_changed_at(2_000);
     assert_eq!(meta.keeper().due_time(), Some(2_000 + DEFAULT_PERIOD));

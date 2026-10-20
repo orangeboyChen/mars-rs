@@ -95,20 +95,91 @@ impl Future for Flush {
         // a pool the port has to own, expire and shut down, for work that is
         // one lock, one write and one `fflush`.
         thread::spawn(move || {
+            // What makes the drain over is the drain ending, and not the drain
+            // succeeding: a drain that panicked is one the caller is told
+            // about too, or the `await` of it never comes back — the panic is
+            // on its own thread, and this future is the only thing holding the
+            // caller. So the end is written by a guard and not by the lines
+            // after the call, which an unwind never reaches.
+            let done = Drained::of(&shared);
             drain();
-            let mut shared = shared
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            shared.drained = true;
-            let waker = shared.waker.take();
-            drop(shared);
-            // Woken with the lock let go: `wake` can run the task on this
-            // thread, and the task's next question is the lock's.
-            if let Some(waker) = waker {
-                waker.wake();
-            }
+            drop(done);
         });
 
         Poll::Pending
+    }
+}
+
+/// The end of the drain, written whether the drain came back or unwound: the
+/// flag and the wake, which is all the future has left to do once the thread
+/// is done with the closure.
+struct Drained<'a> {
+    shared: &'a Arc<Mutex<Shared>>,
+}
+
+impl<'a> Drained<'a> {
+    fn of(shared: &'a Arc<Mutex<Shared>>) -> Self {
+        Self { shared }
+    }
+}
+
+impl Drop for Drained<'_> {
+    fn drop(&mut self) {
+        let mut shared = self
+            .shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        shared.drained = true;
+        let waker = shared.waker.take();
+        drop(shared);
+        // Woken with the lock let go: `wake` can run the task on this thread,
+        // and the task's next question is the lock's.
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::pin::pin;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::task::{Context, Waker};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use super::Flush;
+
+    /// What the caller awaited is the drain ending, and not the drain
+    /// succeeding: a drain that panicked is one the `await` of it has to come
+    /// back from, or an app that asked for a flush before it exited waits for
+    /// a thread that is never going to answer.
+    #[test]
+    fn a_drain_that_panicked_is_one_the_caller_is_told_about() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&ran);
+        let flush = Flush::new(move || {
+            flag.store(true, Ordering::SeqCst);
+            panic!("a drain that did not come back");
+        });
+
+        let mut flush = pin!(flush);
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(
+            flush.as_mut().poll(&mut context).is_pending(),
+            "the drain is on its own thread and is not over yet"
+        );
+
+        let until = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < until {
+            if flush.as_mut().poll(&mut context).is_ready() {
+                assert!(ran.load(Ordering::SeqCst), "and it did run");
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!("an await of a drain that panicked never came back");
     }
 }

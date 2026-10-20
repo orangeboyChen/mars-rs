@@ -11,6 +11,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use marsrs_crypt::{HEADER_LEN, TAILER_LEN};
 
@@ -30,8 +31,24 @@ fn xlog() -> Command {
     Command::new(env!("CARGO_BIN_EXE_xlog"))
 }
 
+/// A directory of this test's own, whose files no other test writes: two
+/// tests of one binary run in threads of one process, and a name a test is
+/// given is not a name it is the only one given.
+///
+/// Emptied first, because what it is named by is a process id as well, and a
+/// run that is given the id a run before it had is a run that finds that
+/// run's files — the `.xlog` an encode that was refused did not write, for
+/// one, is here for a test that asserts it is not.
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("marsrs-xlog-cli-{name}-{}", std::process::id()));
+    // A counter and not the name alone: two tests that happen to be given the
+    // same name are two tests in one directory.
+    static CALLS: AtomicU32 = AtomicU32::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "marsrs-xlog-cli-{name}-{}-{}",
+        std::process::id(),
+        CALLS.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("a scratch directory");
     dir
 }
@@ -72,6 +89,22 @@ fn no_magic_hours(bytes: &mut [u8]) {
 /// standard output, and what it said on standard error.
 fn run(args: &[&str]) -> (bool, Vec<u8>, String) {
     let output = xlog().args(args).output().expect("run the CLI");
+    (
+        output.status.success(),
+        output.stdout,
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// The same, in `dir`: what a relative path on the command line is relative
+/// to, which is the machine's own working directory and not one of these
+/// tests'.
+fn run_in(dir: &Path, args: &[&str]) -> (bool, Vec<u8>, String) {
+    let output = xlog()
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .expect("run the CLI");
     (
         output.status.success(),
         output.stdout,
@@ -285,6 +318,51 @@ fn the_key_file_is_the_owners_alone_and_is_not_written_over() {
     );
 }
 
+/// `--out` of `decode` is the log text itself, so it is created the way the key
+/// file is — for its owner alone, and not for every user of the machine.
+#[test]
+fn the_decoded_log_goes_to_a_file_of_the_owners_alone() {
+    let dir = scratch("decode-out");
+    let input = write(&dir, "records.txt", RECORDS);
+    let file = dir.join("a.xlog");
+    let plain = dir.join("a.plain");
+
+    let (ok, _, err) = run(&[
+        "encode",
+        &input.display().to_string(),
+        "--out",
+        &file.display().to_string(),
+    ]);
+    assert!(ok, "encode failed: {err}");
+    let (ok, _, err) = run(&[
+        "decode",
+        &file.display().to_string(),
+        "--out",
+        &plain.display().to_string(),
+    ]);
+    assert!(ok, "decode failed: {err}");
+    assert_eq!(
+        std::fs::read(&plain).expect("read the decoded text"),
+        RECORDS,
+        "the records did not come back"
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = std::fs::metadata(&plain)
+            .expect("the decoded file")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "the decoded log is readable by more than its owner"
+        );
+    }
+}
+
 #[test]
 fn keygen_takes_no_other_option_and_no_input() {
     // An option of another subcommand: the answer names the one that takes it.
@@ -407,6 +485,35 @@ fn standard_input_and_output_are_the_defaults() {
     let decoded = child.wait_with_output().expect("the log text");
     assert!(decoded.status.success(), "decode failed");
     assert_eq!(decoded.stdout, RECORDS, "the records did not come back");
+}
+
+/// An `=` with nothing after it is the stream, and not a value that has to be
+/// looked for in the next argument: `decode -o= a.xlog` reads `a.xlog` and
+/// prints it to the terminal, where `-o` followed by `a.xlog` decodes what is
+/// on standard input and writes it over the file the command line named.
+#[test]
+fn an_equals_with_nothing_after_it_is_the_stream() {
+    let dir = scratch("empty-value");
+    let input = write(&dir, "records.txt", RECORDS);
+    let file = dir.join("a.xlog");
+
+    let (ok, _, err) = run(&[
+        "encode",
+        &input.display().to_string(),
+        "--out",
+        &file.display().to_string(),
+    ]);
+    assert!(ok, "encode failed: {err}");
+    let before = std::fs::read(&file).expect("read the .xlog");
+
+    let (ok, out, err) = run(&["decode", "-o=", &file.display().to_string()]);
+    assert!(ok, "decode failed: {err}");
+    assert_eq!(out, RECORDS, "the records did not come back");
+    assert_eq!(
+        std::fs::read(&file).expect("read the .xlog again"),
+        before,
+        "the file it was given was written over"
+    );
 }
 
 #[test]
@@ -568,6 +675,51 @@ fn a_region_smaller_than_the_records_round_trips_them_anyway() {
     assert_eq!(out, std::fs::read(&one).expect("read the input"));
 }
 
+/// Bytes no compressor can shrink.
+///
+/// What the size of the region is raised to is computed from the length of the
+/// largest record and from the most a compressor adds to an input like that,
+/// so a record a compressor only makes longer is the one that asks the whole
+/// question: a region sized without the block's header is a region too short
+/// by [`HEADER_LEN`], and [`LogBuffer::write`] drops what does not fit without
+/// saying so.
+fn incompressible_record(len: usize) -> Vec<u8> {
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut bytes = Vec::with_capacity(len + 1);
+    while bytes.len() < len {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mixed = (state ^ (state >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        bytes.extend_from_slice(&mixed.to_le_bytes());
+    }
+    bytes.truncate(len);
+    bytes.push(b'\n');
+    bytes
+}
+
+#[test]
+fn a_record_a_compressor_cannot_shrink_is_written_whole() {
+    let dir = scratch("incompressible");
+    for mode in ["zlib", "zstd"] {
+        for len in [512usize, 2048] {
+            let record = incompressible_record(len);
+            let input = write(&dir, &format!("record-{mode}-{len}.txt"), &record);
+            let file = dir.join(format!("a-{mode}-{len}.xlog"));
+            let (ok, _, err) = run(&[
+                "encode",
+                &format!("--mode={mode}"),
+                &format!("--region={len}"),
+                &input.display().to_string(),
+                "-o",
+                &file.display().to_string(),
+            ]);
+            assert!(ok, "encode of a {len} byte record failed: {err}");
+            let (ok, out, err) = run(&["decode", &file.display().to_string()]);
+            assert!(ok, "decode of a {len} byte record failed: {err}");
+            assert_eq!(out, record, "the tail of a {len} byte record was dropped");
+        }
+    }
+}
+
 #[test]
 fn every_subcommand_and_option_has_a_short_spelling() {
     let dir = scratch("short");
@@ -725,4 +877,176 @@ fn the_version_and_the_usage_are_printed() {
             assert!(usage.contains(word), "the usage does not mention `{word}`");
         }
     }
+}
+
+/// A file read with the private key of another pair is a file no record of
+/// which comes out: the walk goes on from a record it cannot read, so what it
+/// answers with is a marker per record and no log at all. A command that
+/// answers well to that is a command that read nothing.
+#[test]
+fn a_file_read_with_the_key_of_another_pair_is_refused() {
+    let dir = scratch("wrong-key");
+    let input = write(&dir, "records.txt", RECORDS);
+    let file = dir.join("a.xlog");
+
+    let (ok, _, err) = run(&[
+        "encode",
+        &format!("--pubkey={PUBKEY}"),
+        &input.display().to_string(),
+        "-o",
+        &file.display().to_string(),
+    ]);
+    assert!(ok, "encode failed: {err}");
+
+    // A key of another pair: 64 hex characters, and not the one the file was
+    // written with.
+    let (ok, out, err) = run(&["keygen"]);
+    assert!(ok, "keygen failed: {err}");
+    let (_, other) = pair(&out);
+
+    let (ok, out, err) = run(&[
+        "decode",
+        &format!("--privkey={other}"),
+        &file.display().to_string(),
+    ]);
+    assert!(!ok, "a file was decoded with the key of another pair");
+    assert!(
+        err.contains("came out"),
+        "the error does not say what happened: {err}"
+    );
+    // The markers are written out anyway — a file that did not read is still a
+    // file the operator asked to see — but they are not the log: what each of
+    // them says is why that record did not come out.
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(!out.is_empty(), "no marker was written");
+    assert!(text.contains("error"), "no reason was written: {text}");
+    assert_ne!(out, RECORDS, "the records came out with the wrong key");
+}
+
+/// The usage is asked for as a subcommand, or as a flag of its own — and not
+/// from the value of an option, which is an argument like any other.
+#[test]
+fn an_options_value_is_not_the_question_it_looks_like() {
+    let dir = scratch("value-spelling");
+    let input = write(&dir, "records.txt", RECORDS);
+
+    // `--out help` names a file called `help`.
+    let (ok, out, err) = run_in(
+        &dir,
+        &["encode", &input.display().to_string(), "--out", "help"],
+    );
+    assert!(ok, "encode to a file called `help` failed: {err}");
+    assert!(
+        out.is_empty(),
+        "the usage was printed instead: {}",
+        String::from_utf8_lossy(&out)
+    );
+    let help = dir.join("help");
+    assert!(
+        std::fs::metadata(&help)
+            .expect("a file called `help`")
+            .len()
+            > 0,
+        "no file was written"
+    );
+
+    // And `--help` of a subcommand is the question, wherever it stands.
+    for args in [["encode", "--help"].as_slice(), ["decode", "-h"].as_slice()] {
+        let (ok, out, _) = run(args);
+        assert!(ok, "`{}` failed", args.join(" "));
+        let usage = String::from_utf8_lossy(&out).into_owned();
+        assert!(
+            usage.contains("xlog keygen"),
+            "no usage was printed: {usage}"
+        );
+    }
+}
+
+/// An input whose name starts with a dash is an input: what says so is the
+/// `--` that ends the options.
+#[test]
+fn a_dash_dash_ends_the_options() {
+    let dir = scratch("dash-dash");
+    write(&dir, "-weird.txt", RECORDS);
+
+    // Without it, an option parser takes the name for an option of its own:
+    // `w` is no option of any subcommand's.
+    let (ok, _, err) = run_in(&dir, &["encode", "-weird.txt"]);
+    assert!(!ok, "a name of that shape was read as an input");
+    assert!(
+        err.contains("unknown option"),
+        "the error does not say why: {err}"
+    );
+
+    // The options stand in front of the `--`: everything behind it is an input.
+    let (ok, _, err) = run_in(&dir, &["encode", "-o", "a.xlog", "--", "-weird.txt"]);
+    assert!(
+        ok,
+        "encode of a file whose name starts with a dash failed: {err}"
+    );
+    let (ok, out, err) = run_in(&dir, &["decode", "--", "a.xlog"]);
+    assert!(ok, "decode failed: {err}");
+    assert_eq!(out, RECORDS, "the records did not come back");
+}
+
+/// A value of no characters is the stream the option names: `--out=` is
+/// standard output, and `--in=` standard input. A path of no characters is not
+/// one anything can open.
+#[test]
+fn an_empty_value_is_the_stream_it_names() {
+    let dir = scratch("empty-value");
+    let input = write(&dir, "records.txt", RECORDS);
+    let file = dir.join("a.xlog");
+
+    let (ok, _, err) = run(&[
+        "encode",
+        &input.display().to_string(),
+        "-o",
+        &file.display().to_string(),
+    ]);
+    assert!(ok, "encode failed: {err}");
+
+    let (ok, out, err) = run(&["decode", &file.display().to_string(), "--out="]);
+    assert!(ok, "decode with an empty --out failed: {err}");
+    assert_eq!(out, RECORDS, "the records did not come back");
+
+    let mut child = xlog()
+        .args(["decode", "--in="])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("start the CLI");
+    child
+        .stdin
+        .take()
+        .expect("the stdin pipe")
+        .write_all(&std::fs::read(&file).expect("read the .xlog"))
+        .expect("write the .xlog");
+    let decoded = child.wait_with_output().expect("the log text");
+    assert!(
+        decoded.status.success(),
+        "decode from standard input failed: {}",
+        String::from_utf8_lossy(&decoded.stderr)
+    );
+    assert_eq!(decoded.stdout, RECORDS, "the records did not come back");
+}
+
+/// The region is `vec![0u8; region_len]`, and `--region` is a floor and not a
+/// ceiling — a record that needs more room is given it — so a number past the
+/// largest one there is a typo and not a request.
+#[test]
+fn a_region_past_the_largest_one_is_refused() {
+    let dir = scratch("region-cap");
+    let input = write(&dir, "records.txt", RECORDS);
+
+    let (ok, _, err) = run(&[
+        "encode",
+        "--region=999999999999",
+        &input.display().to_string(),
+    ]);
+    assert!(!ok, "a terabyte of region was accepted");
+    assert!(
+        err.contains("at most"),
+        "the error does not say what the largest one is: {err}"
+    );
 }

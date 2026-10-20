@@ -399,6 +399,15 @@ impl LongLinkTaskManager {
             .any(|profile| profile.task.taskid == taskid)
     }
 
+    /// The ids of every task in the queue, which is what a caller that empties
+    /// it has to know: a task no queue holds is one no pass is going to end.
+    pub fn task_ids(&self) -> Vec<u32> {
+        self.tasks
+            .iter()
+            .map(|profile| profile.task.taskid)
+            .collect()
+    }
+
     /// `ClearTasks()` — every channel is taken down with `kReset` and the queue
     /// is emptied, which is not the same as failing the tasks: the app is not
     /// told about any of them.
@@ -431,21 +440,21 @@ impl LongLinkTaskManager {
                 reset(&name);
             }
         }
-        self.redo_tasks_of_at(now, "");
+        self.redo_tasks_of_at(now, None);
     }
 
     /// `__RedoTasks(_name)` — the tasks of one channel are cancelled and tried
     /// again, which is what a channel whose own monitor said the network changed
     /// asks for. The channel itself is left alone.
     pub fn redo_tasks_of(&mut self, name: &str) {
-        self.redo_tasks_of_at(gettickcount(), name)
+        self.redo_tasks_of_at(gettickcount(), Some(name))
     }
 
     /// The same, with the reading handed in.
-    pub fn redo_tasks_of_at(&mut self, now: u64, name: &str) {
+    pub fn redo_tasks_of_at(&mut self, now: u64, name: Option<&str>) {
         let mut i = 0;
         while i < self.tasks.len() {
-            if !name.is_empty() && self.tasks[i].channel_name != name {
+            if name.is_some_and(|name| self.tasks[i].channel_name != name) {
                 i += 1;
                 continue;
             }
@@ -525,7 +534,7 @@ impl LongLinkTaskManager {
         for name in channels {
             self.batch_error_resp_handle_at(
                 now,
-                name,
+                Some(name),
                 Failure {
                     err_type,
                     err_code,
@@ -640,9 +649,10 @@ impl LongLinkTaskManager {
                 }
             }
             // one error for the whole channel it came in on
+            let name = response.name.clone();
             self.batch_error_resp_handle_at(
                 now,
-                response.name,
+                Some(response.name),
                 Failure {
                     err_type: response.err_type,
                     err_code: response.err_code,
@@ -653,9 +663,12 @@ impl LongLinkTaskManager {
             );
             // The C++ answers nothing; the port says whether there is still a
             // task waiting, which for an error with no task id of its own is
-            // any task on the channel.
+            // any task of the channel it came in on and not any task of the
+            // queue: the error was handed to that channel's tasks and to no
+            // other's, so a task of another channel is not one still waiting
+            // for an answer this error was not about.
             let waiting = if taskid == Task::INVALID_TASK_ID {
-                !self.tasks.is_empty()
+                self.task_count(&name) > 0
             } else {
                 self.has_task(taskid)
             };
@@ -690,10 +703,23 @@ impl LongLinkTaskManager {
         match handle {
             TaskFailHandleType::Normal => {
                 let network = self.network();
-                let cost = now.saturating_sub(self.tasks[at].transfer_profile.start_send_time);
+                let sent_at = self.tasks[at].transfer_profile.start_send_time;
                 let total = self.tasks[at].transfer_profile.send_data_size + len;
-                self.dynamic_timeout
-                    .record_at(network, total as u32, cost, now);
+                // `start_send_time` is `0` until the host says the request went
+                // out, and what a cost read off a `0` is is the tick the
+                // process has been up and not the wait the answer took —
+                // minutes, and on a long-lived host days. One such answer in
+                // the window the two queues share is a network both of them
+                // read as dead from then on, which is why the timeouts are
+                // counted off the same field and off nothing else.
+                if sent_at != 0 {
+                    self.dynamic_timeout.record_at(
+                        network,
+                        total as u32,
+                        now.saturating_sub(sent_at),
+                        now,
+                    );
+                }
                 let ended = self.single_resp_handle_at(
                     now,
                     at,
@@ -736,15 +762,15 @@ impl LongLinkTaskManager {
                 self.tasks.remove(at);
                 Some(RespHandle::Ended)
             }
-            // `kTaskFailHandleDefault`, and `kTaskFailHandleTaskTimeout`
-            // together with anything else the app made up, which is the C++'s
-            // `default:`. Both fail the channel and not just the task, and
-            // both hand `__BatchErrorRespHandle` the code the decoder read --
-            // but they report different things to the app.
+            // `kTaskFailHandleDefault` and `kTaskFailHandleTaskTimeout`, which
+            // the C++'s `switch` sends to its `default:`. Both fail the channel
+            // and not just the task, and both hand `__BatchErrorRespHandle` the
+            // code the decoder read — but they report different things to the
+            // app.
             TaskFailHandleType::Default | TaskFailHandleType::TaskTimeout => {
                 self.batch_error_resp_handle_at(
                     now,
-                    name,
+                    Some(name),
                     Failure {
                         err_type: ErrCmdType::EnDecode,
                         err_code,
@@ -753,13 +779,17 @@ impl LongLinkTaskManager {
                     },
                     true,
                 );
-                let reported = match handle {
-                    // `fun_notify_network_err_(..., err_code, ...)`: what the
-                    // app's own decoder read out of the body
-                    TaskFailHandleType::Default => err_code,
-                    // `default:` has no code of its own to name and reports
-                    // the handle
-                    made_up => made_up as i32,
+                // `fun_notify_network_err_(..., err_code, ...)` for the default
+                // handle — what the app's own decoder read out of the body —
+                // and the handle itself for the timeout, which is the only
+                // other one this arm is reached with: `default:` has no code
+                // of its own to name. [`TaskFailHandleType::of`] answers
+                // `Normal` for every int that is not one of these, so there is
+                // no handle the app made up for this arm to see.
+                let reported = if handle == TaskFailHandleType::Default {
+                    err_code
+                } else {
+                    handle as i32
                 };
                 self.notify_network_err(
                     &response.name,
@@ -788,7 +818,7 @@ impl LongLinkTaskManager {
                 None => true,
             };
             if changed {
-                self.redo_tasks_of_at(now, &name);
+                self.redo_tasks_of_at(now, Some(&name));
             }
         }
     }
@@ -885,13 +915,17 @@ impl LongLinkTaskManager {
             .tasks
             .iter()
             .filter_map(|profile| next_deadline(profile, network));
-        // a task that has been tried once already waits out the queue's own
-        // interval, which is not one it keeps for itself
-        let retries = self
-            .tasks
-            .iter()
-            .filter(|profile| !profile.is_running() && profile.retried())
-            .map(|_| last_batch_error_time.saturating_add(retry_interval));
+        // A task that has been tried once already waits out the queue's own
+        // interval, which is not one it keeps for itself — and an interval of
+        // `0` is no wait at all. The queue's is `0` until a channel is failed
+        // with one, and `0` again every time a channel is taken down for the
+        // answer it drew or every task of it is tried again: counted from
+        // `last_batch_error_time`, which a queue that was never failed in a
+        // batch still holds as `0`, it is a tick an hour past, and a host told
+        // to come back then is a host whose loop runs hot until the task's own
+        // timeout runs out.
+        let retries =
+            (retry_interval > 0).then_some(last_batch_error_time.saturating_add(retry_interval));
 
         deadlines.chain(retries).min()
     }
@@ -1141,7 +1175,7 @@ impl LongLinkTaskManager {
                 // already; the rest of the channel is told with it
                 self.batch_error_resp_handle_at(
                     now,
-                    name,
+                    Some(name),
                     Failure {
                         err_type: ErrCmdType::NetMsgXp,
                         err_code: LOCAL_TASK_TIMEOUT,
@@ -1156,7 +1190,7 @@ impl LongLinkTaskManager {
             self.notify_network_err(&name, ErrCmdType::NetMsgXp, code, &profile);
             self.batch_error_resp_handle_at(
                 now,
-                name,
+                Some(name),
                 Failure {
                     err_type: ErrCmdType::NetMsgXp,
                     err_code: code,
@@ -1408,7 +1442,10 @@ impl LongLinkTaskManager {
                     err_code,
                     fail_handle,
                     &task,
-                    cost as u32,
+                    // `u32` is what the app is handed, as in the C++: a cost
+                    // past 49.7 days is the largest one there is rather than
+                    // one that wrapped into a small one.
+                    u32::try_from(cost).unwrap_or(u32::MAX),
                     &profile,
                 )
             });
@@ -1428,9 +1465,6 @@ impl LongLinkTaskManager {
                 profile.transfer_profile.error_code = err_code;
                 profile.push_history();
             }
-            // `longlink_task_manager.cc:760` — the task is only whole now: the
-            // error it ended on and the history of its tries are both in it,
-            // and this is the last moment the queue has it
             // `longlink_task_manager.cc:760` — the task is only whole now: the
             // error it ended on and the history of its tries are both in it,
             // and this is the last moment the queue has it
@@ -1460,10 +1494,15 @@ impl LongLinkTaskManager {
     /// `__BatchErrorRespHandle` — one answer for every task of a channel.
     /// `running_only` is the C++'s `_callback_runing_task_only`, which only the
     /// destructor says `false` to.
+    ///
+    /// `name` of `None` is every channel. The C++ spells that as an empty
+    /// `_channel_name`, which is also the name a task the app gave none
+    /// carries, so a caller that handed over the channel of such a task was
+    /// answered with every other channel's tasks as well.
     fn batch_error_resp_handle_at(
         &mut self,
         now: u64,
-        name: String,
+        name: Option<String>,
         failure: Failure,
         running_only: bool,
     ) {
@@ -1479,7 +1518,10 @@ impl LongLinkTaskManager {
                 i += 1;
                 continue;
             }
-            if !name.is_empty() && self.tasks[i].channel_name != name {
+            if name
+                .as_deref()
+                .is_some_and(|name| self.tasks[i].channel_name != name)
+            {
                 i += 1;
                 continue;
             }
@@ -1502,27 +1544,31 @@ impl LongLinkTaskManager {
             self.retry_interval = RETRY_INTERNAL;
         }
 
-        if matches!(
-            fail_handle,
-            TaskFailHandleType::SessionTimeout | TaskFailHandleType::RetryAllTasks
-        ) {
-            self.disconnect(&name, DisconnectInternalCode::DecodeErr);
-            self.retry_interval = 0;
-        }
+        // a channel is taken down for the answer it drew, and there is no
+        // channel to take down when it is the queue itself that is dropped
+        if let Some(name) = name.as_deref() {
+            if matches!(
+                fail_handle,
+                TaskFailHandleType::SessionTimeout | TaskFailHandleType::RetryAllTasks
+            ) {
+                self.disconnect(name, DisconnectInternalCode::DecodeErr);
+                self.retry_interval = 0;
+            }
 
-        // not a long-link callback: a link that failed on dns, on a socket or on
-        // a cancel is one the C++ leaves alone
-        if fail_handle == TaskFailHandleType::Default
-            && !matches!(
-                err_type,
-                ErrCmdType::Dns | ErrCmdType::Socket | ErrCmdType::Canceld
-            )
-        {
-            self.disconnect(&name, DisconnectInternalCode::DecodeErr);
-        }
+            // not a long-link callback: a link that failed on dns, on a socket
+            // or on a cancel is one the C++ leaves alone
+            if fail_handle == TaskFailHandleType::Default
+                && !matches!(
+                    err_type,
+                    ErrCmdType::Dns | ErrCmdType::Socket | ErrCmdType::Canceld
+                )
+            {
+                self.disconnect(name, DisconnectInternalCode::DecodeErr);
+            }
 
-        if err_type == ErrCmdType::NetMsgXp {
-            self.disconnect(&name, DisconnectInternalCode::TaskTimeout);
+            if err_type == ErrCmdType::NetMsgXp {
+                self.disconnect(name, DisconnectInternalCode::TaskTimeout);
+            }
         }
     }
 
@@ -1709,7 +1755,7 @@ impl Drop for LongLinkTaskManager {
     fn drop(&mut self) {
         self.batch_error_resp_handle_at(
             gettickcount(),
-            String::new(),
+            None,
             Failure {
                 err_type: ErrCmdType::Local,
                 err_code: LOCAL_RESET,
@@ -1819,6 +1865,7 @@ fn upsert(batch: &mut Vec<(String, i32, u32)>, name: String, entry: (i32, u32)) 
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use crate::dynamic_timeout::DynamicTimeout;
     use crate::long_link::DisconnectInternalCode;
     use crate::net_source::LonglinkConfig;
     use crate::task::Task;
@@ -2403,6 +2450,34 @@ mod tests {
     }
 
     #[test]
+    fn an_error_for_no_task_in_particular_waits_on_its_own_channel() {
+        let mut manager = manager();
+        let mut minor = LonglinkConfig::new(MINOR);
+        minor.link_type = Task::CHANNEL_MINOR_LONG;
+        assert!(manager.add_long_link(minor));
+        let _ = wire(&mut manager);
+
+        // a task of the other channel, which is where the queue's only task
+        // is once the error below has been handed out
+        let mut on_minor = task(8);
+        on_minor.minorlong_host_list = vec![MINOR.to_string()];
+        manager.start_task_at(NOW, on_minor, Task::CHANNEL_MINOR_LONG);
+        let mut no_retry = task(7);
+        no_retry.retry_count = 0;
+        manager.start_task_at(NOW, no_retry, Task::CHANNEL_LONG);
+
+        assert_eq!(
+            manager.on_response_at(
+                NOW + 10,
+                failed(Task::INVALID_TASK_ID, ErrCmdType::Socket, -5001)
+            ),
+            Some(RespHandle::Ended),
+            "a task of another channel is not one the error was handed to"
+        );
+        assert_eq!(manager.task_count(MINOR), 1, "and it is still waiting");
+    }
+
+    #[test]
     fn a_handshake_the_two_ends_did_not_agree_on_is_a_try_the_task_gets_back() {
         let mut manager = manager();
         let _ = wire(&mut manager);
@@ -2416,6 +2491,40 @@ mod tests {
             manager.tasks()[0].remain_retry_count,
             1,
             "the try the batch took is given back"
+        );
+    }
+
+    /// The window the two queues share is what the first-package timeout of
+    /// both of them is read off, so what goes into it is one reading of the
+    /// network and not a tick count: `start_send_time` is `0` until the host
+    /// says the request went out, and `now` minus nothing is the age of the
+    /// process — minutes, and on a host that has been up for a while days.
+    #[test]
+    fn an_answer_whose_send_the_host_never_reported_is_not_a_reading_of_the_network() {
+        let mut manager = manager();
+        let _ = wire(&mut manager);
+        let window = DynamicTimeout::new();
+        manager.set_dynamic_timeout(window.clone());
+
+        manager.start_task_at(NOW, task(7), Task::CHANNEL_LONG);
+        manager.on_send_at(NOW, 7);
+        manager.on_response_at(NOW + 1, answered(7, b"hello"));
+        let good = window.continuous_good_count();
+        assert!(
+            good > 0,
+            "an answer inside its budget is one the window counts"
+        );
+
+        // and one that came back without the host ever saying the request went
+        // out, which a host that reads the answer off its own socket and
+        // forgets the send does
+        manager.start_task_at(NOW, task(8), Task::CHANNEL_LONG);
+        manager.on_response_at(NOW + 1, answered(8, b"hello"));
+
+        assert_eq!(
+            window.continuous_good_count(),
+            good,
+            "a cost of nothing is not a package that missed its budget"
         );
     }
 
@@ -2682,6 +2791,45 @@ mod tests {
                 TaskFailHandleType::TaskEnd,
                 7
             )]
+        );
+    }
+
+    /// A task the app gave no channel name is on the channel named nothing,
+    /// and that is not every channel: the C++ spells "every channel" with an
+    /// empty name too, so retrying the tasks of one user used to fail the
+    /// tasks that were out on every other channel with them.
+    #[test]
+    fn a_task_with_no_channel_name_is_not_every_channel() {
+        let mut manager = manager();
+        let (_, ended, _, _) = wire(&mut manager);
+        manager.add_long_link(LonglinkConfig::new("long.bob.qq.com"));
+        let mut alice = task(7);
+        alice.user_id = "alice".to_string();
+        alice.channel_name = String::new();
+        let mut bob = task(8);
+        bob.user_id = "bob".to_string();
+        bob.channel_name = "long.bob.qq.com".to_string();
+        manager.start_task_at(NOW, alice, Task::CHANNEL_LONG);
+        manager.start_task_at(NOW, bob, Task::CHANNEL_LONG);
+
+        manager.retry_tasks_at(
+            NOW + 10,
+            ErrCmdType::Local,
+            LOCAL_TASK_TIMEOUT,
+            TaskFailHandleType::TaskEnd,
+            Task::INVALID_TASK_ID,
+            "alice",
+        );
+        // the channel-less task is one no link could have sent, so the retry
+        // passes it over; what it must not do is fail bob's task for it
+        assert!(manager.has_task(7), "a task no channel could send");
+        assert!(manager.has_task(8), "the other channel was not asked about");
+        assert!(
+            ended
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty(),
+            "nothing was failed"
         );
     }
 
@@ -3202,6 +3350,47 @@ mod tests {
             Timeout::ReadWrite.err_code(),
             crate::task_profile::LONG_READ_WRITE_TIMEOUT
         );
+
+        // The four above are the table the variants carry; this is the queue
+        // reading it, which is what the name is about: a task sent at `NOW`
+        // and never answered runs out of time, and the code the app is told
+        // is the one `Timeout::Task` names — not one the queue made up, and
+        // not the read timeout's, which is told about the channel instead.
+        let mut manager = manager();
+        let (_, ended, notified, _) = wire(&mut manager);
+        manager.start_task_at(NOW, task(7), Task::CHANNEL_LONG);
+        // Out, and never answered: every read wait a task owes runs out on it,
+        // and so does the wait it owes the queue for itself.
+        manager.on_send_at(NOW, 7);
+        manager.run_loop_at(NOW + task_timeout(&manager) + 1);
+
+        let ended = ended
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        assert_eq!(
+            ended,
+            vec![(
+                ErrCmdType::Local,
+                LOCAL_TASK_TIMEOUT,
+                TaskFailHandleType::TaskTimeout,
+                7
+            )]
+        );
+        // The read timeout of the same pass is told about the link and not
+        // about the task — the *last* of the three, which is what the queue's
+        // `batchMap` is: one code per channel, and the last task of a channel
+        // that timed out is the one the channel is failed with.
+        assert_eq!(
+            *notified
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![(
+                CHANNEL.to_string(),
+                ErrCmdType::NetMsgXp,
+                crate::task_profile::LONG_READ_WRITE_TIMEOUT
+            )]
+        );
     }
 
     #[test]
@@ -3231,8 +3420,16 @@ mod tests {
 
         assert_eq!(manager.len(), 1);
         assert!(!manager.is_empty());
+        assert!(manager.has_task(7));
         assert_eq!(manager.channels().len(), 1);
+        assert_eq!(manager.channels()[0].name, CHANNEL);
+        // The count is of the tasks *on* that channel: the one task is on the
+        // one channel there is, and a channel nobody asked for has none —
+        // which is the difference between the two counts and not one of them
+        // twice.
+        assert_eq!(manager.task_count(CHANNEL), 1);
         assert_eq!(manager.task_count("long.other.qq.com"), 0);
-        assert!(format!("{manager:?}").contains("LongLinkTaskManager"));
+        assert!(format!("{manager:?}").contains("tasks: 1"));
+        assert!(format!("{manager:?}").contains("channels: 1"));
     }
 }

@@ -21,10 +21,20 @@
 ///
 /// A slice of nothing or of one thing is left alone, and its rng is never
 /// asked for anything.
+///
+/// A draw outside the bound it was asked for is a broken rng, and the C++
+/// has no answer for one: it is said out loud in a debug build, and any
+/// build clamps it to the position being walked, because a `swap` past the
+/// end of the slice is a panic in the middle of a shuffle.
 pub fn random_shuffle<T>(items: &mut [T], random: &mut dyn FnMut(usize) -> usize) {
     for index in (1..items.len()).rev() {
         let picked = random(index + 1);
-        items.swap(index, picked);
+        debug_assert!(
+            picked <= index,
+            "a draw of {picked} for a bound of {}",
+            index + 1
+        );
+        items.swap(index, picked.min(index));
     }
 }
 

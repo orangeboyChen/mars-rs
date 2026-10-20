@@ -40,8 +40,8 @@ fn an_unknown_body_is_recorded_and_the_second_send_reports_the_span() {
     assert_eq!(limit.records()[0].count, 1);
     assert_eq!(limit.records()[0].last_update, T0);
 
-    // the C++ reports how long ago the same body went out, and a gap
-    // shorter than `RESET_RECORD_INTERVAL` is the same burst
+    // the C++ reports how long ago the same body went out, and a gap of
+    // 150 ms is not one that ends anything: the count goes on
     assert_eq!(limit.check_at(&task, b"body", T0 + 150), (true, 150));
     assert_eq!(limit.records()[0].count, 2);
     assert_eq!(limit.records()[0].last_update, T0 + 150);
@@ -98,34 +98,40 @@ fn the_table_holds_thirty_bodies_and_drops_the_one_touched_longest_ago() {
 }
 
 #[test]
-fn a_body_that_comes_back_after_a_gap_starts_a_new_burst() {
+fn a_gap_is_not_what_ends_the_count_of_a_body() {
     let mut limit = FrequencyLimit::new_at(T0);
     let task = task();
 
-    // a hundred sends two milliseconds apart are one burst, and they are
-    // counted as one
+    // a hundred sends two milliseconds apart are one record
     for send in 0..100 {
         assert!(limit.check_at(&task, b"body", T0 + 2 * send).0);
     }
     assert_eq!(limit.records()[0].count, 100);
 
-    // the same body a second later is not the tail of that burst
-    assert_eq!(
-        limit.check_at(&task, b"body", T0 + 1000),
-        (true, 1000 - 198)
-    );
-    assert_eq!(limit.records()[0].count, 1);
+    // and so is the same body a second later: the gap is reported and the
+    // count goes on from where it was, which is the whole of what the C++
+    // does with a record it found
+    assert_eq!(limit.check_at(&task, b"body", T0 + 1000), (true, 802));
+    assert_eq!(limit.records()[0].count, 101);
     assert_eq!(limit.records()[0].last_update, T0 + 1000);
 
-    // so a body that goes out once a second never reaches the count,
-    // however many times it goes out
-    for send in 2..200 {
-        assert!(
-            limit.check_at(&task, b"body", T0 + 1000 * send).0,
-            "send {send} of the same body was refused"
-        );
+    // so a body that goes out once a second crosses the line as well,
+    // however long it takes over it: there is no burst for a gap to end,
+    // only the hourly sweep
+    for send in 2..5 {
+        assert!(limit.check_at(&task, b"body", T0 + 1000 * send).0);
     }
-    assert_eq!(limit.records()[0].count, 1);
+    assert_eq!(limit.records()[0].count, 104);
+    assert!(
+        limit.check_at(&task, b"body", T0 + 5000).0,
+        "the hundred and fifth send still goes out"
+    );
+    assert_eq!(limit.records()[0].count, 105);
+    assert!(
+        !limit.check_at(&task, b"body", T0 + 6000).0,
+        "the hundred and sixth send of one body is the avalanche"
+    );
+    assert_eq!(limit.records()[0].count, 106);
 }
 
 #[test]

@@ -24,9 +24,20 @@
 # The one credential of the release. crates.io has no trusted publishing, so
 # unlike the npm and the pub.dev half there is a token here to keep — and a
 # release without one is a release that says so and publishes nothing, rather
-# than one that fails.
+# than one that fails. What it says it with is `::error::`, and not a warning:
+# an expired token used to be a green job whose Summary handed the reader a
+# `marsrs = "<version>"` that resolved to nothing. Both halves of that are
+# written to `GITHUB_OUTPUT` as `published=false`, which is what the Summary
+# step of the job is gated on.
 
 set -euo pipefail
+
+# Whether this script put the crates on crates.io: what the Summary step of the
+# job reads before it names a version. Written on every path that leaves one
+# unpublished, so a run summary can never quote a coordinate that is not there.
+published() {
+    printf 'published=%s\n' "$1" >> "${GITHUB_OUTPUT:-/dev/null}"
+}
 
 version="${1:-}"
 if [ -z "$version" ]; then
@@ -42,7 +53,8 @@ cd "$root"
 : "${CRATES_IO_UA:=mars-rs release (https://github.com/orangeboyChen/mars-rs)}"
 
 if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
-    echo "::warning::CARGO_REGISTRY_TOKEN is not set; publish $version to crates.io by hand"
+    echo "::error::CARGO_REGISTRY_TOKEN is not set; publish $version to crates.io by hand (publish.yml reruns this for a release that is out)"
+    published false
     exit 0
 fi
 
@@ -210,3 +222,5 @@ for CRATE in marsrs-core marsrs-comm marsrs-crypt marsrs-buffer \
         exit 1
     fi
 done
+
+published true

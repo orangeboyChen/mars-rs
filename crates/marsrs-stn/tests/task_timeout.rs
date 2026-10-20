@@ -36,7 +36,8 @@ struct Wait {
 }
 
 /// The table — wi-fi first, then the same questions on a mobile network, then
-/// the two rows the app's own answer decides.
+/// the rows the app's own answer decides, and the two of a task that gave
+/// none.
 const WAITS: &[Wait] = &[
     // a request of no length at all on wi-fi: the base wait, nothing added
     Wait {
@@ -48,8 +49,10 @@ const WAITS: &[Wait] = &[
         expected: 12_000,
         what: "the base wifi wait",
     },
-    // 16 bytes: `1000 * 16 / 12288` is 1 ms, and the C++'s `test0` asks for
-    // 12 000 because it rounds the fraction away — the port does not
+    // 16 bytes: `1000 * 16 / 12288` is 1 ms. The C++ never writes the number
+    // down — its cases ask `__FirstPkgTimeout(0, 16, 0)` for it (`test2` to
+    // `test4`) and compare a real wait against that — so 12 001 is what they
+    // expect, and 12 000 is not a number any of them holds
     Wait {
         init: 0,
         len: 16,
@@ -209,6 +212,29 @@ const WAITS: &[Wait] = &[
         mobile: true,
         expected: 10_000,
         what: "a second of transfer on a mobile network",
+    },
+    // ... and `-1`, which is what `Task::new` gives the field and what the
+    // C++'s own constructor gives it (`stn.cc:53`). It is not the `0` above:
+    // a cost of `0` is a cost the app did say the server spends nothing on,
+    // and only that is trusted with the shorter wait an excellent network
+    // has earned. A task that said nothing waits the base time.
+    Wait {
+        init: -1,
+        len: 0,
+        count: 0,
+        status: DynamicTimeoutStatus::Excellent,
+        mobile: false,
+        expected: 12_000,
+        what: "a task that said nothing about the server, on an excellent wifi",
+    },
+    Wait {
+        init: -1,
+        len: 0,
+        count: 0,
+        status: DynamicTimeoutStatus::Excellent,
+        mobile: true,
+        expected: 15_000,
+        what: "a task that said nothing about the server, on an excellent mobile network",
     },
 ];
 

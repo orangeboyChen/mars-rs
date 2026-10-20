@@ -33,8 +33,14 @@ public expect object SdtLogic {
      * @param longLink the long link's hosts, one [Link] per host name
      * @param shortLink the short link's, which is what the HTTP check asks
      * @param mode the [CheckMode] bits, which is what the plan is made of
-     * @param timeout milliseconds, or `0` for a run that never times out
-     * @return `false` when a check is already in flight
+     * @param timeout milliseconds, or `0` — or less, which is read as `0` — for
+     *   a run with no timeout of its own: every probe keeps the default of its kind
+     * @return `false` when no check was started: one that is already in flight,
+     *   or a `mode` with no check in it. [isChecking] tells the two apart —
+     *   `true` is a check of somebody else's to wait for, and `false` is a
+     *   request that was never taken. The C ABI the Kotlin/Native `actual`
+     *   calls is the seam that answers with the reason instead:
+     *   `MARS_SDT_ERR_BUSY` and `MARS_SDT_ERR_BAD_ARG`.
      */
     public fun startActiveCheck(longLink: Array<Link>, shortLink: Array<Link>, mode: Int, timeout: Int): Boolean
 
@@ -58,21 +64,30 @@ public expect object SdtLogic {
      * profiles, which is this app's to answer.
      *
      * The report reaches the app the way it always does: [ICallBack], which the
-     * run calls once it is over. [takeReport] hands the same document over to an
-     * app that would rather ask for it.
+     * run calls once it is over, with the document of the run it ran in.
+     * [takeReport] hands over whatever has been recorded since the last call —
+     * which is that document when a take follows every run, and the results of
+     * several runs in one when it does not.
      *
      * @param networkType what `PlatformComm.getNetInfo` answers on Android, and
      *                    the caller's own elsewhere
      * @param probe the four probes, asked while this runs and not after
-     * @return `false` when there was no check in flight, or when the one there
-     *         was got cancelled before its first check
+     * @return `false` when no check recorded anything — there was no check in
+     *         flight, the one there was got cancelled before its first check,
+     *         or the checks it planned had nothing to check — and when this was
+     *         called from inside a run of it, which is what a probe or a
+     *         callback that starts a second one is answered with, rather than
+     *         with a second run
      */
     public fun runChecks(networkType: Int, probe: IProbe): Boolean
 
     /**
-     * The JSON of everything the checks have reported since the last call — the
-     * same document [ICallBack] was handed — or `null` when there was nothing to
-     * take. Taking it empties it: the next call reports what happened since.
+     * The JSON of everything the checks have reported since the last call: one
+     * document of every result recorded since, which is the results of one run
+     * when a take follows every run, and of several when it does not. Not the
+     * document [ICallBack] is handed, which is the one of the run that just
+     * finished — `null` when there was nothing to take. Taking it empties it:
+     * the next call reports what happened since.
      */
     public fun takeReport(): String?
 
@@ -95,10 +110,13 @@ public expect object SdtLogic {
          * The JSON of the report.
          *
          * This is called on the thread that ran the checks, which is the thread
-         * that called [runChecks], and it is called *inside* that call: a
-         * diagnosis holds one process-wide lock for the whole run, so nothing in
-         * [SdtLogic] may be called from here — the call would not come back. Take
-         * what is handed over and hand it to another thread.
+         * that called [runChecks], and it is called before that call comes back
+         * — but after the run itself is over and the diagnosis has been let go,
+         * which is the difference that matters: [isChecking], [plan] and
+         * [takeReport] are questions an app asks from here as a matter of
+         * course, and every one of them is answered. What a callback should
+         * still not do is start a second run on this thread: it would run its
+         * checks inside the [runChecks] the caller is still waiting on.
          */
         public fun reportSignalDetectResults(resultsJson: String?)
     }

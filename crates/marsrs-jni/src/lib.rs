@@ -9,8 +9,7 @@
 //! | `appenderRequestFlush`     | `Java_…_appenderRequestFlush`                  |
 //! | `appenderFlushNow`        | `Java_…_appenderFlushNow`                     |
 //! | `newXlogInstance`         | [`marsrs_appender::new_xlogger_instance`]  |
-//! | `getXlogInstance`         | [`marsrs_appender::get_xlogger_instance`]  |
-//! | `releaseXlogInstance`     | [`marsrs_appender::release_xlogger_instance`] |
+//! | `releaseXlogInstanceOf`   | [`marsrs_appender::release_xlogger_instance_of`] |
 //! | `write`                  | [`marsrs_appender::is_enabled_for`] + `xlogger_write` |
 //! | `getLogLevel`/`setLogLevel` | [`marsrs_appender::get_level`] / `set_level` |
 //! | `getCurrentLogPath`      | [`marsrs_appender::current_log_path`]       |
@@ -39,9 +38,9 @@ use std::borrow::Cow;
 use marsrs_appender::{
     category_set_max_alive_duration as set_max_alive_duration,
     category_set_max_file_size as set_max_file_size, flush_now, get_level, is_enabled_for,
-    new_xlogger_instance, release_xlogger_instance, request_flush, set_appender_mode,
-    set_console_log_open, set_level, xlogger_write, AppenderMode, LogLevel, XLogConfig,
-    XLoggerInfo,
+    new_xlogger_instance, release_xlogger_instance, release_xlogger_instance_of, request_flush,
+    set_appender_mode, set_console_log_open, set_level, xlogger_write, AppenderMode, LogLevel,
+    XLogConfig, XLoggerInfo,
 };
 
 /// `gettimeofday(&info.timeval, NULL)` — seconds + microseconds since the
@@ -114,8 +113,14 @@ pub(crate) fn new_instance_impl(config: XLogConfig, level: LogLevel) -> jlong {
     new_xlogger_instance(&config, level) as jlong
 }
 
-/// `Xlog.releaseXlogInstance` body.
-pub(crate) fn release_instance_impl(prefix: &str) {
+/// `Xlog.releaseXlogInstanceOf` body.
+pub(crate) fn release_instance_impl(prefix: &str, instance: u64) {
+    release_xlogger_instance_of(prefix, instance)
+}
+
+/// Legacy `Xlog.releaseXlogInstance` body for binaries built before the
+/// handle-aware release was added. New callers must use [`release_instance_impl`].
+pub(crate) fn release_instance_by_prefix_impl(prefix: &str) {
     release_xlogger_instance(prefix)
 }
 
@@ -133,12 +138,31 @@ pub(crate) fn release_instance_impl(prefix: &str) {
 /// either, because Java has no `__FILE__` — the C++ project's `Log` passed
 /// `""` and `0` for them, and always did.
 pub(crate) fn write_impl(instance: u64, level: LogLevel, tag: Cow<'_, str>, log: &str) -> bool {
+    // `Xlog.LEVEL_NONE` — `kLevelNone` — is what a level is *set* to when
+    // nothing is to be logged, and it is not a level a record can have: the
+    // C ABI writes no record of it either, and the level filter lets one
+    // through because `level_ <= kLevelNone` holds for every level there is.
+    // A caller that passes it to `write` means the record to be dropped, and
+    // this is the one seam that can say so: `is_enabled_for` cannot.
+    if level == LogLevel::None {
+        return false;
+    }
+    // An empty body writes nothing, and an empty tag is a tag that was not
+    // given, which is what the C ABI answers for the same call: every seam
+    // but this one goes through it, so the same Kotlin on Android and on
+    // iOS has to write the same record. A message that came out empty is a
+    // line in the file that says nothing and cannot be told from one the
+    // app wrote, and a `[tag]` field of no characters is a field the C ABI
+    // leaves out.
+    if log.is_empty() {
+        return false;
+    }
     if !is_enabled_for(instance, level) {
         return false;
     }
     let info = XLoggerInfo {
         level,
-        tag: Some(tag),
+        tag: (!tag.is_empty()).then_some(tag),
         filename: None,
         func_name: None,
         line: 0,
@@ -197,9 +221,11 @@ pub(crate) fn set_max_file_size_impl(instance: u64, size: jlong) {
     set_max_file_size(instance, size.max(0) as u64)
 }
 
-/// `Xlog.setMaxAliveTime` body.
+/// `Xlog.setMaxAliveTime` body; a value below one day is the appender's to
+/// refuse, and the answer the Rust api gives is the one Java's own `Xlog`
+/// mirrors — see [`crate::set_max_alive_duration`].
 pub(crate) fn set_max_alive_time_impl(instance: u64, seconds: jlong) {
-    set_max_alive_duration(instance, seconds.max(0) as u64)
+    let _ = set_max_alive_duration(instance, seconds.max(0) as u64);
 }
 
 /// The `native` methods of `io.github.orangeboychen.marsrs.stn.StnLogic`.
@@ -313,8 +339,8 @@ mod tests {
         flush_now_impl(instance as u64);
 
         // a closed appender answers nothing, and closing twice is harmless
-        release_instance_impl("Mars");
-        release_instance_impl("Mars");
+        release_instance_impl("Mars", instance as u64);
+        release_instance_impl("Mars", instance as u64);
         assert_eq!(get_level_impl(instance as u64), -1);
         assert!(current_log_path_impl(instance as u64).is_none());
         assert!(log_files_impl(instance as u64, 0).is_empty());
@@ -335,13 +361,85 @@ mod tests {
         assert_eq!(appender_mode_from_java(99), None);
     }
 
+    /// A record of the level that means "log nothing" is not written:
+    /// `Xlog.LEVEL_NONE` is what `setLevel` is given to stop logging, and a
+    /// `write` that carries it drops the record — which is what the C ABI does
+    /// with the same level, and what `is_enabled_for` cannot do, since
+    /// `level_ <= kLevelNone` holds for every level there is.
+    #[test]
+    fn a_record_of_the_level_that_disables_logging_is_not_written() {
+        let _guard = crate::test_lock();
+        let dir = logdir("level-none");
+
+        let instance = new_instance_impl(config(&dir), LogLevel::Verbose) as u64;
+        assert!(
+            !write_impl(instance, LogLevel::None, "Net".into(), "not logged"),
+            "a record of kLevelNone is not written"
+        );
+        assert!(write_impl(instance, LogLevel::Info, "Net".into(), "logged"));
+        flush_now_impl(instance);
+
+        let files = log_files_impl(instance, 0);
+        assert!(!files.is_empty(), "the day has the file the record went to");
+        // The body is compressed, so what is readable of the file is the
+        // header and not the record — the one thing that is certain is that
+        // the appender wrote one record and not two.
+        let bytes = std::fs::read(&files[0]).expect("the file reads");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!text.contains("not logged"), "{text}");
+
+        release_instance_impl("Mars", instance as u64);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A record with nothing in it is not written: what the C ABI answers for
+    /// the same call, and so what every seam but this one does. Two `Xlog`s of
+    /// one source — an Android one going through here and an iOS one going
+    /// through the C ABI — have to write the same file.
+    ///
+    /// The other half of that answer, a tag of no characters being a tag that
+    /// was not given, is in the body above and not here: the body of a record
+    /// is compressed, so a `.xlog` is not a file a test can read the `[tag]`
+    /// field out of.
+    #[test]
+    fn an_empty_record_is_not_written() {
+        let _guard = crate::test_lock();
+        let dir = logdir("empty-record");
+
+        let instance = new_instance_impl(config(&dir), LogLevel::Verbose) as u64;
+        assert!(
+            !write_impl(instance, LogLevel::Info, "Net".into(), ""),
+            "a record with no body is not written"
+        );
+        // and the one beside it, which has a body, is
+        assert!(write_impl(
+            instance,
+            LogLevel::Info,
+            Cow::Borrowed(""),
+            "tagged by nobody"
+        ));
+        flush_now_impl(instance);
+
+        release_instance_impl("Mars", instance);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A panic inside a body is the default value of its answer, and not an
     /// unwind into the JVM.
     #[test]
     fn a_panic_inside_a_body_is_the_default_value() {
         let panicked: u64 = guard(|| panic!("no JVM to unwind into"));
         assert_eq!(panicked, 0);
-        let panicked: () = guard(|| panic!("no JVM to unwind into"));
-        assert_eq!(panicked, ());
+
+        // a `()` body cannot be told apart by what it answers — the default
+        // of `()` is the only value there is — so what is asserted is that
+        // the body ran and the line after it was reached: the panic was
+        // caught here, and not unwound into the JVM
+        let mut ran = false;
+        let _: () = guard(|| {
+            ran = true;
+            panic!("no JVM to unwind into")
+        });
+        assert!(ran);
     }
 }

@@ -115,8 +115,17 @@ impl<'a> PtrBuffer<'a> {
     }
 
     /// Writes `src` at `pos` without moving the cursor.
+    ///
+    /// A `pos` past the backing region writes nothing and answers `0`, which is
+    /// what [`Self::read_at`] answers for the same question. The C++ writes
+    /// through a pointer past the end of the memory it was given; the port
+    /// cannot, and a panic in a logger is worse than the record it is trying to
+    /// save. Writing past the *logical* end is not that: the length grows to
+    /// cover what was written, which is how a header is put behind a payload.
     pub fn write_at(&mut self, pos: usize, src: &[u8]) -> usize {
-        debug_assert!(pos <= self.length);
+        if pos > self.data.len() {
+            return 0;
+        }
         let copy_len = src.len().min(self.data.len().saturating_sub(pos));
         self.data[pos..pos + copy_len].copy_from_slice(&src[..copy_len]);
         self.length = self.length.max(copy_len + pos);
@@ -153,7 +162,6 @@ impl<'a> PtrBuffer<'a> {
     /// Sets the logical length (clamped to the backing region) and moves the
     /// cursor to `pos` (clamped to the new length).
     pub fn set_length(&mut self, pos: usize, length: usize) {
-        debug_assert!(pos <= length);
         self.length = length.min(self.data.len());
         self.seek(pos as isize, Seek::Start);
     }
@@ -191,6 +199,21 @@ mod tests {
     }
 
     #[test]
+    fn a_write_past_the_region_writes_nothing() {
+        let mut backing = vec![0u8; 8];
+        let mut buf = PtrBuffer::new(&mut backing);
+        buf.write(b"abcd");
+
+        assert_eq!(buf.write_at(100, b"xy"), 0);
+        assert_eq!(buf.len(), 4, "the length is not what the write did not do");
+        assert_eq!(&buf.as_slice()[..4], b"abcd");
+        // and the end of the region is still one a write may land on
+        assert_eq!(buf.write_at(8, b"z"), 0);
+        assert_eq!(buf.write_at(7, b"z"), 1);
+        assert_eq!(buf.len(), 8);
+    }
+
+    #[test]
     fn write_at_does_not_move_pos() {
         let mut backing = vec![0u8; 16];
         let mut buf = PtrBuffer::new(&mut backing);
@@ -210,6 +233,18 @@ mod tests {
         buf.set_length(6, 6);
         assert_eq!(buf.len(), 6);
         assert_eq!(buf.pos(), 6);
+    }
+
+    #[test]
+    fn set_length_clamps_a_pos_past_the_length_it_set() {
+        let mut backing = vec![0u8; 8];
+        let mut buf = PtrBuffer::new(&mut backing);
+        // What the doc promises for both of them, and what a debug build did
+        // not do: it panicked on a `pos` past `length` where a release build
+        // clamped it, so one input had two answers.
+        buf.set_length(64, 8);
+        assert_eq!(buf.len(), 8);
+        assert_eq!(buf.pos(), 8);
     }
 
     #[test]

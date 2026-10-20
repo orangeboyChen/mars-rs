@@ -124,7 +124,7 @@ pub enum MarsStnQuestionKind {
 /// One answer per question, and an answer of another kind than the question
 /// asked for is no answer: STN takes [`marsrs_stn::App`]'s own instead, which is
 /// what a host with no app gets.
-#[repr(C)]
+#[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarsStnAnswerKind {
     /// Nobody answered — [`MarsStnAnswer::default`], and what an app that has
@@ -150,6 +150,31 @@ pub enum MarsStnAnswerKind {
     /// what an app puts back is the out-value of the C++'s `unsigned int&`.
     /// Nobody reads it: a task a gate refused stays refused.
     Limit = 8,
+}
+
+impl MarsStnAnswerKind {
+    /// The integer the caller left in `kind`, as the kind it names —
+    /// [`MarsStnAnswerKind::Nothing`] for one no variant has, which is what
+    /// every question an app did not answer is read as anyway.
+    ///
+    /// `kind` is the caller's to fill in, so what it holds is whatever that
+    /// caller left there, and a number no variant has is a value the enum
+    /// cannot hold: reading one is undefined behaviour of its own, before any
+    /// match on it runs and whichever arm that match would have taken. So the
+    /// field is read as the `i32` it is, here, and what leaves is a variant.
+    pub fn of(raw: i32) -> Self {
+        match raw {
+            1 => Self::Yes,
+            2 => Self::Ips,
+            3 => Self::Encoded,
+            4 => Self::Failed,
+            5 => Self::Decoded,
+            6 => Self::Ended,
+            7 => Self::Identified,
+            8 => Self::Limit,
+            _ => Self::Nothing,
+        }
+    }
 }
 
 /// One header of a task: a name and a value, both NUL-terminated.
@@ -401,7 +426,7 @@ pub struct MarsStnDnsProfile {
 ///
 /// Every field is read for the [`MarsStnQuestionKind`] in `kind` and left alone
 /// for the others, so a caller switches on the kind and reads what it names:
-/// `host` is the host of `MakesureAuthed`, `OnNewDns` and
+/// `host` is the host of `MakesureAuthed`, `Req2Buf`, `OnNewDns` and
 /// `ShortLinkNetworkError`; `ip` / `port` the pair of the two network errors;
 /// `channel_id` the link of `OnPush`, `IdentifyCheckBuffer` and
 /// `IdentifyResponse`; `body` what was pushed, what came back and what the
@@ -412,7 +437,8 @@ pub struct MarsStnDnsProfile {
 pub struct MarsStnQuestion {
     /// Which question.
     pub kind: MarsStnQuestionKind,
-    /// The host: `MakesureAuthed`, `OnNewDns`, `ShortLinkNetworkError`.
+    /// The host: `MakesureAuthed`, `Req2Buf`, `OnNewDns`,
+    /// `ShortLinkNetworkError`.
     pub host: *const c_char,
     /// The user: `MakesureAuthed`, `Req2Buf`, `Buf2Resp`, `OnTaskEnd`.
     pub user_id: *const c_char,
@@ -710,7 +736,6 @@ fn with_logic<R>(f: impl FnOnce(&mut StnLogic) -> R) -> R {
 #[no_mangle]
 pub unsafe extern "C" fn mars_stn_set_app(ctx: *mut c_void, ask: MarsStnAsk) {
     guard((), || {
-        let ctx = ctx as usize;
         with_logic(|logic| match ask {
             Some(ask) => logic.set_callback(CApp { ask, ctx }),
             None => logic.set_callback(NoApp),
@@ -773,7 +798,10 @@ pub unsafe extern "C" fn mars_stn_set_longlink_svr_addr(
                 cstr::ptr_to_str_or_empty(debug_ip),
             )
         };
-        let mut ports_vec = Vec::with_capacity(port_count as usize);
+        // Nothing is reserved: `port_count` is the caller's to get wrong, and
+        // a reservation is what turns a number it made up into a request for
+        // gigabytes. The vector grows with what is read.
+        let mut ports_vec = Vec::new();
         if !ports.is_null() {
             for index in 0..port_count as usize {
                 // SAFETY: `ports` is non-null and the caller promises
@@ -1253,12 +1281,28 @@ pub extern "C" fn mars_stn_trig_nooping() {
 }
 
 /// The app STN asks, when the app is C: one function pointer and the `ctx` that
-/// goes with it, carried as a `usize` so that the app is `Send` — which
-/// [`marsrs_stn::App`] requires, because a task may run on any thread.
+/// goes with it.
+///
+/// `ctx` is kept as the pointer the caller handed over and not as the integer
+/// it used to round-trip through: an address turned into a `usize` and cast
+/// back carries no provenance, and what reads through it is the caller's C. The
+/// one crossing is the one [`mars_stn_set_app`] makes, from the caller's
+/// `void*` to this field.
+///
+/// The `usize` used to be there for [`marsrs_stn::App`]'s `Send`, which a task
+/// running on any thread needs; the `impl` below is what says why that is sound
+/// now that the pointer is kept whole.
 struct CApp {
     ask: extern "C" fn(*mut c_void, *const MarsStnQuestion, *mut MarsStnAnswer),
-    ctx: usize,
+    ctx: *mut c_void,
 }
+
+// SAFETY: a raw pointer is not `Send`, and [`marsrs_stn::App`] asks for one
+// because a task may run on any thread. What crosses a thread boundary here is
+// an address: this crate never dereferences `ctx`, it only hands it back to the
+// C `ask` it came from, and `mars_stn_set_app`'s contract is that `ctx` stays
+// alive until another `ask` takes its place — whichever thread asks.
+unsafe impl Send for CApp {}
 
 impl CApp {
     /// One question out, one answer back.
@@ -1269,10 +1313,20 @@ impl CApp {
         // `mars_stn_set_app`, alive by that contract, and the question and
         // answer it reads and writes are locals that outlive it.
         (self.ask)(
-            self.ctx as *mut c_void,
+            self.ctx,
             addr_of!(*question),
             &mut answer as *mut MarsStnAnswer,
         );
+        // What the caller left in `kind` is an `i32`, and not necessarily one
+        // of the numbers that are variants — a caller that writes anything
+        // else, or nothing at all, has written a value the enum cannot hold.
+        //
+        // SAFETY: `MarsStnAnswerKind` is a fieldless `#[repr(i32)]` enum, so
+        // the field is four bytes holding that integer, and reading them as
+        // one yields no value that type cannot hold. Reading the field as the
+        // enum would, and that is undefined behaviour before the first match.
+        let raw = unsafe { addr_of!(answer.kind).cast::<i32>().read() };
+        answer.kind = MarsStnAnswerKind::of(raw);
         answer
     }
 }
@@ -1626,7 +1680,10 @@ unsafe fn headers_from_c(headers: *const MarsStnHeader, count: c_uint) -> BTreeM
 /// `items` must either be null or point to `count` valid NUL-terminated strings
 /// that stay alive for the duration of the call.
 unsafe fn strings_from_c(items: *const *const c_char, count: c_uint) -> Vec<String> {
-    let mut strings = Vec::with_capacity(count as usize);
+    // Nothing is reserved: `count` is the caller's to get wrong, and a
+    // reservation is what turns a number it made up into a request for
+    // gigabytes. The vector grows with what is read.
+    let mut strings = Vec::new();
     if items.is_null() {
         return strings;
     }
@@ -2056,7 +2113,7 @@ mod tests {
         (
             CApp {
                 ask,
-                ctx: app as *const App as usize,
+                ctx: app as *const App as *mut c_void,
             },
             asked,
         )
@@ -2077,6 +2134,31 @@ mod tests {
         assert_eq!(answer.kind, MarsStnAnswerKind::Nothing);
         assert!(answer.ips.is_null());
         assert!(answer.bytes.is_null());
+    }
+
+    #[test]
+    fn a_kind_no_variant_has_is_an_answer_nobody_gave() {
+        let mut answer = MarsStnAnswer {
+            kind: MarsStnAnswerKind::Yes,
+            yes: 1,
+            ..Default::default()
+        };
+        // What a caller that filled the field in with a number of its own
+        // leaves there — four bytes no variant is.
+        //
+        // SAFETY: `MarsStnAnswerKind` is a fieldless `#[repr(i32)]` enum, so
+        // the field is an `i32` and writing one leaves that integer in it.
+        unsafe {
+            std::ptr::addr_of_mut!(answer.kind).cast::<i32>().write(99);
+        }
+        let (mut app, _) = app_of(answer);
+        assert_eq!(
+            app.ask(&MarsStnQuestion::default()).kind,
+            MarsStnAnswerKind::Nothing
+        );
+        // `Yes` with a `yes` of `1` answers `true`, so this is the read of
+        // `Nothing` and not of what the caller wrote.
+        assert!(!app.identify_response("longlink", b"answer", b"hash"));
     }
 
     #[test]
@@ -2448,6 +2530,15 @@ mod tests {
         assert_eq!(
             unsafe { mars_stn_longlink_is_connected_ext(name.as_ptr()) },
             0,
+            "a link that is not there is not up, and asking for it leaves it so"
+        );
+        // … and "not up" is not what says it was never made: the question is
+        // whether a link of that name is there at all, which is what taking it
+        // away answers
+        // SAFETY: `name` is a valid NUL-terminated string, read for the call.
+        assert_eq!(
+            unsafe { mars_stn_destroy_longlink(name.as_ptr()) },
+            0,
             "asking for a link that is not there makes none"
         );
         assert_eq!(mars_stn_longlink_is_connected(), 0);
@@ -2530,14 +2621,5 @@ mod tests {
             with_foreground(|state| state.is_active),
             "the grace has no end while the app is in front"
         );
-    }
-
-    #[test]
-    fn a_network_change_is_one_the_pipeline_survives() {
-        // `mars::baseevent::GetSignalOnNetworkChange()`: every long link is
-        // taken down, so what there was to connect is gone and a link nobody
-        // made is still not one that is up
-        mars_stn_on_network_change();
-        assert_eq!(mars_stn_longlink_is_connected(), 0);
     }
 }

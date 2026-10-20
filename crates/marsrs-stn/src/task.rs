@@ -21,17 +21,24 @@
 use std::collections::BTreeMap;
 
 /// Why the host a task went out to is not the one the caller asked for, which
-/// is what the FFI hands the app as one of these: `None` when it is.
+/// is what the FFI hands the app as one of these: `0` when it is.
+///
+/// The four numbers are the four of `mars/stn/stn.h:53-58`, and `3` is the one
+/// `Task::Task()` gives the field (`stn.cc:62`) — the "some other way" of that
+/// enum, and not the `0` a task that was never redirected would claim. The
+/// names are the port's own, and they are what the FFI and `StnTask` of the
+/// Apple framework spell; the C++'s names for the same four say how the host
+/// was *matched*.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HostRedirectType {
-    /// `kHostRedirectNone`
-    #[default]
+    /// `0`
     None,
-    /// `kHostRedirectBareToHttps`
+    /// `1`
     BareToHttps,
-    /// `kHostRedirectHttpToHttps`
+    /// `2`
     HttpToHttps,
-    /// `kHostRedirectNewHost`
+    /// `3`, and [`Self::default`]: what the C++ constructor gives a task.
+    #[default]
     NewHost,
 }
 
@@ -69,13 +76,15 @@ pub struct Task {
     pub priority: i32,
     /// How many times STN retries the task.
     pub retry_count: i32,
-    /// Expected server processing time, in milliseconds.
+    /// Expected server processing time, in milliseconds; `-1` — the default —
+    /// is "the caller did not say", which is not what `0` is.
     pub server_process_cost: i32,
-    /// Overall deadline, in milliseconds.
+    /// Overall deadline, in milliseconds; `-1` — the default — is no deadline.
     pub total_timeout: i32,
     /// Whether the task is a long poll.
     pub long_polling: bool,
-    /// Long-poll deadline, in milliseconds.
+    /// Long-poll deadline, in milliseconds; `-1`, the default, is the C++'s
+    /// "the caller did not say", which is one millisecond less than nothing.
     pub long_polling_timeout: i32,
 
     /// Extra argument carried into the report.
@@ -200,10 +209,17 @@ impl Task {
             // reads [`crate::DEF_TASK_RETRY_COUNT`] for. `0` is "do not retry",
             // so a default task would get no try back at all.
             retry_count: -1,
-            server_process_cost: 0,
-            total_timeout: 0,
+            // All three are `-1` in `Task::Task()` (`stn.cc:53-57`), and `-1`
+            // is not `0` in this crate either: a cost of `0` is one the
+            // caller said the server spends nothing on, which is what takes
+            // the dynamic-timeout branch of `first_pkg_timeout`, and a
+            // long-polling timeout of `-1` is the `4999`
+            // `compute_task_timeout` gives, where `0` would be the whole
+            // `5 * 1000` of the margin.
+            server_process_cost: -1,
+            total_timeout: -1,
             long_polling: false,
-            long_polling_timeout: 0,
+            long_polling_timeout: -1,
             report_arg: String::new(),
             channel_name: String::new(),
             group_name: String::new(),
@@ -218,7 +234,10 @@ impl Task {
             max_minorlinks: 0,
             function: String::new(),
             cgi_prefix: String::new(),
-            redirect_type: HostRedirectType::None,
+            // `stn.cc:62` gives the field the `3` of that enum, which is
+            // "some other way", and not the `0` a task no host was ever
+            // redirected for would claim
+            redirect_type: HostRedirectType::NewHost,
             client_sequence_id: 0,
         }
     }

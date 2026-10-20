@@ -10,7 +10,11 @@ import { XlogConfig } from './XlogConfig';
 // `platforms/android/marsrs-xlog`, of `platforms/kmp/marsrs-xlog` and of
 // `platforms/react-native/marsrs-xlog` member for member: `Xlog.open(config)`
 // answers the appender, `xlog.level` is the property it is in Kotlin and in
-// Swift, and `xlog.i(tag, message)` has landed by the time it returns.
+// Swift, and `xlog.i(tag, message)` is handed to the appender by the time it
+// returns — which is not the same as being in the file: the default mode is
+// async, so a record waits in the cache for the writer thread until a
+// `flushNow()` takes it over, and only a `Sync` appender has written it when
+// the call is over.
 //
 // Nothing here awaits. A NAPI method that returns no promise is a call and not
 // an `await`, which is why the shape is the Kotlin one and not the Flutter one:
@@ -33,6 +37,12 @@ import { XlogConfig } from './XlogConfig';
 /** `XlogConfig.namePrefix` of the Kotlin and of the Swift: what an appender is
  * opened with when a caller gives none. */
 const DEFAULT_NAME_PREFIX: string = 'xlog';
+
+/** `MIN_LOG_ALIVE_TIME`, in seconds: the shortest lifetime of a file the
+ * appender takes. One below it — `0` among them — is refused, and the appender
+ * keeps the lifetime it has, so this is also the number a setter is asked to
+ * reach before it mirrors one. */
+const MIN_ALIVE_TIME_SECONDS: number = 86400;
 
 /** The appender of every `namePrefix` `Xlog.open` has opened and `close` has not
  * closed, by the prefix: what makes two `Xlog.open`s of one prefix one appender,
@@ -168,11 +178,21 @@ export class Xlog {
       return;
     }
     xlogNapi.setMaxFileSize(this.namePrefix, bytes);
-    this.currentMaxFileSize = bytes;
+    // Mirrored once it is a size the native side took, and not before: it
+    // reads a `number` as an `unsigned long long`, and a negative one is not
+    // one it hands over — so a mirror that took it would answer a size no
+    // appender is splitting at.
+    if (bytes >= 0) {
+      this.currentMaxFileSize = bytes;
+    }
   }
 
-  /** How long a log file is written to before the appender opens the next one,
-   * in seconds; `0` is the C++'s own ten days. */
+  /** How many seconds a log file of this appender is kept before the sweep
+   * deletes it — and not how long one is written to, which is what the day's
+   * turn and [maxFileSizeBytes] decide: `0` is the lifetime an appender
+   * opened with none keeps, the C++'s own ten days, and one below a day is a
+   * lifetime the appender refuses, so what this answers is the one it has and
+   * not the last one it was asked for. */
   get maxAliveTimeSeconds(): number {
     return this.currentMaxAliveTime;
   }
@@ -182,7 +202,12 @@ export class Xlog {
       return;
     }
     xlogNapi.setMaxAliveTime(this.namePrefix, seconds);
-    this.currentMaxAliveTime = seconds;
+    // Mirrored once it is a lifetime the appender took, and not before: a day
+    // is the shortest one it takes, and `0` is below it, so a mirror that took
+    // the number would answer a lifetime no appender is writing under.
+    if (seconds >= MIN_ALIVE_TIME_SECONDS) {
+      this.currentMaxAliveTime = seconds;
+    }
   }
 
   /** `mars_xlog_current_log_path_instance`: the *directory* this appender
@@ -297,6 +322,9 @@ export class Xlog {
    */
   logFiles(daysAgo: number): string[] {
     if (!this.opened) {
+      // `[]` for an appender that is closed, which is the answer the Swift and
+      // the Kotlin give the same question: an app that wants to know whether a
+      // day has files asks while the appender is open.
       return [];
     }
     // What the native side answers for a question it could not read is a throw
@@ -319,10 +347,16 @@ export class Xlog {
     return xlogNapi.logFileNames(this.namePrefix, daysAgo);
   }
 
-  /** `mars_xlog_release_instance`: closes the appender `Xlog.open` made.
+  /** `mars_xlog_release_instance_of`: closes the appender `Xlog.open` made.
    * Nothing is closed twice: an `Xlog` that is already closed answers `false`
    * from `isOpen` and drops what it is asked to write — and an appender two
-   * names hold is closed for both, because `Xlog.open` gave them one `Xlog`. */
+   * names hold is closed for both, because `Xlog.open` gave them one `Xlog`.
+   *
+   * The `_of`, and not `mars_xlog_release_instance`: a release is given the
+   * handle this one's prefix was opened under, so a `close` of an appender it
+   * never opened — or of one it has closed already — releases nothing at all,
+   * where a release by prefix alone would close whichever appender another
+   * caller had there. */
   close(): void {
     if (!this.opened) {
       return;

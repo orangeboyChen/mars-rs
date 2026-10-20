@@ -31,7 +31,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use marsrs_sdt::checkimpl::{Answer, Ask, PingStatus, Query};
 use marsrs_sdt::netchecker_profile::CheckResultProfile;
 use marsrs_sdt::sdt_core::CancelHandle;
-use marsrs_sdt::{report_json, Callback, CheckIPPort, CheckIPPorts, NetCheckType, SdtLogic};
+use marsrs_sdt::{
+    has_check, report_json, Callback, CheckIPPort, CheckIPPorts, NetCheckType, SdtLogic,
+};
 
 use crate::cstr;
 use crate::guard;
@@ -52,12 +54,26 @@ pub const MARS_SDT_ERR_NO_PROBE: c_int = -4;
 /// A check is already in flight, which is what `StartActiveCheck` answers
 /// `false` for.
 pub const MARS_SDT_ERR_BUSY: c_int = -5;
-/// There is no check in flight, so there is nothing to run.
+/// No check recorded anything: nothing was in flight, the request in flight
+/// was cancelled before its first check, or the checks it planned had nothing
+/// to check — a mode that asks for a link that was given no hosts. The run is
+/// over either way, and the report is an empty one, so this is not a code a
+/// caller retries.
 pub const MARS_SDT_ERR_NO_CHECK: c_int = -6;
+/// What the caller handed [`mars_sdt_start_active_check`] cannot start a
+/// check at all: a hosts array that promises `count` hosts behind a null
+/// pointer, or a `mode` with none of the three `NET_CHECK_*` bits in it, so a
+/// request with no check to make.
+///
+/// This is deliberately *not* [`MARS_SDT_ERR_BUSY`], which is the one code a
+/// caller retries on — "a check is already in flight, ask again". Nothing
+/// about this one changes with time: the same arguments are refused the same
+/// way however often they are tried, so a caller that retried it would spin.
+pub const MARS_SDT_ERR_BAD_ARG: c_int = -7;
 
 /// Which probe is being asked, and which answer came back: the four of
 /// `mars/sdt/src/checkimpl/`, plus `Nothing` for a probe nobody answered.
-#[repr(C)]
+#[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarsSdtKind {
     /// Nobody answered — a host with no network to probe with, which the
@@ -75,6 +91,27 @@ pub enum MarsSdtKind {
     Http = 3,
     /// `PingQuery::RunPingQuery`.
     Ping = 4,
+}
+
+impl MarsSdtKind {
+    /// The integer the caller left in `kind`, as the probe it names —
+    /// [`MarsSdtKind::Nothing`] for one no variant has, which is what a probe
+    /// nobody answered is read as anyway.
+    ///
+    /// `kind` is the caller's to fill in, so what it holds is whatever that
+    /// caller left there, and a number no variant has is a value the enum
+    /// cannot hold: reading one is undefined behaviour of its own, before any
+    /// match on it runs. So the field is read as the `i32` it is, here, and
+    /// what leaves is a variant.
+    pub fn of(raw: i32) -> Self {
+        match raw {
+            1 => Self::Dns,
+            2 => Self::Tcp,
+            3 => Self::Http,
+            4 => Self::Ping,
+            _ => Self::Nothing,
+        }
+    }
 }
 
 /// What one probe is asked: [`MarsSdtKind`], and the arguments the C++ hands
@@ -231,9 +268,15 @@ struct Sink(Arc<Mutex<Vec<CheckResultProfile>>>);
 
 impl Callback for Sink {
     fn report_net_check_result(&self, check_results: &[CheckResultProfile]) {
-        if let Ok(mut reported) = self.0.lock() {
-            reported.extend_from_slice(check_results);
-        }
+        // The poisoned lock is taken anyway: a panic that got out of a run
+        // leaves the flag set, and a report that is dropped for it is one no
+        // later take can hand over either — the results of a diagnosis lost
+        // because something else in the process panicked.
+        let mut reported = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reported.extend_from_slice(check_results);
     }
 }
 
@@ -329,10 +372,13 @@ pub unsafe extern "C" fn mars_sdt_http_netcheck_cgi(out: *mut c_char, len: c_uin
 }
 
 /// `StartActiveCheck` — a diagnosis of the two links' hosts, in `mode` and with
-/// `timeout` milliseconds to spend on it.
+/// `timeout` milliseconds to spend on it. A `timeout` of `0` is a run with no
+/// timeout of its own: every probe is asked with the default of its kind, and
+/// nothing breaks the plan off for having spent too long.
 ///
 /// @return [`MARS_SDT_OK`], or [`MARS_SDT_ERR_BUSY`] when a check is already in
-/// flight, or [`MARS_SDT_ERR_PANIC`].
+/// flight — the one answer worth retrying — or [`MARS_SDT_ERR_BAD_ARG`] when
+/// the arguments cannot start a check at all, or [`MARS_SDT_ERR_PANIC`].
 ///
 /// # Safety
 ///
@@ -349,6 +395,23 @@ pub unsafe extern "C" fn mars_sdt_start_active_check(
     timeout: c_uint,
 ) -> c_int {
     guard(MARS_SDT_ERR_PANIC, || {
+        // A count that promises hosts the pointer cannot deliver. A caller
+        // that gets [`MARS_SDT_ERR_BUSY`] here retries, and retrying this
+        // would never stop: the request is the same every time.
+        if (longlink.is_null() && longlink_count > 0)
+            || (shortlink.is_null() && shortlink_count > 0)
+        {
+            return MARS_SDT_ERR_BAD_ARG;
+        }
+        // A mode with none of the three `NET_CHECK_*` bits in it is a request
+        // with an empty plan: it runs nothing and reports nothing, which is
+        // not what a caller that asked for a diagnosis meant. Asked before
+        // the request is taken, because the core refuses it too and answers
+        // `false` either way — which is [`MARS_SDT_ERR_BUSY`] here, and a
+        // caller that retries a busy check would retry this one forever.
+        if !has_check(mode) {
+            return MARS_SDT_ERR_BAD_ARG;
+        }
         // SAFETY: forwarded to `hosts_from_c`, whose contract the caller
         // upholds for both links.
         let (longlink_items, shortlink_items) = unsafe {
@@ -436,8 +499,10 @@ pub unsafe extern "C" fn mars_sdt_plan(out: *mut MarsSdtCheck, cap: c_uint) -> c
 /// profiles, which is the platform's to answer — on Android it is
 /// `PlatformComm.getNetInfo`, on iOS the caller's own.
 ///
-/// @return [`MARS_SDT_OK`], or [`MARS_SDT_ERR_NO_PROBE`],
-/// [`MARS_SDT_ERR_NO_CHECK`] (nothing was in flight, so nothing ran) or
+/// @return [`MARS_SDT_OK`], or [`MARS_SDT_ERR_NO_PROBE`] — `probe` was null, so
+/// nothing was asked and the request in flight was cancelled —
+/// [`MARS_SDT_ERR_NO_CHECK`] — see the constant: no check recorded anything,
+/// which is not the same as nothing having run — or
 /// [`MARS_SDT_ERR_PANIC`].
 ///
 /// # Safety
@@ -458,12 +523,23 @@ pub unsafe extern "C" fn mars_sdt_run_checks(
 ) -> c_int {
     guard(MARS_SDT_ERR_PANIC, || {
         let Some(probe) = probe else {
+            // A run that cannot ask anything is cancelled and not left in
+            // flight. The diagnosis is one process-wide value, so a request
+            // that was started and then never run answers
+            // `MARS_SDT_ERR_BUSY` to every start after it, for the life of
+            // the process — and `MARS_SDT_ERR_NO_PROBE` is not an answer a
+            // caller retries: it has no probe to retry with. Cancelling and
+            // running the cancelled request ends it the way a caller's own
+            // `mars_sdt_cancel_active_check` would, and asks no probe: a
+            // cancelled run stops before its first check.
+            with_state(|state| {
+                state.logic.cancel_active_check();
+                let mut ask = Ask::new(|_| Answer::Nothing);
+                let _ = state.logic.run_checks(&mut ask, network_type);
+            });
             return MARS_SDT_ERR_NO_PROBE;
         };
-        let probe = Probe {
-            probe,
-            ctx: ctx as usize,
-        };
+        let probe = Probe { probe, ctx };
         let mut ask = Ask::new(move |query| probe.ask(query));
         let results = with_state(|state| state.logic.run_checks(&mut ask, network_type));
         if results.is_empty() {
@@ -475,8 +551,16 @@ pub unsafe extern "C" fn mars_sdt_run_checks(
 }
 
 /// Takes the JSON report of everything the checks have reported since the last
-/// call — the document `SdtLogic.reportSignalDetectResults(String)` gets in the
-/// C++, built by [`marsrs_sdt::report_json`].
+/// call: one `{"details":[ … ]}` document, one object in it per host a check
+/// probed, of every result recorded since the last take — the results of one
+/// run when a take follows every run, and of several when it does not.
+///
+/// Which is not the document
+/// `SdtLogic.reportSignalDetectResults(String)` gets in the C++, although both
+/// are [`marsrs_sdt::report_json`]'s: that one is the report of the run that
+/// just finished, and this one is whatever has been recorded and not taken
+/// yet, however many runs it came out of. The callback records and the take
+/// hands over, so a host that asks for nothing loses nothing.
 ///
 /// A report that did not fit is *not* taken: on [`MARS_SDT_ERR_NO_SPACE`] (or
 /// [`MARS_SDT_ERR_NULL_OUT`]) it stays where it was and the next call hands it
@@ -494,11 +578,12 @@ pub unsafe extern "C" fn mars_sdt_run_checks(
 pub unsafe extern "C" fn mars_sdt_take_report(out: *mut c_char, len: c_uint) -> c_int {
     guard(MARS_SDT_ERR_PANIC, || {
         let results = with_state(|state| {
-            state
-                .reported
-                .lock()
-                .map(|mut reported| std::mem::take(&mut *reported))
-                .unwrap_or_default()
+            std::mem::take(
+                &mut *state
+                    .reported
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            )
         });
         let json = report_json(&results);
         // SAFETY: forwarded to `write_str_into`, whose contract the caller
@@ -512,11 +597,13 @@ pub unsafe extern "C" fn mars_sdt_take_report(out: *mut c_char, len: c_uint) -> 
         // 4 KB is one no retry can get back.
         if written < 0 && !results.is_empty() {
             with_state(|state| {
-                if let Ok(mut reported) = state.reported.lock() {
-                    let later = std::mem::take(&mut *reported);
-                    *reported = results;
-                    reported.extend(later);
-                }
+                let mut reported = state
+                    .reported
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let later = std::mem::take(&mut *reported);
+                *reported = results;
+                reported.extend(later);
             });
         }
         written
@@ -524,14 +611,25 @@ pub unsafe extern "C" fn mars_sdt_take_report(out: *mut c_char, len: c_uint) -> 
 }
 
 /// The caller's four probes, as [`marsrs_sdt::checkimpl::Ask`] wants them: a
-/// function pointer and the `ctx` that goes with it, carried as a `usize` so the
-/// closure that asks them is `Send` — which `Ask::new` requires, because a
-/// diagnosis may be run from any thread.
+/// function pointer and the `ctx` that goes with it.
+///
+/// `ctx` is kept as the pointer the caller handed over and not as the integer
+/// it would round-trip through: an address turned into a `usize` and cast back
+/// carries no provenance, and the code that reads through it is the caller's
+/// C, on whatever thread a check asks it from. The single crossing is the one
+/// [`mars_sdt_run_checks`] makes, from the caller's `void*` to this field.
 #[derive(Clone, Copy)]
 struct Probe {
     probe: extern "C" fn(*mut c_void, *const MarsSdtQuery, *mut MarsSdtAnswer),
-    ctx: usize,
+    ctx: *mut c_void,
 }
+
+// SAFETY: `Ask::new` asks for `Send` because a diagnosis may be run from any
+// thread, and a raw pointer is not one. What crosses is an address: this crate
+// never dereferences `ctx`, it only hands it back to the C probe it came from,
+// and the contract `mars_sdt_run_checks` states is that `ctx` stays alive for
+// the whole run — whichever thread the run is on.
+unsafe impl Send for Probe {}
 
 impl Probe {
     /// One probe: the question out, the answer back.
@@ -562,11 +660,17 @@ impl Probe {
         // it is handed is: `ctx` is the pointer the caller gave
         // `mars_sdt_run_checks`, alive for the whole run by that contract, and
         // the query and answer it reads and writes are locals that outlive it.
-        (self.probe)(
-            self.ctx as *mut c_void,
-            addr_of!(query),
-            addr_of_mut!(answer),
-        );
+        (self.probe)(self.ctx, addr_of!(query), addr_of_mut!(answer));
+        // What the caller left in `kind` is an `i32`, and not necessarily one
+        // of the numbers that are variants — a caller that writes anything
+        // else, or nothing at all, has written a value the enum cannot hold.
+        //
+        // SAFETY: `MarsSdtKind` is a fieldless `#[repr(i32)]` enum, so the
+        // field is four bytes holding that integer, and reading them as one
+        // yields no value that type cannot hold. Reading the field as the
+        // enum would, and that is undefined behaviour before the first match.
+        let raw = unsafe { addr_of!(answer.kind).cast::<i32>().read() };
+        answer.kind = MarsSdtKind::of(raw);
         answer_from_c(&answer)
     }
 }
@@ -576,7 +680,10 @@ fn answer_from_c(answer: &MarsSdtAnswer) -> Answer {
     match answer.kind {
         MarsSdtKind::Nothing => Answer::Nothing,
         MarsSdtKind::Dns => {
-            let mut ips = Vec::with_capacity(answer.ip_count as usize);
+            // Nothing is reserved: `ip_count` is the caller's to get wrong,
+            // and a reservation is what turns a number it made up into a
+            // request for gigabytes. The vector grows with what is read.
+            let mut ips = Vec::new();
             if !answer.ips.is_null() {
                 for index in 0..answer.ip_count as usize {
                     // SAFETY: `ips` is non-null and the caller promises
@@ -589,6 +696,10 @@ fn answer_from_c(answer: &MarsSdtAnswer) -> Answer {
             Answer::Dns {
                 error_code: answer.error_code,
                 rtt: answer.rtt,
+                // `MarsSdtAnswer` carries no resolver and no connect time,
+                // so a host on this seam reports neither: the profile keeps
+                // what it started with.
+                local_dns: String::new(),
                 ips,
             }
         }
@@ -596,6 +707,7 @@ fn answer_from_c(answer: &MarsSdtAnswer) -> Answer {
             sent: answer.sent,
             received: answer.received,
             is_noop_resp: answer.is_noop_resp != 0,
+            conntime: 0,
             rtt: answer.rtt,
         },
         MarsSdtKind::Http => Answer::Http {
@@ -632,7 +744,8 @@ unsafe fn hosts_from_c(hosts: *const MarsSdtHosts, count: c_uint) -> CheckIPPort
         // SAFETY: `host.name` is null or a valid NUL-terminated string, per the
         // caller's contract.
         let name = unsafe { cstr::ptr_to_str_or_empty(host.name) };
-        let mut ports = Vec::with_capacity(host.port_count as usize);
+        // Nothing is reserved, for the reason `ips` above is not.
+        let mut ports = Vec::new();
         if !host.ports.is_null() {
             for port_index in 0..host.port_count as usize {
                 // SAFETY: `host.ports` is non-null and the caller promises
@@ -676,28 +789,156 @@ unsafe fn write_str_into(bytes: &[u8], out: *mut c_char, len: c_uint) -> c_int {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CString;
+    use std::ffi::{CStr, CString};
 
-    #[test]
-    fn a_query_round_trips_as_the_kind_the_checker_asked() {
-        let query = Query::Dns {
-            domain: "example.com".to_owned(),
-            timeout_ms: 3_000,
-        };
-        let (_, kind, port, timeout) = match &query {
-            Query::Dns { domain, timeout_ms } => {
-                (domain.as_str(), MarsSdtKind::Dns, 0, *timeout_ms)
+    /// What a probe was asked, copied out of the `MarsSdtQuery` before the
+    /// `CString` behind its `host` goes away.
+    struct Asked {
+        query: MarsSdtQuery,
+        host: [c_char; 64],
+    }
+
+    impl Default for Asked {
+        fn default() -> Self {
+            Self {
+                query: MarsSdtQuery {
+                    kind: MarsSdtKind::Nothing,
+                    host: std::ptr::null(),
+                    port: 0,
+                    timeout: 0,
+                },
+                host: [0; 64],
             }
-            _ => unreachable!(),
+        }
+    }
+
+    /// A probe that answers nothing but keeps the question it was asked.
+    extern "C" fn probe_records(
+        ctx: *mut c_void,
+        query: *const MarsSdtQuery,
+        answer: *mut MarsSdtAnswer,
+    ) {
+        // SAFETY: `ctx` is the `Asked` the test handed over and is alive for
+        // this call; `query` is the local `Probe::ask` built, and its `host`
+        // points at a `CString` that is alive for the call too — which is why
+        // the bytes are copied and not the pointer.
+        unsafe {
+            let asked = &mut *ctx.cast::<Asked>();
+            std::ptr::copy_nonoverlapping(query, addr_of_mut!(asked.query), 1);
+            let mut index = 0;
+            while index + 1 < asked.host.len() {
+                let byte = *(*query).host.add(index);
+                asked.host[index] = byte;
+                if byte == 0 {
+                    break;
+                }
+                index += 1;
+            }
+            (*answer).kind = MarsSdtKind::Nothing;
+        }
+    }
+
+    /// Every check asks its probe through the same four-arm match, and what
+    /// the C side is handed is what the probe is then asked: a timeout that
+    /// arrived in the wrong unit, or a tcp port that did not, is a question
+    /// no caller can answer.
+    #[test]
+    fn a_query_reaches_the_probe_as_the_kind_the_checker_asked() {
+        let mut asked = Asked::default();
+        let probe = Probe {
+            probe: probe_records,
+            ctx: addr_of_mut!(asked).cast::<c_void>(),
         };
-        assert_eq!(kind, MarsSdtKind::Dns);
-        assert_eq!(port, 0);
-        assert_eq!(timeout, 3_000);
+        let queries = [
+            (
+                Query::Dns {
+                    domain: "example.com".to_owned(),
+                    timeout_ms: 3_000,
+                },
+                MarsSdtKind::Dns,
+                "example.com",
+                0,
+                3_000,
+            ),
+            (
+                Query::Tcp {
+                    ip: "1.2.3.4".to_owned(),
+                    port: 8080,
+                    timeout_ms: 4_000,
+                },
+                MarsSdtKind::Tcp,
+                "1.2.3.4",
+                8080,
+                4_000,
+            ),
+            (
+                Query::Http {
+                    url: "http://example.com/netcheck".to_owned(),
+                    timeout_ms: 5_000,
+                },
+                MarsSdtKind::Http,
+                "http://example.com/netcheck",
+                0,
+                5_000,
+            ),
+            (
+                Query::Ping {
+                    host: "example.com".to_owned(),
+                    timeout_s: 2,
+                },
+                MarsSdtKind::Ping,
+                "example.com",
+                0,
+                2,
+            ),
+        ];
+        for (query, kind, host, port, timeout) in queries {
+            assert_eq!(probe.ask(query), Answer::Nothing);
+            assert_eq!(asked.query.kind, kind, "{kind:?}");
+            assert_eq!(asked.query.port, port);
+            assert_eq!(asked.query.timeout, timeout);
+            // SAFETY: the probe copied a NUL-terminated string into `host`,
+            // or left it as the empty one it started as.
+            let asked_host = unsafe { CStr::from_ptr(asked.host.as_ptr()) };
+            assert_eq!(asked_host.to_str(), Ok(host), "{kind:?}");
+        }
     }
 
     #[test]
     fn an_answer_nobody_wrote_is_nothing() {
         assert_eq!(answer_from_c(&MarsSdtAnswer::default()), Answer::Nothing);
+    }
+
+    /// A probe that fills `kind` in with a number of its own, the way a C
+    /// caller writing the field itself would.
+    extern "C" fn probe_of_raw(
+        _ctx: *mut c_void,
+        _query: *const MarsSdtQuery,
+        answer: *mut MarsSdtAnswer,
+    ) {
+        // SAFETY: `answer` is the caller's, alive for this call.
+        let answer = unsafe { &mut *answer };
+        answer.rtt = 7;
+        // SAFETY: `MarsSdtKind` is a fieldless `#[repr(i32)]` enum, so the
+        // field is an `i32` and writing one leaves that integer in it.
+        unsafe {
+            addr_of_mut!(answer.kind).cast::<i32>().write(99);
+        }
+    }
+
+    #[test]
+    fn a_kind_no_variant_has_is_a_probe_nobody_answered() {
+        let probe = Probe {
+            probe: probe_of_raw,
+            ctx: std::ptr::null_mut(),
+        };
+        let answer = probe.ask(Query::Dns {
+            domain: "example.com".to_owned(),
+            timeout_ms: 1,
+        });
+        // The `rtt` of `7` is in the answer the caller wrote, and `Nothing`
+        // is what a probe that names no probe is read as.
+        assert_eq!(answer, Answer::Nothing);
     }
 
     #[test]
@@ -717,6 +958,7 @@ mod tests {
             Answer::Dns {
                 error_code: 0,
                 rtt: 7,
+                local_dns: String::new(),
                 ips: vec!["1.2.3.4".to_owned()],
             }
         );
@@ -743,8 +985,14 @@ mod tests {
 
     #[test]
     fn no_hosts_is_an_empty_request() {
+        // A count of four and not of zero: with none the loop would add
+        // nothing whether the null guard is there or not, and the guard is
+        // what this test is about — a caller that says "four hosts" and
+        // hands over no pointer is answered an empty map and not read
+        // through.
+        //
         // SAFETY: null is explicitly allowed by the contract.
-        let items = unsafe { hosts_from_c(std::ptr::null(), 0) };
+        let items = unsafe { hosts_from_c(std::ptr::null(), 4) };
         assert!(items.is_empty());
     }
 

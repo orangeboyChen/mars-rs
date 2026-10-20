@@ -129,5 +129,5 @@ fn without_the_app_nothing_is_checked() {
     assert!(!checker.has_checked());
     assert!(!checker.on_identify_resp(b"resp"));
     assert!(!checker.has_checked());
-    assert!(format!("{checker:?}").contains("LongLinkIdentifyChecker"));
+    assert!(format!("{checker:?}").contains("has_checked: false"));
 }

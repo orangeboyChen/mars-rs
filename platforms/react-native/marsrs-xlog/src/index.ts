@@ -63,15 +63,16 @@ export type CompressMode = (typeof CompressMode)[keyof typeof CompressMode];
  * gives it: what an `Xlog` is opened with.
  *
  * Every field has the default the C++'s own `XLogConfig` carries, so the one an
- * app has to give is `logDir` — the appender answers
- * `MARS_XLOG_ERR_EMPTY_LOG_DIR` without it. */
+ * app has to give is `logDir` — the C ABI opens no appender
+ * without it. */
 export interface XlogConfig {
   /** Where the log files are written; created if it is missing, and the one
    * field with no default. */
   logDir: string;
   /** What every log file starts with (`marsrs_20260927.xlog`), and the name the
    * appender is known by — an app that writes through two of them gives them
-   * two. `xlog` when left out. */
+   * two. `xlog` when left out, when handed over empty, and when what was
+   * handed over is nothing but whitespace. */
   namePrefix?: string;
   /** The level the appender is opened at; `info` when left out. */
   level?: LogLevel;
@@ -90,8 +91,28 @@ export interface XlogConfig {
 }
 
 /** `XlogConfig.namePrefix` of the Kotlin and of the Swift: what an appender is
- * opened with when a caller gives none. */
+ * opened with when a caller gives none — and when it gives a blank one, which
+ * the two halves do not agree about: the Kotlin answers its own default for a
+ * prefix of nothing but whitespace, and the Swift opens that prefix as it is.
+ * Naming the default here is what keeps the `Xlog` an app holds and the
+ * appender the halves hold the same one, whichever half it is — a prefix of
+ * spaces that one half substituted and the other did not is an appender this
+ * `Xlog` cannot ask about afterwards. */
 const DEFAULT_NAME_PREFIX = 'xlog';
+
+/** The shortest lifetime of a file the appender takes, in seconds: one below it
+ * — `0` among them — is refused, and the appender keeps the lifetime it had.
+ * `MIN_LOG_ALIVE_TIME` of the Rust, which is the one place the number is
+ * written down. */
+const MIN_ALIVE_TIME_SECONDS = 86400;
+
+/** The prefix an appender opened with `config` is known by: `namePrefix`, or
+ * [DEFAULT_NAME_PREFIX] when it is missing or blank. What is handed to the two
+ * halves is this and not the string the caller gave, so the two of them agree
+ * on one name for one appender. */
+function namePrefixOf(config: XlogConfig): string {
+  return config.namePrefix?.trim() || DEFAULT_NAME_PREFIX;
+}
 
 /** The appender of every `namePrefix` `Xlog.open` has opened and `close` has
  * not closed, by the prefix: what makes two `Xlog.open`s of one prefix one
@@ -126,7 +147,7 @@ export class Xlog {
   private open = true;
 
   private constructor(config: XlogConfig) {
-    this.namePrefix = config.namePrefix ?? DEFAULT_NAME_PREFIX;
+    this.namePrefix = namePrefixOf(config);
     this.currentLevel = config.level ?? LogLevel.info;
     this.currentMode = config.mode ?? AppenderMode.async;
   }
@@ -139,16 +160,25 @@ export class Xlog {
    * second one over the first would be a handle nothing releases. So two calls
    * of one prefix are one `Xlog`, and `close` on it is `close` on both.
    *
+   * The native side is asked either way, and not only the first time: one
+   * appender per prefix is one for the whole app, so one the app closed
+   * through its own Kotlin or Swift is gone from under this map, and asking
+   * again is what opens it again.
+   *
    * Throws when the appender would not take the configuration — an empty
-   * `logDir` or `namePrefix`, or a directory it cannot write to. */
+   * `logDir`, or a directory it cannot write to. */
   static open(config: XlogConfig): Xlog {
-    const namePrefix = config.namePrefix ?? DEFAULT_NAME_PREFIX;
+    const namePrefix = namePrefixOf(config);
     const alreadyOpen = openAppenders.get(namePrefix);
-    if (alreadyOpen) {
+    // The appender of a prefix is one for the whole process, so one another
+    // part of the app closed is gone from under this map: the open is asked
+    // again instead of trusted, and what it answers is the appender that is
+    // there now — the same one when nothing closed it.
+    if (alreadyOpen && NativeXlog.open({ ...config, namePrefix })) {
       return alreadyOpen;
     }
     const xlog = new Xlog(config);
-    if (!NativeXlog.open(config)) {
+    if (!NativeXlog.open({ ...config, namePrefix })) {
       throw new Error(
         `marsrs-react-native-xlog: the appender of '${xlog.namePrefix}' refused ${config.logDir}`
       );
@@ -220,11 +250,21 @@ export class Xlog {
       return;
     }
     NativeXlog.setMaxFileSize(this.namePrefix, bytes);
-    this.currentMaxFileSize = bytes;
+    // Mirrored once it is a size the native side took, and not before: that
+    // side reads a `number` as an `unsigned long long`, and a negative one or
+    // a `NaN` is not one it hands over. `0` is a size and not an absence —
+    // "never split" — so it is mirrored like any other.
+    if (Number.isFinite(bytes) && bytes >= 0) {
+      this.currentMaxFileSize = bytes;
+    }
   }
 
-  /** How long a log file is written to before the appender opens the next one,
-   * in seconds; `0` is the C++'s own ten days. */
+  /** How many seconds a log file of this appender is kept before the sweep
+   * deletes it — and not how long one is written to, which is what the day's
+   * turn and [maxFileSizeBytes] decide: `0` is the lifetime an appender
+   * opened with none keeps, the C++'s own ten days, and one below a day is a
+   * lifetime the appender refuses, so what this answers is the one it has and
+   * not the last one it was asked for. */
   get maxAliveTimeSeconds(): number {
     return this.currentMaxAliveTime;
   }
@@ -234,7 +274,12 @@ export class Xlog {
       return;
     }
     NativeXlog.setMaxAliveTime(this.namePrefix, seconds);
-    this.currentMaxAliveTime = seconds;
+    // Mirrored once it is a lifetime the appender took, and not before: a day
+    // is the shortest one it takes, and `0` is below it, so a mirror that took
+    // the number would answer a lifetime no appender is writing under.
+    if (seconds >= MIN_ALIVE_TIME_SECONDS) {
+      this.currentMaxAliveTime = seconds;
+    }
   }
 
   /** Whether a record at `level` is written: the appender's own answer, and the
@@ -370,7 +415,13 @@ export class Xlog {
     return NativeXlog.logFileNames(this.namePrefix, daysAgo);
   }
 
-  /** `mars_xlog_release_instance`: closes the appender `Xlog.open` made.
+  /** Closes the appender `Xlog.open` made. `mars_xlog_release_instance_of` on
+   * iOS, which is given the handle beside the prefix — a release by prefix
+   * alone closes whichever appender the prefix answers at that moment — and
+   * `mars_xlog_release_instance` on Android, which releases the prefix and is
+   * asked once per `Xlog`, by whichever takes its handle out of the table
+   * first.
+   *
    * Nothing is closed twice: an `Xlog` that is already closed answers `false`
    * from `isOpen` and drops what it is asked to write — and an appender two
    * names hold is closed for both, because `Xlog.open` gave them one `Xlog`. */

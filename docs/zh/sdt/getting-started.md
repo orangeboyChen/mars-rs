@@ -33,7 +33,9 @@ Flutter 插件和 React Native 模块目前都只有日志：两个都起不了�
 ## Rust
 
 ```bash
-cargo add marsrs          # 整个移植：xlog、stn、sdt
+# 这个 crate 还没上 crates.io —— 发布还在进行中 —— 所以 Rust 应用现在从
+# tag 上取：只写 `cargo add marsrs` 是解析不到东西的。
+cargo add marsrs --git https://github.com/orangeboyChen/mars-rs --tag v0.1.0-alpha.3
 ```
 
 ```rust
@@ -52,15 +54,18 @@ let shortlink = CheckIPPorts::new();
 let mut ask = Ask::new(|query| match query {
     Query::Dns { domain, .. } => Answer::Dns {
         error_code: 0, rtt: 12, ips: vec!["1.2.3.4".to_owned()],
+        local_dns: String::new(),
     },
-    Query::Tcp { .. } => Answer::Tcp { sent: 0, received: 0, is_noop_resp: true, rtt: 30 },
+    Query::Tcp { .. } => Answer::Tcp {
+        sent: 0, received: 0, is_noop_resp: true, conntime: 0, rtt: 30,
+    },
     Query::Http { .. } => Answer::Http { error_code: 0, status_code: 200, rtt: 40 },
     Query::Ping { .. } => Answer::Ping { error_code: 0, rtt: 20, status: None },
 });
-});
 
 // 3. 一整趟诊断：先 ping 和 dns，再 tcp，跑在 `1` 说的那个网络之上 —— 也就是 C++
-//    里的 `comm::getNetInfo()`。`None` 是已经有一趟在跑了。
+//    里的 `comm::getNetInfo()`。`None` 是这一趟没启动：已经有一趟在跑，或者 mode
+//    三个 bit 一个都没有 —— `is_checking()` 能把这两种分开。
 let results = sdt
     .diagnose(
         &longlink, &shortlink, Mode::BASIC | Mode::LONG, 10_000, &mut ask, 1,
@@ -90,7 +95,7 @@ println!("{}", report_json(&results));
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0")
+.package(url: "https://github.com/orangeboyChen/mars-rs", from: "0.1.0-alpha.3")
 
 // 在要用的 target 里：
 .product(name: "MarsRSNet", package: "mars-rs")   // 要两半都有就 MarsRS
@@ -105,8 +110,8 @@ let longLink = [MarsSdt.Link(
     ports: [MarsSdt.HostPort(host: "1.2.3.4", port: 80)]
 )]
 MarsSdt.setHTTPNetCheckCGI("http://example.com/netcheck")
-// 1 | 2 是 NET_CHECK_BASIC | NET_CHECK_LONG：先 ping 和 dns，再 tcp
-MarsSdt.startActiveCheck(longLink: longLink, shortLink: [], mode: 1 | 2, timeout: 10_000)
+// [.basic, .long] 是先 ping 和 dns，再 tcp
+MarsSdt.startActiveCheck(longLink: longLink, shortLink: [], mode: [.basic, .long], timeout: 10_000)
 
 // 2. 计划，跑在 `probe` 回答的那个网络之上
 MarsSdt.runChecks(networkType: 1) { query in
@@ -115,7 +120,7 @@ MarsSdt.runChecks(networkType: 1) { query in
     case .tcp:   return .tcp(errorCode: 0, rtt: 30, noop: MarsSdt.Noop(sent: 0, received: 0, isNoopResponse: true))
     case .http:  return .http(errorCode: 0, rtt: 40, statusCode: 200)
     case .ping:  return .ping(errorCode: 0, rtt: 20, lossRate: 0, averageRTT: 18)
-    default:     return .nothing
+    default:     return .nothing()
     }
 }
 
@@ -138,7 +143,7 @@ if let report = MarsSdt.takeReport() { send(report) }
 maven { url = uri("https://jitpack.io") }
 
 // build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0")   // 只有 xlog 的那个没有
+implementation("io.github.orangeboychen.marsrs:marsrs:0.1.0-alpha.3")   // 只有 xlog 的那个没有
 ```
 
 ```kotlin
@@ -183,7 +188,7 @@ SdtLogic.runChecks(
 
 ```kotlin
 // 共享模块的 build.gradle.kts
-implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0")   // 不是 xlog-kmp
+implementation("io.github.orangeboychen.marsrs:marsrs-kmp:0.1.0-alpha.3")   // 不是 xlog-kmp
 ```
 
 ```kotlin
@@ -217,7 +222,7 @@ SdtLogic.runChecks(
 SdtLogic.takeReport()?.let { send(it) }
 ```
 
-## The C ABI {#c-abi}
+## C ABI {#c-abi}
 
 ```text
 marsrs-<version>-<host>.tar.gz   （Linux、macOS）
@@ -233,8 +238,7 @@ marsrs-<version>-<host>.zip      （Windows）
 MarsSdtIpPort port = { "1.2.3.4", 80 };
 MarsSdtHosts longlink[] = { { "default", &port, 1 } };
 mars_sdt_set_http_netcheck_cgi("http://example.com/netcheck");
-/* 1 | 2 是 NET_CHECK_BASIC | NET_CHECK_LONG：先 ping 和 dns，再 tcp */
-mars_sdt_start_active_check(longlink, 1, NULL, 0, 1 | 2, 10000);
+mars_sdt_start_active_check(longlink, 1, NULL, 0, NET_CHECK_BASIC | NET_CHECK_LONG, 10000);
 
 /* 2. 计划，跑在 `probe` 回答的那个网络之上 */
 static void probe(void *ctx, const MarsSdtQuery *q, MarsSdtAnswer *a) {

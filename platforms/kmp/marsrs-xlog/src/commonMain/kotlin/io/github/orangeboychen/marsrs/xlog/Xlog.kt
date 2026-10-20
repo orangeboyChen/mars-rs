@@ -62,7 +62,14 @@ public expect class Xlog(config: XlogConfig) {
      */
     public fun isLoggable(level: LogLevel): Boolean
 
-    /** Writes one record of [level]. */
+    /**
+     * Writes one record of [level].
+     *
+     * [LogLevel.NONE] writes nothing: it is the level an appender *sits* at
+     * when it is meant to keep quiet, and a record of it is not a record —
+     * which is why [isLoggable] cannot be the one to drop it, since a level
+     * filter of [LogLevel.NONE] is above every level there is.
+     */
     public fun log(level: LogLevel, tag: String, message: String)
 
     /**
@@ -137,8 +144,10 @@ public expect class Xlog(config: XlogConfig) {
     /**
      * [flushNow] for a caller that can suspend and would rather not block the
      * thread it is on: the records are on disk when this resumes, and what
-     * waited for them is a thread of the I/O pool. A drain blocks whatever
-     * thread it runs on, which is why this one is handed to another one.
+     * waited for them is another thread and not this one — the I/O pool of the
+     * JVM, and the pool Kotlin/Native hands a blocking call to, which is not
+     * the same pool and is not named `IO` there. A drain blocks whatever thread
+     * it runs on, which is why this one is handed to another one.
      */
     public suspend fun flush()
 

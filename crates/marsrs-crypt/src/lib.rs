@@ -114,8 +114,8 @@ const TEA_DELTA: u32 = 0x9e37_79b9;
 /// *only* ever called with bytes decoded little-endian; Mars never decrypts on
 /// device, so there is no `__TeaDecrypt` counterpart in the C++ source.
 fn tea_encrypt(v: &mut [u32; 2], k: [u32; 4]) {
-    let (mut v0, mut v1) = (v[0], v[1]);
-    let (k0, k1, k2, k3) = (k[0], k[1], k[2], k[3]);
+    let [mut v0, mut v1] = *v;
+    let [k0, k1, k2, k3] = k;
     let mut sum: u32 = 0;
     for _ in 0..TEA_ROUNDS {
         sum = sum.wrapping_add(TEA_DELTA);
@@ -367,6 +367,21 @@ impl LogCrypt {
         le::write_u32(data, off::LENGTH, current);
     }
 
+    /// `LogCrypt::SetLogLen()` — writes the payload length the header records,
+    /// absolutely, where [`Self::update_log_len`] only adds to it.
+    ///
+    /// What wants it is a header recovered from a cache file: [`Self::fix`]
+    /// reads a length a process was interrupted leaving, and a length that
+    /// cannot fit the region it was read from has to be written back as the one
+    /// that can — a block that claims bytes the region never held is one a
+    /// reader throws away whole.
+    pub fn set_log_len(data: &mut [u8], len: u32) {
+        if data.len() < HEADER_LEN {
+            return;
+        }
+        le::write_u32(data, off::LENGTH, len);
+    }
+
     /// `LogCrypt::SetTailerInfo()` — writes `magic_end` at `data[0]`.
     ///
     /// Callers pass the slice starting at the tailer offset.
@@ -405,7 +420,10 @@ impl LogCrypt {
     /// `out`, fills in header + payload + tailer and returns the total count.
     ///
     /// The body is always stored in the clear: the C++ has the TEA loop
-    /// commented out, so sync records are byte-identical to the no-crypt path.
+    /// commented out, so a sync record's body is byte-identical to the
+    /// no-crypt path. Its header is not — the record goes out under the
+    /// "crypt" magic and carries the client public key, which is what
+    /// [`Self::set_header_info`] writes whatever `is_async` is.
     pub fn crypt_sync_log(
         &mut self,
         log_data: &[u8],
@@ -872,8 +890,8 @@ mod tests {
     #[test]
     fn tea_encrypt_round_trips_with_reference_decrypt() {
         fn tea_decrypt(v: &mut [u32; 2], k: [u32; 4]) {
-            let (mut v0, mut v1) = (v[0], v[1]);
-            let (k0, k1, k2, k3) = (k[0], k[1], k[2], k[3]);
+            let [mut v0, mut v1] = *v;
+            let [k0, k1, k2, k3] = k;
             let mut sum = TEA_DELTA.wrapping_mul(TEA_ROUNDS);
             for _ in 0..TEA_ROUNDS {
                 v1 = v1.wrapping_sub(

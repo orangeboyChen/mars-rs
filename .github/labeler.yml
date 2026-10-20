@@ -30,12 +30,24 @@
 # `marsrs-compat` and the `marsrs` facade — are the ones every half of the port
 # is built on. A change to one is not a change to any half in particular; it is
 # a Rust change, and `platform: rust` is what it gets.
+#
+# Every glob below has to match a file the repository carries: one that names a
+# directory that is not there is a rule that never fires, and a pull request
+# left unlabelled looks exactly like one that needed no label. Eighteen of them
+# were in that state — the five platform trees had been moved under
+# `platforms/` and the globs naming them had not — and nothing said so. The
+# `globs` job of labeler.yml says so now: it fails the run on a glob that
+# matches no file.
 
 # The xlog half: the facade over it, the three crates it is made of, and the
 # logger's own module on every platform that has one. `marsrs-buffer`,
 # `marsrs-appender` and `marsrs-crypt` are published in their own right but are
 # an implementation detail of this half, which is why they are labelled with it
 # and not as areas of their own.
+#
+# The Kotlin Multiplatform whole-port module is the one line that is not a
+# package: it keeps its logger at the top of its own package, as `Xlog.kt`,
+# where the module that is xlog alone has an `xlog/` of its own.
 'area: xlog':
 - changed-files:
   - any-glob-to-any-file:
@@ -47,18 +59,17 @@
     - platforms/android/marsrs-xlog/**
     - platforms/android/marsrs/src/main/kotlin/**/xlog/**
     - platforms/kmp/marsrs-xlog/**
-    - platforms/kmp/marsrs/src/**/xlog/**
+    - platforms/kmp/marsrs/src/**/Xlog*.kt
     - platforms/flutter/marsrs-xlog/**
     - platforms/react-native/marsrs-xlog/**
     - platforms/harmonyos/marsrs-xlog/**
 
-# The STN half. `platforms/apple/MarsRSNet/` is one module for both halves of the
-# so its files are named apart: `Stn*.swift` is the task model and `Sdt*.swift`
-# is the diagnosis. The Android and Kotlin Multiplatform packages are split the
-# same way — and the Kotlin ones are named before the packages exist, because a
-# glob that matches nothing today matches the day the directory under it lands.
-# `platforms/kmp/marsrs/src/**/xlog/**`, up under `area: xlog`, is in the same
-# state.
+# The STN half. `platforms/apple/MarsRSNet/` is one module for both halves of
+# the net, so its files are named apart: `Stn*.swift` is the task model and
+# `Sdt*.swift` is the diagnosis. The Android and Kotlin Multiplatform packages
+# are split the same way. No glob here is written ahead of the tree it points
+# into: the `globs` job of labeler.yml fails the run on one no file matches, so
+# a package that moves is a glob that is rewritten in the same pull request.
 'area: stn':
 - changed-files:
   - any-glob-to-any-file:

@@ -300,7 +300,8 @@ fn without_a_host_the_monitor_still_answers() {
     monitor.clear_longlink_reset();
     monitor.reconnect();
     assert_eq!(*resets.lock().unwrap_or_else(|e| e.into_inner()), 1);
-    assert!(format!("{monitor:?}").contains("LongLinkConnectMonitor"));
+    assert!(format!("{monitor:?}").contains("status: DisConnected"));
+    assert!(format!("{monitor:?}").contains("is_keep_alive: false"));
 }
 
 /// `__Interval` is salted for two states only — `kInactive` and

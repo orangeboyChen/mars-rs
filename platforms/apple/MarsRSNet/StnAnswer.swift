@@ -39,7 +39,9 @@ public final class StnAnswer: NSObject {
         case ended = 6
         /// `identifyCheckBuffer` — the check a new link is used with.
         case identified = 7
-        /// `reportTaskLimited` — what the limit is; `0` is "go ahead".
+        /// `reportTaskLimited` — the number the gate weighed the
+        /// task against, answered back: a report and not an override,
+        /// so a task the gates refused stays refused.
         case limit = 8
     }
 
@@ -65,7 +67,9 @@ public final class StnAnswer: NSObject {
     @objc public var hashBytes = Data()
     /// `identified` — the command the check is made for.
     @objc public var cmdid: UInt32 = 0
-    /// `limit` — what the gate is told; `0` is "go ahead".
+    /// `limit` — the number the gate weighed the task against,
+    /// answered back: a report and not an override, so a task the
+    /// gates refused stays refused.
     @objc public var limit: UInt32 = 0
 
     /// Nobody answered: the answer for every question the app has nothing to say
@@ -153,7 +157,9 @@ public final class StnAnswer: NSObject {
         return answer
     }
 
-    /// `reportTaskLimited` — what the limit is; `0` is "go ahead".
+    /// `reportTaskLimited` — the number the gate weighed the task
+    /// against, answered back: a report and not an override, so a
+    /// task the gates refused stays refused.
     @objc
     public static func limit(_ limit: UInt32) -> StnAnswer {
         let answer = StnAnswer()

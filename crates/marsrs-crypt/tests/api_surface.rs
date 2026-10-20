@@ -31,6 +31,10 @@ fn decode(bytes: &[u8]) -> Option<Decoded<'_>> {
     ))
 }
 
+/// A 128-char hex secp256k1 public key: [`LogCrypt::is_crypt`] is true of it,
+/// and of a key of any other shape it is not.
+const PUBKEY: &str = "196d0b02543df00c8c1cf8ac58540286d3e568d7316a5de8a2f5a46f44a712518c726bb538f6abbc970391160c35f2df4c30bdb1a04cdba75c6098dcf2b4734b";
+
 #[test]
 fn public_constants_match_the_contract() {
     assert_eq!(HEADER_LEN, 73);
@@ -81,7 +85,17 @@ fn async_record_round_trips_through_the_public_api() {
 
     assert_eq!(out, payload);
     assert_eq!(remain_nocrypt_len, 0);
-    assert_eq!(out.len() % TEA_BLOCK_LEN, payload.len() % TEA_BLOCK_LEN);
+
+    // with a key it is the same length and not the same bytes, and the tail
+    // the blocks did not cover is the one byte 41 leaves: five TEA blocks
+    // are encrypted and the byte behind them is not
+    let crypt = LogCrypt::new(Some(PUBKEY));
+    assert!(crypt.is_crypt(), "a 128 hex char secp256k1 key is one");
+    crypt.crypt_async_log(&payload, &mut out, &mut remain_nocrypt_len);
+    assert_eq!(out.len(), payload.len());
+    assert_ne!(out, payload);
+    assert_eq!(remain_nocrypt_len, 1);
+    assert_eq!(&out[40..], &payload[40..]);
 }
 
 #[test]

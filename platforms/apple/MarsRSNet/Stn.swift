@@ -17,12 +17,13 @@
 // closure — and re-exports the C module, so `mars_stn_start_task` and friends
 // are still reachable from here for whoever prefers them.
 //
-// Three of the types of that surface are not nested here but are types of the
+// Four of the types of that surface are not nested here but are types of the
 // module, named again by the typealiases below: an extension may not carry an
 // access modifier and neither may its members, so a type nested in `MarsStn`
-// has to be declared in this one body, and this file is held to 520 lines —
-// which holds the values a task is made of, but not `StnTask`, `StnQuestion`
-// and `StnAnswer` as well. `MarsStn.Task` is what an app writes either way.
+// has to be declared in this one body, and the lint run holds a file to 640
+// lines — which holds the values a task is made of, but not `StnTask`,
+// `StnQuestion`, `StnAnswer` and `StnLonglinkConfig` as well. `MarsStn.Task`
+// is what an app writes either way.
 //
 // Every call is a straight translation of a symbol in the header; nothing here
 // adds behaviour the C ABI does not have.
@@ -119,8 +120,9 @@ public final class MarsStn: NSObject {
     /// app is told in `ReportConnectStatus`.
     ///
     /// `.none` is a status the C ABI did not hand over: what an integer outside
-    /// these is read as, and what a question of another kind carries — which
-    /// Objective-C has no optional enum to say.
+    /// these is read as, which Objective-C has no optional enum to say. A
+    /// question of another kind is not one of them: the `net_status_all` it
+    /// carries is the `0` the struct starts with, and `0` is `.unavailable`.
     @objc(MarsStnNetStatus)
     public enum NetStatus: Int32 {
         /// Not known yet.
@@ -197,9 +199,13 @@ public final class MarsStn: NSObject {
     /// The app is asked while the process-wide pipeline is held, so `ask` must
     /// not call another `MarsStn`: everything it needs is in the question it is
     /// given. Objective-C hands the same closure over as a block.
+    ///
+    /// [`clearApp()`] is the way back out of this — a closure is not an optional
+    /// here, and the C ABI's way of saying "no app" is a `NULL` `ask`.
     @objc
     public static func setApp(_ ask: @escaping (StnQuestion) -> StnAnswer) {
         let app = AppBox(ask)
+        lock.lock()
         // The box is the context of every question, and `installed` is what
         // keeps it alive: the C ABI hands the pointer back with a question and
         // never gives it back.
@@ -211,6 +217,12 @@ public final class MarsStn: NSObject {
         // has put the new context in its place is a question that
         // dereferences a freed one. Both are locals of this call, so the old
         // box dies here at the earliest — after the swap.
+        //
+        // The lock is what makes the read of `installed`, the swap of the
+        // context and the write back one step: Swift initializes a static
+        // lazily and atomically, but a *later* read of a reference-counted
+        // `var` beside a later write of it is a retain and a release of one
+        // object with nothing between them.
         let previous = installed
         mars_stn_set_app(Unmanaged.passUnretained(app).toOpaque()) { ctx, question, answer in
             guard let ctx, let question, let answer else {
@@ -222,6 +234,25 @@ public final class MarsStn: NSObject {
         withExtendedLifetime(previous) {
             installed = app
         }
+        lock.unlock()
+    }
+
+    /// Takes the app away, and STN answers the eighteen questions itself again:
+    /// a `NULL` `ask` is what `mars_stn.h` calls an app that answers nothing,
+    /// which gets STN's own answers — and [`setApp`] cannot hand one in, its
+    /// closure not being an optional.
+    ///
+    /// The box this drops is held until the swap is over, as it is in [`setApp`]:
+    /// a question asked before this call can still be in flight, and it reads
+    /// the box out of the context it was handed.
+    public static func clearApp() {
+        lock.lock()
+        let previous = installed
+        mars_stn_set_app(nil, nil)
+        withExtendedLifetime(previous) {
+            installed = nil
+        }
+        lock.unlock()
     }
 
     /// `Reset` — a net core made again from nothing: the tasks, the signalling
@@ -297,13 +328,13 @@ public final class MarsStn: NSObject {
     /// `StopTask` — whether it was one of ours.
     @objc
     public static func stop(taskID: UInt32) -> Bool {
-        mars_stn_stop_task(taskID) != 0
+        isYes(mars_stn_stop_task(taskID))
     }
 
     /// `HasTask` — whether the task is in one of the queues.
     @objc
     public static func hasTask(_ taskID: UInt32) -> Bool {
-        mars_stn_has_task(taskID) != 0
+        isYes(mars_stn_has_task(taskID))
     }
 
     /// `RedoTask` — every task that is out is run again.
@@ -327,7 +358,7 @@ public final class MarsStn: NSObject {
     /// `MakesureLongLinkConnected` — whether there was a default link to connect.
     @objc
     public static func makeSureLongLinkConnected() -> Bool {
-        mars_stn_makesure_longlink_connected() != 0
+        isYes(mars_stn_makesure_longlink_connected())
     }
 
     /// `MakesureLonglinkConnected_ext` — the link `name` was made with is asked
@@ -341,14 +372,14 @@ public final class MarsStn: NSObject {
     /// `kConnected` and nothing else, so one that is still connecting is not.
     @objc
     public static func isLongLinkConnected() -> Bool {
-        mars_stn_longlink_is_connected() != 0
+        isYes(mars_stn_longlink_is_connected())
     }
 
     /// `LongLinkIsConnected_ext` — whether the link `name` was made with is up,
     /// `false` for a name no link has.
     @objc
     public static func isLongLinkConnected(name: String) -> Bool {
-        name.withCString { mars_stn_longlink_is_connected_ext($0) != 0 }
+        name.withCString { isYes(mars_stn_longlink_is_connected_ext($0)) }
     }
 
     /// `DisableLongLink` — no task goes out on a long link again, and only
@@ -383,7 +414,7 @@ public final class MarsStn: NSObject {
     @objc
     @discardableResult
     public static func destroyLongLink(_ name: String) -> Bool {
-        name.withCString { mars_stn_destroy_longlink($0) != 0 }
+        name.withCString { isYes(mars_stn_destroy_longlink($0)) }
     }
 
     /// `MarkMainLonglink_ext` — the link of that name is the one whose errors
@@ -395,7 +426,7 @@ public final class MarsStn: NSObject {
     @objc
     @discardableResult
     public static func markMainLongLink(_ name: String) -> Bool {
-        name.withCString { mars_stn_mark_main_longlink($0) != 0 }
+        name.withCString { isYes(mars_stn_mark_main_longlink($0)) }
     }
 
     /// `SetSignallingStrategy` — for every keeper in the process. A period or a
@@ -511,6 +542,24 @@ public final class MarsStn: NSObject {
     override private init() {
         super.init()
     }
+
+    /// Whether the `1` or `0` a symbol of `mars_stn.h` answered was `1`.
+    ///
+    /// `> 0` and not `!= 0`, because every one of them answers
+    /// `MARS_STN_ERR_PANIC` — `-1` — when a panic was caught inside the call,
+    /// and `!= 0` reads that panic as a yes: a task that was stopped, a link
+    /// that is up, a link that is destroyed, when the call never reached the
+    /// net core at all.
+    private static func isYes(_ answer: Int32) -> Bool {
+        answer > 0
+    }
+
+    /// What guards [`installed`], and with it the read-modify-write [`setApp`]
+    /// and [`clearApp`] make of it: two threads may install an app at once, and
+    /// a static `var` is only *initialized* atomically — a later read of a
+    /// reference-counted one beside a later write of it is a retain and a
+    /// release of the same object with nothing between them.
+    private static let lock = NSLock()
 
     /// The app that is installed, which is the only thing the C ABI does not
     /// give back: `setApp` remembers it so that the next app releases it.

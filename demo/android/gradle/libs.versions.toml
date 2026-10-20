@@ -11,10 +11,11 @@ agp = "9.4.1"
 # The release of the port this demo is written against — and the only line in
 # this build that has to move when a new one is out.
 #
-# Why an alpha and not the `0.1.0` the documentation quotes: JitPack builds an
-# artifact from a tag, and the tags there are today are `v0.1.0-alpha.1` through
-# `v0.1.0-alpha.3`, so `0.1.0` is a version that resolves to nothing yet and the
-# newest alpha is the newest thing an app can actually take. A run that answers
+# Why an alpha and not `0.1.0`: JitPack builds an artifact from a tag, and the
+# tags there are today are `v0.1.0-alpha.1` through `v0.1.0-alpha.3`, so `0.1.0`
+# is a version that resolves to nothing and the newest alpha is the newest
+# thing an app can actually take — the one the documentation quotes too. A run
+# that answers
 # "401 from jitpack.io" is this line and not the build.
 #
 # What this line is for, now that `settings.gradle.kts` substitutes

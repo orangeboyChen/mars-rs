@@ -20,8 +20,8 @@
 #   name that looks fixed.
 # * A whole class is kept and not only the members JNI reaches. The name of a
 #   class is part of a JNI *signature* as well —
-#   `(Lio/github/orangeboychen/marsrs/xlog/Xlog$XLogConfig;)J` is what
-#   `newXlogInstance` is looked up under — so an `XLogConfig` that shrank into
+#   `(Lio/github/orangeboychen/marsrs/xlog/XLogConfigJni;)J` is what
+#   `newXlogInstance` is looked up under — so an `XLogConfigJni` that shrank into
 #   `Xlog$a` is a `newXlogInstance` `GetMethodID` cannot find either.
 # * `allowoptimization` is what R8 is still free to do. It rewrites bodies and
 #   not names, and a name is the whole of what JNI asks about.
@@ -40,9 +40,9 @@
 
 ## 2. native -> Kotlin
 ##
-## What `marsrs-jni` asks for by name: the `@JvmField`s of `XLogConfig` are the
-## ones its `config_from_java` reads, and the ones of `XLoggerInfo` the ones
-## `logWrite` reads.
+## What `marsrs-jni` asks for by name: the `@JvmField`s of the top-level
+## `XLogConfigJni` are the ones its `config_from_java` reads. It is not a nested
+## `Xlog$XLogConfig`, of which no class is declared here, and `write` takes its
+## level, tag and body as three arguments, so there is no `XLoggerInfo` either.
 -keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.Xlog { *; }
--keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.Xlog$XLogConfig { *; }
--keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.Xlog$XLoggerInfo { *; }
+-keep,allowoptimization class io.github.orangeboychen.marsrs.xlog.XLogConfigJni { *; }

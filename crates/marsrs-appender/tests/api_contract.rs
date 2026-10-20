@@ -67,8 +67,9 @@ fn struct_and_enum_shapes_match_the_contract() {
     };
     assert_eq!(config.compress_level, XLogConfig::default().compress_level);
 
-    // `XLoggerInfo` field-for-field.
-    let info = XLoggerInfo {
+    // `XLoggerInfo` field-for-field: the literal is the check, the way the
+    // `fn` types above are.
+    let _: XLoggerInfo = XLoggerInfo {
         level: LogLevel::Fatal,
         tag: None,
         filename: None,
@@ -80,8 +81,16 @@ fn struct_and_enum_shapes_match_the_contract() {
         timeval: (0, 0),
         trace_log: 0,
     };
-    assert_eq!(info.level, LogLevel::Fatal);
-    assert_eq!(info.timeval, (0, 0));
+    // what a caller that fills in only some of it starts from:
+    // `XLOGGER_INFO_INITIALIZER`, level verbose and the rest zero — and
+    // *not* the `-1` the FFI hands for pid / tid / maintid, which is what
+    // asks the appender to read the three of them off the OS
+    let init = XLoggerInfo::default();
+    assert_eq!(init.level, LogLevel::Verbose);
+    assert_eq!((init.pid, init.tid, init.maintid), (0, 0, 0));
+    assert_eq!(init.timeval, (0, 0));
+    assert_eq!(init.line, 0);
+    assert!(init.tag.is_none() && init.filename.is_none());
 
     // The three string fields are `Cow`, like the `const char*` they port:
     // borrowed for a caller that already has the bytes (the FFI / JNI

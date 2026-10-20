@@ -66,11 +66,17 @@ fn a_zero_tick_count_is_invalid() {
     let mut tick = TickCount::now();
     tick.set_invalid();
     assert!(!tick.is_valid());
-    // refreshing makes it valid again (unless the process just started)
+    // refreshing makes it valid again, with the reading of the moment it
+    // refreshed at — so what it holds is a count the clock has since
+    // passed, and not one it has not reached yet
     tick.refresh();
-    assert_eq!(
-        tick.get(),
-        TickCount::now().get() - TickCount::now().get() + tick.get()
+    let refreshed = tick.get();
+    assert!(tick.is_valid(), "a refresh left the count invalid");
+    assert!(refreshed > 0, "a refresh left the count at zero");
+    assert!(
+        TickCount::now().get() >= refreshed,
+        "the count is ahead of the clock: {refreshed} against {}",
+        TickCount::now().get()
     );
 }
 

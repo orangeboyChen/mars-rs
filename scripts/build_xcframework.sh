@@ -7,7 +7,7 @@
 #
 # Two artifacts and not one, because the feature set the library is built with
 # is what an app links and not what the crate happens to hold: `marsrs-xlog` is
-# `--no-default-features --features xlog`, so it is xlog's 16 `mars_xlog_*`
+# `--no-default-features --features xlog`, so it is xlog's 17 `mars_xlog_*`
 # symbols and nothing else, and `marsrs-net` is `--no-default-features --features
 # sdt,stn`, so it carries no `mars_xlog_*` at all. That is what lets an app that
 # only logs take the first and stop there, and an app that takes both link
@@ -267,8 +267,8 @@ MAP
         # The other half of the same check, and the reason the two are not one:
         # `nm` prints what it can parse and an error for every object it cannot,
         # so an archive it read nothing from would come out clean above. A slice
-        # of either framework exports symbols of its own — 16 of them for xlog,
-        # 9 and 21 for the diagnosis and the pipeline — so none at all means the
+        # of either framework exports symbols of its own — 17 of them for xlog,
+        # 9 and 33 for the diagnosis and the pipeline — so none at all means the
         # check above asked nothing rather than that the answer is yes.
         own="$(nm -gU "$slice_lib" 2>/dev/null | grep -Ec " T $owns" || true)"
         if [ "$own" -eq 0 ]; then
@@ -287,6 +287,18 @@ MAP
     # there, named the way a consumer's `xcodebuild` looks for it (ios-arm64,
     # ios-arm64_x86_64-simulator, watchos-arm64_arm64_32,
     # watchos-arm64-simulator).
+    #
+    # What is asserted is the count and not the four names: an xcframework is
+    # one directory per slice and an `Info.plist`, so the directories are the
+    # slices, and `${#slices[@]}` is the number the array above asks for — the
+    # day a slice is added or one is dropped, this moves with it. `ls` alone is
+    # not the check it reads as: it prints, it answers 0, and the directory it
+    # is given is one the command above just made, so it cannot be missing.
+    slices_built="$(find "$build/$name" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+    test "$slices_built" -eq "${#slices[@]}" || {
+        echo "::error::$name carries $slices_built slices and not ${#slices[@]}"
+        exit 1
+    }
     ls "$build/$name"
 
     (cd "$build" && zip -q -r "$out/$name.zip" "$name")

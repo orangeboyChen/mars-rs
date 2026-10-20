@@ -5,6 +5,7 @@
 
 package io.github.orangeboychen.marsrs.sdt
 
+import android.util.Log
 import io.github.orangeboychen.marsrs.Mars
 
 /**
@@ -167,10 +168,13 @@ object SdtLogic {
          * hands its own `SdtLogic.ICallBack`.
          *
          * This is called on the thread that ran the checks, which is the thread
-         * that called [runChecks], and it is called *inside* that call: a
-         * diagnosis holds one process-wide lock for the whole run, so nothing
-         * in this class may be called from here — the call would not come back.
-         * Take what is handed over and hand it to another thread.
+         * that called [runChecks], and it is called before that call comes
+         * back — but after the run has let the diagnosis go, which is the
+         * difference that matters: [isChecking], [plan] and [startActiveCheck]
+         * are questions an app asks from here as a matter of course, and every
+         * one of them is answered. What a handler should still not do is start
+         * a second run on this thread: it would run its checks inside the
+         * [runChecks] the caller is still waiting on.
          */
         fun reportSignalDetectResults(resultsJson: String?)
     }
@@ -183,6 +187,12 @@ object SdtLogic {
      * A check whose probe answered nothing records a failure, so this is what a
      * diagnosis is made of — and what makes one possible at all on a host that
      * is not a phone.
+     *
+     * A probe is asked while the native side holds the process-wide diagnosis,
+     * so it must not call back into this class — `startActiveCheck`,
+     * `isChecking`, `plan`, another `runChecks` — from its answer: what it
+     * asked would wait for the lock the thread it is running on already holds.
+     * Everything a check needs is in the query it was given.
      */
     interface IProbe {
         /**
@@ -214,8 +224,10 @@ object SdtLogic {
         fun ping(host: String, timeoutSec: Int): Answer
     }
 
+    @Volatile
     private var callBack: ICallBack? = null
 
+    @Volatile
     private var probe: IProbe? = null
 
     /**
@@ -241,8 +253,13 @@ object SdtLogic {
      * @param longLink the long link's hosts, one [Link] per host name
      * @param shortLink the short link's, which is what the HTTP check asks
      * @param mode the [CheckMode] bits, which is what the plan is made of
-     * @param timeout milliseconds, or `0` for a run that never times out
-     * @return `false` when a check is already in flight
+     * @param timeout milliseconds, or `0` — or less, which is read as `0` — for
+     *   a run with no timeout of its own: every probe keeps the default of its kind
+     * @return `false` when no check was started: one that is already in flight,
+     *   or a `mode` with no check in it. [isChecking] tells the two apart —
+     *   `true` is a check of somebody else's to wait for, and `false` is a
+     *   request that was never taken. The C ABI is the seam that answers with
+     *   the reason instead: `MARS_SDT_ERR_BUSY` and `MARS_SDT_ERR_BAD_ARG`.
      */
     @JvmStatic
     external fun startActiveCheck(longLink: Array<Link>, shortLink: Array<Link>, mode: Int, timeout: Int): Boolean
@@ -274,19 +291,33 @@ object SdtLogic {
      * nobody has set one.
      *
      * The report reaches the app the way it always does: [ICallBack], which the
-     * run calls once it is over. [takeReport] hands the same document over to an
-     * app that would rather ask for it.
+     * run calls once it is over, with one document of that one run. An app that
+     * would rather ask for it finds the same results in [takeReport], which
+     * answers with one document for every run since it was last asked.
      *
      * A second run waits for the first: the diagnosis is one process-wide value,
      * so this call does not come back while another thread is inside it.
      *
      * @param networkType what `PlatformComm.getNetInfo` answers
      * @param probe the four probes, asked while this runs and not after
-     * @return `false` when there was no check in flight, or when the one there
-     *     was got cancelled before its first check
+     * @return `false` when no check recorded anything — there was no check in
+     *     flight, the one there was got cancelled before its first check, or
+     *     the checks it planned had nothing to check — and when this call was
+     *     made from inside a run of it, which is what a probe or the callback
+     *     that starts a second one is answered with, rather than with a second
+     *     run
      */
     @JvmStatic
     fun runChecks(networkType: Int, probe: IProbe): Boolean {
+        // A run started from inside a run — from one of the four probes, or from
+        // the [ICallBack] the report is handed to — is refused and not run:
+        // `synchronized` is reentrant, so the inner run would be let in, and the
+        // `finally` it ends with takes the probe away from the outer run, whose
+        // checks from then on ask a `null` probe and are recorded as failures.
+        if (Thread.holdsLock(runLock)) {
+            Log.w(TAG, "runChecks from inside a run of it: the second one is not started")
+            return false
+        }
         // The four probes are asked of this class's own statics, from the native
         // call below this one on the stack, on this very thread: that is why the
         // probe is a field for as long as the run is and not an argument the
@@ -306,17 +337,29 @@ object SdtLogic {
     private external fun nativeRunChecks(networkType: Int): Boolean
 
     /**
-     * The JSON of everything the checks have reported since the last call — the
-     * same document [ICallBack] was handed — or `null` when there was nothing
-     * to take. Taking it empties it: the next call reports what happened since.
+     * The JSON of everything the checks have reported since the last call, or
+     * `null` when there was nothing to take. Taking it empties it: the next
+     * call reports what happened since.
+     *
+     * It is one document however many runs it took, and [ICallBack] is handed
+     * one document per run — so two runs since the last call are two entries
+     * of this one's `details`, and not either of the two the callback got.
      */
     @JvmStatic
     external fun takeReport(): String?
 
     /**
      * A diagnosis made again from nothing: the check in flight, the plan it was
-     * running and every result waiting to be taken. The callback and the CGI
-     * are not: they are the caller's.
+     * running, every result waiting to be taken, and the URI
+     * [setHttpNetcheckCGI] set.
+     *
+     * The URI goes with it because it is the diagnosis on the native side that
+     * keeps it, and this throws the whole of that away: [httpNetcheckCGI]
+     * answers `null` afterwards, and an app that wants the HTTP check to go
+     * where it went before has to set it again.
+     *
+     * The callback does not: it is a field of this object, and a run after a
+     * reset still reports to it.
      */
     @JvmStatic
     external fun reset()

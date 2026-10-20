@@ -77,7 +77,7 @@
 //! of both, in a file that still decodes end to end.
 //!
 //! Everything else has a counterpart: the per-prefix instance table lives in
-//! [`category`], and the hex dump of a binary blob in [`xlogger_memory_dump`]
+//! [`category`], and the hex dump of a binary blob in [`xlogger_memory_dump`].
 
 // Only `appender::map_region` uses `unsafe` (memmap2 requires it); see the
 // SAFETY comment there. Everything else is safe Rust.
@@ -101,8 +101,8 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 pub use category::{
     current_log_path, flush, flush_now, get_filter, get_level, get_xlogger_instance,
-    is_enabled_for, new_xlogger_instance, release_xlogger_instance, request_flush,
-    set_appender_mode, set_console_log_open, set_filter, set_level,
+    is_enabled_for, new_xlogger_instance, release_xlogger_instance, release_xlogger_instance_of,
+    request_flush, set_appender_mode, set_console_log_open, set_filter, set_level,
     set_max_alive_duration as category_set_max_alive_duration,
     set_max_file_size as category_set_max_file_size, xlogger_write, XloggerCategory, XloggerFilter,
     XloggerHandle, DEFAULT_HANDLE,
@@ -154,15 +154,6 @@ fn lock_instances() -> MutexGuard<'static, Instances> {
 /// table's lock.
 fn instance(id: AppenderId) -> Option<Arc<Appender>> {
     lock_instances().map.get(&id).cloned()
-}
-
-/// The cache file an instance claimed, if any.
-///
-/// Which slot an instance got is decided by the appender at open time and is
-/// not a function of the config alone — another process can hold slot 0 — so
-/// the path has to be read back from the appender.
-fn instance_cache_path(id: AppenderId) -> Option<PathBuf> {
-    instance(id).and_then(|appender| appender.claimed_cache_path())
 }
 
 /// Opens the appender of an instance.
@@ -286,11 +277,10 @@ pub(crate) fn appender_set_max_file_size_instance(id: AppenderId, bytes: u64) {
     }
 }
 
-/// Sets the expiry for a specific instance (values below one day are ignored).
-pub(crate) fn appender_set_max_alive_duration_instance(id: AppenderId, secs: u64) {
-    if let Some(appender) = instance(id) {
-        appender.set_max_alive_duration(secs);
-    }
+/// Sets the expiry for a specific instance; `false` for an unknown id, or
+/// when the appender refused the value for being below one day.
+pub(crate) fn appender_set_max_alive_duration_instance(id: AppenderId, secs: u64) -> bool {
+    instance(id).is_some_and(|appender| appender.set_max_alive_duration(secs))
 }
 
 /// The log directory of a specific instance; `None` for an unknown id.

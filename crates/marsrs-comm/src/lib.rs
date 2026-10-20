@@ -28,8 +28,9 @@
 //! `base64` mirrors `comm/crypt/ibase64.h` — the `Basic` a proxy is logged in
 //! with, which is the one thing mars needs an encoding for.
 //!
-//! `adler32` mirrors `comm/adler32.c`, the checksum [`frequency_limit`] and
-//! [`basepacker`] hash with, and `basepacker` mirrors `comm/basepacker.cc` —
+//! `adler32` mirrors `comm/adler32.c`, the checksum [`basepacker`] hashes
+//! with — and the one `marsrs-stn`'s `FrequencyLimit` keys its avalanche
+//! table on, which is why it is here and not there — and `basepacker` mirrors `comm/basepacker.cc` —
 //! the wire format the long link spoke before `longlink_packer.cc`.
 //!
 //! `shuffle` mirrors `comm/shuffle.h` — the one shuffle mars asks for, with the

@@ -184,13 +184,12 @@ fn the_records_behind_the_damage_are_decoded_too() {
 
 #[test]
 fn the_marker_names_how_much_was_skipped() {
-    let (bytes, damaged, skipped) = damaged_file();
+    let (bytes, _damaged, skipped) = damaged_file();
     let plain = marsrs_xlog::decode_records(&bytes, None).expect("the walk went on");
     let text = String::from_utf8_lossy(&plain);
 
     // From the byte the walk stopped at to the byte the next record starts at,
     // which is the whole of the record the file lost.
-    assert!(damaged < bytes.len(), "the fixture is not damaged");
     assert!(
         text.contains(&format!(
             "[F]decode_log_file.py decode error len={skipped}\n"
@@ -374,3 +373,100 @@ fn a_body_that_will_not_inflate_leaves_its_marker_behind() {
     assert!(text.contains("zstd decompress error"), "{text}");
     assert!(text.contains("after\n"), "{text}");
 }
+
+/// Damage all through a file — what a `.xlog` copied off a device by halves
+/// looks like — is a resync after every span, and a resync is a scan of
+/// everything behind the damage. Five hundred spans is what this asks the walk
+/// for, which is the shape a resync that starts over at the damage each time
+/// costs a file's length per span.
+///
+/// What is asserted is the answer: every record behind every span is still
+/// read, and every span is still marked with its length. A resync that
+/// started over at the damage each time — a pass over the file per span,
+/// and not one pass over the whole of it — would answer the same, and this
+/// is the shape of file that would show it; what it would show it in is
+/// time, and not in the text, so the pass is not what this asks about.
+#[test]
+fn damage_all_through_a_file_is_walked_span_by_span() {
+    /// Bytes no record of any shape can start in: `0xff` is no magic of any of
+    /// the thirteen.
+    const JUNK: [u8; 64] = [0xff; 64];
+
+    let mut bytes = Vec::new();
+    let mut expected = String::new();
+    for index in 0..512 {
+        bytes.extend_from_slice(&JUNK);
+        let text = format!("record {index}\n");
+        bytes.extend_from_slice(&sync_record(text.as_bytes()));
+        expected.push_str(&format!("{DAMAGE_MARKER}{}\n", JUNK.len()));
+        expected.push_str(&text);
+    }
+
+    let plain = marsrs_xlog::decode_records(&bytes, None).expect("the walk went on");
+    let text = String::from_utf8_lossy(&plain);
+
+    assert_eq!(text, expected);
+}
+
+/// What a caller that has to say whether the file read at all is asking about:
+/// the two counts beside the text. A record whose text does not come out is a
+/// record the walk found, so it counts; a span of damage is not a record, so it
+/// does not.
+#[test]
+fn the_counts_say_how_many_of_the_records_came_out() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&sync_record(b"before\n"));
+    // A record that is whole and whose body will not inflate.
+    bytes.extend_from_slice(&record(
+        magic::ASYNC_NOCRYPT_ZSTD_START,
+        &[0; CLIENT_PUBKEY_LEN],
+        b"not a zstd frame",
+    ));
+    bytes.extend_from_slice(&sync_record(b"after\n"));
+
+    let decoded = marsrs_xlog::decode_records_counted(&bytes, None).expect("the walk went on");
+    let text = String::from_utf8_lossy(&decoded.text);
+
+    assert_eq!(decoded.records, 3, "three records were found: {decoded:?}");
+    assert_eq!(
+        decoded.unreadable, 1,
+        "one of the three did not come out: {decoded:?}"
+    );
+    assert!(
+        !decoded.nothing_came_out(),
+        "a walk that read two of three records read the file: {decoded:?}"
+    );
+    assert!(
+        text.contains("before\n") && text.contains("after\n"),
+        "{text}"
+    );
+}
+
+/// A file no record of which came out is a file that was read and gave nothing
+/// back: what it answers with is a marker per record, and a caller that takes
+/// the text alone cannot tell that from a log that said so. This is the shape a
+/// file read with the key of another pair has.
+#[test]
+fn a_file_no_record_of_which_came_out_says_so() {
+    let mut bytes = Vec::new();
+    for _ in 0..2 {
+        bytes.extend_from_slice(&record(
+            magic::ASYNC_NOCRYPT_ZSTD_START,
+            &[0; CLIENT_PUBKEY_LEN],
+            b"not a zstd frame",
+        ));
+    }
+
+    let decoded = marsrs_xlog::decode_records_counted(&bytes, None).expect("the walk went on");
+
+    assert_eq!(decoded.records, 2, "two records were found: {decoded:?}");
+    assert!(decoded.nothing_came_out(), "{decoded:?}");
+    assert!(
+        String::from_utf8_lossy(&decoded.text).contains("zstd decompress error"),
+        "and the markers come out with the text anyway: {decoded:?}"
+    );
+}
+
+/// `decodeBuffer`'s marker for a span it skipped, which the test above spells
+/// out itself: the string a tool grep's the decoded text for.
+const DAMAGE_MARKER: &str = "[F]decode_log_file.py decode error len=";

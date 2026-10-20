@@ -1,6 +1,6 @@
 {
   "name": "marsrs-react-native",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.3",
   "description": "React Native module for mars-rs, a Rust implementation of Tencent/mars: the whole port, xlog today.",
   "license": "MIT",
   "homepage": "https://github.com/orangeboyChen/mars-rs",

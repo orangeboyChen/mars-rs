@@ -42,5 +42,5 @@ repositories {
 }
 
 dependencies {
-    implementation("io.github.orangeboychen.marsrs:xlog:0.1.0-alpha.2")
+    implementation("io.github.orangeboychen.marsrs:xlog:0.1.0-alpha.3")
 }

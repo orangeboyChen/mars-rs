@@ -70,7 +70,12 @@ pub fn pack(url: &str, headers: &Headers, body: &[u8]) -> Vec<u8> {
         fields.set(name, value);
     }
 
-    let mut request = builder.header_to_buffer().unwrap_or_default();
+    // a cgi that would write more than the first line is not a request this
+    // packer has anything to say about: nothing goes out, and the run answers
+    // with the socket rather than with a second request of the cgi's making
+    let Some(mut request) = builder.header_to_buffer() else {
+        return Vec::new();
+    };
     request.extend_from_slice(body);
     request
 }
@@ -439,12 +444,42 @@ mod tests {
         assert_eq!(answer(&failed).unwrap().status(), 500);
     }
 
+    /// The bytes the C++ writes for one request, which is the whole of what
+    /// the packer is for: a `POST` of the cgi, the five fields of its own,
+    /// the `Content-Length`, and then the body.
     #[test]
     fn the_packer_a_link_holds_is_the_one_that_writes() {
         let headers = Headers::new();
+        let request = default_packer()("/cgi", &headers, b"hello");
+        assert_eq!(request, pack("/cgi", &headers, b"hello"));
         assert_eq!(
-            default_packer()("/cgi", &headers, b"hello"),
-            pack("/cgi", &headers, b"hello")
+            String::from_utf8_lossy(&request),
+            "POST /cgi HTTP/1.1\r\n\
+             Accept: */*\r\n\
+             Cache-Control: no-cache\r\n\
+             Connection: close\r\n\
+             Content-Length: 5\r\n\
+             Content-Type: application/octet-stream\r\n\
+             User-Agent: MicroMessenger Client\r\n\
+             \r\nhello"
         );
+    }
+
+    /// A cgi is written into the first line, and `CRLF` is what ends one: a
+    /// cgi that carries it writes a head of its own, and on a socket the task
+    /// asked to keep that is a second request behind the first. Nothing goes
+    /// out instead.
+    #[test]
+    fn a_cgi_that_would_end_the_first_line_is_one_nothing_is_written_for() {
+        let headers = Headers::new();
+        let injected = "/cgi HTTP/1.1\r\nX-Injected: 1\r\n\r\n";
+        assert_eq!(pack(injected, &headers, b"hello"), Vec::<u8>::new());
+
+        // a field of the app's own, which is the other way in
+        let mut headers = Headers::new();
+        headers.insert("X-Injected".to_string(), "v\r\nX-Other: 1".to_string());
+        let request = String::from_utf8_lossy(&pack("/cgi", &headers, b"hello")).to_string();
+        assert!(!request.contains("X-Other"), "{request:?}");
+        assert!(!request.contains("X-Injected"), "{request:?}");
     }
 }

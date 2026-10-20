@@ -26,11 +26,13 @@ use marsrs_comm::tickcount::gettickcount;
 /// `BAN_INTERVAL` — how long a socket that was taken from the pool and turned
 /// out to be no good keeps the pool from handing one out, in milliseconds.
 pub const BAN_INTERVAL: u64 = 5 * 60 * 1000;
-/// `DEFAULT_MAX_KEEPALIVE_TIME` — what the C++ keeps a cached socket for. No
-/// caller in this crate passes it in: the timeout is the one the caller writes
-/// in the [`CachedSocket`] it puts in, which is why it lives here and not in
-/// the pool.
-pub const DEFAULT_MAX_KEEPALIVE_TIME: u32 = 5 * 1000;
+/// `DEFAULT_MAX_KEEPALIVE_TIME` — what the C++ keeps a cached socket for, in
+/// **seconds**: the [`CachedSocket::timeout`] it is written into counts
+/// seconds, and [`CachedSocket::has_timeout_at`] is what multiplies it by
+/// 1000. No caller in this crate passes it in: the timeout is the one the
+/// caller writes in the [`CachedSocket`] it puts in, which is why it lives
+/// here and not in the pool.
+pub const DEFAULT_MAX_KEEPALIVE_TIME: u32 = 5;
 
 /// `closefunc` — `CacheSocketItem::CloseSocket()`.
 pub type CloseSocket = dyn FnMut(SocketFd) + Send;
@@ -211,17 +213,18 @@ impl SocketPool {
 
             let socket = cached.socket;
             let timed_out = cached.has_timeout_at(now);
-            // only a tcp socket is asked: a quic one is there for its streams
-            let closed =
-                item.transport_protocol == Task::TRANSPORT_PROTOCOL_TCP && self.is_closed(socket);
+            // only a quic socket is not asked: it is in the pool for its
+            // streams, and `Task::TRANSPORT_PROTOCOL_DEFAULT` is a tcp one
+            // and not the quic a `!= TRANSPORT_PROTOCOL_TCP` would make of it
+            let is_quic = item.transport_protocol == Task::TRANSPORT_PROTOCOL_QUIC;
+            let closed = !is_quic && self.is_closed(socket);
             if timed_out || closed {
                 self.close(socket);
                 self.pool.remove(index);
                 continue;
             }
 
-            if item.transport_protocol == Task::TRANSPORT_PROTOCOL_TCP || self.is_sub_stream(socket)
-            {
+            if !is_quic || self.is_sub_stream(socket) {
                 self.pool.remove(index);
                 return Some(socket);
             }
@@ -230,6 +233,10 @@ impl SocketPool {
             // on it, and the socket keeps its own timeout from here on
             let stream = self.create_stream(socket);
             if !stream.is_valid() {
+                // The socket leaves the pool but is *not* closed: it is a quic
+                // socket, and the streams already open on it are the host's and
+                // not this pool's — a parent closed here takes every one of them
+                // down with it. What the pool gives up is the caching of it.
                 self.pool.remove(index);
                 return None;
             }
