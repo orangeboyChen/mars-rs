@@ -127,7 +127,7 @@ public actual object StnLogic {
             }
             installed = reference
         } finally {
-            swap.value = 0
+            swap.store(0)
         }
         // The box of the app before this one is held until the swap is over, and
         // not released by the assignment that replaces it: a question can be in

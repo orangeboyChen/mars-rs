@@ -2,6 +2,7 @@ package io.github.orangeboychen.marsrs
 
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_on_foreground
 import io.github.orangeboychen.marsrs.net.ffi.mars_stn_on_network_change
+import kotlinx.cinterop.ExperimentalForeignApi
 
 /**
  * The Kotlin/Native `actual`: the two symbols of `mars_stn.h` the C ABI of
@@ -14,6 +15,7 @@ import io.github.orangeboychen.marsrs.net.ffi.mars_stn_on_network_change
  * calls these itself; this is that call in Kotlin, which is the whole of what an
  * app of a Kotlin Multiplatform project sees of `mars::baseevent`.
  */
+@OptIn(ExperimentalForeignApi::class)
 public actual object BaseEvent {
     public actual fun onForeground(isForeground: Boolean) {
         mars_stn_on_foreground(if (isForeground) 1 else 0)
